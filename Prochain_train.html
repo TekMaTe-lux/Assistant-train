@@ -2,16 +2,16 @@
 <html lang="fr">
 <head>
   <meta charset="UTF-8">
-  <title>Départs SNCF - Metz (retards et suppressions)</title>
+  <title>Départs depuis Luxembourg vers Thionville, Metz, Nancy</title>
 </head>
 <body>
-  <h1>Trains retardés ou annulés depuis Metz</h1>
+  <h1>Départs depuis Luxembourg vers Thionville, Metz ou Nancy</h1>
   <div id="resultat">Chargement en cours...</div>
 
   <script>
     const apiKey = '242fac11-6d98-45fb-93df-28174d362447';
     const encodedApiKey = btoa(apiKey + ":");
-    const url = "https://api.sncf.com/v1/coverage/sncf/stop_areas/stop_area:SNCF:87192039/departures?datetime=20250423T221322";
+    const url = "https://api.sncf.com/v1/coverage/sncf/stop_areas/stop_area:SNCF:82001000/departures?datetime=20250429T140000";
 
     fetch(url, {
       method: 'GET',
@@ -26,58 +26,49 @@
     .then(data => {
       const departures = data.departures;
 
-      const filtered = departures.filter(dep => {
-        const base = dep.stop_date_time?.base_departure_date_time;
-        const real = dep.stop_date_time?.departure_date_time;
-        return (base && real && base !== real);
-      });
-
-      if (filtered.length === 0) {
-        document.getElementById("resultat").innerText = "Aucun train retardé ou annulé.";
-        return;
-      }
-
+      const destinationsCibles = ["Thionville", "Metz", "Nancy"];
       let html = '<ul>';
-      filtered.forEach(dep => {
-        const train = dep.display_informations?.headsign || 'Train inconnu';
 
-        // Recherche de la destination correcte
-        let destination = 'Destination inconnue';
-        if (dep.display_informations?.destination) {
-          destination = dep.display_informations.destination;
-        } else if (dep.display_informations?.via) {
-          destination = dep.display_informations.via;
-        }
+      departures.forEach(dep => {
+        const info = dep.display_informations;
+        const timeInfo = dep.stop_date_time;
 
-        const realTime = dep.stop_date_time?.departure_date_time;
-        const baseTime = dep.stop_date_time?.base_departure_date_time;
+        if (!info || !timeInfo) return;
 
-        // Heure de départ théorique (base)
-        let heureBase = baseTime
-          ? baseTime.slice(9, 11) + 'h' + baseTime.slice(11, 13)
-          : 'heure inconnue';
+        const destination = info.direction || info.destination || "Destination inconnue";
+        if (!destinationsCibles.some(city => destination.includes(city))) return;
 
-        let retard = '';
-        let causeRetard = '';
+        const train = info.headsign || "Train inconnu";
+        const heureBase = timeInfo.base_departure_date_time;
+        const heureReelle = timeInfo.departure_date_time;
+
+        const hBase = heureBase ? heureBase.slice(9, 11) + "h" + heureBase.slice(11, 13) : "Inconnue";
+        const hReelle = heureReelle ? heureReelle.slice(9, 11) + "h" + heureReelle.slice(11, 13) : "Inconnue";
 
         // Calcul du retard
-        if (realTime && baseTime && realTime !== baseTime) {
-          const h1 = parseInt(baseTime.slice(9, 11)) * 60 + parseInt(baseTime.slice(11, 13));
-          const h2 = parseInt(realTime.slice(9, 11)) * 60 + parseInt(realTime.slice(11, 13));
+        let statut = "À l'heure";
+        let retardTxt = "";
+        let cause = info.cause || info.cancelled_message || "—";
+
+        if (heureBase && heureReelle && heureBase !== heureReelle) {
+          const h1 = parseInt(heureBase.slice(9, 11)) * 60 + parseInt(heureBase.slice(11, 13));
+          const h2 = parseInt(heureReelle.slice(9, 11)) * 60 + parseInt(heureReelle.slice(11, 13));
           const diff = h2 - h1;
           if (diff > 0) {
-            retard = ` (+${diff} min)`;
+            statut = "Retardé";
+            retardTxt = ` (+${diff} min)`;
           }
         }
 
-        // Cause du retard ou de l'annulation
-        causeRetard = dep.display_informations?.cancelled_message || dep.display_informations?.cause || 'Cause inconnue';
+        if (info.commercial_mode === "TER" && info.base_departure_date_time && !info.departure_date_time) {
+          statut = "Supprimé";
+        }
 
-        html += `<li>Train ${train} à ${heureBase} — Destination : ${destination} — Retard : ${retard} — Cause : ${causeRetard}</li>`;
+        html += `<li><strong>${train}</strong> à ${hBase}${retardTxt} — Destination : ${destination} — Statut : ${statut} — Cause : ${cause}</li>`;
       });
-      html += '</ul>';
 
-      document.getElementById("resultat").innerHTML = html;
+      html += '</ul>';
+      document.getElementById("resultat").innerHTML = html || "Aucun train trouvé.";
     })
     .catch(error => {
       document.getElementById("resultat").textContent = "Erreur : " + error.message;
