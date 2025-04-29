@@ -2,17 +2,15 @@
 <html lang="fr">
 <head>
   <meta charset="UTF-8">
-  <title>Départs SNCF - Metz</title>
+  <title>Départs SNCF - Metz (retards et suppressions)</title>
 </head>
 <body>
-  <h1>Départs depuis Metz</h1>
+  <h1>Trains retardés ou annulés depuis Metz</h1>
   <div id="resultat">Chargement en cours...</div>
 
   <script>
     const apiKey = '242fac11-6d98-45fb-93df-28174d362447';
     const encodedApiKey = btoa(apiKey + ":");
-
-    // ✅ Metz : code SNCF 87192039
     const url = "https://api.sncf.com/v1/coverage/sncf/stop_areas/stop_area:SNCF:87192039/departures?datetime=20250423T221322";
 
     fetch(url, {
@@ -28,19 +26,27 @@
     .then(data => {
       const departures = data.departures;
 
-      if (departures.length === 0) {
-        document.getElementById("resultat").innerText = "Aucun départ trouvé.";
+      const filtered = departures.filter(dep => {
+        const base = dep.stop_date_time?.base_departure_date_time;
+        const real = dep.stop_date_time?.departure_date_time;
+        const status = dep.status || 'ON_TIME';
+        return (base && real && base !== real) || status !== 'ON_TIME';
+      });
+
+      if (filtered.length === 0) {
+        document.getElementById("resultat").innerText = "Aucun train retardé ou annulé.";
         return;
       }
 
       let html = '<ul>';
-      departures.forEach(dep => {
+      filtered.forEach(dep => {
         const train = dep.display_informations?.headsign || 'Train inconnu';
         const status = dep.status || 'ON_TIME';
 
         const realTime = dep.stop_date_time?.departure_date_time;
         const baseTime = dep.stop_date_time?.base_departure_date_time;
 
+        // Récupérer l'heure et le retard
         let heure = realTime
           ? realTime.slice(9, 11) + 'h' + realTime.slice(11, 13)
           : 'heure inconnue';
@@ -55,7 +61,10 @@
           }
         }
 
-        html += `<li>Train ${train} à ${heure}${retard} — Statut : ${status}</li>`;
+        // Récupérer la destination
+        const destination = dep.display_informations?.headsign || 'Destination inconnue';
+
+        html += `<li>Train ${train} à ${heure}${retard} — Destination : ${destination} — Statut : ${status}</li>`;
       });
       html += '</ul>';
 
