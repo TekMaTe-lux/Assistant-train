@@ -2,7 +2,7 @@
 <html lang="fr">
 <head>
   <meta charset="UTF-8">
-  <title>Provenance des trains à Luxembourg</title>
+  <title>Arrivées à Luxembourg</title>
   <style>
     body {
       font-family: Arial, sans-serif;
@@ -85,35 +85,10 @@
       border-radius: 10px;
       border: none;
     }
-
-    .alertes {
-      margin-top: 20px;
-      background-color: #fff4f4;
-      padding: 20px;
-      border-radius: 5px;
-    }
-
-    #alertes-list {
-      list-style-type: none;
-    }
-
-    .alerte {
-      margin-bottom: 10px;
-      padding: 10px;
-      background-color: #ffe6e6;
-      border-left: 4px solid red;
-    }
   </style>
 </head>
 <body>
-  <h1>Provenance des trains à Luxembourg</h1>
-
-  <div class="alertes">
-    <h2>Alertes TER</h2>
-    <ul id="alertes-list">
-      <li>Chargement des alertes...</li>
-    </ul>
-  </div>
+  <h1>Arrivées à Luxembourg</h1>
 
   <div class="legend">
     <span class="ontime">✅ À l'heure</span>
@@ -126,9 +101,9 @@
   <img id="trainImage" src="https://raw.githubusercontent.com/TekMaTe-lux/Assistant-train/refs/heads/main/20250426_224742.jpg" alt="Image du train">
 
   <div class="humour">
-    Le Lundi c'est conditions de départs non réunies !<br>
-    Le Vendredi c'est panne de PN !<br>
-    Suivez l'aventure des Bétaillères Express Régionales sur
+    Le Mardi c’est TER bondé sans clim !<br>
+    Le Jeudi c’est la grève surprise !<br>
+    Suivez les Bétaillères Express Régionales sur
     <a href="https://x.com/BERNancyMetzLux" target="_blank">@BERNancyMetzLux</a> !
   </div>
 
@@ -165,33 +140,38 @@
     })
     .then(data => {
       const arrivals = data.arrivals;
+      const provenancesCibles = ["Metz", "Thionville", "Nancy"];
       const dejaVus = new Set();
       let html = '<ul>';
 
-      arrivals.forEach(arrival => {
-        const info = arrival.display_informations;
-        const timeInfo = arrival.stop_date_time;
-        const direction = arrival.direction; // Récupérer la direction (provenance)
+      arrivals.forEach(arr => {
+        const info = arr.display_informations;
+        const timeInfo = arr.stop_date_time;
+        const provenance = arr.route?.direction?.stop_area?.name || "Provenance inconnue";
 
-        if (!info || !timeInfo || !direction || !direction.stop_area) return;
+        if (!info || !timeInfo) return;
+        if (!provenancesCibles.some(city => provenance.includes(city))) return;
 
-        // Extraire le nom de la provenance directement depuis direction.stop_area.name
-        const provenance = direction.stop_area.name;
+        const train = info.headsign || "Train inconnu";
+        const heureBase = timeInfo.base_arrival_date_time;
+        const heureReelle = timeInfo.arrival_date_time;
 
-        const timeBase = timeInfo.base_arrival_date_time;
-        const timeReal = timeInfo.arrival_date_time;
+        const cleUnique = `${train}_${provenance}_${heureBase}`;
+        if (dejaVus.has(cleUnique)) return;
+        dejaVus.add(cleUnique);
 
-        const hBase = timeBase ? timeBase.slice(9, 11) + "h" + timeBase.slice(11, 13) : "Inconnue";
-        const hReal = timeReal ? timeReal.slice(9, 11) + "h" + timeReal.slice(11, 13) : "Inconnue";
+        const hBase = heureBase ? heureBase.slice(9, 11) + "h" + heureBase.slice(11, 13) : "Inconnue";
+        const hReelle = heureReelle ? heureReelle.slice(9, 11) + "h" + heureReelle.slice(11, 13) : "Inconnue";
 
         let statut = "ontime";
         let emoji = "✅";
         let texteStatut = "À l'heure";
         let retardTxt = "";
+        let causeTxt = "";
 
-        if (timeBase && timeReal && timeBase !== timeReal) {
-          const h1 = parseInt(timeBase.slice(9, 11)) * 60 + parseInt(timeBase.slice(11, 13));
-          const h2 = parseInt(timeReal.slice(9, 11)) * 60 + parseInt(timeReal.slice(11, 13));
+        if (heureBase && heureReelle && heureBase !== heureReelle) {
+          const h1 = parseInt(heureBase.slice(9, 11)) * 60 + parseInt(heureBase.slice(11, 13));
+          const h2 = parseInt(heureReelle.slice(9, 11)) * 60 + parseInt(heureReelle.slice(11, 13));
           const diff = h2 - h1;
           if (diff > 0) {
             statut = "retarde";
@@ -201,16 +181,18 @@
           }
         }
 
+        if (heureBase && !heureReelle) {
+          statut = "supprime";
+          emoji = "❌";
+          texteStatut = "Supprimé";
+        }
+
         if (statut !== "ontime") {
           const cause = info.cause || info.cancelled_message;
           if (cause) causeTxt = ` — Cause : ${cause}`;
         }
 
-        // Vérifier que l'élément n'a pas déjà été affiché
-        if (!dejaVus.has(info.headsign)) {
-          dejaVus.add(info.headsign);
-          html += `<li class="${statut}">${emoji} <strong>${info.headsign}</strong> à ${hBase}${retardTxt} — Provenance : <strong>${provenance}</strong> — Statut : ${texteStatut}</li>`;
-        }
+        html += `<li class="${statut}">${emoji} <strong>${train}</strong> à ${hBase}${retardTxt} — Provenance : <strong>${provenance}</strong> — Statut : ${texteStatut}${causeTxt}</li>`;
       });
 
       html += '</ul>';
