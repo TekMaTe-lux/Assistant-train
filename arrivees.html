@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <title>Arrivées à Luxembourg</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      line-height: 1.6;
+      padding: 20px;
+      background-color: #f9f9f9;
+      color: #333;
+      max-width: 900px;
+      margin: auto;
+    }
+    h1 {
+      text-align: center;
+      color: #004080;
+      font-size: 2.5em;
+    }
+    .legend {
+      text-align: center;
+      margin: 20px 0;
+    }
+    .legend span {
+      display: inline-block;
+      margin: 0 10px;
+      font-weight: bold;
+      padding: 5px 10px;
+      border-radius: 5px;
+    }
+    .ontime { color: green; background-color: #e0f7e0; }
+    .retarde { color: orange; background-color: #fff4e0; }
+    .supprime { color: red; background-color: #fbeaea; }
+
+    #resultat ul {
+      padding: 0;
+    }
+    #resultat li {
+      background: #fff;
+      border-left: 6px solid #ccc;
+      margin-bottom: 10px;
+      padding: 10px 15px;
+      border-radius: 4px;
+      list-style: none;
+    }
+    #resultat li.ontime { border-left-color: green; }
+    #resultat li.retarde { border-left-color: orange; }
+    #resultat li.supprime { border-left-color: red; }
+
+    #trainImage {
+      display: block;
+      max-width: 100%;
+      margin: 20px auto 10px auto;
+      border-radius: 10px;
+    }
+
+    .humour {
+      font-size: 0.85em;
+      font-style: italic;
+      text-align: center;
+      margin-bottom: 30px;
+      color: #555;
+    }
+
+    .humour a {
+      color: #004080;
+      text-decoration: none;
+      font-weight: bold;
+    }
+
+    .humour a:hover {
+      text-decoration: underline;
+    }
+  </style>
+</head>
+<body>
+  <h1>Arrivées à Luxembourg depuis Nancy, Metz ou Thionville</h1>
+
+  <div class="legend">
+    <span class="ontime">✅ À l'heure</span>
+    <span class="retarde">⚠️ Retardé</span>
+    <span class="supprime">❌ Supprimé</span>
+  </div>
+
+  <div id="resultat">Chargement en cours...</div>
+
+  <img id="trainImage" src="https://raw.githubusercontent.com/TekMaTe-lux/Assistant-train/refs/heads/main/20250426_224742.jpg" alt="Image du train">
+
+  <div class="humour">
+    Le Lundi c'est conditions de départs non réunies !<br>
+    Le Vendredi c'est panne de PN !<br>
+    Suivez l'aventure des Bétaillères Express Régionales sur
+    <a href="https://x.com/BERNancyMetzLux" target="_blank">@BERNancyMetzLux</a> !
+  </div>
+
+  <script>
+    const apiKey = '242fac11-6d98-45fb-93df-28174d362447';
+    const encodedApiKey = btoa(apiKey + ":");
+    const url = "https://api.sncf.com/v1/coverage/sncf/stop_areas/stop_area:SNCF:82001000/arrivals?datetime=20250430T140000";
+
+    fetch(url, {
+      method: 'GET',
+      headers: {
+        "Authorization": "Basic " + encodedApiKey
+      }
+    })
+    .then(response => {
+      if (!response.ok) throw new Error("Erreur HTTP : " + response.status);
+      return response.json();
+    })
+    .then(data => {
+      const arrivals = data.arrivals;
+      const originesCibles = ["Thionville", "Metz", "Nancy"];
+      const dejaVus = new Set();
+      let html = '<ul>';
+
+      arrivals.forEach(arr => {
+        const info = arr.display_informations;
+        const timeInfo = arr.stop_date_time;
+        if (!info || !timeInfo) return;
+
+        let origine = info.direction || "Origine inconnue";
+        origine = origine.trim();
+
+        // Suppression des doublons comme "Metz (Metz)"
+        const doublonMatch = origine.match(/^(.+?)\s+\(\1\)$/);
+        if (doublonMatch) origine = doublonMatch[1];
+
+        if (!originesCibles.some(city => origine.includes(city))) return;
+
+        const train = info.headsign || "Train inconnu";
+        const heureBase = timeInfo.base_arrival_date_time;
+        const cleUnique = `${train}_${origine}_${heureBase}`;
+        if (dejaVus.has(cleUnique)) return;
+        dejaVus.add(cleUnique);
+
+        const heureReelle = timeInfo.arrival_date_time;
+        const hBase = heureBase ? heureBase.slice(9, 11) + "h" + heureBase.slice(11, 13) : "Inconnue";
+        const hReelle = heureReelle ? heureReelle.slice(9, 11) + "h" + heureReelle.slice(11, 13) : "Inconnue";
+
+        let statut = "ontime";
+        let emoji = "✅";
+        let texteStatut = "À l'heure";
+        let retardTxt = "";
+        let causeTxt = "";
+
+        if (heureBase && heureReelle && heureBase !== heureReelle) {
+          const h1 = parseInt(heureBase.slice(9, 11)) * 60 + parseInt(heureBase.slice(11, 13));
+          const h2 = parseInt(heureReelle.slice(9, 11)) * 60 + parseInt(heureReelle.slice(11, 13));
+          const diff = h2 - h1;
+          if (diff > 0) {
+            statut = "retarde";
+            emoji = "⚠️";
+            texteStatut = "Retardé";
+            retardTxt = ` (+${diff} min)`;
+          }
+        }
+
+        if (heureBase && !heureReelle) {
+          statut = "supprime";
+          emoji = "❌";
+          texteStatut = "Supprimé";
+        }
+
+        if (statut !== "ontime") {
+          const cause = info.cause || info.cancelled_message;
+          if (cause) causeTxt = ` — Cause : ${cause}`;
+        }
+
+        html += `<li class="${statut}">${emoji} <strong>${train}</strong> à ${hBase}${retardTxt} — Origine : <strong>${origine}</strong> — Statut : ${texteStatut}${causeTxt}</li>`;
+      });
+
+      html += '</ul>';
+      document.getElementById("resultat").innerHTML = html || "Aucun train trouvé.";
+    })
+    .catch(error => {
+      document.getElementById("resultat").textContent = "Erreur : " + error.message;
+    });
+  </script>
+</body>
+</html>
