@@ -157,6 +157,8 @@
     const datetime = `${yyyy}${mm}${dd}T${hh}${min}${ss}`;
     const url = `https://api.sncf.com/v1/coverage/sncf/stop_areas/stop_area:SNCF:82001000/arrivals?datetime=${datetime}`;
 
+    let arrivalsData = []; // Déclare un tableau pour stocker les arrivées
+
     fetch(url, {
       method: 'GET',
       headers: {
@@ -168,10 +170,37 @@
       return response.json();
     })
     .then(data => {
-      const arrivals = data.arrivals;
+      arrivalsData = data.arrivals; // Stocke les données des arrivées
+      updateTable(arrivalsData); // Appelle la fonction pour afficher les données au départ
+
+      // Filtre interactif
+      document.getElementById("provenance-filter").addEventListener("change", function() {
+        const selectedValue = this.value;
+        const filteredArrivals = filterArrivalsByProvenance(selectedValue);
+        updateTable(filteredArrivals); // Mets à jour le tableau avec les données filtrées
+      });
+    })
+    .catch(error => {
+      document.getElementById("resultat").textContent = "Erreur : " + error.message;
+    });
+
+    // Fonction pour filtrer les arrivées en fonction de la provenance
+    function filterArrivalsByProvenance(provenance) {
+      if (provenance === "all") {
+        return arrivalsData; // Retourne toutes les arrivées si "all" est sélectionné
+      }
+      return arrivalsData.filter(arr => {
+        const info = arr.display_informations;
+        const trainProvenance = info.direction || "Provenance inconnue";
+        return trainProvenance.includes(provenance);
+      });
+    }
+
+    // Fonction pour mettre à jour l'affichage du tableau
+    function updateTable(arrivals) {
+      let html = '<ul>';
       const provenancesCibles = ["Thionville", "Metz", "Nancy"];
       const dejaVus = new Set();
-      let html = '<ul>';
 
       arrivals.forEach(arr => {
         if (!arr || typeof arr !== 'object') return;
@@ -234,63 +263,7 @@
 
       html += '</ul>';
       document.getElementById("resultat").innerHTML = html || "Aucun train trouvé.";
-
-      // Filtre interactif
-      document.getElementById("provenance-filter").addEventListener("change", function() {
-        const selectedValue = this.value;
-        const filteredArrivals = arrivals.filter(arr => {
-          const info = arr.display_informations;
-          const provenance = info.direction || "Provenance inconnue";
-          return selectedValue === "all" || provenance.includes(selectedValue);
-        });
-
-        let html = '<ul>';
-        filteredArrivals.forEach(arr => {
-          const info = arr.display_informations;
-          const timeInfo = arr.stop_date_time;
-          let provenance = info.direction || "Provenance inconnue";
-          const train = info.headsign ? info.headsign : "Train inconnu";
-          const heureBase = timeInfo.base_arrival_date_time;
-          const heureReelle = timeInfo.arrival_date_time;
-          let statut = "ontime";
-          let emoji = "✅";
-          let texteStatut = "À l'heure";
-          let retardTxt = "";
-          let causeTxt = "";
-
-          if (heureBase && heureReelle && heureBase !== heureReelle) {
-            const h1 = parseInt(heureBase.slice(9, 11)) * 60 + parseInt(heureBase.slice(11, 13));
-            const h2 = parseInt(heureReelle.slice(9, 11)) * 60 + parseInt(heureReelle.slice(11, 13));
-            const diff = h2 - h1;
-            if (diff > 0) {
-              statut = "retarde";
-              emoji = "⚠️";
-              texteStatut = "Retardé";
-              retardTxt = ` (+${diff} min)`;
-            }
-          }
-
-          if (heureBase && !heureReelle) {
-            statut = "supprime";
-            emoji = "❌";
-            texteStatut = "Supprimé";
-          }
-
-          if (statut !== "ontime") {
-            const cause = info.cause || info.cancelled_message;
-            if (cause) causeTxt = ` — Cause : ${cause}`;
-          }
-
-          html += `<li class="${statut}">${emoji} <strong>${train}</strong> à ${heureBase.slice(9, 11)}h${heureBase.slice(11, 13)}${retardTxt} — Provenance : <strong>${provenance}</strong> — Statut : ${texteStatut}${causeTxt}</li>`;
-        });
-
-        html += '</ul>';
-        document.getElementById("resultat").innerHTML = html || "Aucun train trouvé.";
-      });
-    })
-    .catch(error => {
-      document.getElementById("resultat").textContent = "Erreur : " + error.message;
-    });
+    }
   </script>
 </body>
 </html>
