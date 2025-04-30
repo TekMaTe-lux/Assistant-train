@@ -85,10 +85,35 @@
       border-radius: 10px;
       border: none;
     }
+
+    .alertes {
+      margin-top: 20px;
+      background-color: #fff4f4;
+      padding: 20px;
+      border-radius: 5px;
+    }
+
+    #alertes-list {
+      list-style-type: none;
+    }
+
+    .alerte {
+      margin-bottom: 10px;
+      padding: 10px;
+      background-color: #ffe6e6;
+      border-left: 4px solid red;
+    }
   </style>
 </head>
 <body>
-  <h1>Arrivées des bétaillères à Luxembourg</h1>
+  <h1>Arrivées à Luxembourg</h1>
+
+  <div class="alertes">
+    <h2>Alertes TER Nancy–Luxembourg</h2>
+    <ul id="alertes-list">
+      <li>Chargement des alertes...</li>
+    </ul>
+  </div>
 
   <div class="legend">
     <span class="ontime">✅ À l'heure</span>
@@ -101,8 +126,9 @@
   <img id="trainImage" src="https://raw.githubusercontent.com/TekMaTe-lux/Assistant-train/refs/heads/main/20250426_224742.jpg" alt="Image du train">
 
   <div class="humour">
-    À bord de la bétaillère express, l’arrivée est une délivrance !<br>
-    Suivez les mésaventures sur
+    Le Lundi c'est conditions de départs non réunies !<br>
+    Le Vendredi c'est panne de PN !<br>
+    Suivez l'aventure des Bétaillères Express Régionales sur
     <a href="https://x.com/BERNancyMetzLux" target="_blank">@BERNancyMetzLux</a> !
   </div>
 
@@ -115,7 +141,7 @@
     const apiKey = '242fac11-6d98-45fb-93df-28174d362447';
     const encodedApiKey = btoa(apiKey + ":");
 
-    // Date et heure actuelles au format YYYYMMDDTHHmmss
+    // Obtenir la date et l'heure actuelles
     const now = new Date();
     const yyyy = now.getFullYear();
     const mm = String(now.getMonth() + 1).padStart(2, '0');
@@ -123,8 +149,8 @@
     const hh = String(now.getHours()).padStart(2, '0');
     const min = String(now.getMinutes()).padStart(2, '0');
     const ss = String(now.getSeconds()).padStart(2, '0');
-    const datetime = `${yyyy}${mm}${dd}T${hh}${min}${ss}`;
 
+    const datetime = `${yyyy}${mm}${dd}T${hh}${min}${ss}`;
     const url = `https://api.sncf.com/v1/coverage/sncf/stop_areas/stop_area:SNCF:82001000/arrivals?datetime=${datetime}`;
 
     fetch(url, {
@@ -139,37 +165,43 @@
     })
     .then(data => {
       const arrivals = data.arrivals;
-      const provenancesCibles = ["Thionville", "Metz", "Nancy"];
-      const dejaVus = new Set();
+      const originCities = ["Thionville", "Metz", "Nancy"];
+      const alreadySeen = new Set();
       let html = '<ul>';
 
       arrivals.forEach(arr => {
         const info = arr.display_informations;
         const timeInfo = arr.stop_date_time;
-        if (!info || !timeInfo || info.network !== "TER") return;
+        if (!info || !timeInfo) return;
 
-        let provenance = info.direction || "Provenance inconnue";
-        provenance = provenance.trim();
+        let origin = info.direction || "Provenance inconnue";
+        origin = origin.trim();
 
-        // Filtrage strict pour éviter les fausses correspondances
-        if (!provenancesCibles.some(city => provenance.includes(city))) return;
+        // Supprime les doublons du type "Metz (Metz)"
+        const match = origin.match(/^(.+?)\s*\((.+?)\)$/);
+        if (match && match[1].trim().toLowerCase() === match[2].trim().toLowerCase()) {
+          console.warn("Provenance doublonnée détectée :", origin);
+          origin = match[1];
+        }
+
+        if (!originCities.some(city => origin.includes(city))) return;
 
         const train = info.headsign || "Train inconnu";
         const heureBase = timeInfo.base_arrival_date_time;
+
+        // Filtre anti-doublon réel
+        const uniqueKey = `${train}_${origin}_${heureBase}`;
+        if (alreadySeen.has(uniqueKey)) return;
+        alreadySeen.add(uniqueKey);
+
         const heureReelle = timeInfo.arrival_date_time;
-
-        // Filtre anti-doublon
-        const cleUnique = `${train}_${provenance}_${heureBase}`;
-        if (dejaVus.has(cleUnique)) return;
-        dejaVus.add(cleUnique);
-
         const hBase = heureBase ? heureBase.slice(9, 11) + "h" + heureBase.slice(11, 13) : "Inconnue";
         const hReelle = heureReelle ? heureReelle.slice(9, 11) + "h" + heureReelle.slice(11, 13) : "Inconnue";
 
-        let statut = "ontime";
+        let status = "ontime";
         let emoji = "✅";
-        let texteStatut = "À l'heure";
-        let retardTxt = "";
+        let statusText = "À l'heure";
+        let delayTxt = "";
         let causeTxt = "";
 
         if (heureBase && heureReelle && heureBase !== heureReelle) {
@@ -177,20 +209,25 @@
           const h2 = parseInt(heureReelle.slice(9, 11)) * 60 + parseInt(heureReelle.slice(11, 13));
           const diff = h2 - h1;
           if (diff > 0) {
-            statut = "retarde";
+            status = "retarde";
             emoji = "⚠️";
-            texteStatut = "Retardé";
-            retardTxt = ` (+${diff} min)`;
+            statusText = "Retardé";
+            delayTxt = ` (+${diff} min)`;
           }
         }
 
         if (heureBase && !heureReelle) {
-          statut = "supprime";
+          status = "supprime";
           emoji = "❌";
-          texteStatut = "Supprimé";
+          statusText = "Supprimé";
         }
 
-        html += `<li class="${statut}">${emoji} <strong>${train}</strong> à ${hBase}${retardTxt} — En provenance de : <strong>${provenance}</strong> — Statut : ${texteStatut}${causeTxt}</li>`;
+        if (status !== "ontime") {
+          const cause = info.cause || info.cancelled_message;
+          if (cause) causeTxt = ` — Cause : ${cause}`;
+        }
+
+        html += `<li class="${status}">${emoji} <strong>${train}</strong> à ${hBase}${delayTxt} — En provenance de : <strong>${origin}</strong> — Statut : ${statusText}${causeTxt}</li>`;
       });
 
       html += '</ul>';
@@ -199,6 +236,28 @@
     .catch(error => {
       document.getElementById("resultat").textContent = "Erreur : " + error.message;
     });
+
+    async function fetchAlerts() {
+      const response = await fetch('https://transport.data.gouv.fr/resources/81779/alerts.pb');
+      const buffer = await response.arrayBuffer();
+      const feed = protobuf.Message.decode(new Uint8Array(buffer));
+
+      const relevantAlerts = feed.entity.filter(entity => {
+        return entity.alert.informed_entity.some(info =>
+          info.route_id === 'LIGNE_NANCY_LUX' || 
+          info.stop_id === 'STOP_ID_NANCY_LUX'
+        );
+      });
+
+      const alertesHTML = relevantAlerts.map(alert => {
+        return `<li class="alerte">${alert.alert.header_text.translation[0].text}: ${alert.alert.description_text.translation[0].text}</li>`;
+      }).join('');
+
+      document.getElementById('alertes-list').innerHTML = alertesHTML || "<li>Aucune alerte en cours.</li>";
+    }
+
+    fetchAlerts();
   </script>
 </body>
 </html>
+
