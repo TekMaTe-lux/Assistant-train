@@ -72,10 +72,23 @@
     .humour a:hover {
       text-decoration: underline;
     }
+
+    .video {
+      margin-top: 40px;
+      text-align: center;
+    }
+
+    .video iframe {
+      width: 100%;
+      max-width: 560px;
+      height: 315px;
+      border-radius: 10px;
+      border: none;
+    }
   </style>
 </head>
 <body>
-  <h1>Arrivées de vos bétaillères à Luxembourg</h1>
+  <h1>Arrivées des bétaillères à Luxembourg</h1>
 
   <div class="legend">
     <span class="ontime">✅ À l'heure</span>
@@ -88,20 +101,31 @@
   <img id="trainImage" src="https://raw.githubusercontent.com/TekMaTe-lux/Assistant-train/refs/heads/main/20250426_224742.jpg" alt="Image du train">
 
   <div class="humour">
-    À défaut de ponctualité, on vous garantit de l’émotion !<br>
-    Les TER de Thionville ont parfois une âme... en retard !<br>
-    Suivez l'aventure des Bétaillères Express Régionales sur
+    À bord de la bétaillère express, l’arrivée est une délivrance !<br>
+    Suivez les mésaventures sur
     <a href="https://x.com/BERNancyMetzLux" target="_blank">@BERNancyMetzLux</a> !
+  </div>
+
+  <div class="video">
+    <h2>Vidéo bonus</h2>
+    <iframe src="https://www.youtube.com/embed/rWFDBMcNTL8" allowfullscreen></iframe>
   </div>
 
   <script>
     const apiKey = '242fac11-6d98-45fb-93df-28174d362447';
     const encodedApiKey = btoa(apiKey + ":");
 
-    const date = new Date();
-    const isoDate = date.toISOString().replace(/[-:]/g, "").slice(0, 15); // Format AAAAMMJJTHHMMSS
+    // Date et heure actuelles au format YYYYMMDDTHHmmss
+    const now = new Date();
+    const yyyy = now.getFullYear();
+    const mm = String(now.getMonth() + 1).padStart(2, '0');
+    const dd = String(now.getDate()).padStart(2, '0');
+    const hh = String(now.getHours()).padStart(2, '0');
+    const min = String(now.getMinutes()).padStart(2, '0');
+    const ss = String(now.getSeconds()).padStart(2, '0');
+    const datetime = `${yyyy}${mm}${dd}T${hh}${min}${ss}`;
 
-    const url = `https://api.sncf.com/v1/coverage/sncf/stop_areas/stop_area:SNCF:87191007/departures?datetime=${isoDate}`;
+    const url = `https://api.sncf.com/v1/coverage/sncf/stop_areas/stop_area:SNCF:82001000/arrivals?datetime=${datetime}`;
 
     fetch(url, {
       method: 'GET',
@@ -114,32 +138,33 @@
       return response.json();
     })
     .then(data => {
-      const departures = data.departures;
+      const arrivals = data.arrivals;
+      const provenancesCibles = ["Thionville", "Metz", "Nancy"];
       const dejaVus = new Set();
       let html = '<ul>';
 
-      departures.forEach(dep => {
-        const info = dep.display_informations;
-        const timeInfo = dep.stop_date_time;
-        if (!info || !timeInfo) return;
+      arrivals.forEach(arr => {
+        const info = arr.display_informations;
+        const timeInfo = arr.stop_date_time;
+        if (!info || !timeInfo || info.network !== "TER") return;
 
-        if (info.network && !info.network.includes("TER")) return;
-        if (!info.direction || !info.direction.includes("Luxembourg")) return;
+        let provenance = info.direction || "Provenance inconnue";
+        provenance = provenance.trim();
 
-        let destination = info.direction || "Destination inconnue";
-        destination = destination.trim();
-
-        let provenance = "Thionville";
+        // Filtrage strict pour éviter les fausses correspondances
+        if (!provenancesCibles.some(city => provenance.includes(city))) return;
 
         const train = info.headsign || "Train inconnu";
-        const heureBase = timeInfo.base_departure_date_time;
-        const heureReelle = timeInfo.departure_date_time;
-        const hBase = heureBase ? heureBase.slice(9, 11) + "h" + heureBase.slice(11, 13) : "Inconnue";
-        const hReelle = heureReelle ? heureReelle.slice(9, 11) + "h" + heureReelle.slice(11, 13) : "Inconnue";
+        const heureBase = timeInfo.base_arrival_date_time;
+        const heureReelle = timeInfo.arrival_date_time;
 
-        const cleUnique = `${train}_${heureBase}`;
+        // Filtre anti-doublon
+        const cleUnique = `${train}_${provenance}_${heureBase}`;
         if (dejaVus.has(cleUnique)) return;
         dejaVus.add(cleUnique);
+
+        const hBase = heureBase ? heureBase.slice(9, 11) + "h" + heureBase.slice(11, 13) : "Inconnue";
+        const hReelle = heureReelle ? heureReelle.slice(9, 11) + "h" + heureReelle.slice(11, 13) : "Inconnue";
 
         let statut = "ontime";
         let emoji = "✅";
@@ -163,11 +188,6 @@
           statut = "supprime";
           emoji = "❌";
           texteStatut = "Supprimé";
-        }
-
-        if (statut !== "ontime") {
-          const cause = info.cause || info.cancelled_message;
-          if (cause) causeTxt = ` — Cause : ${cause}`;
         }
 
         html += `<li class="${statut}">${emoji} <strong>${train}</strong> à ${hBase}${retardTxt} — En provenance de : <strong>${provenance}</strong> — Statut : ${texteStatut}${causeTxt}</li>`;
