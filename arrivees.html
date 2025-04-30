@@ -16,7 +16,6 @@
     h1 {
       text-align: center;
       color: #004080;
-      font-size: 2.5em;
     }
     .legend {
       text-align: center;
@@ -33,25 +32,24 @@
     .retarde { color: orange; background-color: #fff4e0; }
     .supprime { color: red; background-color: #fbeaea; }
 
-    #resultat ul {
+    ul {
+      list-style: none;
       padding: 0;
     }
-    #resultat li {
-      background: #fff;
-      border-left: 6px solid #ccc;
-      margin-bottom: 10px;
-      padding: 10px 15px;
-      border-radius: 4px;
-      list-style: none;
+    li {
+      padding: 10px;
+      margin: 5px 0;
+      background: white;
+      border-left: 5px solid #ccc;
     }
-    #resultat li.ontime { border-left-color: green; }
-    #resultat li.retarde { border-left-color: orange; }
-    #resultat li.supprime { border-left-color: red; }
+    li.ontime { border-color: green; }
+    li.retarde { border-color: orange; }
+    li.supprime { border-color: red; }
 
     #trainImage {
       display: block;
       max-width: 100%;
-      margin: 20px auto 10px auto;
+      margin: 20px auto;
       border-radius: 10px;
     }
 
@@ -75,7 +73,7 @@
   </style>
 </head>
 <body>
-  <h1>Arrivées des bétaillères à Luxembourg</h1>
+  <h1>Arrivées TER à Luxembourg</h1>
 
   <div class="legend">
     <span class="ontime">✅ À l'heure</span>
@@ -88,59 +86,85 @@
   <img id="trainImage" src="https://raw.githubusercontent.com/TekMaTe-lux/Assistant-train/refs/heads/main/20250426_224742.jpg" alt="Image du train">
 
   <div class="humour">
-    Du bétail en approche !<br>
-    Des secousses, des grincements, et parfois même un arrêt surprise à Bettembourg...<br>
-    Suivez les péripéties sur <a href="https://x.com/BERNancyMetzLux" target="_blank">@BERNancyMetzLux</a> !
+    Du bétail en approche ! Suivez les péripéties sur <a href="https://x.com/BERNancyMetzLux" target="_blank">@BERNancyMetzLux</a>
   </div>
 
   <script>
     const apiKey = '242fac11-6d98-45fb-93df-28174d362447';
     const encodedApiKey = btoa(apiKey + ":");
-    const gareLuxembourg = "stop_area:SNCF:82001000";
-    const garesOrigines = [
-      "stop_area:SNCF:87141002", // Nancy
-      "stop_area:SNCF:87192039", // Metz
-      "stop_area:SNCF:87191007"  // Thionville
-    ];
 
-    const dejaVus = new Set();
-    let html = '<ul>';
-    let promises = garesOrigines.map(gareCode => {
-      const url = `https://api.sncf.com/v1/coverage/sncf/stop_areas/${gareCode}/departures?direction=${gareLuxembourg}`;
+    const gareLux = "stop_area:SNCF:82001000";
+    const origines = {
+      "stop_area:SNCF:87141002": "Nancy",
+      "stop_area:SNCF:87192039": "Metz",
+      "stop_area:SNCF:87191007": "Thionville"
+    };
 
-      return fetch(url, {
-        method: 'GET',
+    let html = "<ul>";
+    let dejaVus = new Set();
+
+    const promises = Object.entries(origines).map(([code, nomVille]) => {
+      return fetch(`https://api.sncf.com/v1/coverage/sncf/stop_areas/${code}/departures?direction=${gareLux}`, {
         headers: {
           "Authorization": "Basic " + encodedApiKey
         }
       })
-      .then(res => res.json())
+      .then(r => r.json())
       .then(data => {
-        const departures = data.departures || [];
-        departures.forEach(dep => {
+        (data.departures || []).forEach(dep => {
           const info = dep.display_informations;
-          const timeInfo = dep.stop_date_time;
-          if (!info || !timeInfo) return;
+          const time = dep.stop_date_time;
+          if (!info || !time) return;
 
-          let destination = info.direction || "Destination inconnue";
-          destination = destination.trim();
+          const trainNum = info.headsign || "";
+          const type = info.commercial_mode || "";
 
-          // Ignore trains that do not go to Luxembourg
-          if (!destination.includes("Luxembourg")) return;
+          // Exclure les TGV, IC, etc. — on ne garde que les TER
+          if (type.toUpperCase() !== "TER") return;
 
-          // Ignore TGVs: If the train has 'TGV' in its name, exclude it
-          const trainNumber = info.headsign || "Train inconnu";
-          if (trainNumber.toUpperCase().includes("TGV")) return;
+          // Exclure doublons
+          const uniqueKey = trainNum + time.base_departure_date_time;
+          if (dejaVus.has(uniqueKey)) return;
+          dejaVus.add(uniqueKey);
 
-          const regexDoublon = /^(.+?)\s*\s*\1\s*$/i;
-          const match = destination.match(regexDoublon);
-          if (match) destination = match[1];
+          // Heures
+          const hBase = time.base_departure_date_time?.slice(9, 11) + "h" + time.base_departure_date_time?.slice(11, 13);
+          const hReelle = time.departure_date_time?.slice(9, 11) + "h" + time.departure_date_time?.slice(11, 13);
+          let statut = "ontime";
+          let emoji = "✅";
+          let texteStatut = "À l'heure";
+          let retardTxt = "";
 
-          const train = info.headsign || "Train inconnu";
-          const heureBase = timeInfo.base_departure_date_time;
-          const heureReelle = timeInfo.departure_date_time;
-          const cleUnique = `${train}_${destination}_${heureBase}`;
-          if (dejaVus.has(cleUnique)) return;
-          dejaVus.add(cleUnique);
+          if (time.base_departure_date_time && time.departure_date_time &&
+              time.base_departure_date_time !== time.departure_date_time) {
+            const h1 = parseInt(time.base_departure_date_time.slice(9, 11)) * 60 + parseInt(time.base_departure_date_time.slice(11, 13));
+            const h2 = parseInt(time.departure_date_time.slice(9, 11)) * 60 + parseInt(time.departure_date_time.slice(11, 13));
+            const retard = h2 - h1;
+            if (retard > 0) {
+              statut = "retarde";
+              emoji = "⚠️";
+              texteStatut = "Retardé";
+              retardTxt = ` (+${retard} min)`;
+            }
+          }
 
-          const
+          if (time.base_departure_date_time && !time.departure_date_time) {
+            statut = "supprime";
+            emoji = "❌";
+            texteStatut = "Supprimé";
+          }
+
+          html += `<li class="${statut}">${emoji} <strong>${trainNum}</strong> à ${hBase}${retardTxt} — En provenance de : <strong>${nomVille}</strong> — Statut : ${texteStatut}</li>`;
+        });
+      });
+    });
+
+    Promise.all(promises).then(() => {
+      html += "</ul>";
+      document.getElementById("resultat").innerHTML = html;
+    }).catch(err => {
+      document.getElementById("resultat").textContent = "Erreur : " + err.message;
+    });
+  </script>
+</body>
+</html>
