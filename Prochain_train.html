@@ -165,6 +165,17 @@
     })
     .then(data => {
       const departures = data.departures;
+      const disruptions = data.disruptions || [];
+      const disruptionMap = {};
+
+      // Map des disruptions pour accès par ID
+      disruptions.forEach(disruption => {
+        const id = disruption.id?.replace('disruption:SNCF:', '');
+        if (id && disruption.cause) {
+          disruptionMap[id] = disruption.cause;
+        }
+      });
+
       const destinationsCibles = ["Thionville", "Metz", "Nancy"];
       const dejaVus = new Set();
       let html = '<ul>';
@@ -222,17 +233,16 @@
           texteStatut = "Supprimé";
         }
 
-        // Chercher la cause du retard
-        if (statut !== "ontime") {
-          const disruptions = dep.disruptions || [];
-          disruptions.forEach(d => {
-            if (d.impacted_objects && d.impacted_objects.length > 0) {
-              const impacted = d.impacted_objects.find(obj => obj.pt_object.id === `SNCF:2025-04-30:${dep.train_id}:Train`);
-              if (impacted) {
-                causeTxt = ` — Cause : ${d.messages[0].text || "Aucune cause précisée"}`;
-              }
+        // Chercher la cause du retard via links -> disruption
+        if (statut !== "ontime" && dep.links) {
+          const disruptionLink = dep.links.find(link => link.rel === "disruption");
+          if (disruptionLink && disruptionLink.href) {
+            const id = disruptionLink.href.split('/').pop().replace('disruption:SNCF:', '');
+            const cause = disruptionMap[id];
+            if (cause) {
+              causeTxt = ` — Cause : ${cause}`;
             }
-          });
+          }
         }
 
         html += `<li class="${statut}">${emoji} <strong>${train}</strong> à ${hBase}${retardTxt} — Destination : <strong>${destination}</strong> — Statut : ${texteStatut}${causeTxt}</li>`;
