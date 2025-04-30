@@ -47,10 +47,35 @@
     #resultat li.ontime { border-left-color: green; }
     #resultat li.retarde { border-left-color: orange; }
     #resultat li.supprime { border-left-color: red; }
+
+    #trainImage {
+      display: block;
+      max-width: 100%;
+      margin: 20px auto 10px auto;
+      border-radius: 10px;
+    }
+
+    .humour {
+      font-size: 0.85em;
+      font-style: italic;
+      text-align: center;
+      margin-bottom: 30px;
+      color: #555;
+    }
+
+    .humour a {
+      color: #004080;
+      text-decoration: none;
+      font-weight: bold;
+    }
+
+    .humour a:hover {
+      text-decoration: underline;
+    }
   </style>
 </head>
 <body>
-  <h1>Arrivées à Luxembourg depuis Nancy, Metz et Thionville</h1>
+  <h1>Arrivées des bétaillères à Luxembourg</h1>
 
   <div class="legend">
     <span class="ontime">✅ À l'heure</span>
@@ -60,57 +85,66 @@
 
   <div id="resultat">Chargement en cours...</div>
 
+  <img id="trainImage" src="https://raw.githubusercontent.com/TekMaTe-lux/Assistant-train/refs/heads/main/20250426_224742.jpg" alt="Image du train">
+
+  <div class="humour">
+    Du bétail en approche !<br>
+    Des secousses, des grincements, et parfois même un arrêt surprise à Bettembourg...<br>
+    Suivez les péripéties sur <a href="https://x.com/BERNancyMetzLux" target="_blank">@BERNancyMetzLux</a> !
+  </div>
+
   <script>
     const apiKey = '242fac11-6d98-45fb-93df-28174d362447';
     const encodedApiKey = btoa(apiKey + ":");
-    const urls = [
-      { name: 'Nancy', code: '87175001' },
-      { name: 'Metz', code: '87192000' },
-      { name: 'Thionville', code: '87193000' }
+    const gareLuxembourg = "stop_area:SNCF:82001000";
+    const garesOrigines = [
+      "stop_area:SNCF:87141002", // Nancy
+      "stop_area:SNCF:87192039", // Metz
+      "stop_area:SNCF:87191007"  // Thionville
     ];
 
     const dejaVus = new Set();
-    const datetime = new Date().toISOString().slice(0,16).replace(/[-:T]/g, '').padEnd(15, '0');
-    const destinationCible = 'Luxembourg';
+    let html = '<ul>';
+    let promises = garesOrigines.map(gareCode => {
+      const url = `https://api.sncf.com/v1/coverage/sncf/stop_areas/${gareCode}/departures?direction=${gareLuxembourg}`;
 
-    const promises = urls.map(station => {
-      const url = `https://api.sncf.com/v1/coverage/sncf/stop_areas/stop_area:SNCF:${station.code}/departures?datetime=${datetime}`;
       return fetch(url, {
-        headers: { 'Authorization': 'Basic ' + encodedApiKey }
-      }).then(r => r.json());
-    });
-
-    Promise.all(promises).then(dataList => {
-      let html = '<ul>';
-
-      dataList.forEach(data => {
-        if (!data.departures) return;
-
-        data.departures.forEach(dep => {
+        method: 'GET',
+        headers: {
+          "Authorization": "Basic " + encodedApiKey
+        }
+      })
+      .then(res => res.json())
+      .then(data => {
+        const departures = data.departures || [];
+        departures.forEach(dep => {
           const info = dep.display_informations;
           const timeInfo = dep.stop_date_time;
           if (!info || !timeInfo) return;
 
           let destination = info.direction || "Destination inconnue";
           destination = destination.trim();
-
-          const regexDoublon = /^(.+?)\s*\uE041\s*\1\s*\uE041$/i;
+          const regexDoublon = /^(.+?)\s*\s*\1\s*$/i;
           const match = destination.match(regexDoublon);
           if (match) destination = match[1];
 
-          if (!destination.includes(destinationCible)) return;
+          if (!destination.includes("Luxembourg")) return;
 
           const train = info.headsign || "Train inconnu";
           const heureBase = timeInfo.base_departure_date_time;
+          const heureReelle = timeInfo.departure_date_time;
           const cleUnique = `${train}_${destination}_${heureBase}`;
           if (dejaVus.has(cleUnique)) return;
           dejaVus.add(cleUnique);
 
-          const heureReelle = timeInfo.departure_date_time;
           const hBase = heureBase ? heureBase.slice(9, 11) + "h" + heureBase.slice(11, 13) : "Inconnue";
           const hReelle = heureReelle ? heureReelle.slice(9, 11) + "h" + heureReelle.slice(11, 13) : "Inconnue";
 
-          let statut = "ontime", emoji = "✅", texteStatut = "À l'heure", retardTxt = "", causeTxt = "";
+          let statut = "ontime";
+          let emoji = "✅";
+          let texteStatut = "À l'heure";
+          let retardTxt = "";
+          let causeTxt = "";
 
           if (heureBase && heureReelle && heureBase !== heureReelle) {
             const h1 = parseInt(heureBase.slice(9, 11)) * 60 + parseInt(heureBase.slice(11, 13));
@@ -135,10 +169,12 @@
             if (cause) causeTxt = ` — Cause : ${cause}`;
           }
 
-          html += `<li class="${statut}">${emoji} <strong>${train}</strong> à ${hBase}${retardTxt} — Destination : <strong>${destination}</strong> — Statut : ${texteStatut}${causeTxt}</li>`;
+          html += `<li class="${statut}">${emoji} <strong>${train}</strong> à ${hBase}${retardTxt} — En provenance de : <strong>${info.direction}</strong> — Statut : ${texteStatut}${causeTxt}</li>`;
         });
       });
+    });
 
+    Promise.all(promises).then(() => {
       html += '</ul>';
       document.getElementById("resultat").innerHTML = html || "Aucun train trouvé.";
     }).catch(err => {
