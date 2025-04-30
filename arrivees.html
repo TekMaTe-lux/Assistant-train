@@ -106,7 +106,7 @@
   </style>
 </head>
 <body>
-  <h1>Arrivées des bétaillères à Luxembourg</h1>
+  <h1>Arrivées à Luxembourg</h1>
 
   <div class="alertes">
     <h2>Alertes TER Nancy–Luxembourg</h2>
@@ -126,8 +126,8 @@
   <img id="trainImage" src="https://raw.githubusercontent.com/TekMaTe-lux/Assistant-train/refs/heads/main/20250426_224742.jpg" alt="Image du train">
 
   <div class="humour">
-    Le Mardi c'est train bondé sans clim !<br>
-    Le Jeudi c'est grêve inopinée !<br>
+    Le Lundi c'est conditions de départs non réunies !<br>
+    Le Vendredi c'est panne de PN !<br>
     Suivez l'aventure des Bétaillères Express Régionales sur
     <a href="https://x.com/BERNancyMetzLux" target="_blank">@BERNancyMetzLux</a> !
   </div>
@@ -141,6 +141,7 @@
     const apiKey = '242fac11-6d98-45fb-93df-28174d362447';
     const encodedApiKey = btoa(apiKey + ":");
 
+    // Obtenir la date et l'heure actuelles
     const now = new Date();
     const yyyy = now.getFullYear();
     const mm = String(now.getMonth() + 1).padStart(2, '0');
@@ -164,26 +165,47 @@
     })
     .then(data => {
       const arrivals = data.arrivals;
+      const disruptions = data.disruptions || [];
+      const disruptionMap = {};
+
+      // Map des disruptions pour accès par ID
+      disruptions.forEach(disruption => {
+        const id = disruption.id?.replace('disruption:SNCF:', '');
+        if (id && disruption.cause) {
+          disruptionMap[id] = disruption.cause;
+        }
+      });
+
+      const destinationsCibles = ["Thionville", "Metz", "Nancy"];
       const dejaVus = new Set();
       let html = '<ul>';
 
       arrivals.forEach(arr => {
         const info = arr.display_informations;
         const timeInfo = arr.stop_date_time;
-        const provenance = arr.route?.direction?.stop_area?.name || "Provenance inconnue";
-
         if (!info || !timeInfo) return;
 
-        if (!["Metz", "Nancy", "Thionville"].includes(provenance)) return;
+        let origin = info.origin || "Origine inconnue";
+        origin = origin.trim();
+
+        // Supprime les doublons du type "Metz (Metz)"
+        const match = origin.match(/^(.+?)\s*\((.+?)\)$/);
+        if (match && match[1].trim().toLowerCase() === match[2].trim().toLowerCase()) {
+          console.warn("Origine doublonnée détectée :", origin);
+          origin = match[1];
+        }
+
+        if (!destinationsCibles.some(city => origin.includes(city))) return;
 
         const train = info.headsign || "Train inconnu";
         const heureBase = timeInfo.base_arrival_date_time;
-        const heureReelle = timeInfo.arrival_date_time;
 
-        const cleUnique = `${train}_${provenance}_${heureBase}`;
+        // Filtre anti-doublon réel
+        const cleUnique = `${train}_${origin}_${heureBase}`;
         if (dejaVus.has(cleUnique)) return;
         dejaVus.add(cleUnique);
 
+        const heureReelle = timeInfo.arrival_date_time;
         const hBase = heureBase ? heureBase.slice(9, 11) + "h" + heureBase.slice(11, 13) : "Inconnue";
         const hReelle = heureReelle ? heureReelle.slice(9, 11) + "h" + heureReelle.slice(11, 13) : "Inconnue";
 
@@ -211,13 +233,19 @@
           texteStatut = "Supprimé";
         }
 
-        // Vérification des disruptions pour récupérer la cause du retard
-        if (statut !== "ontime" && arr.disruptions && arr.disruptions.length > 0) {
-          const causes = arr.disruptions.map(d => d.text).join(" / ");
-          causeTxt = `<div style="color: red; font-style: italic; margin-top: 5px;">Cause : ${causes}</div>`;
+        // Chercher la cause du retard via links -> disruption
+        if (statut !== "ontime" && arr.links) {
+          const disruptionLink = arr.links.find(link => link.rel === "disruption");
+          if (disruptionLink && disruptionLink.href) {
+            const id = disruptionLink.href.split('/').pop().replace('disruption:SNCF:', '');
+            const cause = disruptionMap[id];
+            if (cause) {
+              causeTxt = ` — Cause : ${cause}`;
+            }
+          }
         }
 
-        html += `<li class="${statut}">${emoji} <strong>${train}</strong> à ${hBase}${retardTxt} — Provenance : <strong>${provenance}</strong> — Statut : ${texteStatut}${causeTxt}</li>`;
+        html += `<li class="${statut}">${emoji} <strong>${train}</strong> à ${hBase}${retardTxt} — Origine : <strong>${origin}</strong> — Statut : ${texteStatut}${causeTxt}</li>`;
       });
 
       html += '</ul>';
