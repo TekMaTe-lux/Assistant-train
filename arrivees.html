@@ -47,35 +47,10 @@
     #resultat li.ontime { border-left-color: green; }
     #resultat li.retarde { border-left-color: orange; }
     #resultat li.supprime { border-left-color: red; }
-
-    #trainImage {
-      display: block;
-      max-width: 100%;
-      margin: 20px auto 10px auto;
-      border-radius: 10px;
-    }
-
-    .humour {
-      font-size: 0.85em;
-      font-style: italic;
-      text-align: center;
-      margin-bottom: 30px;
-      color: #555;
-    }
-
-    .humour a {
-      color: #004080;
-      text-decoration: none;
-      font-weight: bold;
-    }
-
-    .humour a:hover {
-      text-decoration: underline;
-    }
   </style>
 </head>
 <body>
-  <h1>Arrivées à Luxembourg depuis Nancy, Metz ou Thionville</h1>
+  <h1>Arrivées à Luxembourg depuis Nancy, Metz et Thionville</h1>
 
   <div class="legend">
     <span class="ontime">✅ À l'heure</span>
@@ -85,97 +60,89 @@
 
   <div id="resultat">Chargement en cours...</div>
 
-  <img id="trainImage" src="https://raw.githubusercontent.com/TekMaTe-lux/Assistant-train/refs/heads/main/20250426_224742.jpg" alt="Image du train">
-
-  <div class="humour">
-    Le Lundi c'est conditions de départs non réunies !<br>
-    Le Vendredi c'est panne de PN !<br>
-    Suivez l'aventure des Bétaillères Express Régionales sur
-    <a href="https://x.com/BERNancyMetzLux" target="_blank">@BERNancyMetzLux</a> !
-  </div>
-
   <script>
     const apiKey = '242fac11-6d98-45fb-93df-28174d362447';
     const encodedApiKey = btoa(apiKey + ":");
-    const url = "https://api.sncf.com/v1/coverage/sncf/stop_areas/stop_area:SNCF:82001000/arrivals?datetime=20250430T140000";
+    const urls = [
+      { name: 'Nancy', code: '87175001' },
+      { name: 'Metz', code: '87192000' },
+      { name: 'Thionville', code: '87193000' }
+    ];
 
-    fetch(url, {
-      method: 'GET',
-      headers: {
-        "Authorization": "Basic " + encodedApiKey
-      }
-    })
-    .then(response => {
-      if (!response.ok) throw new Error("Erreur HTTP : " + response.status);
-      return response.json();
-    })
-    .then(data => {
-      const arrivals = data.arrivals;
-      const originesCibles = ["Thionville", "Metz", "Nancy"];
-      const dejaVus = new Set();
+    const dejaVus = new Set();
+    const datetime = new Date().toISOString().slice(0,16).replace(/[-:T]/g, '').padEnd(15, '0');
+    const destinationCible = 'Luxembourg';
+
+    const promises = urls.map(station => {
+      const url = `https://api.sncf.com/v1/coverage/sncf/stop_areas/stop_area:SNCF:${station.code}/departures?datetime=${datetime}`;
+      return fetch(url, {
+        headers: { 'Authorization': 'Basic ' + encodedApiKey }
+      }).then(r => r.json());
+    });
+
+    Promise.all(promises).then(dataList => {
       let html = '<ul>';
 
-      arrivals.forEach(arr => {
-        const info = arr.display_informations;
-        const timeInfo = arr.stop_date_time;
-        if (!info || !timeInfo) return;
+      dataList.forEach(data => {
+        if (!data.departures) return;
 
-        let origine = info.direction || "Origine inconnue";
-        origine = origine.trim();
+        data.departures.forEach(dep => {
+          const info = dep.display_informations;
+          const timeInfo = dep.stop_date_time;
+          if (!info || !timeInfo) return;
 
-        // Suppression des doublons comme "Metz (Metz)"
-        const doublonMatch = origine.match(/^(.+?)\s+\(\1\)$/);
-        if (doublonMatch) origine = doublonMatch[1];
+          let destination = info.direction || "Destination inconnue";
+          destination = destination.trim();
 
-        if (!originesCibles.some(city => origine.includes(city))) return;
+          const regexDoublon = /^(.+?)\s*\uE041\s*\1\s*\uE041$/i;
+          const match = destination.match(regexDoublon);
+          if (match) destination = match[1];
 
-        const train = info.headsign || "Train inconnu";
-        const heureBase = timeInfo.base_arrival_date_time;
-        const cleUnique = `${train}_${origine}_${heureBase}`;
-        if (dejaVus.has(cleUnique)) return;
-        dejaVus.add(cleUnique);
+          if (!destination.includes(destinationCible)) return;
 
-        const heureReelle = timeInfo.arrival_date_time;
-        const hBase = heureBase ? heureBase.slice(9, 11) + "h" + heureBase.slice(11, 13) : "Inconnue";
-        const hReelle = heureReelle ? heureReelle.slice(9, 11) + "h" + heureReelle.slice(11, 13) : "Inconnue";
+          const train = info.headsign || "Train inconnu";
+          const heureBase = timeInfo.base_departure_date_time;
+          const cleUnique = `${train}_${destination}_${heureBase}`;
+          if (dejaVus.has(cleUnique)) return;
+          dejaVus.add(cleUnique);
 
-        let statut = "ontime";
-        let emoji = "✅";
-        let texteStatut = "À l'heure";
-        let retardTxt = "";
-        let causeTxt = "";
+          const heureReelle = timeInfo.departure_date_time;
+          const hBase = heureBase ? heureBase.slice(9, 11) + "h" + heureBase.slice(11, 13) : "Inconnue";
+          const hReelle = heureReelle ? heureReelle.slice(9, 11) + "h" + heureReelle.slice(11, 13) : "Inconnue";
 
-        if (heureBase && heureReelle && heureBase !== heureReelle) {
-          const h1 = parseInt(heureBase.slice(9, 11)) * 60 + parseInt(heureBase.slice(11, 13));
-          const h2 = parseInt(heureReelle.slice(9, 11)) * 60 + parseInt(heureReelle.slice(11, 13));
-          const diff = h2 - h1;
-          if (diff > 0) {
-            statut = "retarde";
-            emoji = "⚠️";
-            texteStatut = "Retardé";
-            retardTxt = ` (+${diff} min)`;
+          let statut = "ontime", emoji = "✅", texteStatut = "À l'heure", retardTxt = "", causeTxt = "";
+
+          if (heureBase && heureReelle && heureBase !== heureReelle) {
+            const h1 = parseInt(heureBase.slice(9, 11)) * 60 + parseInt(heureBase.slice(11, 13));
+            const h2 = parseInt(heureReelle.slice(9, 11)) * 60 + parseInt(heureReelle.slice(11, 13));
+            const diff = h2 - h1;
+            if (diff > 0) {
+              statut = "retarde";
+              emoji = "⚠️";
+              texteStatut = "Retardé";
+              retardTxt = ` (+${diff} min)`;
+            }
           }
-        }
 
-        if (heureBase && !heureReelle) {
-          statut = "supprime";
-          emoji = "❌";
-          texteStatut = "Supprimé";
-        }
+          if (heureBase && !heureReelle) {
+            statut = "supprime";
+            emoji = "❌";
+            texteStatut = "Supprimé";
+          }
 
-        if (statut !== "ontime") {
-          const cause = info.cause || info.cancelled_message;
-          if (cause) causeTxt = ` — Cause : ${cause}`;
-        }
+          if (statut !== "ontime") {
+            const cause = info.cause || info.cancelled_message;
+            if (cause) causeTxt = ` — Cause : ${cause}`;
+          }
 
-        html += `<li class="${statut}">${emoji} <strong>${train}</strong> à ${hBase}${retardTxt} — Origine : <strong>${origine}</strong> — Statut : ${texteStatut}${causeTxt}</li>`;
+          html += `<li class="${statut}">${emoji} <strong>${train}</strong> à ${hBase}${retardTxt} — Destination : <strong>${destination}</strong> — Statut : ${texteStatut}${causeTxt}</li>`;
+        });
       });
 
       html += '</ul>';
       document.getElementById("resultat").innerHTML = html || "Aucun train trouvé.";
-    })
-    .catch(error => {
-      document.getElementById("resultat").textContent = "Erreur : " + error.message;
+    }).catch(err => {
+      document.getElementById("resultat").textContent = "Erreur : " + err.message;
     });
   </script>
 </body>
