@@ -106,7 +106,7 @@
   </style>
 </head>
 <body>
-  <h1>Arrivées des bétaillères à Luxembourg</h1>
+  <h1>Arrivées à Luxembourg</h1>
 
   <div class="alertes">
     <h2>Alertes TER Nancy–Luxembourg</h2>
@@ -165,36 +165,25 @@
     })
     .then(data => {
       const arrivals = data.arrivals;
-      const originsCibles = ["Thionville", "Metz", "Nancy"];
       const dejaVus = new Set();
       let html = '<ul>';
 
-      arrivals.forEach(arr => {
-        const info = arr.display_informations;
-        const timeInfo = arr.stop_date_time;
+      arrivals.forEach(arrival => {
+        const info = arrival.display_informations;
+        const timeInfo = arrival.stop_date_time;
         if (!info || !timeInfo) return;
 
-        let origin = info.origin || "Origine inconnue";
-        origin = origin.trim();
-
-        // Supprime les doublons du type "Metz (Metz)"
-        const match = origin.match(/^(.+?)\s*\((.+?)\)$/);
-        if (match && match[1].trim().toLowerCase() === match[2].trim().toLowerCase()) {
-          console.warn("Origine doublonnée détectée :", origin);
-          origin = match[1];
-        }
-
-        if (!originsCibles.some(city => origin.includes(city))) return;
-
-        const train = info.headsign || "Train inconnu";
-        const heureBase = timeInfo.base_arrival_date_time;
+        let destination = info.direction || "Destination inconnue";
+        destination = destination.trim();
 
         // Filtre anti-doublon réel
-        const cleUnique = `${train}_${origin}_${heureBase}`;
+        const cleUnique = `${info.headsign}_${destination}_${timeInfo.base_departure_date_time}`;
         if (dejaVus.has(cleUnique)) return;
         dejaVus.add(cleUnique);
 
+        const heureBase = timeInfo.base_departure_date_time;
         const heureReelle = timeInfo.arrival_date_time;
+
         const hBase = heureBase ? heureBase.slice(9, 11) + "h" + heureBase.slice(11, 13) : "Inconnue";
         const hReelle = heureReelle ? heureReelle.slice(9, 11) + "h" + heureReelle.slice(11, 13) : "Inconnue";
 
@@ -202,7 +191,6 @@
         let emoji = "✅";
         let texteStatut = "À l'heure";
         let retardTxt = "";
-        let causeTxt = "";
 
         if (heureBase && heureReelle && heureBase !== heureReelle) {
           const h1 = parseInt(heureBase.slice(9, 11)) * 60 + parseInt(heureBase.slice(11, 13));
@@ -222,12 +210,7 @@
           texteStatut = "Supprimé";
         }
 
-        if (statut !== "ontime") {
-          const cause = info.cause || info.cancelled_message;
-          if (cause) causeTxt = ` — Cause : ${cause}`;
-        }
-
-        html += `<li class="${statut}">${emoji} <strong>${train}</strong> à ${hBase}${retardTxt} — Origine : <strong>${origin}</strong> — Statut : ${texteStatut}${causeTxt}</li>`;
+        html += `<li class="${statut}">${emoji} <strong>${info.headsign}</strong> à ${hBase}${retardTxt} — Destination : <strong>${destination}</strong> — Statut : ${texteStatut}</li>`;
       });
 
       html += '</ul>';
@@ -236,27 +219,6 @@
     .catch(error => {
       document.getElementById("resultat").textContent = "Erreur : " + error.message;
     });
-
-    async function fetchAlerts() {
-      const response = await fetch('https://transport.data.gouv.fr/resources/81779/alerts.pb');
-      const buffer = await response.arrayBuffer();
-      const feed = protobuf.Message.decode(new Uint8Array(buffer));
-
-      const relevantAlerts = feed.entity.filter(entity => {
-        return entity.alert.informed_entity.some(info =>
-          info.route_id === 'LIGNE_NANCY_LUX' || 
-          info.stop_id === 'STOP_ID_NANCY_LUX'
-        );
-      });
-
-      const alertesHTML = relevantAlerts.map(alert => {
-        return `<li class="alerte">${alert.alert.header_text.translation[0].text}: ${alert.alert.description_text.translation[0].text}</li>`;
-      }).join('');
-
-      document.getElementById('alertes-list').innerHTML = alertesHTML || "<li>Aucune alerte en cours.</li>";
-    }
-
-    fetchAlerts();
   </script>
 </body>
 </html>
