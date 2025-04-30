@@ -2,15 +2,13 @@
 <html lang="fr">
 <head>
   <meta charset="UTF-8">
-  <title>Arrivées à Luxembourg</title>
+  <title>Arrivées TER depuis Thionville</title>
   <style>
     body {
       font-family: Arial, sans-serif;
-      line-height: 1.6;
       padding: 20px;
-      background-color: #f9f9f9;
-      color: #333;
-      max-width: 900px;
+      background-color: #f4f4f4;
+      max-width: 800px;
       margin: auto;
     }
     h1 {
@@ -46,18 +44,11 @@
     li.retarde { border-color: orange; }
     li.supprime { border-color: red; }
 
-    #trainImage {
-      display: block;
-      max-width: 100%;
-      margin: 20px auto;
-      border-radius: 10px;
-    }
-
     .humour {
       font-size: 0.85em;
       font-style: italic;
       text-align: center;
-      margin-bottom: 30px;
+      margin-top: 30px;
       color: #555;
     }
 
@@ -73,7 +64,7 @@
   </style>
 </head>
 <body>
-  <h1>Arrivées TER à Luxembourg</h1>
+  <h1>Arrivées TER à Luxembourg depuis Thionville</h1>
 
   <div class="legend">
     <span class="ontime">✅ À l'heure</span>
@@ -83,87 +74,72 @@
 
   <div id="resultat">Chargement en cours...</div>
 
-  <img id="trainImage" src="https://raw.githubusercontent.com/TekMaTe-lux/Assistant-train/refs/heads/main/20250426_224742.jpg" alt="Image du train">
-
   <div class="humour">
-    Du bétail en approche ! Suivez les péripéties sur <a href="https://x.com/BERNancyMetzLux" target="_blank">@BERNancyMetzLux</a>
+    Pour suivre les trajets mouvementés, direction <a href="https://x.com/BERNancyMetzLux" target="_blank">@BERNancyMetzLux</a> 🐄
   </div>
 
   <script>
     const apiKey = '242fac11-6d98-45fb-93df-28174d362447';
-    const encodedApiKey = btoa(apiKey + ":");
+    const encodedKey = btoa(apiKey + ":");
 
+    const thionvilleCode = "stop_area:SNCF:87191007";
     const gareLux = "stop_area:SNCF:82001000";
-    const origines = {
-      "stop_area:SNCF:87141002": "Nancy",
-      "stop_area:SNCF:87192039": "Metz",
-      "stop_area:SNCF:87191007": "Thionville"
-    };
+    const apiUrl = "https://api.sncf.com/v1/coverage/sncf/stop_areas/" + thionvilleCode + "/departures?direction=" + gareLux;
 
     let html = "<ul>";
-    let dejaVus = new Set();
 
-    const promises = Object.entries(origines).map(([code, nomVille]) => {
-      return fetch(`https://api.sncf.com/v1/coverage/sncf/stop_areas/${code}/departures?direction=${gareLux}`, {
-        headers: {
-          "Authorization": "Basic " + encodedApiKey
+    fetch(apiUrl, {
+      headers: {
+        "Authorization": "Basic " + encodedKey
+      }
+    })
+    .then(r => r.json())
+    .then(data => {
+      (data.departures || []).forEach(dep => {
+        const info = dep.display_informations;
+        const time = dep.stop_date_time;
+
+        if (!info || !time) return;
+
+        const type = info.commercial_mode;
+        if (type.toUpperCase() !== "TER") return;
+
+        const trainNum = info.headsign || "Inconnu";
+        const hBase = time.base_departure_date_time?.slice(9, 11) + "h" + time.base_departure_date_time?.slice(11, 13);
+        const hReelle = time.departure_date_time?.slice(9, 11) + "h" + time.departure_date_time?.slice(11, 13);
+
+        let statut = "ontime";
+        let emoji = "✅";
+        let texteStatut = "À l'heure";
+        let retardTxt = "";
+
+        if (time.base_departure_date_time && time.departure_date_time &&
+            time.base_departure_date_time !== time.departure_date_time) {
+          const baseMin = parseInt(time.base_departure_date_time.slice(9, 11)) * 60 + parseInt(time.base_departure_date_time.slice(11, 13));
+          const realMin = parseInt(time.departure_date_time.slice(9, 11)) * 60 + parseInt(time.departure_date_time.slice(11, 13));
+          const retard = realMin - baseMin;
+          if (retard > 0) {
+            statut = "retarde";
+            emoji = "⚠️";
+            texteStatut = "Retardé";
+            retardTxt = ` (+${retard} min)`;
+          }
         }
-      })
-      .then(r => r.json())
-      .then(data => {
-        (data.departures || []).forEach(dep => {
-          const info = dep.display_informations;
-          const time = dep.stop_date_time;
-          if (!info || !time) return;
 
-          const trainNum = info.headsign || "";
-          const type = info.commercial_mode || "";
+        if (!time.departure_date_time) {
+          statut = "supprime";
+          emoji = "❌";
+          texteStatut = "Supprimé";
+        }
 
-          // Exclure les TGV, IC, etc. — on ne garde que les TER
-          if (type.toUpperCase() !== "TER") return;
-
-          // Exclure doublons
-          const uniqueKey = trainNum + time.base_departure_date_time;
-          if (dejaVus.has(uniqueKey)) return;
-          dejaVus.add(uniqueKey);
-
-          // Heures
-          const hBase = time.base_departure_date_time?.slice(9, 11) + "h" + time.base_departure_date_time?.slice(11, 13);
-          const hReelle = time.departure_date_time?.slice(9, 11) + "h" + time.departure_date_time?.slice(11, 13);
-          let statut = "ontime";
-          let emoji = "✅";
-          let texteStatut = "À l'heure";
-          let retardTxt = "";
-
-          if (time.base_departure_date_time && time.departure_date_time &&
-              time.base_departure_date_time !== time.departure_date_time) {
-            const h1 = parseInt(time.base_departure_date_time.slice(9, 11)) * 60 + parseInt(time.base_departure_date_time.slice(11, 13));
-            const h2 = parseInt(time.departure_date_time.slice(9, 11)) * 60 + parseInt(time.departure_date_time.slice(11, 13));
-            const retard = h2 - h1;
-            if (retard > 0) {
-              statut = "retarde";
-              emoji = "⚠️";
-              texteStatut = "Retardé";
-              retardTxt = ` (+${retard} min)`;
-            }
-          }
-
-          if (time.base_departure_date_time && !time.departure_date_time) {
-            statut = "supprime";
-            emoji = "❌";
-            texteStatut = "Supprimé";
-          }
-
-          html += `<li class="${statut}">${emoji} <strong>${trainNum}</strong> à ${hBase}${retardTxt} — En provenance de : <strong>${nomVille}</strong> — Statut : ${texteStatut}</li>`;
-        });
+        html += `<li class="${statut}">${emoji} <strong>${trainNum}</strong> à ${hBase}${retardTxt} — En provenance de : <strong>Thionville</strong> — Statut : ${texteStatut}</li>`;
       });
-    });
 
-    Promise.all(promises).then(() => {
       html += "</ul>";
       document.getElementById("resultat").innerHTML = html;
-    }).catch(err => {
-      document.getElementById("resultat").textContent = "Erreur : " + err.message;
+    })
+    .catch(error => {
+      document.getElementById("resultat").textContent = "Erreur lors du chargement : " + error.message;
     });
   </script>
 </body>
