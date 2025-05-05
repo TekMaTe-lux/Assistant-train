@@ -1,182 +1,67 @@
 <!DOCTYPE html>
 <html lang="fr">
 <head>
-  <meta charset="UTF-8">
+  <meta charset="UTF-8" />
   <title>Arrivées à Luxembourg</title>
   <style>
     body {
-      font-family: Arial, sans-serif;
-      line-height: 1.6;
+      font-family: sans-serif;
       padding: 20px;
-      background-color: #f9f9f9;
-      color: #333;
-      max-width: 900px;
-      margin: auto;
     }
-    h1 {
-      text-align: center;
-      color: #004080;
-      font-size: 2.5em;
-    }
-    .legend {
-      text-align: center;
-      margin: 20px 0;
-    }
-    .legend span {
-      display: inline-block;
-      margin: 0 10px;
-      font-weight: bold;
-      padding: 5px 10px;
-      border-radius: 5px;
-    }
-    .ontime { color: green; background-color: #e0f7e0; }
-    .retarde { color: orange; background-color: #fff4e0; }
-    .supprime { color: red; background-color: #fbeaea; }
-    #resultat ul, #causes-retards { padding: 0; }
-    #resultat li, #causes-retards li {
-      background: #fff;
-      border-left: 6px solid #ccc;
+    .train {
       margin-bottom: 10px;
-      padding: 10px 15px;
-      border-radius: 4px;
-      list-style: none;
-    }
-    #resultat li.ontime { border-left-color: green; }
-    #resultat li.retarde { border-left-color: orange; }
-    #resultat li.supprime { border-left-color: red; }
-    #trainImage {
-      display: block;
-      max-width: 100%;
-      margin: 20px auto 10px auto;
-      border-radius: 10px;
-    }
-    .humour {
-      font-size: 0.85em;
-      font-style: italic;
-      text-align: center;
-      margin-bottom: 30px;
-      color: #555;
-    }
-    .humour a {
-      color: #004080;
-      text-decoration: none;
-      font-weight: bold;
-    }
-    .humour a:hover {
-      text-decoration: underline;
-    }
-    .video {
-      margin-top: 40px;
-      text-align: center;
-    }
-    .video iframe {
-      width: 100%;
-      max-width: 560px;
-      height: 315px;
-      border-radius: 10px;
-      border: none;
-    }
-    .alertes {
-      margin-top: 20px;
-      background-color: #fff4f4;
-      padding: 20px;
-      border-radius: 5px;
     }
   </style>
 </head>
 <body>
-  <h1>Arrivées des bétaillères à Luxembourg</h1>
-  <div class="alertes">
-    <h2>🚧 Causes des retards en cours</h2>
-    <ul id="causes-retards">
-      <li>Chargement des causes...</li>
-    </ul>
-  </div>
-  <div class="legend">
-    <span class="ontime">✅ À l'heure</span>
-    <span class="retarde">⚠️ Retardé</span>
-    <span class="supprime">❌ Supprimé</span>
-  </div>
-  <div id="resultat">Chargement en cours...</div>
-  <img id="trainImage" src="https://raw.githubusercontent.com/TekMaTe-lux/Assistant-train/refs/heads/main/20250426_224742.jpg" alt="Image du train">
-  <div class="humour">
-    Le Mardi c'est train bondé sans clim !<br>
-    Le Jeudi c'est grêve inopinée !<br>
-    Suivez l'aventure des Bétaillères Express Régionales sur
-    <a href="https://x.com/BERNancyMetzLux" target="_blank">@BERNancyMetzLux</a> !
-  </div>
-  <div class="video">
-    <h2>Vidéo bonus</h2>
-    <iframe src="https://www.youtube.com/embed/rWFDBMcNTL8" allowfullscreen></iframe>
-  </div>
+  <h1>Trains arrivant à Luxembourg</h1>
+  <div id="trains">Chargement...</div>
+
   <script>
-    const apiKey = '242fac11-6d98-45fb-93df-28174d362447';
-    const encodedApiKey = btoa(apiKey + ":");
+    const apiKey = "242fac11-6d98-45fb-93df-28174d362447";
+    const luxId = "stop_area:SNCF:82001000";
+    const date = new Date().toISOString().split("T")[0].replace(/-/g, '');
+    const endpoint = `https://api.sncf.com/v1/coverage/sncf/stop_areas/82001000/arrivals?from_datetime=${date}T060000&duration=7200`;
 
-    const now = new Date();
-    const datetime = now.toISOString().replace(/[-:]/g, '').split('.')[0]; // datetime actuel (pour la requête API)
-
-    const url = `https://api.sncf.com/v1/coverage/sncf/stop_areas/stop_area:SNCF:82001000/arrivals?datetime=${datetime}`;
-
-    fetch(url, {
-      method: 'GET',
-      headers: { "Authorization": "Basic " + encodedApiKey }
-    })
-    .then(response => response.json())
-    .then(data => {
-      const arrivals = data.arrivals;
-      const disruptions = data.disruptions || [];
-      const disruptionsMap = {};
-      disruptions.forEach(d => { if (d.id) disruptionsMap[d.id] = d; });
-
-      const dejaVus = new Set();
-      let html = '<ul>';
-
-      arrivals.forEach(arr => {
-        const info = arr.display_informations;
-        const timeInfo = arr.stop_date_time;
-        const provenanceID = arr.links && arr.links[0] && arr.links[0].id ? arr.links[0].id : "Provenance inconnue"; // Récupérer l'ID depuis links[0]
-        const provenance = provenanceID ? getProvenanceFromId(provenanceID) : "Provenance inconnue";
-        if (!info || !timeInfo) return;
-
-        const train = info.headsign || "Train inconnu";
-        const heureBase = timeInfo.base_arrival_date_time;
-        const heureReelle = timeInfo.arrival_date_time;
-        
-        // Ajustement de l'heure d'arrivée (en UTC +2 pour Luxembourg)
-        const arrivalDate = new Date(heureReelle);
-        arrivalDate.setHours(arrivalDate.getHours() + 2); // Conversion vers le fuseau horaire de Luxembourg
-        const arrivalTime = arrivalDate.getHours() * 60 + arrivalDate.getMinutes(); // Convertit en minutes
-
-        const hBase = heureBase ? heureBase.slice(9, 11) + "h" + heureBase.slice(11, 13) : "Inconnue";
-        const hReelle = heureReelle ? heureReelle.slice(9, 11) + "h" + heureReelle.slice(11, 13) : "Inconnue";
-
-        let statut = "ontime", emoji = "✅", texteStatut = "À l'heure", retardTxt = "", causeTxt = "";
-
-        // Si l'heure d'arrivée est inférieure à l'heure actuelle, on l'affiche quand même
-        const currentTime = now.getHours() * 60 + now.getMinutes();
-        if (arrivalTime < currentTime - 5) return; // Affiche les trains arrivant dans les 5 prochaines minutes
-
-        html += `<li class="${statut}">${emoji} <strong>${train}</strong> à ${hBase}${retardTxt} — Provenance : ${provenance} — Statut : ${texteStatut}${causeTxt}</li>`;
+    async function getStopAreaName(stopAreaId) {
+      const url = `https://api.sncf.com/v1/coverage/sncf/${stopAreaId}`;
+      const response = await fetch(url, {
+        headers: { Authorization: `Basic ${btoa(apiKey + ":")}` }
       });
-
-      html += '</ul>';
-      document.getElementById("resultat").innerHTML = html || "Aucun train trouvé.";
-    })
-    .catch(error => {
-      document.getElementById("resultat").textContent = "Erreur : " + error.message;
-    });
-
-    // Fonction pour obtenir la provenance depuis l'ID
-    function getProvenanceFromId(id) {
-      const gareCorrespondance = {
-        "stop_area:SNCF:87192039": "Metz",
-        "stop_area:SNCF:87141002": "Nancy",
-        "stop_area:SNCF:87191007": "Thionville",
-        "stop_area:SNCF:82001000": "Luxembourg"
-      };
-      return gareCorrespondance[id] || "Autre provenance";
+      if (!response.ok) return "Inconnu";
+      const data = await response.json();
+      return data.stop_area?.label || "Inconnu";
     }
+
+    async function fetchArrivals() {
+      const response = await fetch(endpoint, {
+        headers: { Authorization: `Basic ${btoa(apiKey + ":")}` }
+      });
+      const data = await response.json();
+      const arrivals = data.arrivals || [];
+      const container = document.getElementById("trains");
+      container.innerHTML = "";
+
+      for (const train of arrivals) {
+        const dt = train.stop_date_time?.arrival_date_time;
+        const hour = dt ? `${dt.slice(9, 11)}h${dt.slice(11, 13)}` : "Heure inconnue";
+        const num = train.display_informations?.headsign || "Numéro inconnu";
+
+        const originLink = train.links?.find(l => l.rel === "origins" && l.type === "stop_area");
+        let provenance = "Provenance inconnue";
+
+        if (originLink) {
+          provenance = await getStopAreaName(originLink.id);
+        }
+
+        const el = document.createElement("div");
+        el.className = "train";
+        el.textContent = `✅ ${num} à ${hour} — Provenance : ${provenance} — Statut : À l'heure`;
+        container.appendChild(el);
+      }
+    }
+
+    fetchArrivals();
   </script>
 </body>
 </html>
