@@ -114,17 +114,8 @@
     const encodedApiKey = btoa(apiKey + ":");
 
     const now = new Date();
-    const yyyy = now.getFullYear();
-    const mm = String(now.getMonth() + 1).padStart(2, '0');
-    const dd = String(now.getDate()).padStart(2, '0');
-    const hh = String(now.getHours()).padStart(2, '0');
-    const min = String(now.getMinutes()).padStart(2, '0');
-    const ss = String(now.getSeconds()).padStart(2, '0');
-
-    const datetime = `${yyyy}${mm}${dd}T${hh}${min}${ss}`;
+    const datetime = now.toISOString().replace(/[-:]/g, '').split('.')[0];
     const url = `https://api.sncf.com/v1/coverage/sncf/stop_areas/stop_area:SNCF:82001000/arrivals?datetime=${datetime}`;
-
-    const trainsAffiches = new Set();
 
     fetch(url, {
       method: 'GET',
@@ -133,6 +124,10 @@
     .then(response => response.json())
     .then(data => {
       const arrivals = data.arrivals;
+      const disruptions = data.disruptions || [];
+      const disruptionsMap = {};
+      disruptions.forEach(d => { if (d.id) disruptionsMap[d.id] = d; });
+
       const dejaVus = new Set();
       let html = '<ul>';
 
@@ -143,8 +138,6 @@
         if (!info || !timeInfo || !["Metz", "Nancy", "Thionville"].includes(provenance)) return;
 
         const train = info.headsign || "Train inconnu";
-        trainsAffiches.add(train);
-
         const heureBase = timeInfo.base_arrival_date_time;
         const heureReelle = timeInfo.arrival_date_time;
         const cleUnique = `${train}_${provenance}_${heureBase}`;
@@ -174,9 +167,11 @@
           texteStatut = "Supprimé";
         }
 
-        if (statut !== "ontime") {
-          const cause = info.cause || info.cancelled_message;
-          if (cause) causeTxt = ` — Cause : ${cause}`;
+        const link = info.links?.find(l => l.type === "disruption");
+        if (link && disruptionsMap[link.id]) {
+          const d = disruptionsMap[link.id];
+          const message = d.messages?.[0]?.text || d.description || d.cause || "Cause non précisée";
+          causeTxt = `<div style="color: red; font-style: italic; margin-top: 5px;">Cause : ${message}</div>`;
         }
 
         html += `<li class="${statut}">${emoji} <strong>${train}</strong> à ${hBase}${retardTxt} — Provenance : <strong>${provenance}</strong> — Statut : ${texteStatut}${causeTxt}</li>`;
@@ -188,42 +183,6 @@
     .catch(error => {
       document.getElementById("resultat").textContent = "Erreur : " + error.message;
     });
-
-    fetch('https://api.sncf.com/v1/coverage/sncf/disruptions', {
-      method: 'GET',
-      headers: { "Authorization": "Basic " + encodedApiKey }
-    })
-    .then(response => response.json())
-    .then(data => {
-      const disruptions = data.disruptions;
-      const causesList = document.getElementById('causes-retards');
-      causesList.innerHTML = '';
-
-      disruptions.forEach(disruption => {
-        const cause = disruption.cause || disruption.messages?.[0]?.text || "Cause non spécifiée";
-        const impacted = disruption.impacted_objects || [];
-        impacted.forEach(obj => {
-          const id = obj.pt_object?.id || "";
-          const match = id.match(/vehicle_journey:.*:(\d+)/);
-          if (match) {
-            const trainNum = match[1];
-            if (trainsAffiches.has(trainNum)) {
-              const li = document.createElement('li');
-              li.innerHTML = `⚠️ <strong>${trainNum}</strong> — ${cause}`;
-              causesList.appendChild(li);
-            }
-          }
-        });
-      });
-
-      if (!causesList.hasChildNodes()) {
-        causesList.innerHTML = '<li>Aucune perturbation pour les trains affichés</li>';
-      }
-    })
-    .catch(error => {
-      document.getElementById('causes-retards').innerHTML = `<li>Erreur lors du chargement des causes : ${error.message}</li>`;
-    });
   </script>
 </body>
 </html>
-
