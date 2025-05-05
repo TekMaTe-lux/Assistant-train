@@ -116,9 +116,6 @@
     const now = new Date();
     const datetime = now.toISOString().replace(/[-:]/g, '').split('.')[0]; // datetime actuel (pour la requête API)
 
-    // Format l'heure actuelle sous un format comparable (hh:mm)
-    const currentTime = now.getHours() * 60 + now.getMinutes(); // Minutes depuis minuit
-
     const url = `https://api.sncf.com/v1/coverage/sncf/stop_areas/stop_area:SNCF:82001000/arrivals?datetime=${datetime}`;
 
     fetch(url, {
@@ -139,52 +136,26 @@
         const info = arr.display_informations;
         const timeInfo = arr.stop_date_time;
         const provenance = arr.route?.direction?.stop_area?.name || "Provenance inconnue";
-        if (!info || !timeInfo || !["Metz", "Nancy", "Thionville"].includes(provenance)) return;
+        if (!info || !timeInfo) return;
 
         const train = info.headsign || "Train inconnu";
         const heureBase = timeInfo.base_arrival_date_time;
         const heureReelle = timeInfo.arrival_date_time;
-        const cleUnique = `${train}_${provenance}_${heureBase}`;
-        if (dejaVus.has(cleUnique)) return;
-        dejaVus.add(cleUnique);
+        
+        // Ajustement de l'heure d'arrivée (en UTC +2 pour Luxembourg)
+        const arrivalDate = new Date(heureReelle);
+        arrivalDate.setHours(arrivalDate.getHours() + 2); // Conversion vers le fuseau horaire de Luxembourg
+        const arrivalTime = arrivalDate.getHours() * 60 + arrivalDate.getMinutes(); // Convertit en minutes
 
         const hBase = heureBase ? heureBase.slice(9, 11) + "h" + heureBase.slice(11, 13) : "Inconnue";
         const hReelle = heureReelle ? heureReelle.slice(9, 11) + "h" + heureReelle.slice(11, 13) : "Inconnue";
 
         let statut = "ontime", emoji = "✅", texteStatut = "À l'heure", retardTxt = "", causeTxt = "";
 
-        // Extraire les heures et minutes pour l'heure d'arrivée (heureReelle)
-        const arrivalHour = parseInt(heureReelle.slice(9, 11), 10);  // Récupère les heures (par exemple "11" pour "11h22")
-        const arrivalMinute = parseInt(heureReelle.slice(11, 13), 10);  // Récupère les minutes (par exemple "22" pour "11h22")
-        
-        const arrivalTime = arrivalHour * 60 + arrivalMinute; // Convertit l'heure d'arrivée en minutes depuis minuit
-        
-        if (arrivalTime < currentTime) return; // Ignore les trains arrivant avant l'heure actuelle
-
-        if (heureBase && heureReelle && heureBase !== heureReelle) {
-          const h1 = parseInt(heureBase.slice(9, 11)) * 60 + parseInt(heureBase.slice(11, 13));
-          const h2 = arrivalTime;
-          const diff = h2 - h1;
-          if (diff > 0) {
-            statut = "retarde";
-            emoji = "⚠️";
-            texteStatut = "Retardé";
-            retardTxt = ` (+${diff} min)`;
-          }
-        }
-
-        if (heureBase && !heureReelle) {
-          statut = "supprime";
-          emoji = "❌";
-          texteStatut = "Supprimé";
-        }
-
-        const link = info.links?.find(l => l.type === "disruption");
-        if (link && disruptionsMap[link.id]) {
-          const d = disruptionsMap[link.id];
-          const message = d.messages?.[0]?.text || d.description || d.cause || "Cause non précisée";
-          causeTxt = `<div style="color: red; font-style: italic; margin-top: 5px;">Cause : ${message}</div>`;
-        }
+        // Ici, nous ne filtrons pas les trains en fonction de la provenance
+        // Si l'heure d'arrivée est inférieure à l'heure actuelle, on l'affiche quand même
+        const currentTime = now.getHours() * 60 + now.getMinutes();
+        if (arrivalTime < currentTime - 5) return; // Affiche les trains arrivant dans les 5 prochaines minutes
 
         html += `<li class="${statut}">${emoji} <strong>${train}</strong> à ${hBase}${retardTxt} — Provenance : <strong>${provenance}</strong> — Statut : ${texteStatut}${causeTxt}</li>`;
       });
