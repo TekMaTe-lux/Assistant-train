@@ -48,6 +48,16 @@
     #resultat li.retarde { border-left-color: orange; }
     #resultat li.supprime { border-left-color: red; }
 
+    .retard-cause {
+      margin-top: 8px;
+      padding: 8px 10px;
+      background-color: #ffe6e6;
+      border-left: 4px solid red;
+      font-style: italic;
+      font-size: 0.95em;
+      border-radius: 4px;
+    }
+
     #trainImage {
       display: block;
       max-width: 100%;
@@ -85,35 +95,10 @@
       border-radius: 10px;
       border: none;
     }
-
-    .alertes {
-      margin-top: 20px;
-      background-color: #fff4f4;
-      padding: 20px;
-      border-radius: 5px;
-    }
-
-    #alertes-list {
-      list-style-type: none;
-    }
-
-    .alerte {
-      margin-bottom: 10px;
-      padding: 10px;
-      background-color: #ffe6e6;
-      border-left: 4px solid red;
-    }
   </style>
 </head>
 <body>
   <h1>Arrivées des bétaillères à Luxembourg</h1>
-
-  <div class="alertes">
-    <h2>Alertes TER Nancy–Luxembourg</h2>
-    <ul id="alertes-list">
-      <li>Chargement des alertes...</li>
-    </ul>
-  </div>
 
   <div class="legend">
     <span class="ontime">✅ À l'heure</span>
@@ -127,7 +112,7 @@
 
   <div class="humour">
     Le Mardi c'est train bondé sans clim !<br>
-    Le Jeudi c'est grêve inopinée !<br>
+    Le Jeudi c'est grève inopinée !<br>
     Suivez l'aventure des Bétaillères Express Régionales sur
     <a href="https://x.com/BERNancyMetzLux" target="_blank">@BERNancyMetzLux</a> !
   </div>
@@ -141,7 +126,8 @@
     const apiKey = '242fac11-6d98-45fb-93df-28174d362447';
     const encodedApiKey = btoa(apiKey + ":");
 
-    const now = new Date();
+    // Décalage de 1h01 en arrière
+    const now = new Date(Date.now() - (61 * 60 * 1000));
     const yyyy = now.getFullYear();
     const mm = String(now.getMonth() + 1).padStart(2, '0');
     const dd = String(now.getDate()).padStart(2, '0');
@@ -174,8 +160,7 @@
 
         if (!info || !timeInfo) return;
 
-        if (!["Metz", "Nancy", "Thionville"].includes(provenance)) return;
-
+        // Ne pas filtrer de manière trop stricte
         const train = info.headsign || "Train inconnu";
         const heureBase = timeInfo.base_arrival_date_time;
         const heureReelle = timeInfo.arrival_date_time;
@@ -211,42 +196,26 @@
           texteStatut = "Supprimé";
         }
 
-        // Vérification des disruptions pour récupérer la cause du retard
-        if (statut !== "ontime" && arr.disruptions && arr.disruptions.length > 0) {
+        // Cause du retard ou de la suppression (disruptions)
+        if ((statut === "retarde" || statut === "supprime") && arr.disruptions && arr.disruptions.length > 0) {
           const causes = arr.disruptions.map(d => d.text).join(" / ");
-          causeTxt = `<div style="color: red; font-style: italic; margin-top: 5px;">Cause : ${causes}</div>`;
+          causeTxt = `<div class="retard-cause">📢 ${causes}</div>`;
         }
 
-        html += `<li class="${statut}">${emoji} <strong>${train}</strong> à ${hBase}${retardTxt} — Provenance : <strong>${provenance}</strong> — Statut : ${texteStatut}${causeTxt}</li>`;
+        html += `<li class="${statut}">${emoji} <strong>${train}</strong> à ${hBase}${retardTxt} — Provenance : <strong>${provenance}</strong> — Statut : ${texteStatut}</li>`;
+
+        // Si retardé ou supprimé, ajouter la cause sous le train
+        if (causeTxt) {
+          html += `<div class="retard-cause">${causeTxt}</div>`;
+        }
       });
 
       html += '</ul>';
       document.getElementById("resultat").innerHTML = html || "Aucun train trouvé.";
     })
     .catch(error => {
-      document.getElementById("resultat").textContent = "Erreur : " + error.message;
+      document.getElementById("resultat").textContent = "Erreur lors du chargement des données.";
     });
-
-    async function fetchAlerts() {
-      const response = await fetch('https://transport.data.gouv.fr/resources/81779/alerts.pb');
-      const buffer = await response.arrayBuffer();
-      const feed = protobuf.Message.decode(new Uint8Array(buffer));
-
-      const relevantAlerts = feed.entity.filter(entity => {
-        return entity.alert.informed_entity.some(info =>
-          info.route_id === 'LIGNE_NANCY_LUX' || 
-          info.stop_id === 'STOP_ID_NANCY_LUX'
-        );
-      });
-
-      const alertesHTML = relevantAlerts.map(alert => {
-        return `<li class="alerte">${alert.alert.header_text.translation[0].text}: ${alert.alert.description_text.translation[0].text}</li>`;
-      }).join('');
-
-      document.getElementById('alertes-list').innerHTML = alertesHTML || "<li>Aucune alerte en cours.</li>";
-    }
-
-    fetchAlerts();
   </script>
 </body>
 </html>
