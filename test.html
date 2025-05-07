@@ -2,157 +2,100 @@
 <html lang="fr">
 <head>
   <meta charset="UTF-8">
-  <title>Arrivées TER à Luxembourg</title>
-  <style>
-    body {
-      font-family: Arial, sans-serif;
-      background-color: #f4f4f4;
-      padding: 20px;
-      max-width: 800px;
-      margin: auto;
-    }
-    h1 {
-      text-align: center;
-      color: #003366;
-    }
-    ul {
-      list-style-type: none;
-      padding: 0;
-    }
-    li {
-      background-color: white;
-      margin: 10px 0;
-      padding: 10px;
-      border-left: 6px solid #ccc;
-      box-shadow: 0 0 5px rgba(0,0,0,0.1);
-    }
-    .ontime { border-color: green; }
-    .retarde { border-color: orange; }
-    .supprime { border-color: red; }
-    .alerte {
-      background-color: #ffdddd;
-      border-left: 6px solid red;
-      padding: 10px;
-      margin-bottom: 20px;
-    }
-  </style>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Arrivées à Luxembourg</title>
+  <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+  <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
 </head>
-<body>
-  <h1>🚆 Arrivées TER à Luxembourg</h1>
-  <div id="resultat">Chargement en cours...</div>
+<body class="bg-gray-100 text-gray-900">
+  <div class="container mx-auto px-4 py-6">
+    <h1 class="text-3xl font-bold mb-4">🚉 Arrivées à Luxembourg (hors TGV)</h1>
+
+    <!-- Vidéo -->
+    <div class="mb-4">
+      <video autoplay loop muted class="w-full rounded-lg shadow-lg">
+        <source src="https://cdn.pixabay.com/video/2023/03/07/153708-810472417_large.mp4" type="video/mp4">
+        Votre navigateur ne prend pas en charge les vidéos HTML5.
+      </video>
+    </div>
+
+    <!-- Logo SNCF -->
+    <img src="https://upload.wikimedia.org/wikipedia/commons/thumb/d/d3/SNCF_logo_2011.svg/2560px-SNCF_logo_2011.svg.png" alt="Logo SNCF" class="w-48 mb-6">
+
+    <!-- Liste des arrivées -->
+    <div id="arrivals" class="space-y-4"></div>
+  </div>
 
   <script>
-    const apiKey = '242fac11-6d98-45fb-93df-28174d362447';
-    const encodedApiKey = btoa(apiKey + ":");
+    const allowedOrigins = ["87141002", "87191007", "87192039"]; // Nancy, Thionville, Metz
+    const excludedModes = ["TGV", "TGV INOUI", "inOui"];
 
-    const now = new Date();
-    const yyyy = now.getFullYear();
-    const mm = String(now.getMonth() + 1).padStart(2, '0');
-    const dd = String(now.getDate()).padStart(2, '0');
-    const hh = String(now.getHours()).padStart(2, '0');
-    const min = String(now.getMinutes()).padStart(2, '0');
-    const ss = String(now.getSeconds()).padStart(2, '0');
-    const datetime = `${yyyy}${mm}${dd}T${hh}${min}${ss}`;
+    function formatTime(dateTime) {
+      const hour = dateTime.slice(9, 11);
+      const minute = dateTime.slice(11, 13);
+      return `${hour}h${minute}`;
+    }
 
-    const url = `https://api.sncf.com/v1/coverage/sncf/stop_areas/stop_area:SNCF:82001000/arrivals?datetime=${datetime}`;
+    async function fetchArrivals() {
+      try {
+        const response = await axios.get("https://api.sncf.com/v1/coverage/sncf/stop_areas/stop_area:SNCF:82001000/arrivals", {
+          headers: {
+            Authorization: "Basic c2Q2YjY0MmZkYjdiNDZlZjlkMGM3OTg1ZDYzYjA3YjA6"
+          }
+        });
 
-    fetch(url, {
-      method: 'GET',
-      headers: {
-        "Authorization": "Basic " + encodedApiKey
+        // Log the response to see what we get from the API
+        console.log(response.data);
+
+        const arrivals = response.data.arrivals.filter(arrival => {
+          const info = arrival.display_informations;
+          const mode = info?.physical_mode || "";
+          const commercialMode = info?.commercial_mode || "";
+          const originId = arrival.links?.find(link => link.rel === "origins")?.id?.split(":")[2];
+
+          // For debugging purposes, we remove some of the filters temporarily
+          return (
+            arrival.stop_date_time?.arrival_date_time &&  // Make sure the arrival date is present
+            allowedOrigins.includes(originId) &&          // Check the origin ID (e.g. Nancy, Thionville, Metz)
+            !excludedModes.includes(commercialMode) &&    // Exclude TGV, TGV INOUI
+            mode.includes("Train")                         // Only include trains
+          );
+        });
+
+        // Check if there are arrivals after filtering
+        console.log("Filtered arrivals:", arrivals);
+
+        const container = document.getElementById("arrivals");
+        container.innerHTML = "";
+
+        if (arrivals.length === 0) {
+          container.innerHTML = "<p>Aucun train correspondant n'a été trouvé.</p>";
+          return;
+        }
+
+        arrivals.forEach(arrival => {
+          const time = formatTime(arrival.stop_date_time.arrival_date_time);
+          const info = arrival.display_informations || {};
+          const origin = info.direction || "Origine inconnue";
+          const train = info.label || info.headsign || "Train";
+
+          const card = document.createElement("div");
+          card.className = "bg-white rounded-lg shadow-md p-4";
+          card.innerHTML = `
+            <h2 class="text-xl font-semibold">Train ${train}</h2>
+            <p class="text-gray-700">🕒 Arrivée prévue : <strong>${time}</strong></p>
+            <p class="text-gray-700">📍 En provenance de : <strong>${origin}</strong></p>
+          `;
+          container.appendChild(card);
+        });
+      } catch (error) {
+        console.error("Erreur lors de la récupération des arrivées :", error);
+        const container = document.getElementById("arrivals");
+        container.innerHTML = "<p class='text-red-600'>Erreur de chargement des données.</p>";
       }
-    })
-    .then(response => {
-      if (!response.ok) throw new Error("Erreur HTTP : " + response.status);
-      return response.json();
-    })
-    .then(data => {
-      const arrivals = data.arrivals;
-      const disruptions = data.disruptions || [];
-      const dejaVus = new Set();
-      const villesCibles = ["Metz", "Nancy", "Thionville"];
+    }
 
-      let alertesHtml = "";
-      if (disruptions.length > 0) {
-        alertesHtml = `
-          <div class="alerte">
-            <strong>⚠️ Alertes SNCF en cours :</strong><br>
-            <ul>
-              ${disruptions.map(d => `<li><strong>${d.severity?.name || 'Perturbation'} :</strong> ${d?.text || 'Détail non disponible'}</li>`).join('')}
-            </ul>
-          </div>`;
-      }
-
-      let html = '<ul>';
-      arrivals.forEach(arr => {
-        const info = arr.display_informations;
-        const timeInfo = arr.stop_date_time;
-        const provenance = arr.route?.direction?.stop_area?.name || "Provenance inconnue";
-
-        if (!info || !timeInfo) return;
-        if (info.commercial_mode === "TGV") return; // exclusion TGV
-        if (!villesCibles.some(ville => provenance.includes(ville))) return;
-
-        const train = info.headsign || "Train inconnu";
-        const heureBase = timeInfo.base_arrival_date_time;
-        const heureReelle = timeInfo.arrival_date_time;
-        const heureBaseDepart = timeInfo.base_departure_date_time;
-        const heureReelleDepart = timeInfo.departure_date_time;
-
-        const cleUnique = `${train}_${provenance}_${heureBase}`;
-        if (dejaVus.has(cleUnique)) return;
-        dejaVus.add(cleUnique);
-
-        const hBase = heureBase ? heureBase.slice(9, 11) + "h" + heureBase.slice(11, 13) : "Inconnue";
-
-        let statut = "ontime";
-        let emoji = "✅";
-        let texteStatut = "À l'heure";
-        let retardTxt = "";
-        let causeTxt = "";
-
-        let retardArrivee = 0;
-        if (heureBase && heureReelle && heureBase !== heureReelle) {
-          const h1 = parseInt(heureBase.slice(9, 11)) * 60 + parseInt(heureBase.slice(11, 13));
-          const h2 = parseInt(heureReelle.slice(9, 11)) * 60 + parseInt(heureReelle.slice(11, 13));
-          retardArrivee = h2 - h1;
-        }
-
-        let retardDepart = 0;
-        if (heureBaseDepart && heureReelleDepart && heureBaseDepart !== heureReelleDepart) {
-          const d1 = parseInt(heureBaseDepart.slice(9, 11)) * 60 + parseInt(heureBaseDepart.slice(11, 13));
-          const d2 = parseInt(heureReelleDepart.slice(9, 11)) * 60 + parseInt(heureReelleDepart.slice(11, 13));
-          retardDepart = d2 - d1;
-        }
-
-        if (retardArrivee > 0 || retardDepart > 0) {
-          statut = "retarde";
-          emoji = "⚠️";
-          texteStatut = "Retardé";
-          if (retardDepart > 0) retardTxt += ` Départ retardé de ${retardDepart} min.`;
-          if (retardArrivee > 0) retardTxt += ` Arrivée retardée de ${retardArrivee} min.`;
-        }
-
-        if (heureBase && !heureReelle) {
-          statut = "supprime";
-          emoji = "❌";
-          texteStatut = "Supprimé";
-        }
-
-        if (statut !== "ontime" && arr.disruptions && arr.disruptions.length > 0) {
-          const causes = arr.disruptions.map(d => d.text).join(" / ");
-          causeTxt = `<div style="color: red; font-style: italic; margin-top: 5px;">Cause : ${causes}</div>`;
-        }
-
-        html += `<li class="${statut}">${emoji} <strong>${train}</strong> à ${hBase} — Provenance : <strong>${provenance}</strong> — Statut : ${texteStatut}${retardTxt}${causeTxt}</li>`;
-      });
-
-      html += '</ul>';
-      document.getElementById("resultat").innerHTML = alertesHtml + (html || "Aucun train trouvé.");
-    })
-    .catch(error => {
-      document.getElementById("resultat").textContent = "Erreur : " + error.message;
-    });
+    fetchArrivals();
   </script>
 </body>
 </html>
