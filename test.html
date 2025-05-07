@@ -2,89 +2,157 @@
 <html lang="fr">
 <head>
   <meta charset="UTF-8">
-  <title>Arrivées à Luxembourg - Temps Réel</title>
+  <title>Arrivées TER à Luxembourg</title>
   <style>
     body {
       font-family: Arial, sans-serif;
-      line-height: 1.6;
+      background-color: #f4f4f4;
       padding: 20px;
-      background-color: #f9f9f9;
-      color: #333;
-      max-width: 900px;
+      max-width: 800px;
       margin: auto;
     }
     h1 {
       text-align: center;
-      color: #004080;
-      font-size: 2.5em;
+      color: #003366;
     }
-    #resultat {
-      margin-top: 20px;
-    }
-    #resultat ul {
+    ul {
+      list-style-type: none;
       padding: 0;
     }
-    #resultat li {
-      background: #fff;
+    li {
+      background-color: white;
+      margin: 10px 0;
+      padding: 10px;
       border-left: 6px solid #ccc;
-      margin-bottom: 10px;
-      padding: 10px 15px;
-      border-radius: 4px;
-      list-style: none;
+      box-shadow: 0 0 5px rgba(0,0,0,0.1);
     }
-    #resultat li.ontime { border-left-color: green; }
-    #resultat li.retarde { border-left-color: orange; }
-    #resultat li.supprime { border-left-color: red; }
+    .ontime { border-color: green; }
+    .retarde { border-color: orange; }
+    .supprime { border-color: red; }
+    .alerte {
+      background-color: #ffdddd;
+      border-left: 6px solid red;
+      padding: 10px;
+      margin-bottom: 20px;
+    }
   </style>
 </head>
 <body>
-  <h1>Arrivées des trains à Luxembourg (Temps Réel)</h1>
-
+  <h1>🚆 Arrivées TER à Luxembourg</h1>
   <div id="resultat">Chargement en cours...</div>
 
   <script>
-    // URL de SIRI Lite pour récupérer les horaires estimés des trains
-    const siriLiteUrl = 'https://proxy.transport.data.gouv.fr/resource/sncf-siri-lite-estimated-timetable';
+    const apiKey = '242fac11-6d98-45fb-93df-28174d362447';
+    const encodedApiKey = btoa(apiKey + ":");
 
-    // Fonction pour récupérer et afficher les horaires estimés
-    fetch(siriLiteUrl)
-      .then(response => response.text())
-      .then(str => (new window.DOMParser()).parseFromString(str, "text/xml"))
-      .then(data => {
-        const entries = data.querySelectorAll("EstimatedJourneyVersionFrame");
-        let html = '<ul>';
+    const now = new Date();
+    const yyyy = now.getFullYear();
+    const mm = String(now.getMonth() + 1).padStart(2, '0');
+    const dd = String(now.getDate()).padStart(2, '0');
+    const hh = String(now.getHours()).padStart(2, '0');
+    const min = String(now.getMinutes()).padStart(2, '0');
+    const ss = String(now.getSeconds()).padStart(2, '0');
+    const datetime = `${yyyy}${mm}${dd}T${hh}${min}${ss}`;
 
-        // Parcours des informations de chaque train
-        entries.forEach(entry => {
-          const lineName = entry.querySelector("LineRef")?.textContent;
-          const dest = entry.querySelector("DestinationDisplay")?.textContent;
-          const aimedTime = entry.querySelector("AimedArrivalTime")?.textContent;
-          const expectedTime = entry.querySelector("ExpectedArrivalTime")?.textContent;
-          const trainStatus = entry.querySelector("TrainRunningStatus")?.textContent || 'ontime'; // Statut par défaut "ontime"
+    const url = `https://api.sncf.com/v1/coverage/sncf/stop_areas/stop_area:SNCF:82001000/arrivals?datetime=${datetime}`;
 
-          let statusClass = 'ontime';
-          let emoji = "✅";
-          let statusText = "À l'heure";
+    fetch(url, {
+      method: 'GET',
+      headers: {
+        "Authorization": "Basic " + encodedApiKey
+      }
+    })
+    .then(response => {
+      if (!response.ok) throw new Error("Erreur HTTP : " + response.status);
+      return response.json();
+    })
+    .then(data => {
+      const arrivals = data.arrivals;
+      const disruptions = data.disruptions || [];
+      const dejaVus = new Set();
+      const villesCibles = ["Metz", "Nancy", "Thionville"];
 
-          if (trainStatus === "Delayed") {
-            statusClass = 'retarde';
-            emoji = "⚠️";
-            statusText = "Retardé";
-          } else if (trainStatus === "Cancelled") {
-            statusClass = 'supprime';
-            emoji = "❌";
-            statusText = "Supprimé";
-          }
+      let alertesHtml = "";
+      if (disruptions.length > 0) {
+        alertesHtml = `
+          <div class="alerte">
+            <strong>⚠️ Alertes SNCF en cours :</strong><br>
+            <ul>
+              ${disruptions.map(d => `<li><strong>${d.severity?.name || 'Perturbation'} :</strong> ${d?.text || 'Détail non disponible'}</li>`).join('')}
+            </ul>
+          </div>`;
+      }
 
-          html += `<li class="${statusClass}">${emoji} <strong>${lineName}</strong> vers ${dest} — Prévu à ${aimedTime} — Attendu à ${expectedTime || 'Inconnue'} — Statut : ${statusText}</li>`;
-        });
+      let html = '<ul>';
+      arrivals.forEach(arr => {
+        const info = arr.display_informations;
+        const timeInfo = arr.stop_date_time;
+        const provenance = arr.route?.direction?.stop_area?.name || "Provenance inconnue";
 
-        html += '</ul>';
-        document.getElementById("resultat").innerHTML = html || "Aucun train trouvé.";
-      })
-      .catch(error => {
-        document.getElementById("resultat").textContent = "Erreur : " + error.message;
+        if (!info || !timeInfo) return;
+        if (info.commercial_mode === "TGV") return; // exclusion TGV
+        if (!villesCibles.some(ville => provenance.includes(ville))) return;
+
+        const train = info.headsign || "Train inconnu";
+        const heureBase = timeInfo.base_arrival_date_time;
+        const heureReelle = timeInfo.arrival_date_time;
+        const heureBaseDepart = timeInfo.base_departure_date_time;
+        const heureReelleDepart = timeInfo.departure_date_time;
+
+        const cleUnique = `${train}_${provenance}_${heureBase}`;
+        if (dejaVus.has(cleUnique)) return;
+        dejaVus.add(cleUnique);
+
+        const hBase = heureBase ? heureBase.slice(9, 11) + "h" + heureBase.slice(11, 13) : "Inconnue";
+
+        let statut = "ontime";
+        let emoji = "✅";
+        let texteStatut = "À l'heure";
+        let retardTxt = "";
+        let causeTxt = "";
+
+        let retardArrivee = 0;
+        if (heureBase && heureReelle && heureBase !== heureReelle) {
+          const h1 = parseInt(heureBase.slice(9, 11)) * 60 + parseInt(heureBase.slice(11, 13));
+          const h2 = parseInt(heureReelle.slice(9, 11)) * 60 + parseInt(heureReelle.slice(11, 13));
+          retardArrivee = h2 - h1;
+        }
+
+        let retardDepart = 0;
+        if (heureBaseDepart && heureReelleDepart && heureBaseDepart !== heureReelleDepart) {
+          const d1 = parseInt(heureBaseDepart.slice(9, 11)) * 60 + parseInt(heureBaseDepart.slice(11, 13));
+          const d2 = parseInt(heureReelleDepart.slice(9, 11)) * 60 + parseInt(heureReelleDepart.slice(11, 13));
+          retardDepart = d2 - d1;
+        }
+
+        if (retardArrivee > 0 || retardDepart > 0) {
+          statut = "retarde";
+          emoji = "⚠️";
+          texteStatut = "Retardé";
+          if (retardDepart > 0) retardTxt += ` Départ retardé de ${retardDepart} min.`;
+          if (retardArrivee > 0) retardTxt += ` Arrivée retardée de ${retardArrivee} min.`;
+        }
+
+        if (heureBase && !heureReelle) {
+          statut = "supprime";
+          emoji = "❌";
+          texteStatut = "Supprimé";
+        }
+
+        if (statut !== "ontime" && arr.disruptions && arr.disruptions.length > 0) {
+          const causes = arr.disruptions.map(d => d.text).join(" / ");
+          causeTxt = `<div style="color: red; font-style: italic; margin-top: 5px;">Cause : ${causes}</div>`;
+        }
+
+        html += `<li class="${statut}">${emoji} <strong>${train}</strong> à ${hBase} — Provenance : <strong>${provenance}</strong> — Statut : ${texteStatut}${retardTxt}${causeTxt}</li>`;
       });
+
+      html += '</ul>';
+      document.getElementById("resultat").innerHTML = alertesHtml + (html || "Aucun train trouvé.");
+    })
+    .catch(error => {
+      document.getElementById("resultat").textContent = "Erreur : " + error.message;
+    });
   </script>
 </body>
 </html>
