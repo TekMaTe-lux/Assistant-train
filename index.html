@@ -43,6 +43,9 @@
       padding: 10px 15px;
       border-radius: 4px;
       list-style: none;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
     }
     #resultat li.ontime { border-left-color: green; }
     #resultat li.retarde { border-left-color: orange; }
@@ -58,42 +61,33 @@
       border-radius: 4px;
     }
 
-    #trainImage {
-      display: block;
-      max-width: 100%;
-      margin: 20px auto 10px auto;
-      border-radius: 10px;
+    .pastille {
+      display: inline-block;
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+      margin-right: 5px;
     }
 
-    .humour {
-      font-size: 0.85em;
-      font-style: italic;
-      text-align: center;
-      margin-bottom: 30px;
-      color: #555;
+    .pastille.ter {
+      background-color: #0078D4; /* Bleu TER */
     }
 
-    .humour a {
-      color: #004080;
-      text-decoration: none;
-      font-weight: bold;
+    .pastille.cfl {
+      background-color: #D40000; /* Rouge CFL */
     }
 
-    .humour a:hover {
-      text-decoration: underline;
-    }
-
-    .video {
-      margin-top: 40px;
-      text-align: center;
-    }
-
-    .video iframe {
-      width: 100%;
-      max-width: 560px;
-      height: 315px;
-      border-radius: 10px;
+    .button {
+      background-color: #004080;
+      color: white;
       border: none;
+      padding: 5px 10px;
+      border-radius: 5px;
+      cursor: pointer;
+      text-decoration: none;
+    }
+    .button:hover {
+      background-color: #003366;
     }
   </style>
 </head>
@@ -126,27 +120,7 @@
     const apiKey = '242fac11-6d98-45fb-93df-28174d362447';
     const encodedApiKey = btoa(apiKey + ":");
 
-    const nomsGares = {
-      "87192039": "Metz",
-      "87141002": "Nancy",
-      "87191007": "Thionville",
-      "82001000": "Luxembourg",
-      "87182000": "Longwy",
-      // Ajoute ici d'autres codes UIC si besoin
-    };
-
-    const linksCFL = {
-      "87192039": "https://www.cfl.lu/fr/gares/87192039",
-      "87141002": "https://www.cfl.lu/fr/gares/87141002",
-      "87191007": "https://www.cfl.lu/fr/gares/87191007",
-    };
-
-    const linksSNCF = {
-      "87192039": "https://www.sncf.com/fr/gares/87192039",
-      "87141002": "https://www.sncf.com/fr/gares/87141002",
-      "87191007": "https://www.sncf.com/fr/gares/87191007",
-    };
-
+    // Décalage de 1h01 en arrière
     const now = new Date(Date.now() - (61 * 60 * 1000));
     const yyyy = now.getFullYear();
     const mm = String(now.getMonth() + 1).padStart(2, '0');
@@ -154,8 +128,8 @@
     const hh = String(now.getHours()).padStart(2, '0');
     const min = String(now.getMinutes()).padStart(2, '0');
     const ss = String(now.getSeconds()).padStart(2, '0');
-    const datetime = `${yyyy}${mm}${dd}T${hh}${min}${ss}`;
 
+    const datetime = `${yyyy}${mm}${dd}T${hh}${min}${ss}`;
     const url = `https://api.sncf.com/v1/coverage/sncf/stop_areas/stop_area:SNCF:82001000/arrivals?datetime=${datetime}`;
 
     fetch(url, {
@@ -176,21 +150,15 @@
       arrivals.forEach(arr => {
         const info = arr.display_informations;
         const timeInfo = arr.stop_date_time;
+        const provenance = arr.route?.direction?.stop_area?.name || "Provenance inconnue";
+        const links = arr.links || [];
+        const isCFL = links.some(link => link.id.includes('SNCF:87191007'));  // Détecter si c'est un train CFL
+
         if (!info || !timeInfo) return;
 
         const train = info.headsign || "Train inconnu";
         const heureBase = timeInfo.base_arrival_date_time;
         const heureReelle = timeInfo.arrival_date_time;
-
-        // Trouver la vraie provenance dans links
-        const originLink = arr.links?.find(l => l.category === "origin" && l.id.includes("stop_area:SNCF:"));
-        let provenance = "Inconnue";
-        let linkProvenance = "#";
-        if (originLink) {
-          const codeUIC = originLink.id.split(":").pop();
-          provenance = nomsGares[codeUIC] || `UIC ${codeUIC}`;
-          linkProvenance = linksSNCF[codeUIC] || linksCFL[codeUIC] || "#";
-        }
 
         const cleUnique = `${train}_${provenance}_${heureBase}`;
         if (dejaVus.has(cleUnique)) return;
@@ -228,10 +196,16 @@
           causeTxt = `<div class="retard-cause">📢 ${causes}</div>`;
         }
 
-        html += `<li class="${statut}">${emoji} <strong>${train}</strong> à ${hBase}${retardTxt} — Provenance : <strong><a href="${linkProvenance}" target="_blank">${provenance}</a></strong> — Statut : ${texteStatut}</li>`;
+        // Ajouter la pastille et les liens
+        const pastilleClass = isCFL ? 'cfl' : 'ter';
+        html += `<li class="${statut}">
+                  <span class="pastille ${pastilleClass}"></span>
+                  ${emoji} <strong>${train}</strong> à ${hBase}${retardTxt} — Provenance : <strong>${provenance}</strong> — Statut : ${texteStatut}
+                  <a href="${links[0]?.href || '#'}" class="button" target="_blank">Voir plus</a>
+                 </li>`;
 
         if (causeTxt) {
-          html += causeTxt;
+          html += `<div class="retard-cause">${causeTxt}</div>`;
         }
       });
 
