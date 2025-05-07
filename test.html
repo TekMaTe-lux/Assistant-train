@@ -126,7 +126,15 @@
     const apiKey = '242fac11-6d98-45fb-93df-28174d362447';
     const encodedApiKey = btoa(apiKey + ":");
 
-    // Décalage de 1h01 en arrière
+    const nomsGares = {
+      "87192039": "Metz",
+      "87141002": "Nancy",
+      "87191007": "Thionville",
+      "82001000": "Luxembourg",
+      "87182000": "Longwy",
+      // Ajoute ici d'autres codes UIC si besoin
+    };
+
     const now = new Date(Date.now() - (61 * 60 * 1000));
     const yyyy = now.getFullYear();
     const mm = String(now.getMonth() + 1).padStart(2, '0');
@@ -134,8 +142,8 @@
     const hh = String(now.getHours()).padStart(2, '0');
     const min = String(now.getMinutes()).padStart(2, '0');
     const ss = String(now.getSeconds()).padStart(2, '0');
-
     const datetime = `${yyyy}${mm}${dd}T${hh}${min}${ss}`;
+
     const url = `https://api.sncf.com/v1/coverage/sncf/stop_areas/stop_area:SNCF:82001000/arrivals?datetime=${datetime}`;
 
     fetch(url, {
@@ -156,25 +164,19 @@
       arrivals.forEach(arr => {
         const info = arr.display_informations;
         const timeInfo = arr.stop_date_time;
-        let provenance = arr.route?.direction?.stop_area?.name || "Provenance inconnue";
-
         if (!info || !timeInfo) return;
-
-        // Correction de la provenance pour Thionville, Metz, Nancy
-        if (arr.route?.direction?.stop_area?.name === "Thionville") {
-          provenance = "Thionville";
-        } else if (arr.route?.direction?.stop_area?.name === "Metz") {
-          provenance = "Metz";
-        } else if (arr.route?.direction?.stop_area?.name === "Nancy") {
-          provenance = "Nancy";
-        }
-
-        // Ne conserver que les trains en provenance de Nancy, Metz et Thionville
-        if (!["Nancy", "Metz", "Thionville"].includes(provenance)) return;
 
         const train = info.headsign || "Train inconnu";
         const heureBase = timeInfo.base_arrival_date_time;
         const heureReelle = timeInfo.arrival_date_time;
+
+        // Trouver la vraie provenance dans links
+        const originLink = arr.links?.find(l => l.category === "origin" && l.id.includes("stop_area:SNCF:"));
+        let provenance = "Inconnue";
+        if (originLink) {
+          const codeUIC = originLink.id.split(":").pop();
+          provenance = nomsGares[codeUIC] || `UIC ${codeUIC}`;
+        }
 
         const cleUnique = `${train}_${provenance}_${heureBase}`;
         if (dejaVus.has(cleUnique)) return;
@@ -207,7 +209,6 @@
           texteStatut = "Supprimé";
         }
 
-        // Cause du retard ou de la suppression (disruptions)
         if ((statut === "retarde" || statut === "supprime") && arr.disruptions && arr.disruptions.length > 0) {
           const causes = arr.disruptions.map(d => d.text).join(" / ");
           causeTxt = `<div class="retard-cause">📢 ${causes}</div>`;
@@ -215,9 +216,8 @@
 
         html += `<li class="${statut}">${emoji} <strong>${train}</strong> à ${hBase}${retardTxt} — Provenance : <strong>${provenance}</strong> — Statut : ${texteStatut}</li>`;
 
-        // Si retardé ou supprimé, ajouter la cause sous le train
         if (causeTxt) {
-          html += `<div class="retard-cause">${causeTxt}</div>`;
+          html += causeTxt;
         }
       });
 
