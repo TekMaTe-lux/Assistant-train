@@ -1,103 +1,79 @@
 <!DOCTYPE html>
 <html lang="fr">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>Trains Luxembourg</title>
-  <style>
-    body { font-family: Arial, sans-serif; padding: 20px; background: #f2f2f2; }
-    .train { background: #fff; padding: 15px; margin-bottom: 10px; border-radius: 8px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); }
-    summary { cursor: pointer; font-weight: bold; }
-    .delay { color: red; font-weight: bold; }
-    .suppressed { color: gray; font-style: italic; }
-    .station { margin-left: 15px; }
-  </style>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Trains vers Luxembourg</title>
+    <style>
+        body { font-family: Arial, sans-serif; }
+        table { width: 100%; border-collapse: collapse; margin: 20px 0; }
+        th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+        th { background-color: #f2f2f2; }
+        .train-row { cursor: pointer; }
+        .train-details { display: none; }
+    </style>
 </head>
 <body>
-  <h1>Trains vers Luxembourg aujourd’hui</h1>
-  <div id="results">Chargement…</div>
+    <h1>Liste des Trains vers Luxembourg</h1>
+    <div id="train-list"></div>
 
-  <script>
-    const API_KEY = "242fac11-6d98-45fb-93df-28174d362447";
-    const STOP_AREA_ID = "stop_area:SNCF:82001000"; // Luxembourg
-    const now = new Date();
-    const yyyy = now.getFullYear();
-    const mm = String(now.getMonth() + 1).padStart(2, "0");
-    const dd = String(now.getDate()).padStart(2, "0");
-    const hour = String(now.getHours()).padStart(2, "0");
-    const min = String(now.getMinutes()).padStart(2, "0");
-    const datetime = `${yyyy}${mm}${dd}T${hour}${min}00`;
+    <script>
+        async function fetchTrainData() {
+            const datetime = new Date().toISOString(); // Prend la date et heure actuelles
+            const url = `https://api.sncf.com/v1/coverage/sncf/stop_areas/stop_area:SNCF:82001000/vehicle_journeys?datetime=${datetime}`;
+            
+            try {
+                const response = await fetch(url);
+                const data = await response.json();
+                const trains = data.vehicle_journeys.filter(train => {
+                    // Filtrer les trains en direction de Luxembourg
+                    return train.headsign.toLowerCase().includes("luxembourg");
+                });
 
-    const url = `https://api.sncf.com/v1/coverage/sncf/stop_areas/${STOP_AREA_ID}/vehicle_journeys?datetime=${datetime}&count=100`;
-
-    async function fetchTrains() {
-      const response = await fetch(url, {
-        headers: { Authorization: API_KEY }
-      });
-      const data = await response.json();
-      return data;
-    }
-
-    function formatTime(iso) {
-      const d = new Date(iso);
-      return d.toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" });
-    }
-
-    function getDisruptionInfo(vehicle_journey_id, disruptions) {
-      const found = disruptions.find(d => d.impacted_objects.some(obj => obj.vehicle_journey?.id === vehicle_journey_id));
-      if (found) {
-        let status = found.severity?.effect === "CANCELLED" ? "Train supprimé" : "Retard : " + found.message.text;
-        return `<div class="${found.severity?.effect === "CANCELLED" ? "suppressed" : "delay"}">${status}</div>`;
-      }
-      return "";
-    }
-
-    function displayTrains(data) {
-      const container = document.getElementById("results");
-      container.innerHTML = "";
-
-      if (!data.vehicle_journeys || data.vehicle_journeys.length === 0) {
-        container.textContent = "Aucun train trouvé.";
-        return;
-      }
-
-      data.vehicle_journeys.forEach(train => {
-        const details = document.createElement("details");
-        const summary = document.createElement("summary");
-        const stops = train.stop_times || [];
-
-        const origin = stops[0]?.stop_point?.name || "Départ inconnu";
-        const dest = stops[stops.length - 1]?.stop_point?.name || "Arrivée inconnue";
-        const departure = stops[0]?.departure_time || stops[0]?.arrival_time;
-        const arrival = stops[stops.length - 1]?.arrival_time || stops[stops.length - 1]?.departure_time;
-
-        summary.innerHTML = `Train ${train.name} : ${origin} → ${dest} (${formatTime(departure)} - ${formatTime(arrival)})`;
-
-        const disruptionHTML = getDisruptionInfo(train.id, data.disruptions || []);
-        const ul = document.createElement("ul");
-
-        stops.forEach(stop => {
-          const li = document.createElement("li");
-          li.className = "station";
-          li.textContent = `${stop.stop_point.name} — ${formatTime(stop.departure_time || stop.arrival_time)}`;
-          ul.appendChild(li);
-        });
-
-        details.appendChild(summary);
-        if (disruptionHTML) {
-          const disruptionDiv = document.createElement("div");
-          disruptionDiv.innerHTML = disruptionHTML;
-          details.appendChild(disruptionDiv);
+                displayTrainData(trains);
+            } catch (error) {
+                console.error("Erreur lors de la récupération des données :", error);
+            }
         }
-        details.appendChild(ul);
-        container.appendChild(details);
-      });
-    }
 
-    fetchTrains().then(displayTrains).catch(err => {
-      document.getElementById("results").textContent = "Erreur lors du chargement des données.";
-      console.error(err);
-    });
-  </script>
+        function displayTrainData(trains) {
+            const trainListContainer = document.getElementById("train-list");
+            let tableHTML = "<table><thead><tr><th>Train</th><th>Heure de départ</th><th>Gares intermédiaires</th></tr></thead><tbody>";
+
+            trains.forEach(train => {
+                const journeyDetails = train.legs.map(leg => {
+                    return `<li>${leg.stop_point.name}: ${leg.departure_time}</li>`;
+                }).join("");
+
+                tableHTML += `
+                    <tr class="train-row" onclick="toggleDetails(${train.id})">
+                        <td>${train.name}</td>
+                        <td>${train.departure_time}</td>
+                        <td><ul>${journeyDetails}</ul></td>
+                    </tr>
+                    <tr id="train-details-${train.id}" class="train-details">
+                        <td colspan="3">
+                            <strong>Plus d'infos pour le train ${train.name}:</strong>
+                            <p><b>Origine:</b> ${train.origin.name}</p>
+                            <p><b>Destination:</b> Luxembourg</p>
+                            <p><b>Heure de départ:</b> ${train.departure_time}</p>
+                            <p><b>Gares intermédiaires:</b><ul>${journeyDetails}</ul></p>
+                        </td>
+                    </tr>
+                `;
+            });
+
+            tableHTML += "</tbody></table>";
+            trainListContainer.innerHTML = tableHTML;
+        }
+
+        function toggleDetails(trainId) {
+            const detailsRow = document.getElementById(`train-details-${trainId}`);
+            detailsRow.style.display = detailsRow.style.display === "none" ? "table-row" : "none";
+        }
+
+        // Charger les données dès que la page est chargée
+        fetchTrainData();
+    </script>
 </body>
 </html>
