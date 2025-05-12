@@ -2,139 +2,188 @@
 <html lang="fr">
 <head>
   <meta charset="UTF-8">
-  <title>Arrivées à Luxembourg</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Arrivées des trains à Luxembourg</title>
   <style>
-    /* Styles inchangés */
+    body {
+      font-family: Arial, sans-serif;
+      background-color: #f4f6f8;
+      color: #333;
+      padding: 20px;
+    }
+
+    h1 {
+      text-align: center;
+      margin-bottom: 20px;
+    }
+
+    ul {
+      list-style: none;
+      padding: 0;
+    }
+
+    li {
+      background-color: #fff;
+      border-radius: 8px;
+      box-shadow: 0 2px 6px rgba(0, 0, 0, 0.1);
+      margin-bottom: 15px;
+      padding: 15px;
+      transition: all 0.3s ease;
+    }
+
+    li.ontime summary {
+      color: green;
+    }
+
+    li.retarde summary {
+      color: orange;
+    }
+
+    li.supprime summary {
+      color: red;
+    }
+
+    details > summary {
+      font-weight: bold;
+      cursor: pointer;
+    }
+
+    .retard-cause {
+      margin-top: 10px;
+      font-style: italic;
+      color: #555;
+    }
+
+    h4 {
+      margin-top: 10px;
+    }
+
+    .error {
+      color: red;
+      text-align: center;
+    }
   </style>
 </head>
 <body>
-  <h1>Arrivées des bétaillères à Luxembourg</h1>
-
-  <div class="layout">
-    <div class="content-main">
-      <div class="legend">
-        <span class="ontime">✅ À l'heure</span>
-        <span class="retarde">⚠️ Retardé</span>
-        <span class="supprime">❌ Supprimé</span>
-      </div>
-
-      <div id="resultat">Chargement en cours...</div>
-
-      <img id="trainImage" src="https://raw.githubusercontent.com/TekMaTe-lux/Assistant-train/refs/heads/main/20250426_224742.jpg" alt="Image du train">
-
-      <div class="humour">
-        Le Mardi c'est train bondé sans clim !<br>
-        Le Jeudi c'est grève inopinée !<br>
-        Suivez l'aventure des Bétaillères Express Régionales sur
-        <a href="https://x.com/BERNancyMetzLux" target="_blank">@BERNancyMetzLux</a> !
-      </div>
-
-      <div class="video">
-        <h2>Vidéo bonus</h2>
-        <iframe src="https://www.youtube.com/embed/rWFDBMcNTL8" allowfullscreen></iframe>
-      </div>
-    </div>
-
-    <div class="buttons-container">
-      <a href="https://www.ter.sncf.com/grand-est/se-deplacer/prochaines-arrivees/luxembourg-82001000" target="_blank" class="button">SNCF - Arrivées</a>
-      <a href="https://www.cfl.lu/fr-fr/search/searchresult?SearchDepartureExtId=9700059&SearchDeparture=Thionville&SearchArrivalExtId=9217081&SearchArrival=Luxembourg" target="_blank" class="button">CFL - Arrivées</a>
-      <a href="https://x.com/TERNancyMetzLux" target="_blank" class="button">X @TERNancyMetzLux</a>
-    </div>
-  </div>
+  <h1>Arrivées à Luxembourg — Trains depuis Nancy, Metz et Thionville</h1>
+  <div id="resultat">Chargement en cours...</div>
 
   <script>
     const apiKey = '242fac11-6d98-45fb-93df-28174d362447';
     const encodedApiKey = btoa(apiKey + ":");
 
-    const now = new Date(Date.now() - (61 * 60 * 1000));
-    const yyyy = now.getFullYear();
-    const mm = String(now.getMonth() + 1).padStart(2, '0');
-    const dd = String(now.getDate()).padStart(2, '0');
-    const hh = String(now.getHours()).padStart(2, '0');
-    const min = String(now.getMinutes()).padStart(2, '0');
-    const ss = String(now.getSeconds()).padStart(2, '0');
+    function getFormattedDatetime() {
+      const now = new Date(Date.now() - (61 * 60 * 1000));
+      const yyyy = now.getFullYear();
+      const mm = String(now.getMonth() + 1).padStart(2, '0');
+      const dd = String(now.getDate()).padStart(2, '0');
+      const hh = String(now.getHours()).padStart(2, '0');
+      const min = String(now.getMinutes()).padStart(2, '0');
+      const ss = String(now.getSeconds()).padStart(2, '0');
+      return `${yyyy}${mm}${dd}T${hh}${min}${ss}`;
+    }
 
-    const datetime = `${yyyy}${mm}${dd}T${hh}${min}${ss}`;
-    const url = `https://api.sncf.com/v1/coverage/sncf/stop_areas/stop_area:SNCF:82001000/arrivals?datetime=${datetime}`;
+    async function fetchArrivals() {
+      const datetime = getFormattedDatetime();
+      const url = `https://api.sncf.com/v1/coverage/sncf/stop_areas/stop_area:SNCF:82001000/arrivals?datetime=${datetime}`;
 
-    fetch(url, {
-      method: 'GET',
-      headers: {
-        "Authorization": "Basic " + encodedApiKey
-      }
-    })
-    .then(response => {
-      if (!response.ok) throw new Error("Erreur HTTP : " + response.status);
-      return response.json();
-    })
-    .then(data => {
-      const arrivals = data.arrivals;
-      const dejaVus = new Set();
-      let html = '<ul>';
-
-      arrivals.forEach(arr => {
-        const info = arr.display_informations;
-        const timeInfo = arr.stop_date_time;
-        const vehicleJourneyId = arr.vehicle_journey?.id;  // ID du vehicle_journey
-        const links = info?.links || [];
-        const provenanceId = links.find(link => link.rel === "origins")?.id?.split(':').pop();
-        let provenance = "Origine inconnue";
-
-        if (provenanceId === "87191007") provenance = "Thionville";
-        else if (provenanceId === "87192039") provenance = "Metz";
-        else if (provenanceId === "87141002") provenance = "Nancy";
-        if (!["Thionville", "Metz", "Nancy"].includes(provenance)) return;
-
-        if (!info || !timeInfo || !vehicleJourneyId) return;
-
-        const train = info.headsign || "Train inconnu";
-        const heureBase = timeInfo.base_arrival_date_time;
-        const heureReelle = timeInfo.arrival_date_time;
-
-        const cleUnique = `${train}_${provenance}_${heureBase}`;
-        if (dejaVus.has(cleUnique)) return;
-        dejaVus.add(cleUnique);
-
-        const hBase = heureBase ? heureBase.slice(9, 11) + "h" + heureBase.slice(11, 13) : "Inconnue";
-        const hReelle = heureReelle ? heureReelle.slice(9, 11) + "h" + heureReelle.slice(11, 13) : "Inconnue";
-
-        let statut = "ontime";
-        let emoji = "✅";
-        let texteStatut = "À l'heure";
-        let retardTxt = "";
-
-        if (heureBase && heureReelle && heureBase !== heureReelle) {
-          const h1 = parseInt(heureBase.slice(9, 11)) * 60 + parseInt(heureBase.slice(11, 13));
-          const h2 = parseInt(heureReelle.slice(9, 11)) * 60 + parseInt(heureReelle.slice(11, 13));
-          const diff = h2 - h1;
-          if (diff > 0) {
-            statut = "retarde";
-            emoji = "⚠️";
-            texteStatut = "Retardé";
-            retardTxt = ` (+${diff} min)`;
-          }
-        }
-
-        if (heureBase && !heureReelle) {
-          statut = "supprime";
-          emoji = "❌";
-          texteStatut = "Supprimé";
-        }
-
-        // Ajout d'un appel API pour récupérer les détails du vehicle_journey
-        const vehicleJourneyUrl = `https://api.sncf.com/v1/coverage/sncf/vehicle_journeys/${vehicleJourneyId}`;
-        fetch(vehicleJourneyUrl, {
+      try {
+        const response = await fetch(url, {
           method: 'GET',
           headers: {
             "Authorization": "Basic " + encodedApiKey
           }
-        })
-        .then(response => response.json())
-        .then(vehicleJourneyData => {
-          const causeTxt = vehicleJourneyData?.status?.cause || "Non précisée";
-          
-          // Ajout du menu déroulant pour chaque train avec détails dynamiques
+        });
+
+        if (!response.ok) throw new Error("Erreur HTTP : " + response.status);
+
+        const data = await response.json();
+        const arrivals = data.arrivals;
+        const dejaVus = new Set();
+        let html = '<ul>';
+
+        for (const arr of arrivals) {
+          const info = arr.display_informations;
+          const timeInfo = arr.stop_date_time;
+          const links = arr.links || [];
+          const provenanceId = links.find(link => link.rel === "origins")?.id?.split(':').pop();
+          let provenance = "Origine inconnue";
+
+          if (provenanceId === "87191007") provenance = "Thionville";
+          else if (provenanceId === "87192039") provenance = "Metz";
+          else if (provenanceId === "87141002") provenance = "Nancy";
+          if (!["Thionville", "Metz", "Nancy"].includes(provenance)) continue;
+
+          if (!info || !timeInfo) continue;
+
+          const train = info.headsign || "Train inconnu";
+          const heureBase = timeInfo.base_arrival_date_time;
+          const heureReelle = timeInfo.arrival_date_time;
+
+          const cleUnique = `${train}_${provenance}_${heureBase}`;
+          if (dejaVus.has(cleUnique)) continue;
+          dejaVus.add(cleUnique);
+
+          const hBase = heureBase ? heureBase.slice(9, 11) + "h" + heureBase.slice(11, 13) : "Inconnue";
+          const hReelle = heureReelle ? heureReelle.slice(9, 11) + "h" + heureReelle.slice(11, 13) : "Inconnue";
+
+          let statut = "ontime";
+          let emoji = "✅";
+          let texteStatut = "À l'heure";
+          let retardTxt = "";
+          let causeTxt = "Non précisée";
+
+          if (heureBase && heureReelle && heureBase !== heureReelle) {
+            const h1 = parseInt(heureBase.slice(9, 11)) * 60 + parseInt(heureBase.slice(11, 13));
+            const h2 = parseInt(heureReelle.slice(9, 11)) * 60 + parseInt(heureReelle.slice(11, 13));
+            const diff = h2 - h1;
+            if (diff > 0) {
+              statut = "retarde";
+              emoji = "⚠️";
+              texteStatut = "Retardé";
+              retardTxt = ` (+${diff} min)`;
+            }
+          }
+
+          if (heureBase && !heureReelle) {
+            statut = "supprime";
+            emoji = "❌";
+            texteStatut = "Supprimé";
+          }
+
+          // Récupération des arrêts et de la cause via vehicle_journey
+          const vehicleJourneyLink = arr.links.find(link => link.type === "vehicle_journey");
+          const vehicleJourneyId = vehicleJourneyLink?.id;
+
+          let stopsList = '<ul><li>Non disponible</li></ul>';
+
+          if (vehicleJourneyId) {
+            try {
+              const vehicleJourneyUrl = `https://api.sncf.com/v1/coverage/sncf/vehicle_journeys/${vehicleJourneyId}`;
+              const vehicleJourneyResponse = await fetch(vehicleJourneyUrl, {
+                headers: { "Authorization": "Basic " + encodedApiKey }
+              });
+              const vehicleJourneyData = await vehicleJourneyResponse.json();
+
+              const stops = vehicleJourneyData.vehicle_journeys[0].stop_times || [];
+              if (stops.length > 0) {
+                stopsList = '<ul>';
+                for (const stop of stops) {
+                  const stopName = stop.stop_point.name;
+                  const arrivalTime = stop.arrival_time ? stop.arrival_time.slice(0, 5) : 'N/A';
+                  stopsList += `<li>${stopName} - Arrivée : ${arrivalTime}</li>`;
+                }
+                stopsList += '</ul>';
+              }
+
+              const disruptions = vehicleJourneyData.vehicle_journeys[0].disruptions || [];
+              if (disruptions.length > 0) {
+                causeTxt = disruptions[0].cause || "Perturbation non précisée";
+              }
+            } catch (error) {
+              console.warn("Erreur lors du chargement du trajet détaillé :", error);
+            }
+          }
+
           html += `
             <li class="${statut}">
               <details>
@@ -143,20 +192,23 @@
                 </summary>
                 <p>Arrivée réelle : ${hReelle}</p>
                 <div class="retard-cause">Cause : ${causeTxt}</div>
+                <h4>Arrêts intermédiaires :</h4>
+                ${stopsList}
               </details>
             </li>
           `;
-          document.getElementById("resultat").innerHTML = html;
-        })
-        .catch(error => {
-          console.error("Erreur API vehicle_journey : ", error);
-        });
-      });
-    })
-    .catch(error => {
-      console.error("Erreur API : ", error);
-      document.getElementById("resultat").innerHTML = "Désolé, une erreur est survenue lors du chargement des données.";
-    });
+        }
+
+        html += '</ul>';
+        document.getElementById("resultat").innerHTML = html;
+
+      } catch (error) {
+        console.error("Erreur API principale : ", error);
+        document.getElementById("resultat").innerHTML = "<div class='error'>Désolé, une erreur est survenue lors du chargement des données.</div>";
+      }
+    }
+
+    fetchArrivals();
   </script>
 </body>
 </html>
