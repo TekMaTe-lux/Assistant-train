@@ -2,15 +2,114 @@
 <html lang="fr">
 <head>
   <meta charset="UTF-8">
-  <title>Arrivées à Luxembourg</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Arrivées à Luxembourg - Bétaillères Express Régionales</title>
   <style>
-    /* Styles CSS identiques à votre version actuelle */
-    /* ... */
+    body {
+      font-family: Arial, sans-serif;
+      background-color: #f5f5f5;
+      margin: 0;
+      padding: 0;
+    }
+
+    h1 {
+      text-align: center;
+      margin-top: 20px;
+      color: #333;
+      font-size: 1.8rem;
+    }
+
+    .layout {
+      display: flex;
+      justify-content: space-between;
+      margin: 20px;
+    }
+
+    .content-main {
+      width: 70%;
+    }
+
+    .legend {
+      margin-bottom: 10px;
+      display: flex;
+      justify-content: space-around;
+    }
+
+    .legend span {
+      font-size: 1.2rem;
+      font-weight: bold;
+    }
+
+    .ontime { color: green; }
+    .retarde { color: orange; }
+    .supprime { color: red; }
+
+    #resultat {
+      list-style-type: none;
+      padding: 0;
+      margin: 0;
+    }
+
+    #resultat li {
+      background-color: #fff;
+      margin-bottom: 10px;
+      padding: 15px;
+      border-radius: 5px;
+      box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
+    }
+
+    #resultat li details {
+      background-color: #f9f9f9;
+      padding: 10px;
+      border-radius: 5px;
+    }
+
+    #resultat li .train-details {
+      margin-top: 10px;
+    }
+
+    .buttons-container {
+      margin-top: 20px;
+      text-align: center;
+    }
+
+    .button {
+      display: inline-block;
+      padding: 10px 20px;
+      margin: 5px;
+      background-color: #007bff;
+      color: white;
+      text-decoration: none;
+      border-radius: 5px;
+      transition: background-color 0.3s;
+    }
+
+    .button:hover {
+      background-color: #0056b3;
+    }
+
+    .humour {
+      margin-top: 20px;
+      text-align: center;
+      font-size: 1.2rem;
+      color: #555;
+    }
+
+    iframe {
+      display: block;
+      width: 100%;
+      height: 315px;
+      margin-top: 20px;
+    }
+
+    .video {
+      margin-top: 20px;
+      text-align: center;
+    }
   </style>
 </head>
 <body>
-  <h1>Arrivées des bétaillères à Luxembourg</h1>
+  <h1>Arrivées des Bétaillères Express Régionales à Luxembourg</h1>
 
   <div class="layout">
     <div class="content-main">
@@ -21,8 +120,6 @@
       </div>
 
       <div id="resultat">Chargement en cours...</div>
-
-      <img id="trainImage" src="https://raw.githubusercontent.com/TekMaTe-lux/Assistant-train/refs/heads/main/20250426_224742.jpg" alt="Image du train">
 
       <div class="humour">
         Le Mardi c'est train bondé sans clim !<br>
@@ -45,7 +142,7 @@
   </div>
 
   <script>
-    const apiKey = '242fac11-6d98-45fb-93df-28174d362447';
+    const apiKey = 'VOTRE_CLE_API';  // Remplacez par votre clé API
     const encodedApiKey = btoa(apiKey + ":");
 
     const now = new Date(Date.now() - (61 * 60 * 1000));
@@ -69,12 +166,12 @@
       if (!response.ok) throw new Error("Erreur HTTP : " + response.status);
       return response.json();
     })
-    .then(async data => {
+    .then(data => {
       const arrivals = data.arrivals;
       const dejaVus = new Set();
       let html = '<ul>';
 
-      for (const arr of arrivals) {
+      const promises = arrivals.map(arr => {
         const info = arr.display_informations;
         const timeInfo = arr.stop_date_time;
         const links = info?.links || [];
@@ -84,16 +181,16 @@
         if (provenanceId === "87191007") provenance = "Thionville";
         else if (provenanceId === "87192039") provenance = "Metz";
         else if (provenanceId === "87141002") provenance = "Nancy";
-        if (!["Thionville", "Metz", "Nancy"].includes(provenance)) continue;
+        if (!["Thionville", "Metz", "Nancy"].includes(provenance)) return Promise.resolve('');
 
-        if (!info || !timeInfo) continue;
+        if (!info || !timeInfo) return Promise.resolve('');
 
         const train = info.headsign || "Train inconnu";
         const heureBase = timeInfo.base_arrival_date_time;
         const heureReelle = timeInfo.arrival_date_time;
 
         const cleUnique = `${train}_${provenance}_${heureBase}`;
-        if (dejaVus.has(cleUnique)) continue;
+        if (dejaVus.has(cleUnique)) return Promise.resolve('');
         dejaVus.add(cleUnique);
 
         const hBase = heureBase ? heureBase.slice(9, 11) + "h" + heureBase.slice(11, 13) : "Inconnue";
@@ -122,70 +219,72 @@
           texteStatut = "Supprimé";
         }
 
-        // Récupération des détails du train via vehicle_journey
-        const vehicleJourneyId = info?.links?.find(link => link.rel === "vehicle_journey")?.id;
-        let detailsHtml = "";
+        const vehicleJourneyId = info?.vehicle_journey?.id;
+        if (!vehicleJourneyId) return Promise.resolve('');
 
-        if (vehicleJourneyId) {
-          const vjUrl = `https://api.sncf.com/v1/coverage/sncf/vehicle_journeys/${vehicleJourneyId}`;
-          try {
-            const vjResponse = await fetch(vjUrl, {
-              method: 'GET',
-              headers: {
-                "Authorization": "Basic " + encodedApiKey
-              }
-            });
-            if (!vjResponse.ok) throw new Error("Erreur HTTP : " + vjResponse.status);
-            const vjData = await vjResponse.json();
-            const stopTimes = vjData.vehicle_journeys[0]?.stop_times || [];
+        const vjUrl = `https://api.sncf.com/v1/coverage/sncf/vehicle_journeys/${vehicleJourneyId}`;
 
-            detailsHtml += `<ul>`;
-            for (const stop of stopTimes) {
-              const station = stop.stop_point?.name || "Gare inconnue";
-              const baseArrival = stop.base_arrival_time || "N/A";
-              const realArrival = stop.arrival_time || "N/A";
-              const baseDeparture = stop.base_departure_time || "N/A";
-              const realDeparture = stop.departure_time || "N/A";
-              const platform = stop.stop_point?.platform || "N/A";
-
-              let delay = "";
-              if (baseArrival !== "N/A" && realArrival !== "N/A" && baseArrival !== realArrival) {
-                const h1 = parseInt(baseArrival.slice(0, 2)) * 60 + parseInt(baseArrival.slice(2, 4));
-                const h2 = parseInt(realArrival.slice(0, 2)) * 60 + parseInt(realArrival.slice(2, 4));
-                const diff = h2 - h1;
-                if (diff > 0) {
-                  delay = ` (+${diff} min)`;
-                }
-              }
-
-              detailsHtml += `<li><strong>${station}</strong> - Arrivée prévue : ${baseArrival.slice(0,2)}h${baseArrival.slice(2,4)}, réelle : ${realArrival.slice(0,2)}h${realArrival.slice(2,4)}${delay}, quai : ${platform}</li>`;
-            }
-            detailsHtml += `</ul>`;
-          } catch (error) {
-            detailsHtml = "<p>Impossible de charger les détails du train.</p>";
+        return fetch(vjUrl, {
+          method: 'GET',
+          headers: {
+            "Authorization": "Basic " + encodedApiKey
           }
-        }
+        })
+        .then(response => {
+          if (!response.ok) throw new Error("Erreur HTTP : " + response.status);
+          return response.json();
+        })
+        .then(vjData => {
+          const stopTimes = vjData.vehicle_journeys[0]?.stop_times || [];
+          let stopsHtml = '<ul>';
+          stopTimes.forEach(stop => {
+            const stopName = stop.stop_point?.name || "Gare inconnue";
+            const baseTime = stop.base_arrival_time || "Inconnue";
+            const realTime = stop.arrival_time || "Inconnue";
+            let delayTxt = "";
+            if (baseTime !== "Inconnue" && realTime !== "Inconnue" && baseTime !== realTime) {
+              const h1 = parseInt(baseTime.slice(0, 2)) * 60 + parseInt(baseTime.slice(2, 4));
+              const h2 = parseInt(realTime.slice(0, 2)) * 60 + parseInt(realTime.slice(2, 4));
+              const diff = h2 - h1;
+              if (diff > 0) {
+                delayTxt = ` (+${diff} min)`;
+              }
+            }
+            stopsHtml += `<li>${stopName} : ${baseTime} → ${realTime}${delayTxt}</li>`;
+          });
+          stopsHtml += '</ul>';
 
-        html += `
-          <li class="${statut}">
-            <details>
-              <summary>
-                ${emoji} <strong>${train}</strong> à ${hBase}${retardTxt} — Provenance : <strong>${provenance}</strong> — Statut : ${texteStatut}
-              </summary>
-              <div class="train-details">
-                <p>Heure réelle : ${hReelle}</p>
-                <p>Provenance : ${provenance}</p>
-                <p>Statut : ${texteStatut}</p>
-                <h4>Arrêts intermédiaires :</h4>
-                ${detailsHtml}
-              </div>
-            </details>
-          </li>
-        `;
-      }
+          return `
+            <li class="${statut}">
+              <details>
+                <summary>
+                  ${emoji} <strong>${train}</strong> à ${hBase}${retardTxt} — Provenance : <strong>${provenance}</strong> — Statut : ${texteStatut}
+                </summary>
+                <div class="train-details">
+                  <p><strong>Provenance :</strong> ${provenance}</p>
+                  <p><strong>Heure prévue d'arrivée :</strong> ${hBase}</p>
+                  <p><strong>Heure réelle :</strong> ${hReelle}</p>
+                  <p><strong>Statut :</strong> ${texteStatut}${retardTxt}</p>
+                  <p><strong>Arrêts desservis :</strong></p>
+                  ${stopsHtml}
+                </div>
+              </details>
+            </li>
+          `;
+        })
+        .catch(error => {
+          console.error("Erreur lors de la récupération des détails du train : " + error.message);
+          return '';
+        });
+      });
 
-      html += '</ul>';
-      document.getElementById('resultat').innerHTML = html;
+      Promise.all(promises).then(results => {
+        results.forEach(item => {
+          html += item;
+        });
+        html += '</ul>';
+        document.getElementById('resultat').innerHTML = html;
+      });
     })
     .catch(error => {
       console.error("Erreur de chargement des arrivées : " + error.message);
