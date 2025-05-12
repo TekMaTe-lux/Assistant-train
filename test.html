@@ -208,6 +208,12 @@
     const datetime = `${yyyy}${mm}${dd}T${hh}${min}${ss}`;
     const url = `https://api.sncf.com/v1/coverage/sncf/stop_areas/stop_area:SNCF:82001000/arrivals?datetime=${datetime}`;
 
+    function formatTime(minutes) {
+      const hours = Math.floor(minutes / 60);
+      const mins = minutes % 60;
+      return `${String(hours).padStart(2, '0')}h${String(mins).padStart(2, '0')}`;
+    }
+
     fetch(url, {
       method: 'GET',
       headers: {
@@ -273,6 +279,7 @@
           texteStatut = "Supprimé";
         }
 
+        // Récupération des arrêts et de la cause via vehicle_journey
         const vehicleJourneyLink = arr.links.find(link => link.type === "vehicle_journey");
         const vehicleJourneyId = vehicleJourneyLink?.id;
 
@@ -287,10 +294,11 @@
             const stops = vehicleJourneyData.vehicle_journeys[0].stop_times || [];
             if (stops.length > 0) {
               stopsList = '<ul>';
-              for (const stop of stops) {
-                const stopName = stop.stop_point.name;
-                const arrivalTime = stop.arrival_time ? stop.arrival_time.slice(0, 5) : 'N/A';
-                stopsList += `<li>${stopName} - Arrivée : ${arrivalTime}</li>`;
+              for (let i = 0; i < stops.length; i++) {
+                const stopName = stops[i].stop_point.name;
+                const arrivalTime = stops[i].arrival_time ? formatTime(parseInt(stops[i].arrival_time.slice(0, 4))) : 'N/A';
+                const prefix = (i === 0) ? "Départ" : "Arrivée"; // Changement ici pour le premier arrêt
+                stopsList += `<li>${prefix} : ${stopName} - ${arrivalTime}</li>`;
               }
               stopsList += '</ul>';
             }
@@ -304,28 +312,21 @@
           }
         }
 
-        html += `
-          <li class="${statut}">
-            <details>
-              <summary>
-                ${emoji} <strong>${train}</strong> à ${hBase}${retardTxt} — Provenance : <strong>${provenance}</strong> — Statut : ${texteStatut}
-              </summary>
-              <p>Arrivée réelle : ${hReelle}</p>
-              <div class="retard-cause">Cause : ${causeTxt}</div>
-              <h4>Arrêts intermédiaires :</h4>
-              ${stopsList}
-            </details>
-          </li>
-        `;
+        // Si le train est à l'heure, ne pas afficher "Arrivée réelle" et "Cause"
+        const arrivalDetails = statut !== "ontime" ? `<p>Arrivée réelle : ${hReelle}</p><div class="retard-cause">Cause : ${causeTxt}</div>` : '';
+        html += `<li class="${statut}">
+                  <span>${emoji} Train ${train} en provenance de ${provenance}</span>
+                  <p>Heure prévue : ${hBase}${retardTxt}</p>
+                  ${arrivalDetails}
+                  ${stopsList}
+                </li>`;
       }
-
       html += '</ul>';
-      document.getElementById("resultat").innerHTML = html;
-
+      document.getElementById('resultat').innerHTML = html;
     })
     .catch(error => {
-      console.error("Erreur API : ", error);
-      document.getElementById("resultat").innerHTML = "Désolé, une erreur est survenue lors du chargement des données.";
+      console.error('Erreur API:', error);
+      document.getElementById('resultat').innerHTML = '<p>Impossible de récupérer les informations.</p>';
     });
   </script>
 </body>
