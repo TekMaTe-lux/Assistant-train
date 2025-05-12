@@ -218,12 +218,12 @@
       if (!response.ok) throw new Error("Erreur HTTP : " + response.status);
       return response.json();
     })
-    .then(data => {
+    .then(async data => {
       const arrivals = data.arrivals;
       const dejaVus = new Set();
       let html = '<ul>';
 
-      arrivals.forEach(arr => {
+      for (const arr of arrivals) {
         const info = arr.display_informations;
         const timeInfo = arr.stop_date_time;
         const links = info?.links || [];
@@ -233,16 +233,16 @@
         if (provenanceId === "87191007") provenance = "Thionville";
         else if (provenanceId === "87192039") provenance = "Metz";
         else if (provenanceId === "87141002") provenance = "Nancy";
-        if (!["Thionville", "Metz", "Nancy"].includes(provenance)) return;
+        if (!["Thionville", "Metz", "Nancy"].includes(provenance)) continue;
 
-        if (!info || !timeInfo) return;
+        if (!info || !timeInfo) continue;
 
         const train = info.headsign || "Train inconnu";
         const heureBase = timeInfo.base_arrival_date_time;
         const heureReelle = timeInfo.arrival_date_time;
 
         const cleUnique = `${train}_${provenance}_${heureBase}`;
-        if (dejaVus.has(cleUnique)) return;
+        if (dejaVus.has(cleUnique)) continue;
         dejaVus.add(cleUnique);
 
         const hBase = heureBase ? heureBase.slice(9, 11) + "h" + heureBase.slice(11, 13) : "Inconnue";
@@ -253,6 +253,7 @@
         let texteStatut = "À l'heure";
         let retardTxt = "";
         let causeTxt = "";
+        let stopsList = '<ul><li>Non disponible</li></ul>';
 
         if (heureBase && heureReelle && heureBase !== heureReelle) {
           const h1 = parseInt(heureBase.slice(9, 11)) * 60 + parseInt(heureBase.slice(11, 13));
@@ -272,19 +273,55 @@
           texteStatut = "Supprimé";
         }
 
-        // Ajout du menu déroulant pour chaque train avec détails dynamiques
+        // Récupération des arrêts et de la cause via vehicle_journey
+        const vehicleJourneyLink = arr.links.find(link => link.type === "vehicle_journey");
+        const vehicleJourneyId = vehicleJourneyLink?.id;
+
+        if (vehicleJourneyId) {
+          try {
+            const vehicleJourneyUrl = `https://api.sncf.com/v1/coverage/sncf/vehicle_journeys/${vehicleJourneyId}`;
+            const vehicleJourneyResponse = await fetch(vehicleJourneyUrl, {
+              headers: { "Authorization": "Basic " + encodedApiKey }
+            });
+            const vehicleJourneyData = await vehicleJourneyResponse.json();
+
+            const stops = vehicleJourneyData.vehicle_journeys[0].stop_times || [];
+            if (stops.length > 0) {
+              stopsList = '<ul>';
+              for (let i = 0; i < stops.length; i++) {
+                const stopName = stops[i].stop_point.name;
+                const arrivalTime = stops[i].arrival_time ? stops[i].arrival_time.slice(0, 5) : 'N/A';
+                const prefix = (i === 0) ? "Départ" : "Arrivée"; // Changement ici pour le premier arrêt
+                stopsList += `<li>${prefix} : ${stopName} - ${arrivalTime}</li>`;
+              }
+              stopsList += '</ul>';
+            }
+
+            const disruptions = vehicleJourneyData.vehicle_journeys[0].disruptions || [];
+            if (disruptions.length > 0) {
+              causeTxt = disruptions[0].cause || "Perturbation non précisée";
+            }
+          } catch (error) {
+            console.warn("Erreur lors du chargement du trajet détaillé :", error);
+          }
+        }
+
+        // Si le train est à l'heure, ne pas afficher "Arrivée réelle" et "Cause"
+        const arrivalDetails = statut !== "ontime" ? `<p>Arrivée réelle : ${hReelle}</p><div class="retard-cause">Cause : ${causeTxt}</div>` : '';
+
         html += `
           <li class="${statut}">
             <details>
               <summary>
                 ${emoji} <strong>${train}</strong> à ${hBase}${retardTxt} — Provenance : <strong>${provenance}</strong> — Statut : ${texteStatut}
               </summary>
-              <p>Arrivée réelle : ${hReelle}</p>
-              <div class="retard-cause">Cause : ${causeTxt || "Non précisée"}</div>
+              ${arrivalDetails}
+              <h4>Arrêts intermédiaires :</h4>
+              ${stopsList}
             </details>
           </li>
         `;
-      });
+      }
 
       html += '</ul>';
       document.getElementById("resultat").innerHTML = html;
