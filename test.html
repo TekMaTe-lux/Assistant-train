@@ -20,19 +20,23 @@
     <script>
         async function fetchTrainData() {
             const datetime = new Date().toISOString(); // Prend la date et heure actuelles
-            const url = `https://api.sncf.com/v1/coverage/sncf/stop_areas/stop_area:SNCF:82001000/vehicle_journeys?datetime=${datetime}`;
+            const url = `https://api.sncf.com/v1/coverage/sncf/vehicle_journeys?datetime=${datetime}`;
             
             try {
                 const response = await fetch(url);
                 const data = await response.json();
-                
+
                 // Vérifie si les données sont bien présentes
                 if (data.vehicle_journeys && data.vehicle_journeys.length > 0) {
                     const trains = data.vehicle_journeys.filter(train => {
                         // Filtrer les trains en direction de Luxembourg
                         return train.headsign && train.headsign.toLowerCase().includes("luxembourg");
                     });
-                    displayTrainData(trains);
+
+                    // Récupérer les disruptions et ajouter les retards
+                    const disruptions = data.disruptions || [];
+
+                    displayTrainData(trains, disruptions);
                 } else {
                     document.getElementById("train-list").innerHTML = "Aucun train trouvé.";
                 }
@@ -42,32 +46,37 @@
             }
         }
 
-        function displayTrainData(trains) {
+        function displayTrainData(trains, disruptions) {
             const trainListContainer = document.getElementById("train-list");
-            let tableHTML = "<table><thead><tr><th>Train</th><th>Heure de départ</th><th>Retard</th><th>Gares intermédiaires</th></tr></thead><tbody>";
+            let tableHTML = "<table><thead><tr><th>Train</th><th>Heure de départ</th><th>Retard</th><th>Gares intermédiaires</th><th>Disruptions</th></tr></thead><tbody>";
 
             trains.forEach(train => {
-                // Vérification du retard et de l'état du train
+                // Recherche les disruptions affectant ce train
+                const trainDisruptions = disruptions.filter(disruption => disruption.headsign === train.headsign);
+                const disruptionMessages = trainDisruptions.map(d => d.severity.name).join(", ");
+
                 const delay = train.status === "delayed" ? `${train.delay} minutes` : "À l'heure";
-                const journeyDetails = train.legs ? train.legs.map(leg => {
-                    return `<li>${leg.stop_point.name}: ${leg.departure_time}</li>`;
+                const journeyDetails = train.stop_times ? train.stop_times.map(stop => {
+                    return `<li>${stop.stop_point.label}: ${new Date(stop.departure_time).toLocaleTimeString()}</li>`;
                 }).join("") : "";
 
                 tableHTML += `
                     <tr class="train-row" onclick="toggleDetails(${train.id})">
                         <td>${train.name}</td>
-                        <td>${train.departure_time}</td>
+                        <td>${new Date(train.departure_time).toLocaleTimeString()}</td>
                         <td>${delay}</td>
                         <td><ul>${journeyDetails}</ul></td>
+                        <td>${disruptionMessages || "Aucune disruption"}</td>
                     </tr>
                     <tr id="train-details-${train.id}" class="train-details">
-                        <td colspan="4">
+                        <td colspan="5">
                             <strong>Plus d'infos pour le train ${train.name}:</strong>
                             <p><b>Origine:</b> ${train.origin ? train.origin.name : "Non spécifié"}</p>
                             <p><b>Destination:</b> Luxembourg</p>
-                            <p><b>Heure de départ:</b> ${train.departure_time}</p>
+                            <p><b>Heure de départ:</b> ${new Date(train.departure_time).toLocaleTimeString()}</p>
                             <p><b>Retard:</b> ${delay}</p>
                             <p><b>Gares intermédiaires:</b><ul>${journeyDetails}</ul></p>
+                            <p><b>Disruptions:</b> ${disruptionMessages || "Aucune disruption"}</p>
                         </td>
                     </tr>
                 `;
