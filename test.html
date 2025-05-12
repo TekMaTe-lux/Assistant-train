@@ -208,12 +208,6 @@
     const datetime = `${yyyy}${mm}${dd}T${hh}${min}${ss}`;
     const url = `https://api.sncf.com/v1/coverage/sncf/stop_areas/stop_area:SNCF:82001000/arrivals?datetime=${datetime}`;
 
-    function formatTime(minutes) {
-      const hours = Math.floor(minutes / 60);
-      const mins = minutes % 60;
-      return `${String(hours).padStart(2, '0')}h${String(mins).padStart(2, '0')}`;
-    }
-
     fetch(url, {
       method: 'GET',
       headers: {
@@ -279,7 +273,6 @@
           texteStatut = "Supprimé";
         }
 
-        // Récupération des arrêts et de la cause via vehicle_journey
         const vehicleJourneyLink = arr.links.find(link => link.type === "vehicle_journey");
         const vehicleJourneyId = vehicleJourneyLink?.id;
 
@@ -296,37 +289,63 @@
               stopsList = '<ul>';
               for (let i = 0; i < stops.length; i++) {
                 const stopName = stops[i].stop_point.name;
-                const arrivalTime = stops[i].arrival_time ? formatTime(parseInt(stops[i].arrival_time.slice(0, 4))) : 'N/A';
-                const prefix = (i === 0) ? "Départ" : "Arrivée"; // Changement ici pour le premier arrêt
-                stopsList += `<li>${prefix} : ${stopName} - ${arrivalTime}</li>`;
+                let arrivalTime = 'N/A';
+                if (stops[i].arrival_time) {
+                  const timeStr = stops[i].arrival_time.replace(/[^0-9]/g, '');
+                  if (timeStr.length >= 4) {
+                    const h = timeStr.slice(0, 2);
+                    const m = timeStr.slice(2, 4);
+                    arrivalTime = `${h}h${m}`;
+                  }
+                }
+                let prefix = '';
+                if (i === 0) prefix = "Départ : ";
+                else if (i === stops.length - 1) prefix = "Arrivée : ";
+                stopsList += `<li>${prefix}${stopName} - ${arrivalTime}</li>`;
               }
               stopsList += '</ul>';
             }
 
             const disruptions = vehicleJourneyData.vehicle_journeys[0].disruptions || [];
             if (disruptions.length > 0) {
-              causeTxt = disruptions[0].cause || "Perturbation non précisée";
+              const messageText = disruptions[0].message?.text;
+              if (messageText) {
+                causeTxt = messageText;
+              }
             }
           } catch (error) {
             console.warn("Erreur lors du chargement du trajet détaillé :", error);
           }
         }
 
-        // Si le train est à l'heure, ne pas afficher "Arrivée réelle" et "Cause"
-        const arrivalDetails = statut !== "ontime" ? `<p>Arrivée réelle : ${hReelle}</p><div class="retard-cause">Cause : ${causeTxt}</div>` : '';
-        html += `<li class="${statut}">
-                  <span>${emoji} Train ${train} en provenance de ${provenance}</span>
-                  <p>Heure prévue : ${hBase}${retardTxt}</p>
-                  ${arrivalDetails}
-                  ${stopsList}
-                </li>`;
+        let arrivalDetails = '';
+        if (statut !== "ontime") {
+          arrivalDetails = `<p>Arrivée réelle : ${hReelle}</p>`;
+          if (causeTxt) {
+            arrivalDetails += `<div class="retard-cause">Cause : ${causeTxt}</div>`;
+          }
+        }
+
+        html += `
+          <li class="${statut}">
+            <details>
+              <summary>
+                ${emoji} <strong>${train}</strong> à ${hBase}${retardTxt} — Provenance : <strong>${provenance}</strong> — Statut : ${texteStatut}
+              </summary>
+              ${arrivalDetails}
+              <h4>Arrêts intermédiaires :</h4>
+              ${stopsList}
+            </details>
+          </li>
+        `;
       }
+
       html += '</ul>';
-      document.getElementById('resultat').innerHTML = html;
+      document.getElementById("resultat").innerHTML = html;
     })
     .catch(error => {
-      console.error('Erreur API:', error);
-      document.getElementById('resultat').innerHTML = '<p>Impossible de récupérer les informations.</p>';
+      console.error("Erreur API : ", error);
+      document.getElementById("resultat").innerHTML = "Désolé, une erreur est survenue lors du chargement des données.";
     });
   </script>
 </body>
