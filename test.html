@@ -1,205 +1,103 @@
 <!DOCTYPE html>
 <html lang="fr">
 <head>
-  <meta charset="UTF-8">
-  <title>Trains depuis Luxembourg (aujourd’hui)</title>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Trains Luxembourg</title>
   <style>
-    body {
-      font-family: Arial, sans-serif;
-      background-color: #f7f7f7;
-      padding: 20px;
-      max-width: 1000px;
-      margin: auto;
-    }
-
-    h1 {
-      text-align: center;
-      color: #003366;
-    }
-
-    .legend {
-      text-align: center;
-      margin-bottom: 20px;
-    }
-
-    .legend span {
-      margin: 0 10px;
-      padding: 5px 10px;
-      border-radius: 5px;
-      font-weight: bold;
-    }
-
-    .ontime { color: green; background-color: #e6ffe6; }
-    .retarde { color: darkorange; background-color: #fff4e0; }
-    .supprime { color: red; background-color: #ffe5e5; }
-
-    .train-item {
-      background: white;
-      border-left: 6px solid #ccc;
-      margin-bottom: 10px;
-      padding: 10px 15px;
-      border-radius: 4px;
-      cursor: pointer;
-    }
-
-    .train-item.ontime { border-left-color: green; }
-    .train-item.retarde { border-left-color: orange; }
-    .train-item.supprime { border-left-color: red; }
-
-    .train-header {
-      font-weight: bold;
-      font-size: 1.1em;
-    }
-
-    .details {
-      display: none;
-      margin-top: 10px;
-      background: #f0f0f0;
-      padding: 10px;
-      border-radius: 4px;
-    }
-
-    .stop {
-      margin: 4px 0;
-    }
-
-    .stop strong {
-      display: inline-block;
-      width: 150px;
-    }
+    body { font-family: Arial, sans-serif; padding: 20px; background: #f2f2f2; }
+    .train { background: #fff; padding: 15px; margin-bottom: 10px; border-radius: 8px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); }
+    summary { cursor: pointer; font-weight: bold; }
+    .delay { color: red; font-weight: bold; }
+    .suppressed { color: gray; font-style: italic; }
+    .station { margin-left: 15px; }
   </style>
 </head>
 <body>
-  <h1>Trains depuis Luxembourg (aujourd’hui)</h1>
-
-  <div class="legend">
-    <span class="ontime">✅ À l'heure</span>
-    <span class="retarde">⚠️ Retardé</span>
-    <span class="supprime">❌ Supprimé</span>
-  </div>
-
-  <div id="resultat">Chargement…</div>
+  <h1>Trains vers Luxembourg aujourd’hui</h1>
+  <div id="results">Chargement…</div>
 
   <script>
-    const apiKey = '242fac11-6d98-45fb-93df-28174d362447';
-    const encodedApiKey = btoa(apiKey + ":");
-
+    const API_KEY = "242fac11-6d98-45fb-93df-28174d362447";
+    const STOP_AREA_ID = "stop_area:SNCF:82001000"; // Luxembourg
     const now = new Date();
     const yyyy = now.getFullYear();
-    const mm = String(now.getMonth() + 1).padStart(2, '0');
-    const dd = String(now.getDate()).padStart(2, '0');
-    const hh = String(now.getHours()).padStart(2, '0');
-    const min = String(now.getMinutes()).padStart(2, '0');
-    const ss = String(now.getSeconds()).padStart(2, '0');
+    const mm = String(now.getMonth() + 1).padStart(2, "0");
+    const dd = String(now.getDate()).padStart(2, "0");
+    const hour = String(now.getHours()).padStart(2, "0");
+    const min = String(now.getMinutes()).padStart(2, "0");
+    const datetime = `${yyyy}${mm}${dd}T${hour}${min}00`;
 
-    const fromDatetime = `${yyyy}${mm}${dd}T${hh}${min}${ss}`;
-    const toDatetime = `${yyyy}${mm}${dd}T235959`;
+    const url = `https://api.sncf.com/v1/coverage/sncf/stop_areas/${STOP_AREA_ID}/vehicle_journeys?datetime=${datetime}&count=100`;
 
-    const url = `https://api.sncf.com/v1/coverage/sncf/stop_areas/stop_area:SNCF:82001000/vehicle_journeys?from_datetime=${fromDatetime}&to_datetime=${toDatetime}`;
-
-    fetch(url, {
-      headers: { 'Authorization': 'Basic ' + encodedApiKey }
-    })
-    .then(res => res.json())
-    .then(data => {
-      const journeys = data.vehicle_journeys || [];
-      const disruptions = data.disruptions || [];
-      const disruptionMap = {};
-
-      disruptions.forEach(d => {
-        if (d.id && d.cause) {
-          disruptionMap[d.id.replace("disruption:SNCF:", "")] = d.cause;
-        }
+    async function fetchTrains() {
+      const response = await fetch(url, {
+        headers: { Authorization: API_KEY }
       });
-
-      let html = '';
-      const dejaVus = new Set();
-
-      journeys.forEach((journey, index) => {
-        const train = journey.display_informations?.headsign || "Train inconnu";
-        const dest = journey.display_informations?.direction || "Destination inconnue";
-
-        const departure = journey.stop_times.find(st => st.stop_point?.stop_area?.id === "stop_area:SNCF:82001000");
-        if (!departure) return;
-
-        const baseTime = departure.base_departure_time;
-        const realTime = departure.departure_time;
-        const heure = baseTime?.slice(0, 2) + "h" + baseTime?.slice(2, 4);
-
-        const cleUnique = `${train}_${dest}_${baseTime}`;
-        if (dejaVus.has(cleUnique)) return;
-        dejaVus.add(cleUnique);
-
-        let statut = "ontime", emoji = "✅", texteStatut = "À l'heure", retardTxt = "", causeTxt = "";
-
-        if (realTime && baseTime && baseTime !== realTime) {
-          const diff = (parseInt(realTime.slice(0,2)) * 60 + parseInt(realTime.slice(2,4))) -
-                       (parseInt(baseTime.slice(0,2)) * 60 + parseInt(baseTime.slice(2,4)));
-          if (diff > 0) {
-            statut = "retarde";
-            emoji = "⚠️";
-            texteStatut = "Retardé";
-            retardTxt = ` (+${diff} min)`;
-          }
-        }
-
-        if (departure.departure_status === "cancelled") {
-          statut = "supprime";
-          emoji = "❌";
-          texteStatut = "Supprimé";
-        }
-
-        const disruptionLink = journey.links?.find(l => l.rel === "disruption");
-        if (disruptionLink) {
-          const id = disruptionLink.href.split("/").pop().replace("disruption:SNCF:", "");
-          if (disruptionMap[id]) {
-            causeTxt = ` — Cause : ${disruptionMap[id]}`;
-          }
-        }
-
-        // Détails des arrêts
-        let detailHTML = `<div class="details" id="details${index}">`;
-        journey.stop_times.forEach(st => {
-          const gare = st.stop_point.name;
-          const base = st.base_departure_time || st.base_arrival_time;
-          const real = st.departure_time || st.arrival_time;
-          let ligne = `<div class="stop"><strong>${gare}</strong> : `;
-          if (base) {
-            const heureBase = `${base.slice(0,2)}h${base.slice(2,4)}`;
-            ligne += `prévu à ${heureBase}`;
-          }
-          if (real && real !== base) {
-            const heureReal = `${real.slice(0,2)}h${real.slice(2,4)}`;
-            const diff = (parseInt(real.slice(0,2)) * 60 + parseInt(real.slice(2,4))) -
-                         (parseInt(base.slice(0,2)) * 60 + parseInt(base.slice(2,4)));
-            if (diff > 0) {
-              ligne += ` → retardé à ${heureReal} (+${diff} min)`;
-            }
-          }
-          ligne += `</div>`;
-          detailHTML += ligne;
-        });
-        detailHTML += `</div>`;
-
-        html += `
-          <div class="train-item ${statut}" onclick="toggleDetails('details${index}')">
-            <div class="train-header">${emoji} <strong>${train}</strong> à ${heure}${retardTxt} — Destination : ${dest} — Statut : ${texteStatut}${causeTxt}</div>
-            ${detailHTML}
-          </div>`;
-      });
-
-      document.getElementById("resultat").innerHTML = html || "Aucun train trouvé.";
-    })
-    .catch(err => {
-      document.getElementById("resultat").innerHTML = "Erreur : " + err.message;
-    });
-
-    function toggleDetails(id) {
-      const el = document.getElementById(id);
-      if (el) {
-        el.style.display = (el.style.display === "block") ? "none" : "block";
-      }
+      const data = await response.json();
+      return data;
     }
+
+    function formatTime(iso) {
+      const d = new Date(iso);
+      return d.toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" });
+    }
+
+    function getDisruptionInfo(vehicle_journey_id, disruptions) {
+      const found = disruptions.find(d => d.impacted_objects.some(obj => obj.vehicle_journey?.id === vehicle_journey_id));
+      if (found) {
+        let status = found.severity?.effect === "CANCELLED" ? "Train supprimé" : "Retard : " + found.message.text;
+        return `<div class="${found.severity?.effect === "CANCELLED" ? "suppressed" : "delay"}">${status}</div>`;
+      }
+      return "";
+    }
+
+    function displayTrains(data) {
+      const container = document.getElementById("results");
+      container.innerHTML = "";
+
+      if (!data.vehicle_journeys || data.vehicle_journeys.length === 0) {
+        container.textContent = "Aucun train trouvé.";
+        return;
+      }
+
+      data.vehicle_journeys.forEach(train => {
+        const details = document.createElement("details");
+        const summary = document.createElement("summary");
+        const stops = train.stop_times || [];
+
+        const origin = stops[0]?.stop_point?.name || "Départ inconnu";
+        const dest = stops[stops.length - 1]?.stop_point?.name || "Arrivée inconnue";
+        const departure = stops[0]?.departure_time || stops[0]?.arrival_time;
+        const arrival = stops[stops.length - 1]?.arrival_time || stops[stops.length - 1]?.departure_time;
+
+        summary.innerHTML = `Train ${train.name} : ${origin} → ${dest} (${formatTime(departure)} - ${formatTime(arrival)})`;
+
+        const disruptionHTML = getDisruptionInfo(train.id, data.disruptions || []);
+        const ul = document.createElement("ul");
+
+        stops.forEach(stop => {
+          const li = document.createElement("li");
+          li.className = "station";
+          li.textContent = `${stop.stop_point.name} — ${formatTime(stop.departure_time || stop.arrival_time)}`;
+          ul.appendChild(li);
+        });
+
+        details.appendChild(summary);
+        if (disruptionHTML) {
+          const disruptionDiv = document.createElement("div");
+          disruptionDiv.innerHTML = disruptionHTML;
+          details.appendChild(disruptionDiv);
+        }
+        details.appendChild(ul);
+        container.appendChild(details);
+      });
+    }
+
+    fetchTrains().then(displayTrains).catch(err => {
+      document.getElementById("results").textContent = "Erreur lors du chargement des données.";
+      console.error(err);
+    });
   </script>
 </body>
 </html>
