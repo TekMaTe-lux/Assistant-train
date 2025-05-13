@@ -1,55 +1,85 @@
 <!DOCTYPE html>
 <html lang="fr">
 <head>
-  <meta charset="UTF-8" />
-  <title>État des trains SNCF</title>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Détails des trains</title>
 </head>
 <body>
-  <h1>Arrivées à Luxembourg – Suivi des perturbations</h1>
-  <ul id="train-list"></ul>
+    <h1>Détails des trains</h1>
+    <div id="trainDetails"></div>
 
-  <script>
-    const trainNumbers = [
-      "88511", "88736", "88729", "88727",
-      "88530", "88532", "88747", "88745",
-      "88534", "88749", "88751", "88753"
-    ];
+    <script>
+        // Remplacez ceci par votre clé API SNCF
+        const apiKey = '242fac11-6d98-45fb-93df-28174d362447';  
+        const baseUrl = 'https://api.sncf.com/v1/coverage/sncf/vehicle_journeys/vehicle_journey:SNCF:';
+        
+        // Liste des numéros de train
+        const trainNumbers = [88530, 88532, 88534, 88747, 88745, 88749, 88751];
 
-    const encodedKey = "242fac11-6d98-45fb-93df-28174d362447"; //
-    const today = new Date().toISOString().slice(0, 10);
-    const trainList = document.getElementById("train-list");
-
-    trainNumbers.forEach(trainNumber => {
-      const url = `https://api.sncf.com/v1/coverage/sncf/vehicle_journeys/vehicle_journey:SNCF:${today}:${trainNumber}:1187:Train`;
-
-      fetch(url, {
-        headers: {
-          "Authorization": "Basic " + encodedKey
-        }
-      })
-      .then(response => response.json())
-      .then(data => {
-        const name = data.vehicle_journeys?.[0]?.name || trainNumber;
-        const disruptions = data.disruptions || [];
-
-        let disruptionText = "🟢 Aucune perturbation";
-        if (disruptions.length > 0) {
-          const message = disruptions[0]?.messages?.[0]?.text || "Perturbation sans détail";
-          const effect = disruptions[0]?.severity?.name || "Impact inconnu";
-          disruptionText = `🔴 ${effect} – ${message}`;
+        // Fonction pour récupérer la date actuelle au format YYYY-MM-DD
+        function getCurrentDate() {
+            const today = new Date();
+            const year = today.getFullYear();
+            const month = String(today.getMonth() + 1).padStart(2, '0');
+            const day = String(today.getDate()).padStart(2, '0');
+            return `${year}-${month}-${day}`;
         }
 
-        const li = document.createElement("li");
-        li.textContent = `Train ${name} : ${disruptionText}`;
-        trainList.appendChild(li);
-      })
-      .catch(err => {
-        console.error("Erreur API:", err);
-        const li = document.createElement("li");
-        li.textContent = `Train ${trainNumber} — ⚠️ Erreur lors du chargement`;
-        trainList.appendChild(li);
-      });
-    });
-  </script>
+        // Fonction pour afficher les détails du train
+        function displayTrainDetails(trainNumber, status, cause) {
+            const trainDetailsDiv = document.getElementById('trainDetails');
+            const trainElement = document.createElement('div');
+            trainElement.innerHTML = `
+                <h2>Train ${trainNumber}</h2>
+                <p>Status : ${status}</p>
+                <p>Cause : ${cause}</p>
+                <hr>
+            `;
+            trainDetailsDiv.appendChild(trainElement);
+        }
+
+        // Fonction pour récupérer et afficher les détails de chaque train
+        function fetchTrainDetails(trainNumber) {
+            const date = getCurrentDate(); // Récupère la date actuelle au format YYYY-MM-DD
+            const url = `${baseUrl}${date}:${trainNumber}:1187:Train`;
+            fetch(url, {
+                headers: {
+                    'Authorization': `Bearer ${apiKey}`
+                }
+            })
+            .then(response => response.json())
+            .then(data => {
+                const disruptions = data.disruptions || [];  // Récupère les disruptions (s'il y en a)
+                
+                let status = 'À l\'heure';  // Par défaut, on suppose que le train est à l'heure
+                let cause = 'Aucune perturbation signalée.';  // Si aucune perturbation
+
+                // Vérifier si des disruptions existent
+                if (disruptions.length > 0) {
+                    const disruption = disruptions[0];
+                    // Si "effect" est REDUCED_SERVICE ou ANNULÉ, afficher la perturbation
+                    if (disruption.effect === 'REDUCED_SERVICE' || disruption.effect === 'CANCELED') {
+                        status = disruption.effect === 'REDUCED_SERVICE' ? 'Service réduit' : 'Annulé';
+                        cause = disruption.messages && disruption.messages[0] ? disruption.messages[0].text : 'Aucune cause précisée';
+                    }
+                    else if (disruption.status === "future" && !disruption.effect) {
+                        // Cas où la perturbation est à venir sans effet spécifique
+                        status = 'À l\'heure';  // Toujours à l'heure si aucune perturbation claire
+                        cause = 'Aucune perturbation signalée.';
+                    }
+                }
+
+                // Affiche les détails du train
+                displayTrainDetails(trainNumber, status, cause);
+            })
+            .catch(error => console.error('Erreur lors de la récupération des données :', error));
+        }
+
+        // Pour chaque train, on récupère ses détails
+        trainNumbers.forEach(trainNumber => {
+            fetchTrainDetails(trainNumber);
+        });
+    </script>
 </body>
 </html>
