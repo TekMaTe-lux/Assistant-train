@@ -5,20 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>Informations sur les Trains</title>
   <style>
-    body {
-      font-family: Arial, sans-serif;
-      background: #f9f9f9;
-      margin: 0;
-    }
-    header {
-      background-color: #0044cc;
-      color: white;
-      padding: 10px;
-      text-align: center;
-    }
-    .train-list {
-      padding: 20px;
-    }
+    body { font-family: Arial; background: #f9f9f9; margin: 0; }
+    header { background-color: #0044cc; color: white; padding: 10px; text-align: center; }
+    .train-list { padding: 20px; }
     .train-item {
       background: white;
       border-radius: 8px;
@@ -26,13 +15,8 @@
       margin-bottom: 15px;
       box-shadow: 0 0 5px rgba(0,0,0,0.1);
     }
-    .train-item p {
-      margin: 5px 0;
-    }
-    .disruption {
-      color: red;
-      font-weight: bold;
-    }
+    .train-item p { margin: 5px 0; }
+    .disruption { color: red; font-weight: bold; }
   </style>
 </head>
 <body>
@@ -48,14 +32,40 @@
     88700, 88770, 88702, 88704, 88706, 88708, 88710, 88802, 88712, 88501,
     88804, 88714, 88503, 88806, 88716, 88505, 88718, 88571, 88722, 88724,
     88726, 88730, 88720, 88734, 88509, 88736, 88738, 88511, 837680, 837682,
-    88513, 88740, 88727, 88729
+    88513, 88740, 88727, 88729, 88530, 88532, 88747, 88745, 88534, 88749,
+    88751, 88753
   ];
 
-  const apiKey = "a58e9d9f-3c75-4ad2-8e82-cf276f3a95f4"; // <- Ta clé ici
+  const apiKey = "a58e9d9f-3c75-4ad2-8e82-cf276f3a95f4";
+  const encodedKey = btoa(apiKey + ":");
 
   function getTodayDate() {
     const today = new Date();
-    return today.toISOString().split('T')[0]; // format YYYY-MM-DD
+    return today.toISOString().split("T")[0];
+  }
+
+  const disruptionMap = {};
+
+  function fetchDisruptions(date) {
+    const url = `https://api.sncf.com/v1/coverage/sncf/disruptions?since=${date}T00:00:00&until=${date}T23:59:59`;
+    return fetch(url, {
+      headers: {
+        "Authorization": "Basic " + encodedKey
+      }
+    })
+    .then(res => res.json())
+    .then(data => {
+      data.disruptions?.forEach(disruption => {
+        disruption.impacted_objects?.forEach(obj => {
+          const id = obj.pt_object?.id || "";
+          const match = id.match(/:(\d+):\d+:Train/);
+          if (match) {
+            const trainNum = match[1];
+            disruptionMap[trainNum] = disruption;
+          }
+        });
+      });
+    });
   }
 
   function formatTime(timeStr) {
@@ -63,57 +73,59 @@
     return timeStr.substring(0, 2) + ":" + timeStr.substring(2, 4);
   }
 
-  function getTrainInfo(trainNumber) {
-    const date = getTodayDate();
-    const url = `https://api.sncf.com/v1/coverage/sncf/vehicle_journeys/vehicle_journey:SNCF:${date}:${trainNumber}:1187:Train?apikey=${apiKey}`;
+  function getTrainInfo(trainNumber, date) {
+    const url = `https://api.sncf.com/v1/coverage/sncf/vehicle_journeys/vehicle_journey:SNCF:${date}:${trainNumber}:1187:Train`;
 
-    fetch(url)
-      .then(res => {
-        if (!res.ok) throw new Error("Erreur réseau");
-        return res.json();
-      })
-      .then(data => {
-        const container = document.getElementById("train-list");
-        const trainItem = document.createElement("div");
-        trainItem.className = "train-item";
-        trainItem.innerHTML = `<h3>Train ${trainNumber}</h3>`;
+    fetch(url, {
+      headers: {
+        "Authorization": "Basic " + encodedKey
+      }
+    })
+    .then(res => res.json())
+    .then(data => {
+      const container = document.getElementById("train-list");
+      const trainItem = document.createElement("div");
+      trainItem.className = "train-item";
+      trainItem.innerHTML = `<h3>Train ${trainNumber}</h3>`;
 
-        const journey = data.vehicle_journeys?.[0];
-        if (!journey) {
-          trainItem.innerHTML += `<p>Données indisponibles</p>`;
-          container.appendChild(trainItem);
-          return;
-        }
+      // Vérifier si une disruption est mappée à ce train
+      const disruption = disruptionMap[trainNumber];
+      if (disruption) {
+        const severity = disruption.severity?.name || "Gravité inconnue";
+        const message = disruption.messages?.[0]?.text || "Cause inconnue";
+        trainItem.innerHTML += `
+          <div class="disruption">
+            <p>Perturbation : ${severity}</p>
+            <p>Cause : ${message}</p>
+          </div>
+        `;
+      } else {
+        trainItem.innerHTML += `<p>Aucune perturbation</p>`;
+      }
 
-        if (journey.disruptions?.length) {
-          journey.disruptions.forEach(disruption => {
-            const message = disruption.messages?.[0]?.text || "Cause inconnue";
-            const severity = disruption.severity?.name || "Gravité inconnue";
-            trainItem.innerHTML += `
-              <div class="disruption">
-                <p>Perturbation : ${severity}</p>
-                <p>Cause : ${message}</p>
-              </div>
-            `;
-          });
-        } else {
-          trainItem.innerHTML += `<p>Aucune perturbation</p>`;
-        }
-
+      const journey = data.vehicle_journeys?.[0];
+      if (journey?.stop_times) {
         journey.stop_times.forEach(stop => {
           const arrival = formatTime(stop.arrival_time);
           const departure = formatTime(stop.departure_time);
           trainItem.innerHTML += `<p>Arrêt à ${stop.stop_point.label} - Arrivée : ${arrival}, Départ : ${departure}</p>`;
         });
+      } else {
+        trainItem.innerHTML += `<p>Données horaires indisponibles</p>`;
+      }
 
-        container.appendChild(trainItem);
-      })
-      .catch(err => {
-        console.error(`Erreur pour le train ${trainNumber}:`, err);
-      });
+      container.appendChild(trainItem);
+    })
+    .catch(err => {
+      console.error(`Erreur pour le train ${trainNumber}:`, err);
+    });
   }
 
-  trainNumbers.forEach(getTrainInfo);
+  // Chargement général
+  const date = getTodayDate();
+  fetchDisruptions(date).then(() => {
+    trainNumbers.forEach(trainNumber => getTrainInfo(trainNumber, date));
+  });
 </script>
 
 </body>
