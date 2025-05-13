@@ -3,134 +3,100 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Recherche des Trains Annulés ou No Service</title>
+  <title>Recherche des Trains Annulés</title>
   <style>
     body {
       font-family: Arial, sans-serif;
-      margin: 20px;
-      background-color: #f4f4f9;
-    }
-    .container {
-      max-width: 800px;
-      margin: 0 auto;
-      background-color: white;
       padding: 20px;
-      box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
     }
-    button {
-      padding: 10px 20px;
-      background-color: #4CAF50;
-      color: white;
-      border: none;
-      border-radius: 5px;
-      cursor: pointer;
-    }
-    button:hover {
-      background-color: #45a049;
-    }
-    .result {
-      margin-top: 20px;
-    }
-    .result ul {
+    ul {
       list-style-type: none;
-      padding: 0;
     }
-    .result li {
-      padding: 8px;
-      background-color: #e7f4e4;
-      margin: 5px 0;
-      border-radius: 5px;
-    }
-    .error {
-      color: red;
+    li {
+      margin: 10px 0;
     }
   </style>
 </head>
 <body>
-
-<div class="container">
   <h1>Recherche des Trains Annulés ou No Service</h1>
-  <p>Liste automatique des trains : <strong>88700, 88702, 88704, 88706, 88708, 88710, 88802, 88712, 88501, 88804, 88714, 88503, 88806, 88716, 88505, 88718, 88571, 88722, 88724, 88726, 88730, 88720, 88734, 88509, 88736, 88738, 88511, 837680, 837682, 88513, 88740, 88727, 88729</strong></p>
-  <button onclick="searchCanceledTrains()">Rechercher</button>
+  <p>Liste automatique des trains : 88700, 88702, 88704, 88706, 88708, 88710, 88802, 88712, 88501, 88804, 88714, 88503, 88806, 88716, 88505, 88718, 88571, 88722, 88724, 88726, 88730, 88720, 88734, 88509, 88736, 88738, 88511, 837680, 837682, 88513, 88740, 88727, 88729</p>
+  <ul id="result"></ul>
 
-  <div class="result" id="result"></div>
-</div>
+  <script>
+    const trainNumbers = [
+      88700, 88702, 88704, 88706, 88708, 88710, 88802, 88712, 88501, 88804, 88714, 
+      88503, 88806, 88716, 88505, 88718, 88571, 88722, 88724, 88726, 88730, 88720, 
+      88734, 88509, 88736, 88738, 88511, 837680, 837682, 88513, 88740, 88727, 88729
+    ];
 
-<script>
-  // Liste des numéros de trains fournis
-  const trainNumbers = [
-    "88700", "88702", "88704", "88706", "88708", "88710", "88802", "88712", 
-    "88501", "88804", "88714", "88503", "88806", "88716", "88505", "88718", 
-    "88571", "88722", "88724", "88726", "88730", "88720", "88734", "88509", 
-    "88736", "88738", "88511", "837680", "837682", "88513", "88740", "88727", 
-    "88729"
-  ];
-
-  async function searchCanceledTrains() {
-    const region = "sncf"; // Région SNCF
-    const apiKey = "242fac11-6d98-45fb-93df-28174d362447"; // Ta clé API
+    const apiKey = '242fac11-6d98-45fb-93df-28174d362447'; // Ta clé API
     const now = new Date();
     const dateStr = now.toISOString().split('T')[0]; // Date actuelle en format YYYY-MM-DD
 
-    const resultContainer = document.getElementById('result');
-    resultContainer.innerHTML = ''; // Clear previous results
+    async function searchCanceledTrains() {
+      const resultContainer = document.getElementById('result');
+      resultContainer.innerHTML = ''; // Clear previous results
 
-    const promises = trainNumbers.map(async (trainNumber) => {
-      const journeyId = `vehicle_journey:SNCF:${dateStr}:${trainNumber}:1187:Train`;
-      const url = `https://api.sncf.com/v1/coverage/${region}/vehicle_journeys/${journeyId}`;
-      const disruptionUrl = `https://api.sncf.com/v1/coverage/${region}/disruptions?filter=vehicle_journey_name:${trainNumber}`;
+      const promises = trainNumbers.map(async (trainNumber) => {
+        const vehicleJourneyUrl = `https://api.sncf.com/v1/coverage/sncf/vehicle_journeys?filter=vehicle_journey_name=${trainNumber}&datetime=${dateStr}T000000`;
+        const disruptionUrl = `https://api.sncf.com/v1/coverage/sncf/disruptions?filter=vehicle_journey_name:${trainNumber}`;
 
-      try {
-        const response = await fetch(url, {
-          headers: {
-            Authorization: `Bearer ${apiKey}` // Utilisation du token Bearer pour l'authentification
+        try {
+          const response = await fetch(vehicleJourneyUrl, {
+            headers: {
+              Authorization: `Bearer ${apiKey}` // Utilisation du token Bearer pour l'authentification
+            }
+          });
+
+          if (response.status === 401) {
+            throw new Error(`Erreur 401 - Clé API invalide ou permissions manquantes.`);
           }
-        });
 
-        if (!response.ok) {
-          const errorDetails = await response.json();
-          throw new Error(`Erreur HTTP ${response.status}: ${errorDetails}`);
+          if (!response.ok) {
+            const errorDetails = await response.json();
+            throw new Error(`Erreur HTTP ${response.status}: ${errorDetails}`);
+          }
+
+          const data = await response.json();
+          if (!data.vehicle_journeys || data.vehicle_journeys.length === 0) {
+            return `Aucun voyageur trouvé pour le train ${trainNumber}`;
+          }
+
+          // Vérifier s'il y a des perturbations ou annulations pour ce train
+          const disruptionResponse = await fetch(disruptionUrl, {
+            headers: {
+              Authorization: `Bearer ${apiKey}` // Utilisation du token Bearer pour l'authentification
+            }
+          });
+
+          const disruptionData = await disruptionResponse.json();
+
+          if (disruptionData.disruptions && disruptionData.disruptions.length > 0) {
+            const disruption = disruptionData.disruptions[0];
+            if (disruption.severity.name === "trip canceled" || disruption.severity.effect === "NO_SERVICE") {
+              const cause = disruption.cause ? disruption.cause : 'Aucune cause précisée';
+              const message = disruption.messages.length > 0 ? disruption.messages[0].text : 'Pas de message associé';
+              return `Train ${trainNumber} - Annulé / No Service - Cause: ${cause} - Message: ${message}`;
+            }
+          } 
+          return `Train ${trainNumber} - Pas de perturbation signalée.`;
+
+        } catch (error) {
+          return `Erreur pour le train ${trainNumber}: ${error.message}`;
         }
+      });
 
-        const data = await response.json();
-        if (!data.vehicle_journeys || data.vehicle_journeys.length === 0) {
-          return `Aucun voyageur trouvé pour le train ${trainNumber}`;
-        }
+      const results = await Promise.all(promises);
 
-        // Vérifier s'il y a des perturbations ou annulations pour ce train
-        const disruptionResponse = await fetch(disruptionUrl, {
-          headers: {
-            Authorization: `Bearer ${apiKey}` // Utilisation du token Bearer pour l'authentification
-          }
-        });
+      // Affichage des résultats
+      results.forEach(result => {
+        const li = document.createElement('li');
+        li.textContent = result;
+        resultContainer.appendChild(li);
+      });
+    }
 
-        const disruptionData = await disruptionResponse.json();
-
-        if (disruptionData.disruptions && disruptionData.disruptions.length > 0) {
-          const disruption = disruptionData.disruptions[0];
-          if (disruption.severity.name === "trip canceled" || disruption.severity.effect === "NO_SERVICE") {
-            const cause = disruption.cause ? disruption.cause : 'Aucune cause précisée';
-            const message = disruption.messages.length > 0 ? disruption.messages[0].text : 'Pas de message associé';
-            return `Train ${trainNumber} - Annulé / No Service - Cause: ${cause} - Message: ${message}`;
-          }
-        } 
-        return `Train ${trainNumber} - Pas de perturbation signalée.`;
-
-      } catch (error) {
-        return `Erreur pour le train ${trainNumber}: ${error.message}`;
-      }
-    });
-
-    const results = await Promise.all(promises);
-
-    // Affichage des résultats
-    results.forEach(result => {
-      const li = document.createElement('li');
-      li.textContent = result;
-      resultContainer.appendChild(li);
-    });
-  }
-</script>
-
+    searchCanceledTrains(); // Exécuter la recherche des trains annulés dès le chargement de la page
+  </script>
 </body>
 </html>
