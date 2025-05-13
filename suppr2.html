@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Informations des Trains</title>
+    <title>Informations sur les Trains</title>
     <style>
         body {
             font-family: Arial, sans-serif;
@@ -33,6 +33,7 @@
         .disruption {
             color: red;
             font-weight: bold;
+            margin-top: 10px;
         }
     </style>
 </head>
@@ -47,7 +48,6 @@
 </div>
 
 <script>
-    // Liste des numéros de train
     const trainNumbers = [
         88700, 88770, 88702, 88704, 88706, 88708, 88710, 88802, 88712, 88501, 
         88804, 88714, 88503, 88806, 88716, 88505, 88718, 88571, 88722, 88724, 
@@ -55,36 +55,43 @@
         88513, 88740, 88727, 88729
     ];
 
-    // URL de l'API pour récupérer les détails de chaque train avec la nouvelle structure
     const baseUrl = "https://api.sncf.com/v1/coverage/sncf/vehicle_journeys/vehicle_journey:SNCF:2025-05-13:{}:1187:Train";
 
-    // Fonction pour récupérer et afficher les informations pour chaque train
+    function formatTime(timeStr) {
+        if (!timeStr || timeStr.length < 4) return "Heure inconnue";
+        return timeStr.substring(0, 2) + ":" + timeStr.substring(2, 4);
+    }
+
     function getTrainInfo(trainNumber) {
-        // Construire l'URL pour ce numéro de train
         const apiUrl = baseUrl.replace("{}", trainNumber);
 
-        // Faire l'appel API pour récupérer les données
         fetch(apiUrl)
-            .then(response => response.json())
+            .then(response => {
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                return response.json();
+            })
             .then(data => {
-                // Récupérer l'élément qui contiendra les informations des trains
                 const trainList = document.getElementById('train-list');
-
-                // Créer un élément pour afficher les informations du train
                 const trainItem = document.createElement('div');
                 trainItem.classList.add('train-item');
-
-                // Affichage du numéro de train
                 trainItem.innerHTML = `<h3>Train ${trainNumber}</h3>`;
 
-                // Vérifier si le train a des perturbations
-                if (data.disruptions && data.disruptions.length > 0) {
-                    data.disruptions.forEach(disruption => {
-                        const disruptionMessage = disruption.messages.length > 0 ? disruption.messages[0].text : "Aucune information sur la cause.";
+                const journey = data.vehicle_journeys && data.vehicle_journeys[0];
+                if (!journey) {
+                    trainItem.innerHTML += `<p>Aucune donnée disponible pour ce train.</p>`;
+                    trainList.appendChild(trainItem);
+                    return;
+                }
+
+                // Affichage des perturbations depuis vehicle_journey
+                if (journey.disruptions && journey.disruptions.length > 0) {
+                    journey.disruptions.forEach(disruption => {
+                        const message = disruption.messages?.[0]?.text || "Cause inconnue";
+                        const severity = disruption.severity?.name || "Type inconnu";
                         trainItem.innerHTML += `
                             <div class="disruption">
-                                <p>Perturbation: ${disruption.severity.name}</p>
-                                <p>Cause: ${disruptionMessage}</p>
+                                <p>Perturbation : ${severity}</p>
+                                <p>Cause : ${message}</p>
                             </div>
                         `;
                     });
@@ -92,29 +99,25 @@
                     trainItem.innerHTML += `<p>Aucune perturbation</p>`;
                 }
 
-                // Affichage des arrêts et horaires du train
-                if (data.vehicle_journeys && data.vehicle_journeys.length > 0) {
-                    data.vehicle_journeys[0].stop_times.forEach(stop => {
-                        const stopPoint = stop.stop_point;
-                        const arrivalTime = new Date(stop.arrival_time).toLocaleTimeString('fr-FR');
+                // Affichage des arrêts
+                if (journey.stop_times) {
+                    journey.stop_times.forEach(stop => {
+                        const arrival = formatTime(stop.arrival_time);
+                        const departure = formatTime(stop.departure_time);
                         trainItem.innerHTML += `
-                            <p>Arrêt à ${stopPoint.label} à ${arrivalTime}</p>
+                            <p>Arrêt à ${stop.stop_point.label} - Arrivée : ${arrival}, Départ : ${departure}</p>
                         `;
                     });
                 }
 
-                // Ajouter l'élément à la liste des trains
                 trainList.appendChild(trainItem);
             })
             .catch(error => {
-                console.error('Erreur lors de l\'appel API pour le train', trainNumber, error);
+                console.error(`Erreur API pour le train ${trainNumber} :`, error);
             });
     }
 
-    // Appel de la fonction pour chaque train
-    trainNumbers.forEach(trainNumber => {
-        getTrainInfo(trainNumber);
-    });
+    trainNumbers.forEach(getTrainInfo);
 </script>
 
 </body>
