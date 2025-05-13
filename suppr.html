@@ -2,29 +2,82 @@
 <html lang="fr">
 <head>
   <meta charset="UTF-8">
-  <title>Recherche Trains par Numéro et ID</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Recherche de Trains par Numéro</title>
   <style>
-    body { font-family: sans-serif; padding: 20px; }
-    input, button { padding: 8px; font-size: 16px; margin: 5px 0; }
-    .train { border: 1px solid #ccc; padding: 10px; margin: 10px 0; border-radius: 5px; }
+    body {
+      font-family: Arial, sans-serif;
+      margin: 20px;
+      background-color: #f4f4f9;
+    }
+    .container {
+      max-width: 800px;
+      margin: 0 auto;
+      background-color: white;
+      padding: 20px;
+      box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
+    }
+    input[type="text"] {
+      width: 100%;
+      padding: 10px;
+      margin: 10px 0;
+      border: 1px solid #ccc;
+      border-radius: 5px;
+    }
+    button {
+      padding: 10px 20px;
+      background-color: #4CAF50;
+      color: white;
+      border: none;
+      border-radius: 5px;
+      cursor: pointer;
+    }
+    button:hover {
+      background-color: #45a049;
+    }
+    .result {
+      margin-top: 20px;
+    }
+    .result ul {
+      list-style-type: none;
+      padding: 0;
+    }
+    .result li {
+      padding: 8px;
+      background-color: #e7f4e4;
+      margin: 5px 0;
+      border-radius: 5px;
+    }
+    .error {
+      color: red;
+    }
   </style>
 </head>
 <body>
-  <h2>🔎 Rechercher un train par numéro (ID véhicule)</h2>
-  <p>Exemple : <code>88700 88702 88704</code></p>
-  <input id="trainInput" placeholder="Entrez les numéros de trains..." style="width: 100%;">
-  <button onclick="fetchTrainDetails()">Rechercher</button>
-  <div id="results"></div>
 
-  <script>
-    const apiKey = '242fac11-6d98-45fb-93df-28174d362447'; // Ta clé API SNCF
-    const region = 'sncf'; // Nom de la région, ici pour SNCF
+<div class="container">
+  <h1>Recherche de Trains par Numéro</h1>
+  <p>Entrez les numéros de train séparés par un espace (ex. 88700 88702 88704) :</p>
+  <input type="text" id="trainNumbersInput" placeholder="Entrez les numéros de train">
+  <button onclick="searchTrains()">Rechercher</button>
 
-    // Fonction pour récupérer l'ID du voyageur du véhicule via le numéro de train
-    async function fetchVehicleJourneyId(trainNumber) {
-      const now = new Date();
-      const dateStr = now.toISOString().split('T')[0]; // Date actuelle en format YYYY-MM-DD
+  <div class="result" id="result"></div>
+</div>
 
+<script>
+  async function searchTrains() {
+    const trainNumbersInput = document.getElementById('trainNumbersInput').value;
+    const trainNumbers = trainNumbersInput.split(' ').map(num => num.trim());
+
+    const region = "sncf"; // Remplacez par la région concernée
+    const apiKey = "242fac11-6d98-45fb-93df-28174d362447"; // Remplacez par votre clé API
+    const now = new Date();
+    const dateStr = now.toISOString().split('T')[0]; // Date actuelle en format YYYY-MM-DD
+
+    const resultContainer = document.getElementById('result');
+    resultContainer.innerHTML = ''; // Clear previous results
+
+    const promises = trainNumbers.map(async (trainNumber) => {
       const url = `https://api.sncf.com/v1/coverage/${region}/vehicle_journeys?filter=vehicle_journey_name=${trainNumber}&datetime=${dateStr}T000000`;
 
       try {
@@ -34,69 +87,33 @@
           }
         });
 
-        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        if (!response.ok) {
+          const errorDetails = await response.json();
+          throw new Error(`Erreur HTTP ${response.status}: ${errorDetails}`);
+        }
 
         const data = await response.json();
-        if (data.vehicle_journeys.length === 0) return null;
+        if (data.vehicle_journeys.length === 0) {
+          return `Aucun voyageur trouvé pour le train ${trainNumber}`;
+        }
 
-        // Récupère l'ID du premier voyageur du véhicule
         const vehicleJourneyId = data.vehicle_journeys[0].id;
-        return vehicleJourneyId;
+        return `Train ${trainNumber}: ID du voyageur du véhicule: ${vehicleJourneyId}`;
       } catch (error) {
-        console.error(error);
-        return null;
+        return `Erreur pour le train ${trainNumber}: ${error.message}`;
       }
-    }
+    });
 
-    // Fonction pour récupérer les détails du train via son ID
-    async function fetchTrainDetails() {
-      const input = document.getElementById('trainInput').value.trim();
-      const trainNumbers = input.split(/\s+/); // Séparation des numéros de train par espaces
-      const resultsDiv = document.getElementById('results');
-      resultsDiv.innerHTML = '⏳ Recherche en cours...';
+    const results = await Promise.all(promises);
 
-      const results = await Promise.all(trainNumbers.map(async (trainNumber) => {
-        const vehicleJourneyId = await fetchVehicleJourneyId(trainNumber);
-        if (!vehicleJourneyId) {
-          return { error: `🚫 Train ${trainNumber} non trouvé.` };
-        }
+    // Affichage des résultats
+    results.forEach(result => {
+      const li = document.createElement('li');
+      li.textContent = result;
+      resultContainer.appendChild(li);
+    });
+  }
+</script>
 
-        // Utilise l'ID pour récupérer les détails via l'API
-        const url = `https://api.sncf.com/v1/coverage/${region}/vehicle_journeys/${vehicleJourneyId}`;
-        const response = await fetch(url, {
-          headers: { Authorization: apiKey }
-        });
-
-        if (!response.ok) throw new Error(`HTTP ${response.status}`);
-
-        const trainDetails = await response.json();
-        if (!trainDetails) {
-          return { error: `🚫 Détails non trouvés pour le train ${trainNumber}.` };
-        }
-
-        const train = trainDetails.vehicle_journey;
-        return {
-          number: train.name,
-          departure: train.stop_times[0]?.departure_time || 'inconnue',
-          arrival: train.stop_times.at(-1)?.arrival_time || 'inconnue',
-          from: train.stop_times[0]?.stop_point?.name,
-          to: train.stop_times.at(-1)?.stop_point?.name,
-          status: train.status || 'prévu'
-        };
-      }));
-
-      resultsDiv.innerHTML = results.map(res => {
-        if (res.error) return `<div class="train">${res.error}</div>`;
-        return `
-          <div class="train">
-            🚆 <strong>${res.number}</strong><br>
-            🕒 Départ : ${res.departure} de ${res.from}<br>
-            🕒 Arrivée : ${res.arrival} à ${res.to}<br>
-            📌 Statut : ${res.status}
-          </div>
-        `;
-      }).join('');
-    }
-  </script>
 </body>
 </html>
