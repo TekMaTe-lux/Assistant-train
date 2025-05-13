@@ -66,11 +66,6 @@
       border-radius: 4px;
     }
 
-    .retard-cause a {
-      color: #b30000;
-      text-decoration: underline;
-    }
-
     #trainImage {
       display: block;
       max-width: 100%;
@@ -278,6 +273,7 @@
           texteStatut = "Supprimé";
         }
 
+        // Récupération des arrêts et de la cause via vehicle_journey
         const vehicleJourneyLink = arr.links.find(link => link.type === "vehicle_journey");
         const vehicleJourneyId = vehicleJourneyLink?.id;
 
@@ -292,25 +288,56 @@
             const stops = vehicleJourneyData.vehicle_journeys[0].stop_times || [];
             if (stops.length > 0) {
               stopsList = '<ul>';
-              for (const stop of stops) {
-                const stopName = stop.stop_point.name;
-                const arrivalTime = stop.arrival_time ? stop.arrival_time.slice(0, 5) : 'N/A';
-                stopsList += `<li>${stopName} - Arrivée : ${arrivalTime}</li>`;
-              }
+for (let i = 0; i < stops.length; i++) {
+  const stopName = stops[i].stop_point.name;
+  let arrivalTime = 'N/A';
+  if (stops[i].arrival_time) {
+    const timeStr = stops[i].arrival_time.replace(/[^0-9]/g, '');
+    if (timeStr.length >= 4) {
+      const h = timeStr.slice(0, 2);
+      const m = timeStr.slice(2, 4);
+      arrivalTime = `${h}h${m}`;
+    }
+  }
+
+  let prefix = '';
+  if (i === 0) prefix = "Départ : ";
+  else if (i === stops.length - 1) prefix = "Arrivée : ";
+
+  stopsList += `<li>${prefix}${stopName} - ${arrivalTime}</li>`;
+}
               stopsList += '</ul>';
             }
 
-            const disruptions = vehicleJourneyData.vehicle_journeys[0].disruptions || [];
-            if (disruptions.length > 0) {
-              const disruption = disruptions[0];
-              const cause = disruption?.cause || "Perturbation non précisée";
-              const disruptionUrl = disruption?.url;
-              causeTxt = disruptionUrl ? `<a href="${disruptionUrl}" target="_blank">${cause}</a>` : cause;
+// Vérifie s'il y a un retard ou une suppression
+        const hasDisruption = vjData.stop_times.some(st =>
+            st.arrival_status === 'delayed' || st.arrival_status === 'cancelled'
+        );
+
+        if (hasDisruption && vjData.disruptions && vjData.disruptions.length > 0) {
+            const disruptionId = vjData.disruptions[0].id;
+            const disruption = data.disruptions.find(d => d.id === disruptionId);
+
+            if (disruption && disruption.messages && disruption.messages.length > 0) {
+                const disruptionCause = disruption.messages[0].text;
+                if (disruptionCause) {
+                    detailsContent += `<p><strong>Cause :</strong> ${disruptionCause}</p>`;
+                }
             }
-          } catch (error) {
-            console.warn("Erreur lors du chargement du trajet détaillé :", error);
-          }
         }
+
+        detailsDiv.innerHTML = detailsContent;
+        container.appendChild(detailsDiv);
+    })
+    .catch(error => {
+        console.error('Erreur lors de la récupération des détails du train :', error);
+        detailsDiv.innerHTML = '<p>Erreur lors de la récupération des détails du train.</p>';
+        container.appendChild(detailsDiv);
+    });
+}
+
+        // Si le train est à l'heure, ne pas afficher "Arrivée réelle" et "Cause"
+        const arrivalDetails = statut !== "ontime" ? `<p>Arrivée réelle : ${hReelle}</p><div class="retard-cause">Cause : ${causeTxt}</div>` : '';
 
         html += `
           <li class="${statut}">
@@ -318,8 +345,7 @@
               <summary>
                 ${emoji} <strong>${train}</strong> à ${hBase}${retardTxt} — Provenance : <strong>${provenance}</strong> — Statut : ${texteStatut}
               </summary>
-              <p>Arrivée réelle : ${hReelle}</p>
-              <div class="retard-cause">Cause : ${causeTxt}</div>
+              ${arrivalDetails}
               <h4>Arrêts intermédiaires :</h4>
               ${stopsList}
             </details>
