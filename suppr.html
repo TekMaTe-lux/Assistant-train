@@ -3,79 +3,65 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Recherche des Trains</title>
+  <title>Liste des Trains</title>
   <script>
-    const trainNumbers = [
-      "88727"  // Exemple de train
+    // Liste des numéros de trains
+    const trainIds = [
+      "vehicle_journey:SNCF:2025-05-13:88700:1187:Train",
+      "vehicle_journey:SNCF:2025-05-13:88770:1187:Train",
+      "vehicle_journey:SNCF:2025-05-13:88702:1187:Train",
+      // Ajoutez ici d'autres numéros de train...
+      "vehicle_journey:SNCF:2025-05-13:88727:1187:Train"
     ];
 
-    const apiKey = '242fac11-6d98-45fb-93df-28174d362447';  // Ta clé API
-    const encodedApiKey = btoa(apiKey + ":");
-
-    // Fonction pour rechercher les informations sur un train spécifique
-    async function checkTrainInfo(trainNumber) {
-      const now = new Date(Date.now() - (61 * 60 * 1000));  // Heure actuelle moins 61 minutes
-      const yyyy = now.getFullYear();
-      const mm = String(now.getMonth() + 1).padStart(2, '0');
-      const dd = String(now.getDate()).padStart(2, '0');
-      const hh = String(now.getHours()).padStart(2, '0');
-      const min = String(now.getMinutes()).padStart(2, '0');
-      const ss = String(now.getSeconds()).padStart(2, '0');
-
-      const datetime = `${yyyy}${mm}${dd}T${hh}${min}${ss}`;
-      const url = `https://api.sncf.com/v1/coverage/sncf/vehicle_journeys/vehicle_journey:SNCF:2025-05-13:${trainNumber}:1187:Train`;
-
-      try {
-        const response = await fetch(url, {
-          method: 'GET',
-          headers: {
-            "Authorization": "Basic " + encodedApiKey
-          }
-        });
-        const data = await response.json();
-
-        if (data && data.vehicle_journeys && data.vehicle_journeys.length > 0) {
-          const trainDetails = data.vehicle_journeys[0]; // Prendre le premier train
-
-          // Vérifier si le train a des disruptions
-          const disruptions = trainDetails.disruptions ? trainDetails.disruptions : [];
-          const trainStatus = disruptions.length > 0 ? disruptions[0].severity.name : "En service";
-
-          // Ajouter le train à la liste
-          const resultDiv = document.getElementById("results");
-          resultDiv.innerHTML += `
-            <p><strong>Train ${trainNumber}</strong> - Statut: ${trainStatus}</p>
-            <p>Heure de départ : ${trainDetails.stop_times[0].departure_time}</p>
-            <p>Disruption : ${disruptions.length > 0 ? disruptions[0].messages[0]?.text || "Aucune cause spécifiée" : "Aucune disruption"}</p>
-            <hr>
-          `;
-        } else {
-          const resultDiv = document.getElementById("results");
-          resultDiv.innerHTML += `<p><strong>Train ${trainNumber}</strong> - Pas d'information disponible.</p><hr>`;
-        }
-      } catch (error) {
-        console.error(`Erreur pour le train ${trainNumber}:`, error);
-        const resultDiv = document.getElementById("results");
-        resultDiv.innerHTML += `<p><strong>Erreur pour le train ${trainNumber}: ${error}</strong></p><hr>`;
-      }
+    // Fonction pour récupérer les détails d'un train en utilisant son ID
+    async function getTrainDetails(trainId) {
+      const response = await fetch(`https://api.sncf.com/v1/coverage/sncf/vehicle_journeys/${trainId}`);
+      const data = await response.json();
+      return data;
     }
 
-    // Fonction pour vérifier tous les trains de la liste
-    async function checkAllTrainInfo() {
+    // Fonction pour afficher la liste des trains avec leurs états
+    async function displayTrainStatus() {
       const resultDiv = document.getElementById("results");
-      resultDiv.innerHTML = "<h3>Liste des Trains :</h3>";
+      resultDiv.innerHTML = "<h3>Liste des Trains</h3>";
 
-      for (const trainNumber of trainNumbers) {
-        await checkTrainInfo(trainNumber);
+      for (const trainId of trainIds) {
+        const trainData = await getTrainDetails(trainId);
+        const disruptions = trainData.disruptions || [];
+
+        let status = "Prévu"; // Par défaut, le train est prévu
+        let disruptionMessage = "";
+
+        // Si le train est perturbé, ajuster l'état et afficher la cause
+        if (disruptions.length > 0) {
+          status = "Retardé / Supprimé";
+          disruptionMessage = disruptions[0].messages[0]?.text || "Aucune information de perturbation.";
+        }
+
+        resultDiv.innerHTML += `
+          <div>
+            <h4>Train ${trainData.vehicle_journeys[0].name}</h4>
+            <p>État : ${status}</p>
+            <p><strong>Cause de la perturbation :</strong> ${disruptionMessage}</p>
+            <p><strong>Arrêts :</strong></p>
+            <ul>
+              ${trainData.vehicle_journeys[0].stop_times.map(stop => `
+                <li>${stop.stop_point.label} - Arrivée : ${stop.arrival_time}, Départ : ${stop.departure_time}</li>
+              `).join('')}
+            </ul>
+            <hr>
+          </div>
+        `;
       }
     }
 
-    // Lancer la vérification au chargement de la page
-    window.onload = checkAllTrainInfo;
+    // Exécution de la fonction au chargement de la page
+    window.onload = displayTrainStatus;
   </script>
 </head>
 <body>
-  <h1>Recherche des Trains</h1>
+  <h1>Affichage des Trains et de leur État</h1>
   <div id="results"></div>
 </body>
 </html>
