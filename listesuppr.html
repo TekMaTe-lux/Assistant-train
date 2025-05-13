@@ -1,77 +1,112 @@
 <!DOCTYPE html>
 <html lang="fr">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Détails des trains</title>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Arrivées à Luxembourg</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      background-color: #f4f4f4;
+      color: #333;
+      padding: 20px;
+    }
+    h1 {
+      text-align: center;
+    }
+    .train {
+      background: white;
+      border-radius: 10px;
+      margin: 10px auto;
+      padding: 15px;
+      max-width: 700px;
+      box-shadow: 0 0 5px rgba(0,0,0,0.1);
+    }
+    .retard {
+      color: red;
+      font-weight: bold;
+    }
+    details {
+      margin-top: 10px;
+    }
+    summary {
+      cursor: pointer;
+      font-weight: bold;
+    }
+    .stop {
+      padding: 5px 0;
+      border-bottom: 1px solid #eee;
+    }
+  </style>
 </head>
 <body>
-    <h1>Détails des trains</h1>
-    <div id="trainDetails"></div>
+  <h1>Arrivées à Luxembourg</h1>
+  <div id="results">Chargement en cours...</div>
 
-    <script>
-        // Remplacez ceci par votre clé API SNCF
-        const apiKey = '242fac11-6d98-45fb-93df-28174d362447';  
-        const baseUrl = 'https://api.sncf.com/v1/coverage/sncf/vehicle_journeys/vehicle_journey:SNCF:';
-        
-        // Liste des numéros de train
-        const trainNumbers = [88530, 88532, 88534, 88747, 88745, 88749, 88751];
+  <script>
+    async function fetchArrivals() {
+      const apiKey = 'YOUR_API_KEY_HERE'; // Remplace avec ta vraie clé API SNCF
+      const url = `https://api.sncf.com/v1/coverage/sncf/stop_areas/stop_area:SNCF:82001000/arrivals?from_datetime=${new Date().toISOString().replace(/[-:]/g, '').slice(0,15)}&count=100`; 
 
-        // Fonction pour récupérer la date actuelle au format YYYY-MM-DD
-        function getCurrentDate() {
-            const today = new Date();
-            const year = today.getFullYear();
-            const month = String(today.getMonth() + 1).padStart(2, '0');
-            const day = String(today.getDate()).padStart(2, '0');
-            return `${year}-${month}-${day}`;
+      const response = await fetch(url, {
+        headers: { Authorization: `Basic ${btoa(apiKey + ':')}` }
+      });
+
+      const data = await response.json();
+      const results = document.getElementById('results');
+      results.innerHTML = '';
+
+      for (const arrival of data.arrivals) {
+        const train = arrival.display_informations;
+        if (!train || train.commercial_mode === 'TGV') continue;
+
+        const headsign = train.headsign;
+        const code = train.code;
+        const origin = train.direction;
+        const baseArrival = arrival.stop_date_time.base_arrival_date_time;
+        const amendedArrival = arrival.stop_date_time.amended_arrival_date_time || baseArrival;
+        const delay = arrival.stop_date_time.arrival_delay || 0;
+
+        const vjId = arrival.vehicle_journey.id;
+        const disruptions = (arrival.links || []).filter(link => link.type === 'disruption');
+
+        let trainHtml = `<div class="train">
+          <div><strong>Train ${code}</strong> (${train.commercial_mode}) de ${origin}</div>
+          <div>Heure d'arrivée prévue : ${amendedArrival.slice(9,11)}h${amendedArrival.slice(11,13)}</div>`;
+
+        if (delay > 0) {
+          trainHtml += `<div class="retard">Retard estimé : ${Math.round(delay / 60)} min</div>`;
         }
 
-        // Fonction pour afficher les détails du train
-        function displayTrainDetails(trainNumber, status, cause) {
-            const trainDetailsDiv = document.getElementById('trainDetails');
-            const trainElement = document.createElement('div');
-            trainElement.innerHTML = `
-                <h2>Train ${trainNumber}</h2>
-                <p>Status : ${status}</p>
-                <p>Cause : ${cause}</p>
-                <hr>
-            `;
-            trainDetailsDiv.appendChild(trainElement);
+        if (disruptions.length > 0) {
+          const disruptionId = disruptions[0].id;
+          const disruptionData = data.disruptions.find(d => d.id === disruptionId);
+          if (disruptionData && disruptionData.messages.length > 0) {
+            trainHtml += `<div><strong>Cause :</strong> ${disruptionData.messages[0].text}</div>`;
+          }
         }
 
-        // Fonction pour récupérer et afficher les détails de chaque train
-        function fetchTrainDetails(trainNumber) {
-            const date = getCurrentDate(); // Récupère la date actuelle au format YYYY-MM-DD
-            const url = `${baseUrl}${date}:${trainNumber}:1187:Train`;
-            fetch(url, {
-                headers: {
-                    'Authorization': `Bearer ${apiKey}`
-                }
-            })
-            .then(response => response.json())
-            .then(data => {
-                const disruptions = data.disruptions || [];  // Récupère les disruptions (s'il y en a)
-                
-                let status = 'À l\'heure';  // Par défaut, on suppose que le train est à l'heure
-                let cause = 'Aucune perturbation signalée.';  // Si aucune perturbation
+        trainHtml += `<details><summary>Détails du parcours</summary><div id="details-${vjId}">Chargement...</div></details></div>`;
+        results.innerHTML += trainHtml;
 
-                // Si des disruptions sont présentes, on met à jour le statut et la cause
-                if (disruptions.length > 0) {
-                    const disruption = disruptions[0];
-                    status = disruption.effect === 'REDUCED_SERVICE' ? 'Service réduit' : 'Annulé';
-                    cause = disruption.messages ? disruption.messages[0].text : 'Aucune cause précisée';
-                }
+        // Fetch détails horaires (vehicle_journey)
+        fetch(`https://api.sncf.com/v1/coverage/sncf/vehicle_journeys/${vjId}`, {
+          headers: { Authorization: `Basic ${btoa(apiKey + ':')}` }
+        })
+        .then(res => res.json())
+        .then(vjData => {
+          const stopHtml = vjData.vehicle_journey.stop_times.map(stop => {
+            const arr = stop.arrival_time ? stop.arrival_time.slice(0,2) + 'h' + stop.arrival_time.slice(2,4) : '-';
+            const dep = stop.departure_time ? stop.departure_time.slice(0,2) + 'h' + stop.departure_time.slice(2,4) : '-';
+            return `<div class="stop">${stop.stop_point.name} - Arrivée : ${arr} / Départ : ${dep}</div>`;
+          }).join('');
 
-                // Affiche les détails du train
-                displayTrainDetails(trainNumber, status, cause);
-            })
-            .catch(error => console.error('Erreur lors de la récupération des données :', error));
-        }
-
-        // Pour chaque train, on récupère ses détails
-        trainNumbers.forEach(trainNumber => {
-            fetchTrainDetails(trainNumber);
+          document.getElementById(`details-${vjId}`).innerHTML = stopHtml;
         });
-    </script>
+      }
+    }
+
+    fetchArrivals();
+  </script>
 </body>
 </html>
