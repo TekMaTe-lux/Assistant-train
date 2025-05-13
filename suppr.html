@@ -2,7 +2,7 @@
 <html lang="fr">
 <head>
   <meta charset="UTF-8">
-  <title>Recherche Trains par Numéro</title>
+  <title>Recherche Trains par Numéro et ID</title>
   <style>
     body { font-family: sans-serif; padding: 20px; }
     input, button { padding: 8px; font-size: 16px; margin: 5px 0; }
@@ -10,19 +10,20 @@
   </style>
 </head>
 <body>
-  <h2>🔎 Rechercher un ou plusieurs trains par numéro</h2>
+  <h2>🔎 Rechercher un train par numéro (ID véhicule)</h2>
   <p>Exemple : <code>88700 88702 88704</code></p>
   <input id="trainInput" placeholder="Entrez les numéros de trains..." style="width: 100%;">
-  <button onclick="fetchTrains()">Rechercher</button>
+  <button onclick="fetchTrainDetails()">Rechercher</button>
   <div id="results"></div>
 
   <script>
-    const apiKey = '242fac11-6d98-45fb-93df-28174d362447';
-    const region = 'sncf';
+    const apiKey = '242fac11-6d98-45fb-93df-28174d362447'; // Ta clé API SNCF
+    const region = 'sncf'; // Nom de la région, ici pour SNCF
 
-    async function fetchTrain(trainNumber) {
+    // Fonction pour récupérer l'ID du voyageur du véhicule via le numéro de train
+    async function fetchVehicleJourneyId(trainNumber) {
       const now = new Date();
-      const dateStr = now.toISOString().split('T')[0]; // YYYY-MM-DD
+      const dateStr = now.toISOString().split('T')[0]; // Date actuelle en format YYYY-MM-DD
 
       const url = `https://api.sncf.com/v1/coverage/${region}/vehicle_journeys?filter=vehicle_journey_name=${trainNumber}&datetime=${dateStr}T000000`;
 
@@ -36,9 +37,44 @@
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
 
         const data = await response.json();
-        if (data.vehicle_journeys.length === 0) return { error: `🚫 Train ${trainNumber} non trouvé.` };
+        if (data.vehicle_journeys.length === 0) return null;
 
-        const train = data.vehicle_journeys[0];
+        // Récupère l'ID du premier voyageur du véhicule
+        const vehicleJourneyId = data.vehicle_journeys[0].id;
+        return vehicleJourneyId;
+      } catch (error) {
+        console.error(error);
+        return null;
+      }
+    }
+
+    // Fonction pour récupérer les détails du train via son ID
+    async function fetchTrainDetails() {
+      const input = document.getElementById('trainInput').value.trim();
+      const trainNumbers = input.split(/\s+/); // Séparation des numéros de train par espaces
+      const resultsDiv = document.getElementById('results');
+      resultsDiv.innerHTML = '⏳ Recherche en cours...';
+
+      const results = await Promise.all(trainNumbers.map(async (trainNumber) => {
+        const vehicleJourneyId = await fetchVehicleJourneyId(trainNumber);
+        if (!vehicleJourneyId) {
+          return { error: `🚫 Train ${trainNumber} non trouvé.` };
+        }
+
+        // Utilise l'ID pour récupérer les détails via l'API
+        const url = `https://api.sncf.com/v1/coverage/${region}/vehicle_journeys/${vehicleJourneyId}`;
+        const response = await fetch(url, {
+          headers: { Authorization: apiKey }
+        });
+
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+
+        const trainDetails = await response.json();
+        if (!trainDetails) {
+          return { error: `🚫 Détails non trouvés pour le train ${trainNumber}.` };
+        }
+
+        const train = trainDetails.vehicle_journey;
         return {
           number: train.name,
           departure: train.stop_times[0]?.departure_time || 'inconnue',
@@ -47,18 +83,8 @@
           to: train.stop_times.at(-1)?.stop_point?.name,
           status: train.status || 'prévu'
         };
-      } catch (error) {
-        return { error: `🚫 Train ${trainNumber} : ${error.message}` };
-      }
-    }
+      }));
 
-    async function fetchTrains() {
-      const input = document.getElementById('trainInput').value.trim();
-      const trainNumbers = input.split(/\s+/);
-      const resultsDiv = document.getElementById('results');
-      resultsDiv.innerHTML = '⏳ Recherche en cours...';
-
-      const results = await Promise.all(trainNumbers.map(fetchTrain));
       resultsDiv.innerHTML = results.map(res => {
         if (res.error) return `<div class="train">${res.error}</div>`;
         return `
