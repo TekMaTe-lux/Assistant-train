@@ -273,6 +273,26 @@
           texteStatut = "Supprimé";
         }
 
+const disruptionsUrl = 'https://api.sncf.com/v1/coverage/sncf/disruptions?count=50';
+
+fetch(disruptionsUrl, {
+  headers: {
+    "Authorization": "Basic " + encodedApiKey
+  }
+})
+.then(res => res.json())
+.then(data => {
+  const disruptionsVersLux = data.disruptions.filter(disruption =>
+    disruption.messages &&
+    disruption.messages.some(msg =>
+      msg.text.toLowerCase().includes("luxembourg") &&
+      (msg.text.toLowerCase().includes("supprimé") || msg.text.toLowerCase().includes("annulé"))
+    )
+  );
+
+  console.log("Trains supprimés vers Luxembourg :", disruptionsVersLux);
+});
+        
         // Récupération des arrêts et de la cause via vehicle_journey
         const vehicleJourneyLink = arr.links.find(link => link.type === "vehicle_journey");
         const vehicleJourneyId = vehicleJourneyLink?.id;
@@ -288,19 +308,50 @@
             const stops = vehicleJourneyData.vehicle_journeys[0].stop_times || [];
             if (stops.length > 0) {
               stopsList = '<ul>';
-              for (const stop of stops) {
-                const stopName = stop.stop_point.name;
-                const arrivalTime = stop.arrival_time ? stop.arrival_time.slice(0, 5) : 'N/A';
-                stopsList += `<li>${stopName} - Arrivée : ${arrivalTime}</li>`;
-              }
+for (let i = 0; i < stops.length; i++) {
+  const stopName = stops[i].stop_point.name;
+  let arrivalTime = 'N/A';
+  if (stops[i].arrival_time) {
+    const timeStr = stops[i].arrival_time.replace(/[^0-9]/g, '');
+    if (timeStr.length >= 4) {
+      const h = timeStr.slice(0, 2);
+      const m = timeStr.slice(2, 4);
+      arrivalTime = `${h}h${m}`;
+    }
+  }
+
+  let prefix = '';
+  if (i === 0) prefix = "Départ : ";
+  else if (i === stops.length - 1) prefix = "Arrivée : ";
+
+  stopsList += `<li>${prefix}${stopName} - ${arrivalTime}</li>`;
+}
               stopsList += '</ul>';
             }
 
-            const disruptions = vehicleJourneyData.vehicle_journeys[0].disruptions || [];
-            if (disruption && disruption.messages && disruption.messages.length > 0) {
+             // Recherche de la cause de perturbation
+            let disruptionCause = '';
+            if (vehicleJourneyData.vehicle_journeys[0].disruptions && vehicleJourneyData.vehicle_journeys[0].disruptions.length > 0) {
+              const disruptionId = vehicleJourneyData.vehicle_journeys[0].disruptions[0].id;
+              const disruption = data.disruptions.find(d => d.id === disruptionId);
+
+              if (disruption && disruption.messages && disruption.messages.length > 0) {
                 disruptionCause = disruption.messages[0].text;
               }
             }
+
+            // Ajout de la cause de perturbation si présente
+            if (disruptionCause) {
+              causeTxt = `<div class="retard-cause">Cause : ${disruptionCause}</div>`;
+            }
+
+          } catch (err) {
+            console.log('Erreur lors de la récupération des perturbations :', err);
+          }
+        }
+
+        // Si le train est à l'heure, ne pas afficher "Arrivée réelle" et "Cause"
+        const arrivalDetails = statut !== "ontime" ? `<p>Arrivée réelle : ${hReelle}</p><div class="retard-cause">Cause : ${causeTxt}</div>` : '';
 
         html += `
           <li class="${statut}">
@@ -308,20 +359,22 @@
               <summary>
                 ${emoji} <strong>${train}</strong> à ${hBase}${retardTxt} — Provenance : <strong>${provenance}</strong> — Statut : ${texteStatut}
               </summary>
-              <p>Arrivée réelle : ${hReelle}</p>
-              <div class="retard-cause">Cause : ${causeTxt}</div>
+              ${causeTxt}
+              ${arrivalDetails}
               <h4>Arrêts intermédiaires :</h4>
               ${stopsList}
             </details>
           </li>
         `;
       }
+
       html += '</ul>';
       document.getElementById("resultat").innerHTML = html;
+
     })
     .catch(error => {
-      document.getElementById("resultat").innerHTML = 'Erreur de chargement des données.';
-      console.error("Erreur de données :", error);
+      console.error("Erreur API : ", error);
+      document.getElementById("resultat").innerHTML = "Désolé, une erreur est survenue lors du chargement des données.";
     });
   </script>
 </body>
