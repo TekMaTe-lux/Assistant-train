@@ -1,65 +1,76 @@
-<script>
-const trainNumbers = [
-  "88700", "88770", "88702", "88704", "88706", "88708", "88710", "88802",
-  "88712", "88501", "88804", "88714", "88503", "88806", "88716", "88505",
-  "88718", "88571", "88722", "88724", "88726", "88730", "88720", "88734",
-  "88509", "88736", "88738", "88511", "837680", "837682", "88513", "88740",
-  "88727", "88729"
-];
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <title>Recherche Trains par Numéro</title>
+  <style>
+    body { font-family: sans-serif; padding: 20px; }
+    input, button { padding: 8px; font-size: 16px; margin: 5px 0; }
+    .train { border: 1px solid #ccc; padding: 10px; margin: 10px 0; border-radius: 5px; }
+  </style>
+</head>
+<body>
+  <h2>🔎 Rechercher un ou plusieurs trains par numéro</h2>
+  <p>Exemple : <code>88700 88702 88704</code></p>
+  <input id="trainInput" placeholder="Entrez les numéros de trains..." style="width: 100%;">
+  <button onclick="fetchTrains()">Rechercher</button>
+  <div id="results"></div>
 
-const API_KEY = "242fac11-6d98-45fb-93df-28174d362447";
+  <script>
+    const apiKey = '242fac11-6d98-45fb-93df-28174d362447';
+    const region = 'sncf';
 
-async function fetchTrainStatus(trainNumber) {
-  const url = `https://api.sncf.com/v2/vehicle_journeys/${trainNumber}`;
+    async function fetchTrain(trainNumber) {
+      const now = new Date();
+      const dateStr = now.toISOString().split('T')[0]; // YYYY-MM-DD
 
-  try {
-    const response = await fetch(url, {
-      headers: {
-        "Authorization": "Basic " + btoa(API_KEY + ":")
+      const url = `https://api.sncf.com/v1/coverage/${region}/vehicle_journeys?filter=vehicle_journey_name=${trainNumber}&datetime=${dateStr}T000000`;
+
+      try {
+        const response = await fetch(url, {
+          headers: {
+            Authorization: apiKey
+          }
+        });
+
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+
+        const data = await response.json();
+        if (data.vehicle_journeys.length === 0) return { error: `🚫 Train ${trainNumber} non trouvé.` };
+
+        const train = data.vehicle_journeys[0];
+        return {
+          number: train.name,
+          departure: train.stop_times[0]?.departure_time || 'inconnue',
+          arrival: train.stop_times.at(-1)?.arrival_time || 'inconnue',
+          from: train.stop_times[0]?.stop_point?.name,
+          to: train.stop_times.at(-1)?.stop_point?.name,
+          status: train.status || 'prévu'
+        };
+      } catch (error) {
+        return { error: `🚫 Train ${trainNumber} : ${error.message}` };
       }
-    });
-
-    if (!response.ok) {
-      return { trainNumber, error: `Erreur HTTP ${response.status}` };
     }
 
-    const data = await response.json();
-    return { trainNumber, data };
-  } catch (err) {
-    return { trainNumber, error: err.message };
-  }
-}
+    async function fetchTrains() {
+      const input = document.getElementById('trainInput').value.trim();
+      const trainNumbers = input.split(/\s+/);
+      const resultsDiv = document.getElementById('results');
+      resultsDiv.innerHTML = '⏳ Recherche en cours...';
 
-async function checkTrains() {
-  const results = await Promise.all(trainNumbers.map(fetchTrainStatus));
-
-  const container = document.getElementById("train-status");
-  container.innerHTML = ""; // Clear previous
-
-  results.forEach(result => {
-    const div = document.createElement("div");
-    div.style.marginBottom = "6px";
-
-    if (result.error) {
-      div.textContent = `🚫 Train ${result.trainNumber}: ${result.error}`;
-    } else {
-      const journey = result.data.vehicle_journeys?.[0];
-      if (!journey) {
-        div.textContent = `❓ Train ${result.trainNumber}: Aucune donnée`;
-      } else {
-        const status = journey.canceled ? "SUPPRIMÉ ❌" : "Actif ✅";
-        const cause = journey.stop_times?.[0]?.cause || "Cause non précisée";
-        div.textContent = `🚆 Train ${result.trainNumber}: ${status} — ${cause}`;
-      }
+      const results = await Promise.all(trainNumbers.map(fetchTrain));
+      resultsDiv.innerHTML = results.map(res => {
+        if (res.error) return `<div class="train">${res.error}</div>`;
+        return `
+          <div class="train">
+            🚆 <strong>${res.number}</strong><br>
+            🕒 Départ : ${res.departure} de ${res.from}<br>
+            🕒 Arrivée : ${res.arrival} à ${res.to}<br>
+            📌 Statut : ${res.status}
+          </div>
+        `;
+      }).join('');
     }
-
-    container.appendChild(div);
-  });
-}
-
-document.addEventListener("DOMContentLoaded", checkTrains);
-</script>
-
-<div id="train-status" style="font-family: sans-serif; font-size: 14px; margin-top: 20px;">
-  Chargement des statuts des trains...
-</div>
+  </script>
+</body>
+</html>
