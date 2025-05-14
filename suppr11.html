@@ -38,7 +38,6 @@
                         let effect = null;
                         let impactedStopsMap = {};
 
-                        // Traitement des disruptions
                         if (disruptions.length > 0) {
                             const disruption = disruptions[0];
                             effect = disruption.severity?.effect || null;
@@ -54,39 +53,55 @@
                             });
                         }
 
-                        // Construction de la liste des arrêts
-                        const stopHtml = train.stop_times.map(stop => {
+                        const stopHtml = train.stop_times.map((stop, index, stops) => {
                             const id = stop.stop_point.id;
-                            const arrival = formatTime(stop.arrival_time);
-                            const departure = formatTime(stop.departure_time);
                             const name = stop.stop_point.name;
+                            const baseArrival = formatTime(stop.arrival_time);
+                            const baseDeparture = formatTime(stop.departure_time);
+                            let arrival = baseArrival;
+                            let departure = baseDeparture;
 
-                            // Statut par défaut
-                            let barré = false;
+                            const impact = impactedStopsMap[id];
+                            let barrerLigne = false;
+                            let barrerArrivee = false;
+                            let barrerDepart = false;
                             let couleur = '';
+                            let nouvelleGareDepart = false;
 
                             if (effect === "NO_SERVICE") {
-                                barré = true;
+                                barrerLigne = true;
                                 couleur = 'red';
-                            } else if (effect === "REDUCED_SERVICE" && impactedStopsMap[id]) {
-                                const impact = impactedStopsMap[id];
-                                const arrivalDeleted = impact.arrival_status === "deleted";
-                                const departureDeleted = impact.departure_status === "deleted";
-                                if (arrivalDeleted && departureDeleted) {
-                                    barré = true;
+                            } else if (effect === "REDUCED_SERVICE" && impact) {
+                                const aDel = impact.arrival_status === "deleted";
+                                const dUnchanged = impact.departure_status === "unchanged";
+                                const stopDel = impact.stop_time_effect === "deleted";
+
+                                if (stopDel && aDel && dUnchanged) {
+                                    nouvelleGareDepart = true;
+                                }
+
+                                if (stopDel || (aDel && impact.departure_status === "deleted")) {
+                                    barrerLigne = true;
                                     couleur = 'red';
+                                } else {
+                                    if (aDel) barrerArrivee = true;
+                                    if (impact.departure_status === "deleted") barrerDepart = true;
                                 }
                             }
 
-                            let display = `${name} - Arrivée: ${arrival} - Départ: ${departure}`;
-                            if (barré) {
-                                return `<p style="color:${couleur}; text-decoration:line-through;">${display}</p>`;
+                            if (nouvelleGareDepart) {
+                                return `<p style="color:orange;"><strong>${name}</strong> - Départ: <strong>${departure}</strong> <span style="color:orange;">(Nouvelle gare de départ)</span></p>`;
+                            }
+
+                            if (barrerLigne) {
+                                return `<p style="color:${couleur}; text-decoration:line-through;">${name} - Arrivée: ${arrival} - Départ: ${departure}</p>`;
                             } else {
-                                return `<p>${display}</p>`;
+                                if (barrerArrivee) arrival = `<span style="text-decoration: line-through; color: red;">${arrival}</span>`;
+                                if (barrerDepart) departure = `<span style="text-decoration: line-through; color: red;">${departure}</span>`;
+                                return `<p>${name} - Arrivée: ${arrival} - Départ: ${departure}</p>`;
                             }
                         }).join('');
 
-                        // Affichage du résumé de la perturbation
                         let disruptionHtml = '';
                         if (effect) {
                             const cause = disruptions[0].messages?.[0]?.text || 'Non précisée';
