@@ -1,5 +1,4 @@
-<!DOCTYPE html>
-<html lang="fr">
+<!DOCTYPE html><html lang="fr">
 <head>
     <meta charset="UTF-8">
     <title>Informations Train SNCF</title>
@@ -22,162 +21,169 @@
                 const trainDate = $('#trainDate').val();
                 const apiKey = '242fac11-6d98-45fb-93df-28174d362447';
                 const encodedApiKey = btoa(apiKey + ":");
-                const url = `https://api.sncf.com/v1/coverage/sncf/vehicle_journeys/vehicle_journey:SNCF:${trainDate}:${trainNumber}:1187:Train`;
-
-                $.ajax({
-                    url: url,
-                    method: 'GET',
-                    headers: {
-                        'Authorization': 'Basic ' + encodedApiKey
-                    },
-                    success: function (response) {
-                        const train = response.vehicle_journeys[0];
-                        const disruptions = response.disruptions || [];
-                        let effect = null;
-                        let impactedStopsMap = {};
-
-                        if (disruptions.length > 0) {
-                            const disruption = disruptions[0];
-                            effect = disruption.severity?.effect || null;
-                            disruption.impacted_objects?.forEach(obj => {
-                                obj.impacted_stops?.forEach(stop => {
-                                    impactedStopsMap[stop.stop_point.id] = {
-                                        arrival_status: stop.arrival_status,
-                                        departure_status: stop.departure_status,
-                                        stop_time_effect: stop.stop_time_effect,
-                                        amended_arrival_time: stop.amended_arrival_time,
-                                        amended_departure_time: stop.amended_departure_time
-                                    };
-                                });
+                const url = `https://api.sncf.com/v1/coverage/sncf/vehicle_journeys/vehicle_journey:SNCF:${trainDate}:${trainNumber}:1187:Train`;$.ajax({
+                url: url,
+                method: 'GET',
+                headers: {
+                    'Authorization': 'Basic ' + encodedApiKey
+                },
+                success: function (response) {
+                    const train = response.vehicle_journeys[0];
+                    const disruptions = response.disruptions || [];
+                    let effect = null;
+                    let impactedStopsMap = {};
+                    if (disruptions.length > 0) {
+                        const disruption = disruptions[0];
+                        effect = disruption.severity?.effect || null;
+                        disruption.impacted_objects?.forEach(obj => {
+                            obj.impacted_stops?.forEach(stop => {
+                                impactedStopsMap[stop.stop_point.id] = {
+                                    arrival_status: stop.arrival_status,
+                                    departure_status: stop.departure_status,
+                                    stop_time_effect: stop.stop_time_effect,
+                                    amended_arrival_time: stop.amended_arrival_time,
+                                    amended_departure_time: stop.amended_departure_time
+                                };
                             });
-                        }
-
-                        const stops = train.stop_times;
-                        const firstIndex = 0;
-                        const lastIndex = stops.length - 1;
-                        let firstRealDepartureIndex = -1;
-                        let lastRealArrivalIndex = -1;
-
-                        stops.forEach((stop, index) => {
-                            const impact = impactedStopsMap[stop.stop_point.id];
-                            if (!impact || impact.departure_status !== "deleted") {
-                                if (firstRealDepartureIndex === -1) firstRealDepartureIndex = index;
-                            }
-                            if (!impact || impact.arrival_status !== "deleted") {
-                                lastRealArrivalIndex = index;
-                            }
                         });
+                    }
 
-                        const stopHtml = stops.map((stop, index) => {
-                            const id = stop.stop_point.id;
-                            const name = stop.stop_point.name;
-                            const baseArrival = formatTime(stop.arrival_time);
-                            const baseDeparture = formatTime(stop.departure_time);
-                            let arrival = baseArrival;
-                            let departure = baseDeparture;
+                    const stops = train.stop_times;
+                    let firstRealDepartureIndex = -1;
+                    let lastRealArrivalIndex = -1;
+                    let newStartIndex = -1;
+                    let newEndIndex = -1;
 
-                            const impact = impactedStopsMap[id];
-                            let barrerLigne = false;
-                            let barrerArrivee = false;
-                            let barrerDepart = false;
-                            let couleur = '';
-                            const estSupprime = impact && impact.stop_time_effect === "deleted";
-                            const aDel = impact?.arrival_status === "deleted";
-                            const dDel = impact?.departure_status === "deleted";
-                            const dUnchanged = impact?.departure_status === "unchanged";
-                            const aUnchanged = impact?.arrival_status === "unchanged";
+                    stops.forEach((stop, index) => {
+                        const impact = impactedStopsMap[stop.stop_point.id];
+                        if (!impact || impact.departure_status !== "deleted") {
+                            if (firstRealDepartureIndex === -1) firstRealDepartureIndex = index;
+                        }
+                        if (!impact || impact.arrival_status !== "deleted") {
+                            lastRealArrivalIndex = index;
+                        }
+                        if (impact?.stop_time_effect === "deleted" && impact?.departure_status === "deleted" && impact?.arrival_status !== "deleted") {
+                            newStartIndex = index;
+                        }
+                        if (impact?.stop_time_effect === "deleted" && impact?.arrival_status === "deleted" && impact?.departure_status !== "deleted") {
+                            newEndIndex = index;
+                        }
+                    });
 
-                            if (effect === "NO_SERVICE") {
+                    const stopHtml = stops.map((stop, index) => {
+                        const id = stop.stop_point.id;
+                        const name = stop.stop_point.name;
+                        const baseArrival = formatTime(stop.arrival_time);
+                        const baseDeparture = formatTime(stop.departure_time);
+                        let arrival = baseArrival;
+                        let departure = baseDeparture;
+
+                        const impact = impactedStopsMap[id];
+                        const estSupprime = impact && impact.stop_time_effect === "deleted";
+                        const arriveeSupprimee = impact && impact.arrival_status === "deleted";
+                        const departSupprime = impact && impact.departure_status === "deleted";
+
+                        if (index === 0 && index !== newStartIndex) return "";
+                        if (index === stops.length - 1 && index !== newEndIndex) return "";
+
+                        let barrerLigne = false;
+                        let barrerArrivee = false;
+                        let barrerDepart = false;
+                        let couleur = '';
+
+                        if (effect === "NO_SERVICE") {
+                            barrerLigne = true;
+                            couleur = 'red';
+                        } else if (effect === "REDUCED_SERVICE") {
+                            if (estSupprime && departSupprime && !arriveeSupprimee && index === newStartIndex) {
+                                let amendedDeparture = impact?.amended_departure_time ? formatTime(impact.amended_departure_time) : departure;
+                                let delay = impact?.amended_departure_time ? computeDelay(stop.departure_time, impact.amended_departure_time) : null;
+                                let retard = delay ? ` <span style="color:gray;">(+${delay}min)</span>` : '';
+                                return `<p style="color:orange;"><strong>${name}</strong> - Départ: <strong>${amendedDeparture}</strong>${retard} <span style="color:orange;">(Nouvelle gare de départ)</span></p>`;
+                            }
+                            if (estSupprime && arriveeSupprimee && !departSupprime && index === newEndIndex) {
+                                let amendedArrival = impact?.amended_arrival_time ? formatTime(impact.amended_arrival_time) : arrival;
+                                let delay = impact?.amended_arrival_time ? computeDelay(stop.arrival_time, impact.amended_arrival_time) : null;
+                                let retard = delay ? ` <span style="color:gray;">(+${delay}min)</span>` : '';
+                                return `<p style="color:orange;"><strong>${name}</strong> - Arrivée: <strong>${amendedArrival}</strong>${retard} <span style="color:orange;">(Nouveau terminus)</span></p>`;
+                            }
+                            if (estSupprime) {
                                 barrerLigne = true;
                                 couleur = 'red';
-                            } else if (effect === "REDUCED_SERVICE") {
-                                if (index < firstRealDepartureIndex || index > lastRealArrivalIndex || estSupprime) {
-                                    barrerLigne = true;
-                                    couleur = 'red';
-                                } else {
-                                    if (aDel) barrerArrivee = true;
-                                    if (dDel) barrerDepart = true;
-                                }
-                            }
-
-                            let arrivalDisplay = arrival;
-                            let departureDisplay = departure;
-
-                            if (impact && impact.amended_arrival_time && impact.amended_arrival_time !== stop.arrival_time) {
-                                const amendedArrival = formatTime(impact.amended_arrival_time);
-                                const delay = computeDelay(stop.arrival_time, impact.amended_arrival_time);
-                                arrivalDisplay = `<span style="text-decoration: line-through;">${arrival}</span> ➔ <strong style="color:orange;">${amendedArrival}</strong> <span style="color:gray;">(+${delay}min)</span>`;
-                            }
-                            if (impact && impact.amended_departure_time && impact.amended_departure_time !== stop.departure_time) {
-                                const amendedDeparture = formatTime(impact.amended_departure_time);
-                                const delay = computeDelay(stop.departure_time, impact.amended_departure_time);
-                                departureDisplay = `<span style="text-decoration: line-through;">${departure}</span> ➔ <strong style="color:orange;">${amendedDeparture}</strong> <span style="color:gray;">(+${delay}min)</span>`;
-                            }
-
-                            if (barrerLigne) {
-                                return `<p style="color:${couleur}; text-decoration:line-through;">${name} - Arrivée: ${arrival} - Départ: ${departure}</p>`;
                             } else {
-                                if (barrerArrivee) arrivalDisplay = `<span style="text-decoration: line-through; color: red;">${arrivalDisplay}</span>`;
-                                if (barrerDepart) departureDisplay = `<span style="text-decoration: line-through; color: red;">${departureDisplay}</span>`;
+                                if (arriveeSupprimee) barrerArrivee = true;
+                                if (departSupprime) barrerDepart = true;
                             }
-
-                            // GARE ORIGINE : afficher seulement départ
-                            if (index === firstIndex) {
-                                return `<p>${name} - Départ: ${departureDisplay}</p>`;
-                            }
-
-                            // GARE TERMINUS : afficher seulement arrivée
-                            if (index === lastIndex) {
-                                return `<p>${name} - Arrivée: ${arrivalDisplay}</p>`;
-                            }
-
-                            // Sinon : afficher arrivée et départ
-                            return `<p>${name} - Arrivée: ${arrivalDisplay} - Départ: ${departureDisplay}</p>`;
-                        }).join('');
-
-                        let disruptionHtml = '';
-                        if (effect) {
-                            const cause = disruptions[0].messages?.[0]?.text || 'Non précisée';
-                            const statut = disruptions[0].status || 'inconnu';
-                            let effetTraduit = effect;
-                            let retardHtml = '';
-                            if (effect === 'NO_SERVICE') effetTraduit = 'Suppression';
-                            else if (effect === 'REDUCED_SERVICE') effetTraduit = 'Suppression partielle';
-                            else if (effect === 'SIGNIFICANT_DELAYS') effetTraduit = 'Retard important';
-
-                            if (disruptions[0].severity?.delay) {
-                                const delay = disruptions[0].severity.delay;
-                                retardHtml = `<p><strong>Retard :</strong> ⚠️ ${trainNumber} à ${formatTime(train.arrival_time)} (+${delay} min)</p>`;
-                            }
-
-                            disruptionHtml = `
-                                <h3>⚠️ Perturbation détectée</h3>
-                                <p><strong>Effet :</strong> ${effetTraduit}</p>
-                                <p><strong>Cause :</strong> ${cause}</p>
-                                <p><strong>Statut :</strong> ${statut}</p>
-                                ${retardHtml}
-                                <hr>
-                            `;
                         }
-                        $('#trainInfo').html(disruptionHtml + `<h2>Arrêts du train ${train.name} :</h2>` + stopHtml);
-                    },
-                    error: function () {
-                        $('#trainInfo').html('<p>Erreur lors de la récupération des données. Vérifiez le numéro et la date.</p>');
+
+                        let arrivalDisplay = arrival;
+                        let departureDisplay = departure;
+
+                        if (impact && impact.amended_arrival_time && impact.amended_arrival_time !== stop.arrival_time) {
+                            const amendedArrival = formatTime(impact.amended_arrival_time);
+                            const delay = computeDelay(stop.arrival_time, impact.amended_arrival_time);
+                            arrivalDisplay = `<span style="text-decoration: line-through;">${arrival}</span> ➔ <strong style="color:orange;">${amendedArrival}</strong> <span style="color:gray;">(+${delay}min)</span>`;
+                        }
+                        if (impact && impact.amended_departure_time && impact.amended_departure_time !== stop.departure_time) {
+                            const amendedDeparture = formatTime(impact.amended_departure_time);
+                            const delay = computeDelay(stop.departure_time, impact.amended_departure_time);
+                            departureDisplay = `<span style="text-decoration: line-through;">${departure}</span> ➔ <strong style="color:orange;">${amendedDeparture}</strong> <span style="color:gray;">(+${delay}min)</span>`;
+                        }
+
+                        if (barrerLigne) {
+                            return `<p style="color:${couleur}; text-decoration:line-through;">${name} - Arrivée: ${arrival} - Départ: ${departure}</p>`;
+                        } else {
+                            if (barrerArrivee) arrivalDisplay = `<span style="text-decoration: line-through; color: red;">${arrivalDisplay}</span>`;
+                            if (barrerDepart) departureDisplay = `<span style="text-decoration: line-through; color: red;">${departureDisplay}</span>`;
+                        }
+
+                        return `<p>${name} - Arrivée: ${arrivalDisplay} - Départ: ${departureDisplay}</p>`;
+                    }).join('');
+
+                    let disruptionHtml = '';
+                    if (effect) {
+                        const cause = disruptions[0].messages?.[0]?.text || 'Non précisée';
+                        const statut = disruptions[0].status || 'inconnu';
+                        let effetTraduit = effect;
+                        let retardHtml = '';
+                        if (effect === 'NO_SERVICE') effetTraduit = 'Suppression';
+                        else if (effect === 'REDUCED_SERVICE') effetTraduit = 'Suppression partielle';
+                        else if (effect === 'SIGNIFICANT_DELAYS') effetTraduit = 'Retard important';
+
+                        if (disruptions[0].severity?.delay) {
+                            const delay = disruptions[0].severity.delay;
+                            retardHtml = `<p><strong>Retard :</strong> ⚠️ ${trainNumber} à ${formatTime(train.arrival_time)} (+${delay} min)</p>`;
+                        }
+
+                        disruptionHtml = `
+                            <h3>⚠️ Perturbation détectée</h3>
+                            <p><strong>Effet :</strong> ${effetTraduit}</p>
+                            <p><strong>Cause :</strong> ${cause}</p>
+                            <p><strong>Statut :</strong> ${statut}</p>
+                            ${retardHtml}
+                            <hr>
+                        `;
                     }
-                });
-
-                function formatTime(t) {
-                    if (!t) return '-';
-                    return t.substring(0, 2) + ':' + t.substring(2, 4);
-                }
-
-                function computeDelay(baseTime, amendedTime) {
-                    const base = parseInt(baseTime.substring(0, 2)) * 60 + parseInt(baseTime.substring(2, 4));
-                    const amended = parseInt(amendedTime.substring(0, 2)) * 60 + parseInt(amendedTime.substring(2, 4));
-                    return amended - base;
+                    $('#trainInfo').html(disruptionHtml + `<h2>Arrêts du train ${train.name} :</h2>` + stopHtml);
+                },
+                error: function () {
+                    $('#trainInfo').html('<p>Erreur lors de la récupération des données. Vérifiez le numéro et la date.</p>');
                 }
             });
+
+            function formatTime(t) {
+                if (!t) return '-';
+                return t.substring(0, 2) + ':' + t.substring(2, 4);
+            }
+
+            function computeDelay(baseTime, amendedTime) {
+                const base = parseInt(baseTime.substring(0, 2)) * 60 + parseInt(baseTime.substring(2, 4));
+                const amended = parseInt(amendedTime.substring(0, 2)) * 60 + parseInt(amendedTime.substring(2, 4));
+                return amended - base;
+            }
         });
-    </script>
+    });
+</script>
+
 </body>
 </html>
