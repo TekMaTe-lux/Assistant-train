@@ -3,16 +3,16 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Informations Train SNCF</title>
+    <title>Informations sur un Train SNCF</title>
     <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
 </head>
 <body>
     <h1>Informations sur un Train SNCF</h1>
     <label for="trainNumber">Entrez le numéro du train:</label>
-    <input type="text" id="trainNumber" value="88532">
+    <input type="text" id="trainNumber" value="88530">
     <br>
     <label for="trainDate">Sélectionnez la date (format: YYYY-MM-DD):</label>
-    <input type="date" id="trainDate" value="2025-05-14">
+    <input type="date" id="trainDate" value="2025-05-13">
     <br>
     <button id="getTrainData">Obtenir les données du train</button>
     <div id="trainInfo"></div>
@@ -36,48 +36,32 @@
                     success: function(response) {
                         if (response.vehicle_journeys && response.vehicle_journeys.length > 0) {
                             var train = response.vehicle_journeys[0];
-                            var stopTimes = train.stop_times.map(function(stop) {
+                            var stopTimes = [];
+                            var isTrainDeleted = true; // On part du principe que le train est supprimé jusqu'à preuve du contraire
+
+                            train.stop_times.forEach(function(stop) {
                                 var arrival = formatTime(stop.arrival_time);
                                 var departure = formatTime(stop.departure_time);
-                                return '<p>' + stop.stop_point.name + ' - Arrivée: ' + arrival + ' - Départ: ' + departure + '</p>';
-                            }).join('');
 
-                            var disruptionsInfo = '';
-                            if (response.disruptions && response.disruptions.length > 0) {
-                                var disruption = response.disruptions[0];
-                                var cause = (disruption.messages && disruption.messages.length > 0)
-                                    ? disruption.messages[0].text
-                                    : 'Cause non précisée';
-
-                                var rawEffect = disruption.severity && disruption.severity.effect
-                                    ? disruption.severity.effect
-                                    : 'Effet inconnu';
-
-                                // Traduction des effets
-                                var translatedEffect = '';
-                                switch (rawEffect) {
-                                    case 'NO_SERVICE':
-                                        translatedEffect = 'Suppression';
-                                        break;
-                                    case 'REDUCED_SERVICE':
-                                        translatedEffect = 'Suppression partielle';
-                                        break;
-                                    default:
-                                        translatedEffect = rawEffect;
+                                // Si un seul arrêt n'est pas supprimé, on marque que le train n'est pas complètement supprimé
+                                if (stop.stop_time_effect !== "deleted") {
+                                    isTrainDeleted = false;
                                 }
 
-                                var status = disruption.status || 'inconnu';
+                                // Ajouter un style barré pour les arrêts supprimés
+                                if (stop.stop_time_effect === "deleted") {
+                                    stopTimes.push('<p style="color:red; text-decoration:line-through;">' + stop.stop_point.name + ' - Arrivée: ' + arrival + ' - Départ: ' + departure + '</p>');
+                                } else {
+                                    stopTimes.push('<p>' + stop.stop_point.name + ' - Arrivée: ' + arrival + ' - Départ: ' + departure + '</p>');
+                                }
+                            });
 
-                                disruptionsInfo = `
-                                    <h3>⚠️ Perturbation signalée</h3>
-                                    <p><strong>Effet :</strong> ${translatedEffect}</p>
-                                    <p><strong>Cause :</strong> ${cause}</p>
-                                    <p><strong>Statut :</strong> ${status}</p>
-                                    <hr>
-                                `;
+                            // Si le train entier est supprimé, on barre toute l'information du train
+                            if (isTrainDeleted) {
+                                $('#trainInfo').html('<h2 style="color:red; text-decoration:line-through;">Train ' + train.name + ' - Annulé</h2>' + stopTimes.join(''));
+                            } else {
+                                $('#trainInfo').html('<h2>Arrêts du train ' + train.name + ':</h2>' + stopTimes.join(''));
                             }
-
-                            $('#trainInfo').html(disruptionsInfo + '<h2>Arrêts du train ' + train.name + ':</h2>' + stopTimes);
                         } else {
                             $('#trainInfo').html('<p>Aucun train trouvé pour ce numéro et cette date.</p>');
                         }
@@ -88,6 +72,7 @@
                 });
             });
 
+            // Fonction pour convertir l'heure au format HHMMSS en format lisible
             function formatTime(time) {
                 var hours = time.substring(0, 2);
                 var minutes = time.substring(2, 4);
