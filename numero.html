@@ -1,59 +1,100 @@
 <!DOCTYPE html>
 <html lang="fr">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Informations Train SNCF</title>
-    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+  <meta charset="UTF-8">
+  <title>Informations sur un Train SNCF</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      padding: 20px;
+    }
+    input, select, button {
+      margin: 5px;
+      padding: 5px;
+    }
+    .info {
+      margin-top: 20px;
+    }
+  </style>
 </head>
 <body>
-    <h1>Informations sur un Train SNCF</h1>
-    <label for="trainNumber">Entrez le numéro du train:</label>
-    <input type="text" id="trainNumber" value="88532">
-    <button id="getTrainData">Obtenir les données du train</button>
-    <div id="trainInfo"></div>
+  <h2>Informations sur un Train SNCF</h2>
 
-    <script>
-        $(document).ready(function() {
-            $('#getTrainData').click(function() {
-                var trainNumber = $('#trainNumber').val();
-                const apiKey = '242fac11-6d98-45fb-93df-28174d362447';
-                const encodedApiKey = btoa(apiKey + ":");
+  <label for="trainNumber">Numéro du train :</label>
+  <input type="text" id="trainNumber" placeholder="Ex: 88532">
 
-                var now = new Date();
-                var yyyy = now.getFullYear();
-                var mm = String(now.getMonth() + 1).padStart(2, '0');
-                var dd = String(now.getDate()).padStart(2, '0');
-                var hh = String(now.getHours()).padStart(2, '0');
-                var min = String(now.getMinutes()).padStart(2, '0');
-                var ss = String(now.getSeconds()).padStart(2, '0');
-                var datetime = `${yyyy}${mm}${dd}T${hh}${min}${ss}`;
+  <label for="trainDate">Date :</label>
+  <input type="date" id="trainDate" value="2025-05-13">
 
-                var url = `https://api.sncf.com/v1/coverage/sncf/vehicle_journeys/vehicle_journey:SNCF:2025-05-14:${trainNumber}:1187:Train`;
+  <button onclick="getTrainInfo()">Rechercher</button>
 
-                $.ajax({
-                    url: url,
-                    method: 'GET',
-                    headers: {
-                        'Authorization': 'Basic ' + encodedApiKey
-                    },
-                    success: function(response) {
-                        if (response.vehicle_journeys && response.vehicle_journeys.length > 0) {
-                            var train = response.vehicle_journeys[0];
-                            var stopTimes = train.stop_times.map(function(stop) {
-                                return '<p>' + stop.stop_point.name + ' - Arrivée: ' + stop.arrival_time + ' - Départ: ' + stop.departure_time + '</p>';
-                            }).join('');
-                            $('#trainInfo').html('<h2>Arrêts du train ' + train.name + ':</h2>' + stopTimes);
-                        } else {
-                            $('#trainInfo').html('<p>Aucun train trouvé pour ce numéro.</p>');
-                        }
-                    },
-                    error: function() {
-                        $('#trainInfo').html('<p>Erreur lors de la récupération des données du train. Vérifiez le numéro et réessayez.</p>');
-                    }
-                });
-            });
+  <div class="info" id="trainInfo"></div>
+
+  <script>
+    async function getTrainInfo() {
+      const trainNumber = document.getElementById("trainNumber").value;
+      const trainDate = document.getElementById("trainDate").value;
+      const trainInfoDiv = document.getElementById("trainInfo");
+      trainInfoDiv.innerHTML = "Chargement...";
+
+      if (!trainNumber || !trainDate) {
+        trainInfoDiv.innerHTML = "Veuillez renseigner un numéro de train et une date.";
+        return;
+      }
+
+      const dateFormatted = trainDate.replace(/-/g, '');
+      const apiUrl = `https://api.sncf.com/v1/coverage/sncf/vehicle_journeys?since=${dateFormatted}T000000&until=${dateFormatted}T235959&count=50&start_page=0`;
+
+      try {
+        const response = await fetch(apiUrl, {
+          headers: {
+            Authorization: "242fac11-6d98-45fb-93df-28174d362447" // Remplace par ta vraie clé
+          }
         });
-    </script>
+        const data = await response.json();
+        // console.log(data);
+
+        const journey = data.vehicle_journeys.find(j =>
+          j.name === trainNumber || j.id.includes(trainNumber)
+        );
+
+        // Vérifier disruptions
+        let canceled = false;
+        let reason = "";
+        if (data.disruptions && data.disruptions.length > 0) {
+          data.disruptions.forEach(disruption => {
+            disruption.impacted_objects.forEach(obj => {
+              if (obj.pt_object?.id.includes(trainNumber)) {
+                canceled = disruption.severity?.effect === "NO_SERVICE";
+                reason = disruption.messages?.[0]?.text || "Cause non précisée";
+              }
+            });
+          });
+        }
+
+        if (canceled) {
+          trainInfoDiv.innerHTML = `<strong>🚫 Train ${trainNumber} supprimé</strong><br>Cause : ${reason}`;
+        } else if (journey) {
+          const stops = journey.stop_times.map(stop => {
+            const arr = stop.arrival_time?.slice(11, 16) || "—";
+            const dep = stop.departure_time?.slice(11, 16) || "—";
+            const label = stop.stop_point?.name || "—";
+            return `${label} - Arrivée: ${arr} - Départ: ${dep}`;
+          });
+
+          trainInfoDiv.innerHTML = `
+            <strong>🟢 Arrêts du train ${trainNumber} :</strong><br>
+            ${stops.join("<br>")}
+          `;
+        } else {
+          trainInfoDiv.innerHTML = `Aucun trajet trouvé pour le train ${trainNumber} le ${trainDate}`;
+        }
+
+      } catch (error) {
+        console.error(error);
+        trainInfoDiv.innerHTML = "Erreur lors de la récupération des données.";
+      }
+    }
+  </script>
 </body>
 </html>
