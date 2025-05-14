@@ -1,0 +1,118 @@
+<!DOCTYPE html><html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <title>Informations Train SNCF</title>
+    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+</head>
+<body>
+    <h1>Informations sur un Train SNCF</h1>
+    <label for="trainNumber">Numéro du train :</label>
+    <input type="text" id="trainNumber" value="88743">
+    <br>
+    <label for="trainDate">Date (YYYY-MM-DD) :</label>
+    <input type="date" id="trainDate" value="2025-05-13">
+    <br>
+    <button id="getTrainData">Obtenir les données</button>
+    <div id="trainInfo"></div>
+    <script>
+        $(document).ready(function () {
+            $('#getTrainData').click(function () {
+                const trainNumber = $('#trainNumber').val();
+                const trainDate = $('#trainDate').val();
+                const apiKey = '242fac11-6d98-45fb-93df-28174d362447';
+                const encodedApiKey = btoa(apiKey + ":");
+                const url = `https://api.sncf.com/v1/coverage/sncf/vehicle_journeys/vehicle_journey:SNCF:${trainDate}:${trainNumber}:1187:Train`;$.ajax({
+                url: url,
+                method: 'GET',
+                headers: {
+                    'Authorization': 'Basic ' + encodedApiKey
+                },
+                success: function (response) {
+                    const train = response.vehicle_journeys[0];
+                    const disruptions = response.disruptions || [];
+                    const impactedStopsMap = {};
+
+                    disruptions.forEach(disruption => {
+                        disruption.impacted_objects?.forEach(obj => {
+                            obj.impacted_stops?.forEach(stop => {
+                                impactedStopsMap[stop.stop_point.id] = {
+                                    arrival_status: stop.arrival_status,
+                                    departure_status: stop.departure_status,
+                                    stop_time_effect: stop.stop_time_effect,
+                                    amended_arrival_time: stop.amended_arrival_time,
+                                    amended_departure_time: stop.amended_departure_time
+                                };
+                            });
+                        });
+                    });
+
+                    const stops = train.stop_times;
+                    const stopHtml = stops.map((stop, index) => {
+                        const id = stop.stop_point.id;
+                        const name = stop.stop_point.name;
+                        const baseArrival = formatTime(stop.arrival_time);
+                        const baseDeparture = formatTime(stop.departure_time);
+
+                        let impact = impactedStopsMap[id];
+                        let amendedArrival = impact?.amended_arrival_time ? formatTime(impact.amended_arrival_time) : baseArrival;
+                        let amendedDeparture = impact?.amended_departure_time ? formatTime(impact.amended_departure_time) : baseDeparture;
+
+                        let arrivalDelay = computeDelay(stop.arrival_time, impact?.amended_arrival_time);
+                        let departureDelay = computeDelay(stop.departure_time, impact?.amended_departure_time);
+
+                        let html = `<p><strong>${name}</strong><br>`;
+                        html += `&nbsp;&nbsp;Prévu : Arrivée ${baseArrival}, Départ ${baseDeparture}<br>`;
+                        if (impact) {
+                            html += `&nbsp;&nbsp;<span style="color:orange;">Perturbé : Arrivée ${amendedArrival}`;
+                            if (arrivalDelay) html += ` (+${arrivalDelay} min)`;
+                            html += `, Départ ${amendedDeparture}`;
+                            if (departureDelay) html += ` (+${departureDelay} min)`;
+                            html += `</span>`;
+                        }
+                        html += `</p>`;
+                        return html;
+                    }).join('');
+
+                    let disruptionHtml = '';
+                    if (disruptions.length > 0) {
+                        const cause = disruptions[0].messages?.[0]?.text || 'Non précisée';
+                        const statut = disruptions[0].status || 'inconnu';
+                        const effect = disruptions[0].severity?.effect || 'non précisé';
+                        let effetTraduit = effect;
+                        if (effect === 'NO_SERVICE') effetTraduit = 'Suppression';
+                        else if (effect === 'REDUCED_SERVICE') effetTraduit = 'Suppression partielle';
+                        else if (effect === 'SIGNIFICANT_DELAYS') effetTraduit = 'Retard important';
+
+                        disruptionHtml = `
+                            <h3>⚠️ Perturbation détectée</h3>
+                            <p><strong>Effet :</strong> ${effetTraduit}</p>
+                            <p><strong>Cause :</strong> ${cause}</p>
+                            <p><strong>Statut :</strong> ${statut}</p>
+                            <hr>
+                        `;
+                    }
+
+                    $('#trainInfo').html(disruptionHtml + `<h2>Arrêts du train ${train.name} :</h2>` + stopHtml);
+                },
+                error: function () {
+                    $('#trainInfo').html('<p>Erreur lors de la récupération des données. Vérifiez le numéro et la date.</p>');
+                }
+            });
+
+            function formatTime(t) {
+                if (!t) return '-';
+                return t.substring(0, 2) + ':' + t.substring(2, 4);
+            }
+
+            function computeDelay(base, amended) {
+                if (!base || !amended) return null;
+                const baseMinutes = parseInt(base.substring(0, 2)) * 60 + parseInt(base.substring(2, 4));
+                const amendedMinutes = parseInt(amended.substring(0, 2)) * 60 + parseInt(amended.substring(2, 4));
+                return amendedMinutes - baseMinutes;
+            }
+        });
+    });
+</script>
+
+</body>
+</html>
