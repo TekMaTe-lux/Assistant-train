@@ -1,133 +1,118 @@
 <!DOCTYPE html>
 <html lang="fr">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>Informations Train SNCF</title>
-  <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
-  <style>
-    .impacted {
-      color: red;
-      text-decoration: line-through;
-    }
-  </style>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Informations Train SNCF</title>
+    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+    <style>
+        .impacted {
+            color: red;
+            text-decoration: line-through;
+        }
+    </style>
 </head>
 <body>
-  <h1>Informations sur un Train SNCF</h1>
-  <label for="trainNumber">Entrez le numéro du train:</label>
-  <input type="text" id="trainNumber" value="88532" />
-  <br />
-  <label for="trainDate">Sélectionnez la date (format: YYYY-MM-DD):</label>
-  <input type="date" id="trainDate" value="2025-05-14" />
-  <br />
-  <button id="getTrainData">Obtenir les données du train</button>
-  <div id="trainInfo"></div>
+    <h1>Informations sur un Train SNCF</h1>
+    <label for="trainNumber">Entrez le numéro du train:</label>
+    <input type="text" id="trainNumber" value="88532">
+    <br>
+    <label for="trainDate">Sélectionnez la date (format: YYYY-MM-DD):</label>
+    <input type="date" id="trainDate" value="2025-05-14">
+    <br>
+    <button id="getTrainData">Obtenir les données du train</button>
+    <div id="trainInfo"></div>
 
-  <script>
-    $(document).ready(function () {
-      $('#getTrainData').click(function () {
-        var trainNumber = $('#trainNumber').val();
-        var trainDate = $('#trainDate').val();
-        const apiKey = '242fac11-6d98-45fb-93df-28174d362447';
-        const encodedApiKey = btoa(apiKey + ':');
+    <script>
+        $(document).ready(function() {
+            $('#getTrainData').click(function() {
+                var trainNumber = $('#trainNumber').val();
+                var trainDate = $('#trainDate').val();
+                const apiKey = '242fac11-6d98-45fb-93df-28174d362447';
+                const encodedApiKey = btoa(apiKey + ":");
 
-        var url = `https://api.sncf.com/v1/coverage/sncf/vehicle_journeys/vehicle_journey:SNCF:${trainDate}:${trainNumber}:1187:Train`;
+                var url = `https://api.sncf.com/v1/coverage/sncf/vehicle_journeys/vehicle_journey:SNCF:${trainDate}:${trainNumber}:1187:Train`;
 
-        $.ajax({
-          url: url,
-          method: 'GET',
-          headers: {
-            Authorization: 'Basic ' + encodedApiKey,
-          },
-          success: function (response) {
-            if (response.vehicle_journeys && response.vehicle_journeys.length > 0) {
-              var train = response.vehicle_journeys[0];
-              var disruptionsInfo = '';
-              var impactedStopIds = new Set();
-              var isTrainCancelled = false;
+                $.ajax({
+                    url: url,
+                    method: 'GET',
+                    headers: {
+                        'Authorization': 'Basic ' + encodedApiKey
+                    },
+                    success: function(response) {
+                        if (response.vehicle_journeys && response.vehicle_journeys.length > 0) {
+                            var train = response.vehicle_journeys[0];
 
-              if (response.disruptions && response.disruptions.length > 0) {
-                var disruption = response.disruptions[0];
-                var cause =
-                  disruption.messages && disruption.messages.length > 0
-                    ? disruption.messages[0].text
-                    : 'Cause non précisée';
+                            let impactedStopIds = new Set();
+                            let isTrainCancelled = false;
+                            let disruptionsInfo = '';
 
-                var rawEffect =
-                  disruption.severity && disruption.severity.effect
-                    ? disruption.severity.effect
-                    : 'Effet inconnu';
+                            if (response.disruptions && response.disruptions.length > 0) {
+                                const disruption = response.disruptions[0];
 
-                var translatedEffect = '';
-                switch (rawEffect) {
-                  case 'NO_SERVICE':
-                    translatedEffect = 'Suppression';
-                    break;
-                  case 'REDUCED_SERVICE':
-                    translatedEffect = 'Suppression partielle';
-                    break;
-                  default:
-                    translatedEffect = rawEffect;
-                }
+                                const rawEffect = disruption.severity?.effect || 'Effet inconnu';
+                                const translatedEffect = rawEffect === 'NO_SERVICE'
+                                    ? 'Suppression'
+                                    : rawEffect === 'REDUCED_SERVICE'
+                                    ? 'Suppression partielle'
+                                    : rawEffect;
 
-                var status = disruption.status || 'inconnu';
+                                const cause = disruption.messages?.[0]?.text || 'Cause non précisée';
+                                const status = disruption.status || 'inconnu';
 
-                disruptionsInfo = `
-                  <h3>⚠️ Perturbation signalée</h3>
-                  <p><strong>Effet :</strong> ${translatedEffect}</p>
-                  <p><strong>Cause :</strong> ${cause}</p>
-                  <p><strong>Statut :</strong> ${status}</p>
-                  <hr />
-                `;
+                                disruptionsInfo = `
+                                    <h3>⚠️ Perturbation signalée</h3>
+                                    <p><strong>Effet :</strong> ${translatedEffect}</p>
+                                    <p><strong>Cause :</strong> ${cause}</p>
+                                    <p><strong>Statut :</strong> ${status}</p>
+                                    <hr>
+                                `;
 
-                if (rawEffect === 'NO_SERVICE') {
-                  isTrainCancelled = true;
-                } else if (disruption.impacted_objects && disruption.impacted_objects.length > 0) {
-                  disruption.impacted_objects.forEach(function (obj) {
-                    if (obj.impacted_stops) {
-                      obj.impacted_stops.forEach(function (stop) {
-                        if (stop.stop_point && stop.stop_point.id) {
-                          impactedStopIds.add(stop.stop_point.id);
+                                // Si tout le train est supprimé
+                                if (rawEffect === 'NO_SERVICE') {
+                                    isTrainCancelled = true;
+                                }
+
+                                // Récupération des arrêts impactés uniquement
+                                disruption.impacted_objects?.forEach(obj => {
+                                    obj.impacted_stops?.forEach(impactedStop => {
+                                        if (impactedStop.stop_point?.id) {
+                                            impactedStopIds.add(impactedStop.stop_point.id);
+                                        }
+                                    });
+                                });
+                            }
+
+                            const stopTimes = train.stop_times.map(stop => {
+                                const stopId = stop.stop_point.id;
+                                const stopName = stop.stop_point.name;
+                                const arrival = formatTime(stop.arrival_time);
+                                const departure = formatTime(stop.departure_time);
+
+                                const isImpacted = isTrainCancelled || impactedStopIds.has(stopId);
+                                const stopClass = isImpacted ? 'impacted' : '';
+
+                                return `<p class="${stopClass}">${stopName} - Arrivée: ${arrival} - Départ: ${departure}</p>`;
+                            }).join('');
+
+                            $('#trainInfo').html(disruptionsInfo + '<h2>Arrêts du train ' + train.name + ':</h2>' + stopTimes);
+                        } else {
+                            $('#trainInfo').html('<p>Aucun train trouvé pour ce numéro et cette date.</p>');
                         }
-                      });
+                    },
+                    error: function() {
+                        $('#trainInfo').html('<p>Erreur lors de la récupération des données du train. Vérifiez le numéro et la date et réessayez.</p>');
                     }
-                  });
-                }
-              }
+                });
+            });
 
-              var stopTimes = train.stop_times
-                .map(function (stop) {
-                  var arrival = formatTime(stop.arrival_time);
-                  var departure = formatTime(stop.departure_time);
-                  var stopPointId = stop.stop_point.id;
-                  var stopName = stop.stop_point.name;
-                  var isImpacted = isTrainCancelled || impactedStopIds.has(stopPointId);
-                  var stopClass = isImpacted ? 'impacted' : '';
-                  return `<p class="${stopClass}">${stopName} - Arrivée: ${arrival} - Départ: ${departure}</p>`;
-                })
-                .join('');
-
-              $('#trainInfo').html(
-                disruptionsInfo + '<h2>Arrêts du train ' + train.name + ':</h2>' + stopTimes
-              );
-            } else {
-              $('#trainInfo').html('<p>Aucun train trouvé pour ce numéro et cette date.</p>');
+            function formatTime(time) {
+                if (!time || time.length < 4) return time;
+                var hours = time.substring(0, 2);
+                var minutes = time.substring(2, 4);
+                return hours + ':' + minutes;
             }
-          },
-          error: function () {
-            $('#trainInfo').html(
-              '<p>Erreur lors de la récupération des données du train. Vérifiez le numéro et la date et réessayez.</p>'
-            );
-          },
         });
-      });
-
-      function formatTime(time) {
-        var hours = time.substring(0, 2);
-        var minutes = time.substring(2, 4);
-        return hours + ':' + minutes;
-      }
-    });
-  </script>
+    </script>
 </body>
 </html>
