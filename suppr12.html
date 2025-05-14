@@ -53,21 +53,37 @@
                             });
                         }
 
-                        const stops = train.stop_times;
-                        let firstRealDepartureIndex = -1;
-                        let lastRealArrivalIndex = -1;
+                        const stopTimes = train.stop_times;
 
-                        stops.forEach((stop, index) => {
+                        let firstValidIndex = -1;
+                        let lastValidIndex = -1;
+
+                        for (let i = 0; i < stopTimes.length; i++) {
+                            const stop = stopTimes[i];
                             const impact = impactedStopsMap[stop.stop_point.id];
-                            if (!impact || impact.departure_status !== "deleted") {
-                                if (firstRealDepartureIndex === -1) firstRealDepartureIndex = index;
-                            }
-                            if (!impact || impact.arrival_status !== "deleted") {
-                                lastRealArrivalIndex = index;
-                            }
-                        });
+                            const isDeleted = impact?.stop_time_effect === "deleted";
+                            const depDeleted = impact?.departure_status === "deleted";
 
-                        const stopHtml = stops.map((stop, index) => {
+                            if (!isDeleted && !depDeleted && firstValidIndex === -1) {
+                                firstValidIndex = i;
+                            }
+                        }
+
+                        for (let i = stopTimes.length - 1; i >= 0; i--) {
+                            const stop = stopTimes[i];
+                            const impact = impactedStopsMap[stop.stop_point.id];
+                            const isDeleted = impact?.stop_time_effect === "deleted";
+                            const arrDeleted = impact?.arrival_status === "deleted";
+
+                            if (!isDeleted && !arrDeleted && lastValidIndex === -1) {
+                                lastValidIndex = i;
+                            }
+                        }
+
+                        const isOriginalDeparture = firstValidIndex === 0;
+                        const isOriginalTerminus = lastValidIndex === stopTimes.length - 1;
+
+                        const stopHtml = stopTimes.map((stop, index) => {
                             const id = stop.stop_point.id;
                             const name = stop.stop_point.name;
                             const baseArrival = formatTime(stop.arrival_time);
@@ -80,33 +96,32 @@
                             let barrerArrivee = false;
                             let barrerDepart = false;
                             let couleur = '';
-                            let commentaire = '';
-
-                            const estSupprime = impact && impact.stop_time_effect === "deleted";
-                            const arriveeSupprimee = impact && impact.arrival_status === "deleted";
-                            const departSupprime = impact && impact.departure_status === "deleted";
+                            let nouvelleGareDepart = false;
+                            let nouveauTerminus = false;
 
                             if (effect === "NO_SERVICE") {
                                 barrerLigne = true;
                                 couleur = 'red';
-                            } else if (effect === "REDUCED_SERVICE") {
-                                if (index < firstRealDepartureIndex || index > lastRealArrivalIndex || estSupprime) {
+                            } else if (effect === "REDUCED_SERVICE" && impact) {
+                                const aDel = impact.arrival_status === "deleted";
+                                const dDel = impact.departure_status === "deleted";
+                                const stopDel = impact.stop_time_effect === "deleted";
+
+                                if ((stopDel || (aDel && dDel)) && index < firstValidIndex) {
                                     barrerLigne = true;
                                     couleur = 'red';
-                                } else {
-                                    if (arriveeSupprimee) barrerArrivee = true;
-                                    if (departSupprime) barrerDepart = true;
                                 }
+
+                                if (stopDel || aDel) barrerArrivee = true;
+                                if (stopDel || dDel) barrerDepart = true;
                             }
 
-                            if (index === firstRealDepartureIndex && effect === "REDUCED_SERVICE") {
-                                commentaire = ` <span style="color:orange;">(Nouvelle gare de départ)</span>`;
-                                return `<p style="color:orange;"><strong>${name}</strong> - Départ: <strong>${departure}</strong>${commentaire}</p>`;
+                            if (index === firstValidIndex && !isOriginalDeparture) {
+                                return `<p style="color:orange;"><strong>${name}</strong> - Départ: <strong>${departure}</strong> <span style="color:orange;">(Nouvelle gare de départ)</span></p>`;
                             }
 
-                            if (index === lastRealArrivalIndex && effect === "REDUCED_SERVICE") {
-                                commentaire = ` <span style="color:orange;">(Nouveau terminus)</span>`;
-                                return `<p style="color:orange;"><strong>${name}</strong> - Arrivée: <strong>${arrival}</strong>${commentaire}</p>`;
+                            if (index === lastValidIndex && !isOriginalTerminus) {
+                                return `<p style="color:orange;"><strong>${name}</strong> - Arrivée: <strong>${arrival}</strong> <span style="color:orange;">(Nouveau terminus)</span></p>`;
                             }
 
                             if (barrerLigne) {
