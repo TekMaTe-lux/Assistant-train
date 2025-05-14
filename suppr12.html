@@ -66,33 +66,42 @@
                             let barrerArrivee = false;
                             let barrerDepart = false;
                             let couleur = '';
+                            let nouvelleGareDepart = false;
                             let nouveauTerminus = false;
-                            let nouveauDepart = false;
 
-                            // Cas où la gare devient un nouveau terminus
-                            if (impact && impact.stop_time_effect === "deleted" && impact.departure_status === "deleted" && impact.arrival_status === "unchanged") {
-                                nouveauTerminus = true;
-                            }
-
-                            // Cas où la gare devient un nouveau départ
-                            if (impact && impact.stop_time_effect === "deleted" && impact.departure_status === "unchanged" && impact.arrival_status === "deleted") {
-                                nouveauDepart = true;
-                            }
-
-                            // Cas où la suppression affecte la gare (ligne barrée)
-                            if (impact && (impact.stop_time_effect === "deleted" || (impact.departure_status === "deleted" && impact.arrival_status === "deleted"))) {
+                            if (effect === "NO_SERVICE") {
                                 barrerLigne = true;
                                 couleur = 'red';
+                            } else if (effect === "REDUCED_SERVICE" && impact) {
+                                const aDel = impact.arrival_status === "deleted";
+                                const dUnchanged = impact.departure_status === "unchanged";
+                                const stopDel = impact.stop_time_effect === "deleted";
+
+                                // Nouvelle Gare de Départ : Si la gare est supprimée et précède une gare non supprimée
+                                if (stopDel && aDel && dUnchanged && index < stops.length - 1 && impactedStopsMap[stops[index + 1].stop_point.id]?.stop_time_effect !== "deleted") {
+                                    nouvelleGareDepart = true;
+                                }
+
+                                // Nouvelle Gare de Terminus : Si la gare est supprimée et qu'il n'y a pas de gare suivante non supprimée
+                                if (stopDel && aDel && dUnchanged && !isFollowedByNonDeletedStop(index, stops)) {
+                                    nouveauTerminus = true;
+                                }
+
+                                if (stopDel || (aDel && impact.departure_status === "deleted")) {
+                                    barrerLigne = true;
+                                    couleur = 'red';
+                                } else {
+                                    if (aDel) barrerArrivee = true;
+                                    if (impact.departure_status === "deleted") barrerDepart = true;
+                                }
                             }
 
-                            // Si la gare devient le nouveau terminus
+                            if (nouvelleGareDepart) {
+                                return `<p style="color:orange;"><strong>${name}</strong> - Départ: <strong>${departure}</strong> <span style="color:orange;">(Nouvelle gare de départ)</span></p>`;
+                            }
+
                             if (nouveauTerminus) {
                                 return `<p style="color:orange;"><strong>${name}</strong> - Arrivée: <strong>${arrival}</strong> <span style="color:orange;">(Nouveau terminus)</span></p>`;
-                            }
-
-                            // Si la gare devient le nouveau départ
-                            if (nouveauDepart) {
-                                return `<p style="color:blue;"><strong>${name}</strong> - Départ: <strong>${departure}</strong> <span style="color:blue;">(Nouveau départ)</span></p>`;
                             }
 
                             if (barrerLigne) {
@@ -131,6 +140,11 @@
                 function formatTime(t) {
                     if (!t) return '-';
                     return t.substring(0, 2) + ':' + t.substring(2, 4);
+                }
+
+                function isFollowedByNonDeletedStop(index, stops) {
+                    // Vérifier si la gare suivante n'est pas supprimée
+                    return stops[index + 1] && impactedStopsMap[stops[index + 1].stop_point.id]?.stop_time_effect !== "deleted";
                 }
             });
         });
