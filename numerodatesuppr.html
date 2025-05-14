@@ -2,24 +2,19 @@
 <html lang="fr">
 <head>
     <meta charset="UTF-8">
-    <title>Informations sur un Train SNCF</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Informations Train SNCF</title>
     <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
-    <style>
-        body { font-family: Arial, sans-serif; padding: 20px; }
-        label, input, button { margin: 5px; }
-        #trainInfo { margin-top: 20px; }
-    </style>
 </head>
 <body>
-    <h2>Informations sur un Train SNCF</h2>
-
-    <label for="trainNumber">Numéro du train:</label>
-    <input type="text" id="trainNumber" placeholder="Ex: 88532">
-    <label for="trainDate">Date (YYYY-MM-DD):</label>
-    <input type="date" id="trainDate" value="2025-05-13">
-
-    <button id="getTrainData">Rechercher</button>
-
+    <h1>Informations sur un Train SNCF</h1>
+    <label for="trainNumber">Entrez le numéro du train:</label>
+    <input type="text" id="trainNumber" value="88532">
+    <br>
+    <label for="trainDate">Sélectionnez la date (format: YYYY-MM-DD):</label>
+    <input type="date" id="trainDate" value="2025-05-14">
+    <br>
+    <button id="getTrainData">Obtenir les données du train</button>
     <div id="trainInfo"></div>
 
     <script>
@@ -30,12 +25,7 @@
                 const apiKey = '242fac11-6d98-45fb-93df-28174d362447';
                 const encodedApiKey = btoa(apiKey + ":");
 
-                if (!trainNumber || !trainDate) {
-                    $('#trainInfo').html("Veuillez entrer un numéro de train et une date.");
-                    return;
-                }
-
-                const url = `https://api.sncf.com/v1/coverage/sncf/vehicle_journeys/vehicle_journey:SNCF:${trainDate}:${trainNumber}:1187:Train`;
+                var url = `https://api.sncf.com/v1/coverage/sncf/vehicle_journeys/vehicle_journey:SNCF:${trainDate}:${trainNumber}:1187:Train`;
 
                 $.ajax({
                     url: url,
@@ -43,50 +33,46 @@
                     headers: {
                         'Authorization': 'Basic ' + encodedApiKey
                     },
-                    success: function(data) {
-                        let infoHtml = "";
-                        let stops = data.vehicle_journey.stop_times;
-                        if (stops && stops.length > 0) {
-                            infoHtml += `<strong>🟢 Arrêts du train ${trainNumber} :</strong><br>`;
-                            stops.forEach(function(stop) {
-                                let name = stop.stop_point.name;
-                                let arr = stop.arrival_time ? stop.arrival_time.slice(11, 16) : "—";
-                                let dep = stop.departure_time ? stop.departure_time.slice(11, 16) : "—";
-                                infoHtml += `${name} - Arrivée: ${arr} - Départ: ${dep}<br>`;
-                            });
-                        } else {
-                            infoHtml = "Aucun arrêt trouvé pour ce train.";
-                        }
+                    success: function(response) {
+                        if (response.vehicle_journeys && response.vehicle_journeys.length > 0) {
+                            var train = response.vehicle_journeys[0];
+                            var stopTimes = train.stop_times.map(function(stop) {
+                                var arrival = formatTime(stop.arrival_time);
+                                var departure = formatTime(stop.departure_time);
+                                return '<p>' + stop.stop_point.name + ' - Arrivée: ' + arrival + ' - Départ: ' + departure + '</p>';
+                            }).join('');
 
-                        // Vérification de la suppression via disruption
-                        const disruptions = data.disruptions;
-                        if (disruptions && disruptions.length > 0) {
-                            let canceled = false;
-                            let cause = "";
-                            disruptions.forEach(function(disruption) {
-                                disruption.impacted_objects.forEach(function(obj) {
-                                    if (obj.pt_object && obj.pt_object.id.includes(trainNumber)) {
-                                        if (disruption.severity && disruption.severity.effect === "NO_SERVICE") {
-                                            canceled = true;
-                                            cause = disruption.messages?.[0]?.text || "Cause non précisée";
-                                        }
-                                    }
-                                });
-                            });
+                            var disruptionsInfo = '';
+                            if (response.disruptions && response.disruptions.length > 0) {
+                                var disruption = response.disruptions[0];
+                                var cause = disruption.messages && disruption.messages.length > 0 ? disruption.messages[0].text : 'Cause inconnue';
+                                var effect = disruption.severity && disruption.severity.effect ? disruption.severity.effect : 'Effet inconnu';
+                                var status = disruption.status || 'inconnu';
 
-                            if (canceled) {
-                                infoHtml = `<strong>🚫 Train ${trainNumber} supprimé</strong><br>Cause : ${cause}`;
+                                disruptionsInfo = `
+                                    <h3>⚠️ Perturbation signalée</h3>
+                                    <p><strong>Effet :</strong> ${effect}</p>
+                                    <p><strong>Cause :</strong> ${cause}</p>
+                                    <p><strong>Statut :</strong> ${status}</p>
+                                `;
                             }
-                        }
 
-                        $('#trainInfo').html(infoHtml);
+                            $('#trainInfo').html('<h2>Arrêts du train ' + train.name + ':</h2>' + stopTimes + disruptionsInfo);
+                        } else {
+                            $('#trainInfo').html('<p>Aucun train trouvé pour ce numéro et cette date.</p>');
+                        }
                     },
-                    error: function(xhr) {
-                        console.error(xhr);
-                        $('#trainInfo').html("Erreur lors de la récupération des données.");
+                    error: function() {
+                        $('#trainInfo').html('<p>Erreur lors de la récupération des données du train. Vérifiez le numéro et la date et réessayez.</p>');
                     }
                 });
             });
+
+            function formatTime(time) {
+                var hours = time.substring(0, 2);
+                var minutes = time.substring(2, 4);
+                return hours + ':' + minutes;
+            }
         });
     </script>
 </body>
