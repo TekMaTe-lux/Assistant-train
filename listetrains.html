@@ -1,43 +1,124 @@
-<script>
-    const apiKey = '242fac11-6d98-45fb-93df-28174d362447'; // Remplacez par votre clé API
-    const encodedApiKey = btoa(apiKey + ":");
-
-    const now = new Date(Date.now() - (61 * 60 * 1000)); // Prendre l'heure actuelle, moins 1h pour s'assurer qu'on récupère les trains à venir
-    const yyyy = now.getFullYear();
-    const mm = String(now.getMonth() + 1).padStart(2, '0');
-    const dd = String(now.getDate()).padStart(2, '0');
-    const hh = String(now.getHours()).padStart(2, '0');
-    const min = String(now.getMinutes()).padStart(2, '0');
-    const ss = String(now.getSeconds()).padStart(2, '0');
-
-    const datetime = `${yyyy}${mm}${dd}T${hh}${min}${ss}`;
-
-    // URL modifiée pour récupérer les horaires (stop_schedules) des prochains trains à partir de Luxembourg
-    const url = `https://api.sncf.com/v1/coverage/sncf/stop_areas/stop_area:SNCF:82001000/stop_schedules?datetime=${datetime}`;
-
-    fetch(url, {
-        method: 'GET',
-        headers: {
-            "Authorization": "Basic " + encodedApiKey
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Affichage des Trains SNCF</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
         }
-    })
-    .then(response => response.json())
-    .then(data => {
-        const stopSchedules = data.stop_schedules;
-        
-        // Affichage des prochains trains
-        stopSchedules.forEach(schedule => {
-            const trainName = schedule.route.name;
-            const departureTime = schedule.date_times[0].date_time;
-            const direction = schedule.display_informations.direction;
-            
-            console.log(`Train: ${trainName}`);
-            console.log(`Départ: ${departureTime}`);
-            console.log(`Direction: ${direction}`);
-            console.log('-----------------------------');
-        });
-    })
-    .catch(error => {
-        console.error("Erreur lors de la récupération des horaires:", error);
-    });
-</script>
+        #trainInfo {
+            margin-top: 20px;
+        }
+        .train {
+            margin-bottom: 20px;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+        }
+        .train h3 {
+            margin: 0;
+        }
+        .train p {
+            margin: 5px 0;
+        }
+        #inputContainer {
+            margin-top: 20px;
+        }
+    </style>
+</head>
+<body>
+
+    <h1>Informations sur les Trains</h1>
+    <p>Cliquez sur le bouton ci-dessous pour afficher automatiquement des informations sur des trains, ou entrez manuellement des numéros de train.</p>
+    
+    <!-- Section pour l'affichage automatique -->
+    <button onclick="fetchAutoTrains()">Afficher les trains automatiques</button>
+
+    <!-- Formulaire pour entrer manuellement des numéros de train -->
+    <div id="inputContainer">
+        <input type="text" id="trainNumbers" placeholder="Entrez les numéros de train (séparés par des virgules)" />
+        <button onclick="fetchManualTrains()">Rechercher Trains</button>
+    </div>
+
+    <!-- Conteneur pour afficher les informations sur les trains -->
+    <div id="trainInfo"></div>
+
+    <script>
+        const apiKey = '242fac11-6d98-45fb-93df-28174d362447';
+        const encodedApiKey = btoa(apiKey + ":");
+
+        // Fonction pour afficher les informations des trains
+        function fetchTrainDetails(trainNumbers) {
+            const now = new Date(Date.now() - (61 * 60 * 1000));
+            const yyyy = now.getFullYear();
+            const mm = String(now.getMonth() + 1).padStart(2, '0');
+            const dd = String(now.getDate()).padStart(2, '0');
+            const hh = String(now.getHours()).padStart(2, '0');
+            const min = String(now.getMinutes()).padStart(2, '0');
+            const ss = String(now.getSeconds()).padStart(2, '0');
+            const datetime = `${yyyy}${mm}${dd}T${hh}${min}${ss}`;
+
+            // Vider le conteneur avant d'ajouter de nouvelles informations
+            const trainInfoContainer = document.getElementById('trainInfo');
+            trainInfoContainer.innerHTML = '';
+
+            // Boucle sur chaque train de la liste
+            trainNumbers.forEach(trainNumber => {
+                const url = `https://api.sncf.com/v1/coverage/sncf/stop_areas/stop_area:SNCF:82001000/stop_schedules/${trainNumber}?datetime=${datetime}`;
+
+                fetch(url, {
+                    method: 'GET',
+                    headers: {
+                        "Authorization": "Basic " + encodedApiKey
+                    }
+                })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.stop_schedules && data.stop_schedules.length > 0) {
+                        displayTrainInfo(data);
+                    } else {
+                        trainInfoContainer.innerHTML += `<p>Aucune information trouvée pour le train ${trainNumber}.</p>`;
+                    }
+                })
+                .catch(error => {
+                    console.error('Error fetching train data:', error);
+                    trainInfoContainer.innerHTML += `<p>Erreur lors de la récupération des informations pour le train ${trainNumber}.</p>`;
+                });
+            });
+        }
+
+        // Fonction pour afficher les détails du train dans une interface utilisateur
+        function displayTrainInfo(trainData) {
+            const trainInfoContainer = document.getElementById('trainInfo');
+            trainData.stop_schedules.forEach(train => {
+                const trainElement = document.createElement('div');
+                trainElement.classList.add('train');
+                trainElement.innerHTML = `
+                    <h3>Train ${train.route.name}</h3>
+                    <p><strong>Direction:</strong> ${train.display_informations.direction}</p>
+                    <p><strong>Heure de départ:</strong> ${train.date_times[0].date_time}</p>
+                    <p><strong>Status:</strong> ${train.additional_informations || 'Aucune information supplémentaire'}</p>
+                `;
+                trainInfoContainer.appendChild(trainElement);
+            });
+        }
+
+        // Fonction pour récupérer les trains automatiquement
+        function fetchAutoTrains() {
+            // Exemple de trains à afficher automatiquement
+            const autoTrainNumbers = ['C40+', '88530', '88532'];  // Liste de numéros de train à récupérer automatiquement
+            fetchTrainDetails(autoTrainNumbers);
+        }
+
+        // Fonction pour récupérer les trains manuellement
+        function fetchManualTrains() {
+            const input = document.getElementById('trainNumbers').value;
+            const manualTrainNumbers = input.split(',').map(train => train.trim());  // Convertir la liste en tableau
+            fetchTrainDetails(manualTrainNumbers);
+        }
+    </script>
+</body>
+</html>
