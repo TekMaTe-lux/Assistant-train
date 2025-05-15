@@ -222,36 +222,27 @@ $(document).ready(function () {
 
         const stopHtml = stops.map((stop, i) => {
           const id = stop.stop_point.id;
-          const name = stop.stop_point.name;
           const impact = impactedStopsMap[id];
           const isDeleted = impact?.stop_time_effect === "deleted";
 
-          if (effect === "NO_SERVICE" || isDeleted) {
-            let timeToShow = i === 0 ? formatTime(stop.departure_time) : formatTime(stop.arrival_time);
-            return `
-              <tr>
-                <td class="deleted">${name}</td>
-                <td><span class="deleted-strike">${timeToShow}</span></td>
-                <td></td>
-              </tr>`;
-          }
-
+          // Nouvelle gare de départ selon la nouvelle condition
           if (
             effect === "REDUCED_SERVICE" &&
-            i === firstRealDepartureIndex &&
-            !isDeleted &&
-            id !== originStopId
+            id !== originStopId && // Exclure gare origine
+            (stop.arrival_status === "deleted" || (impact && impact.stop_time_effect === "deleted")) &&
+            stop.departure_status !== "deleted"
           ) {
             const amendedDep = impact?.amended_departure_time ? formatTime(impact.amended_departure_time) : formatTime(stop.departure_time);
             const delay = impact?.amended_departure_time ? computeDelay(stop.departure_time, impact.amended_departure_time) : null;
             return `
               <tr class="new-start">
-                <td><strong>${name} (Nouvelle gare de départ)</strong></td>
+                <td><strong>${stop.stop_point.name} (Nouvelle gare de départ)</strong></td>
                 <td><strong>${amendedDep}</strong>${delay ? ` <span class="small-gray">(+${delay}min)</span>` : ''}</td>
                 <td></td>
               </tr>`;
           }
 
+          // Nouveau terminus (inchangé)
           if (
             effect === "REDUCED_SERVICE" &&
             i === lastRealArrivalIndex &&
@@ -262,65 +253,71 @@ $(document).ready(function () {
             const delay = impact?.amended_arrival_time ? computeDelay(stop.arrival_time, impact.amended_arrival_time) : null;
             return `
               <tr class="new-end">
-                <td><strong>${name} (Nouveau terminus)</strong></td>
+                <td><strong>${stop.stop_point.name} (Nouveau terminus)</strong></td>
                 <td><strong>${amendedArr}</strong>${delay ? ` <span class="small-gray">(+${delay}min)</span>` : ''}</td>
                 <td></td>
               </tr>`;
           }
 
-          let baseTime = i === 0 ? stop.departure_time : stop.arrival_time;
-          let amendedTime = i === 0 ? impact?.amended_departure_time : impact?.amended_arrival_time;
-
-          const baseFormatted = formatTime(baseTime);
-
-          if (amendedTime && amendedTime !== baseTime) {
-            const amendedFormatted = formatTime(amendedTime);
-            const delay = computeDelay(baseTime, amendedTime);
-            return `
-              <tr>
-                <td>${name}</td>
-                <td><span class="delay-strike">${baseFormatted}</span></td>
-                <td><strong class="delayed">${amendedFormatted}</strong> <span class="small-gray">(+${delay}min)</span></td>
-              </tr>`;
+          if (effect === "NO_SERVICE" || isDeleted) {
+            let timeToShow = i === 0 ? formatTime(stop.departure_time) : formatTime(stop.arrival_time);
+            return `<tr><td class="deleted">${stop.stop_point.name}</td><td class="deleted">${timeToShow}</td><td class="deleted">Suppression</td></tr>`;
           }
 
-          return `
-            <tr>
-              <td>${name}</td>
-              <td>${baseFormatted}</td>
-              <td></td>
-            </tr>`;
-        }).join('');
+          let delayClass = "";
+          let delayText = "";
+          if (impact?.amended_arrival_time && stop.arrival_time) {
+            const delayMins = computeDelay(stop.arrival_time, impact.amended_arrival_time);
+            if (delayMins > 0) {
+              delayClass = "delayed";
+              delayText = ` <span class="small-gray">(+${delayMins}min)</span>`;
+            }
+          }
 
-        const cause = disruptions[0]?.messages?.[0]?.text || 'Non précisée';
-        const icon = effect === 'NO_SERVICE' ? '❌' : effect === 'SIGNIFICANT_DELAYS' ? '⏰' : '⚠️';
-        const color = effect === 'NO_SERVICE' ? 'red' : 'orange';
-        const effectText = effect === 'NO_SERVICE' ? 'Suppression totale' :
-                           effect === 'REDUCED_SERVICE' ? 'Suppression partielle' :
-                           effect === 'SIGNIFICANT_DELAYS' ? 'Retard important' : effect;
+          if (i === 0) {
+            // Gare de départ normale
+            const depTime = formatTime(stop.departure_time);
+            return `<tr><td>${stop.stop_point.name}</td><td><strong>${depTime}</strong></td><td></td></tr>`;
+          } else {
+            // Gare intermédiaire / arrivée normale
+            const arrTime = formatTime(stop.arrival_time);
+            return `<tr><td>${stop.stop_point.name}</td><td class="${delayClass}">${arrTime}${delayText}</td><td></td></tr>`;
+          }
+        }).join("");
 
-        const disruptionBox = effect ? `
-          <div class="disruption-box ${color}">
-            <div class="disruption-icon">${icon}</div>
-            <div>
-              <div><strong>Effet :</strong> ${effectText}</div>
-              <div><strong>Cause :</strong> ${cause}</div>
-            </div>
-          </div>` : '';
+        // Affichage disruptions principales
+        let disruptionHtml = "";
+        if (disruptions.length > 0) {
+          const severity = disruptions[0].severity;
+          const severityEffect = severity?.effect || "";
+          let boxClass = "disruption-box";
+          let icon = "";
+          if (severityEffect === "NO_SERVICE") {
+            boxClass += " red";
+            icon = "⛔";
+          } else if (severityEffect === "REDUCED_SERVICE") {
+            boxClass += " orange";
+            icon = "⚠️";
+          }
+          disruptionHtml = `<div class="${boxClass}"><span class="disruption-icon">${icon}</span><span>${disruptions[0].message || "Perturbation en cours"}</span></div>`;
+        }
 
-        $('#trainInfo').html(disruptionBox + `
+        $('#trainInfo').html(`
+          ${disruptionHtml}
           <table>
             <thead>
               <tr>
                 <th>Gare</th>
-                <th>Horaire normal</th>
-                <th>Horaire modifié / retard</th>
+                <th>Heure</th>
+                <th>Statut</th>
               </tr>
             </thead>
             <tbody>
               ${stopHtml}
             </tbody>
-          </table>`);
+          </table>
+        `);
+
       },
       error: function () {
         $('#trainInfo').html('<p class="deleted">Erreur lors de la récupération des données.</p>');
@@ -329,6 +326,5 @@ $(document).ready(function () {
   });
 });
 </script>
-
 </body>
 </html>
