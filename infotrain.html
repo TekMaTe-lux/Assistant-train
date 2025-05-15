@@ -112,31 +112,6 @@
     .disruption-icon {
       font-size: 24px;
     }
-    table {
-      width: 100%;
-      border-collapse: collapse;
-      margin-top: 15px;
-    }
-    th, td {
-      border: 1px solid #ddd;
-      padding: 8px 12px;
-      text-align: left;
-    }
-    th {
-      background-color: #0077cc;
-      color: white;
-    }
-    tr:nth-child(even) {background-color: #f9f9f9;}
-    tr.deleted-row {
-      color: #cc0000;
-      text-decoration: line-through;
-      font-weight: 600;
-      background-color: #ffe6e6 !important;
-    }
-    .status-cell {
-      font-weight: 700;
-      color: #0055cc;
-    }
   </style>
 </head>
 <body>
@@ -218,54 +193,68 @@ $(document).ready(function () {
           return a - b;
         }
 
-        // Construire le tableau des horaires
-        let tableRows = stops.map((stop, i) => {
+        const stopHtml = stops.map((stop, i) => {
           const id = stop.stop_point.id;
           const name = stop.stop_point.name;
-          const baseDep = formatTime(stop.departure_time);
-          const baseArr = formatTime(stop.arrival_time);
           const impact = impactedStopsMap[id];
           const isDeleted = impact?.stop_time_effect === "deleted";
 
-          // Gestion des horaires amendés et retards
-          let depTimeDisplay = baseDep;
-          let arrTimeDisplay = baseArr;
-          let delayDep = null;
-          let delayArr = null;
+          // On choisit quel horaire afficher : 
+          // - 1ère gare : départ uniquement
+          // - dernière gare : arrivée uniquement
+          // - autres : arrivée uniquement
 
-          if (impact?.amended_departure_time && impact.amended_departure_time !== stop.departure_time) {
-            depTimeDisplay = `<span class="delay-strike">${baseDep}</span> ➔ <strong class="delayed">${formatTime(impact.amended_departure_time)}</strong>`;
-            delayDep = computeDelay(stop.departure_time, impact.amended_departure_time);
-          }
-          if (impact?.amended_arrival_time && impact.amended_arrival_time !== stop.arrival_time) {
-            arrTimeDisplay = `<span class="delay-strike">${baseArr}</span> ➔ <strong class="delayed">${formatTime(impact.amended_arrival_time)}</strong>`;
-            delayArr = computeDelay(stop.arrival_time, impact.amended_arrival_time);
-          }
-
-          // Statut
-          let status = "";
-          let rowClass = "";
+          // Nouvelle gare de départ
           if (effect === "REDUCED_SERVICE" && i === firstRealDepartureIndex && id !== originStopId) {
-            status = "Nouvelle gare de départ";
-            rowClass = "new-start";
-          } else if (effect === "REDUCED_SERVICE" && i === lastRealArrivalIndex && id !== finalStopId) {
-            status = "Nouveau terminus";
-            rowClass = "new-end";
-          } else if (effect && isDeleted) {
-            status = "Supprimé";
-            rowClass = "deleted-row";
+            const amendedDep = impact?.amended_departure_time ? formatTime(impact.amended_departure_time) : formatTime(stop.departure_time);
+            const delay = impact?.amended_departure_time ? computeDelay(stop.departure_time, impact.amended_departure_time) : null;
+            return `<p class="new-start"><strong>${name}</strong> - <strong>${amendedDep}</strong>${delay ? ` <span class="small-gray">(+${delay}min)</span>` : ''} (Nouvelle gare de départ)</p>`;
           }
 
-          // Format delay strings
-          let delayDepStr = delayDep ? `(+${delayDep} min)` : '';
-          let delayArrStr = delayArr ? `(+${delayArr} min)` : '';
+          // Nouveau terminus
+          if (effect === "REDUCED_SERVICE" && i === lastRealArrivalIndex && id !== finalStopId) {
+            const amendedArr = impact?.amended_arrival_time ? formatTime(impact.amended_arrival_time) : formatTime(stop.arrival_time);
+            const delay = impact?.amended_arrival_time ? computeDelay(stop.arrival_time, impact.amended_arrival_time) : null;
+            return `<p class="new-end"><strong>${name}</strong> - <strong>${amendedArr}</strong>${delay ? ` <span class="small-gray">(+${delay}min)</span>` : ''} (Nouveau terminus)</p>`;
+          }
 
-          return `<tr class="${rowClass}">
-            <td>${name}</td>
-            <td>${depTimeDisplay} ${delayDepStr}</td>
-            <td>${arrTimeDisplay} ${delayArrStr}</td>
-            <td class="status-cell">${status}</td>
-          </tr>`;
+          // Suppression : on écrit le nom en barré, on affiche l'horaire correspondante selon gare (départ 1ère gare, arrivée dernière, arrivée autre)
+          if (effect && isDeleted) {
+            let timeToShow = '';
+            if (i === 0) {
+              timeToShow = formatTime(stop.departure_time);
+            } else {
+              timeToShow = formatTime(stop.arrival_time);
+            }
+            return `<p class="deleted">${name} - ${timeToShow}</p>`;
+          }
+
+          // Affichage horaire unique avec gestion retard/amendement
+
+          let baseTime = '';
+          let amendedTime = '';
+          let delay = null;
+          let timeType = '';
+
+          if (i === 0) {
+            baseTime = stop.departure_time;
+            amendedTime = impact?.amended_departure_time;
+            timeType = 'départ';
+          } else {
+            baseTime = stop.arrival_time;
+            amendedTime = impact?.amended_arrival_time;
+            timeType = 'arrivée';
+          }
+
+          const baseFormatted = formatTime(baseTime);
+
+          if (amendedTime && amendedTime !== baseTime) {
+            const amendedFormatted = formatTime(amendedTime);
+            delay = computeDelay(baseTime, amendedTime);
+            return `<p>${name} - <span class="delay-strike">${baseFormatted}</span> ➔ <strong class="delayed">${amendedFormatted}</strong> <span class="small-gray">(+${delay}min)</span></p>`;
+          }
+
+          return `<p>${name} - ${baseFormatted}</p>`;
         }).join('');
 
         const cause = disruptions[0]?.messages?.[0]?.text || 'Non précisée';
@@ -284,22 +273,7 @@ $(document).ready(function () {
             </div>
           </div>` : '';
 
-        const htmlTable = `<h2>Horaires de départ du train ${train.name} :</h2>
-          <table>
-            <thead>
-              <tr>
-                <th>Gare</th>
-                <th>Heure départ</th>
-                <th>Heure arrivée</th>
-                <th>Statut</th>
-              </tr>
-            </thead>
-            <tbody>
-              ${tableRows}
-            </tbody>
-          </table>`;
-
-        $('#trainInfo').html(disruptionBox + htmlTable);
+        $('#trainInfo').html(disruptionBox + `<h2>Horaires du train ${train.name} :</h2>` + stopHtml);
       },
       error: function () {
         $('#trainInfo').html('<p class="deleted">Erreur lors de la récupération des données. Veuillez réessayer plus tard.</p>');
