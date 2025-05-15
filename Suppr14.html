@@ -201,15 +201,31 @@ $(document).ready(function () {
         const originStopId = stops[0]?.stop_point?.id;
         const finalStopId = stops[stops.length - 1]?.stop_point?.id;
 
-        // Détecter la première et la dernière gare NON supprimée
+        // === MODIFICATION ICI ===
+        // Nouvelle gare de départ : première gare dont le départ n'est pas "deleted"
         let firstRealDepartureIndex = -1;
-        let lastRealArrivalIndex = -1;
-        stops.forEach((stop, i) => {
+        for (let i = 0; i < stops.length; i++) {
+          const stop = stops[i];
           const impact = impactedStopsMap[stop.stop_point.id];
-          const notDeleted = !impact || impact.stop_time_effect !== "deleted";
-          if (notDeleted && firstRealDepartureIndex === -1) firstRealDepartureIndex = i;
-          if (notDeleted) lastRealArrivalIndex = i;
-        });
+          const departureStatus = impact?.stop_time_effect || "UNCHANGED";
+          if (departureStatus !== "deleted") {
+            firstRealDepartureIndex = i;
+            break;
+          }
+        }
+
+        // Nouveau terminus : dernière gare dont l'arrivée n'est pas "deleted"
+        let lastRealArrivalIndex = -1;
+        for (let i = stops.length - 1; i >= 0; i--) {
+          const stop = stops[i];
+          const impact = impactedStopsMap[stop.stop_point.id];
+          const arrivalStatus = impact?.stop_time_effect || "UNCHANGED";
+          if (arrivalStatus !== "deleted") {
+            lastRealArrivalIndex = i;
+            break;
+          }
+        }
+        // === FIN MODIFICATION ===
 
         function formatTime(t) {
           return t ? t.slice(0,2) + ':' + t.slice(2,4) : '-';
@@ -234,114 +250,96 @@ $(document).ready(function () {
 
           // Nouvelle gare de départ
           if (effect === "REDUCED_SERVICE" && i === firstRealDepartureIndex && id !== originStopId) {
-            const amendedDep = impact?.amended_departure_time ? formatTime(impact.amended_departure_time) : formatTime(stop.departure_time);
-            const delay = impact?.amended_departure_time ? computeDelay(stop.departure_time, impact.amended_departure_time) : null;
-            return `
-              <tr class="new-start">
-                <td><strong>${name} (Nouvelle gare de départ)</strong></td>
-                <td><strong>${amendedDep}</strong>${delay ? ` <span class="small-gray">(+${delay}min)</span>` : ''}</td>
-                <td></td>
-              </tr>`;
+            const amendedDep = impact?.amended_departure_time ? formatTime(impact.amended_departure_time) : null;
+            return `<tr>
+              <td class="new-start" colspan="4">Nouvelle gare de départ : ${name} à ${amendedDep || "?"}</td>
+            </tr>`;
           }
 
           // Nouveau terminus
           if (effect === "REDUCED_SERVICE" && i === lastRealArrivalIndex && id !== finalStopId) {
-            const amendedArr = impact?.amended_arrival_time ? formatTime(impact.amended_arrival_time) : formatTime(stop.arrival_time);
-            const delay = impact?.amended_arrival_time ? computeDelay(stop.arrival_time, impact.amended_arrival_time) : null;
-            return `
-              <tr class="new-end">
-                <td><strong>${name} (Nouveau terminus)</strong></td>
-                <td><strong>${amendedArr}</strong>${delay ? ` <span class="small-gray">(+${delay}min)</span>` : ''}</td>
-                <td></td>
-              </tr>`;
-          }
-
-          // Suppression : on affiche le nom en rouge barré, horaire normal barré rouge, pas d'horaire modifié
-          if (effect && isDeleted) {
-            let timeToShow = '';
-            if (i === 0) {
-              timeToShow = formatTime(stop.departure_time);
-            } else {
-              timeToShow = formatTime(stop.arrival_time);
-            }
-            return `
-              <tr>
-                <td class="deleted">${name}</td>
-                <td><span class="deleted-strike">${timeToShow}</span></td>
-                <td></td>
-              </tr>`;
-          }
-
-          // Affichage horaire normal et modifié (retard)
-          let baseTime = '';
-          let amendedTime = '';
-          let delay = null;
-          let timeType = '';
-
-          if (i === 0) {
-            baseTime = stop.departure_time;
-            amendedTime = impact?.amended_departure_time;
-            timeType = 'départ';
-          } else {
-            baseTime = stop.arrival_time;
-            amendedTime = impact?.amended_arrival_time;
-            timeType = 'arrivée';
-          }
-
-          const baseFormatted = formatTime(baseTime);
-
-          if (amendedTime && amendedTime !== baseTime) {
-            const amendedFormatted = formatTime(amendedTime);
-            delay = computeDelay(baseTime, amendedTime);
-            return `
-              <tr>
-                <td>${name}</td>
-                <td><span class="delay-strike">${baseFormatted}</span></td>
-                <td><strong class="delayed">${amendedFormatted}</strong> <span class="small-gray">(+${delay}min)</span></td>
-              </tr>`;
-          }
-
-          // Horaire normal seul, pas de retard ni suppression
-          return `
-            <tr>
-              <td>${name}</td>
-              <td>${baseFormatted}</td>
-              <td></td>
+            const amendedArr = impact?.amended_arrival_time ? formatTime(impact.amended_arrival_time) : null;
+            return `<tr>
+              <td class="new-end" colspan="4">Nouveau terminus : ${name} à ${amendedArr || "?"}</td>
             </tr>`;
-        }).join('');
+          }
 
-        const cause = disruptions[0]?.messages?.[0]?.text || 'Non précisée';
-        const icon = effect === 'NO_SERVICE' ? '❌' : effect === 'SIGNIFICANT_DELAYS' ? '⏰' : '⚠️';
-        const color = effect === 'NO_SERVICE' ? 'red' : 'orange';
-        const effectText = effect === 'NO_SERVICE' ? 'Suppression totale' :
-                           effect === 'REDUCED_SERVICE' ? 'Suppression partielle' :
-                           effect === 'SIGNIFICANT_DELAYS' ? 'Retard important' : effect;
+          if (i === 0) { // gare de départ
+            const baseDep = stop.departure_time ? formatTime(stop.departure_time) : "-";
+            if (isDeleted) {
+              return `<tr><td class="deleted">${name}</td><td class="deleted" colspan="3">Départ supprimé</td></tr>`;
+            }
+            const amendedDep = impact?.amended_departure_time ? formatTime(impact.amended_departure_time) : null;
+            const delay = amendedDep ? computeDelay(stop.departure_time, impact.amended_departure_time) : 0;
+            const delayClass = delay > 0 ? "delayed" : "";
+            return `<tr>
+              <td>${name}</td>
+              <td class="${delayClass}">${amendedDep || baseDep}</td>
+              <td>Départ</td>
+              <td>${delay > 0 ? "+" + delay + " min" : ""}</td>
+            </tr>`;
+          } else if (i === stops.length - 1) { // gare terminus
+            const baseArr = stop.arrival_time ? formatTime(stop.arrival_time) : "-";
+            if (isDeleted) {
+              return `<tr><td class="deleted">${name}</td><td class="deleted" colspan="3">Arrivée supprimée</td></tr>`;
+            }
+            const amendedArr = impact?.amended_arrival_time ? formatTime(impact.amended_arrival_time) : null;
+            const delay = amendedArr ? computeDelay(stop.arrival_time, impact.amended_arrival_time) : 0;
+            const delayClass = delay > 0 ? "delayed" : "";
+            return `<tr>
+              <td>${name}</td>
+              <td class="${delayClass}">${amendedArr || baseArr}</td>
+              <td>Arrivée</td>
+              <td>${delay > 0 ? "+" + delay + " min" : ""}</td>
+            </tr>`;
+          } else { // gares intermédiaires
+            const baseArr = stop.arrival_time ? formatTime(stop.arrival_time) : "-";
+            if (isDeleted) {
+              return `<tr><td class="deleted">${name}</td><td class="deleted" colspan="3">Arrêt supprimé</td></tr>`;
+            }
+            const amendedArr = impact?.amended_arrival_time ? formatTime(impact.amended_arrival_time) : null;
+            const delay = amendedArr ? computeDelay(stop.arrival_time, impact.amended_arrival_time) : 0;
+            const delayClass = delay > 0 ? "delayed" : "";
+            return `<tr>
+              <td>${name}</td>
+              <td class="${delayClass}">${amendedArr || baseArr}</td>
+              <td>Arrivée</td>
+              <td>${delay > 0 ? "+" + delay + " min" : ""}</td>
+            </tr>`;
+          }
+        }).join("");
 
-        const disruptionBox = effect ? `
-          <div class="disruption-box ${color}">
-            <div class="disruption-icon">${icon}</div>
-            <div>
-              <div><strong>Effet :</strong> ${effectText}</div>
-              <div><strong>Cause :</strong> ${cause}</div>
-            </div>
-          </div>` : '';
+        let disruptionHtml = '';
+        if (disruptions.length > 0) {
+          disruptionHtml = disruptions.map(disr => {
+            const sev = disr.severity;
+            let colorClass = 'orange';
+            if (sev.effect === "NO_SERVICE" || sev.effect === "CANCELLATION" || sev.effect === "STRIKE") {
+              colorClass = 'red';
+            }
+            return `<div class="disruption-box ${colorClass}">
+              <div class="disruption-icon">⚠️</div>
+              <div><strong>${disr.title}</strong><br>${disr.description || ''}</div>
+            </div>`;
+          }).join('');
+        }
 
-        $('#trainInfo').html(disruptionBox + `
+        const html = `
+          ${disruptionHtml}
           <table>
             <thead>
-              <tr>
-                <th>Gare</th>
-                <th>Horaire normal</th>
-                <th>Horaire modifié / retard</th>
-              </tr>
+              <tr><th>Gare</th><th>Heure</th><th>Type</th><th>Retard</th></tr>
             </thead>
             <tbody>
               ${stopHtml}
             </tbody>
-          </table>`);
+          </table>
+        `;
+
+        $('#trainInfo').html(html);
       },
       error: function () {
-        $('#trainInfo').html('<p class="deleted">Erreur lors de la récupération des données.</p>');
+        $('#trainInfo').html('<p class="deleted">Erreur lors de la récupération des données. Veuillez réessayer plus tard.</p>');
       }
     });
   });
