@@ -112,42 +112,61 @@
         html+=`<h2>Horaires du train ${train.name}</h2>
                <table><thead><tr><th>Gare</th><th>Prévu</th><th>Retardé</th></tr></thead><tbody>`;
 
-        stops.forEach((s,i)=>{
-          const imp=impacted[s.stop_point.id]||{};
-          const sd=ft(s.departure_time);
-          let /* classes */ cG='', cP='', cN='',
-              prev = sd,
-              newt = '';
-          // Nouveau départ
-          if(effect==='REDUCED_SERVICE' && imp.stop_time_effect==='deleted' 
-             && imp.arrival_status==='deleted' && imp.departure_status==='unchanged' 
-             && i===firstDep && i!==0){
-            cG='new-start'; prev=ft(imp.amended_departure_time); 
-            newt=`(+${delay(s.departure_time,imp.amended_departure_time)}min)`;
-          }
-          // Nouveau terminus
-          if(effect==='REDUCED_SERVICE' && i===lastArr){
-            cG='new-end';
-          }
-          // barrer
-          if(effect==='NO_SERVICE' || i<firstDep || i>lastArr || imp.stop_time_effect==='deleted'){
-            cG='deleted'; cP='deleted'; cN=''; // pas de retard
-          }
-          // retard simple
-          if(imp.amended_departure_time && imp.amended_departure_time!==s.departure_time){
-            cP='delay-strike'; 
-            cN='delayed'; 
-            newt = `(+${delay(s.departure_time,imp.amended_departure_time)}min)`;
-            prev = sd;
-            let nd=ft(imp.amended_departure_time);
-            newt = `➔ ${nd} <span class="small-gray">${newt}</span>`;
-          }
-          html+=`<tr>
-                   <td class="${cG}">${s.stop_point.name}</td>
-                   <td class="${cP}">${prev}</td>
-                   <td class="${cN}">${newt}</td>
-                 </tr>`;
-        });
+stops.forEach((s,i)=>{
+  const imp = impacted[s.stop_point.id] || {};
+  const sd  = formatTime(s.departure_time);
+
+  // calcul des indices firstDep / lastArr déjà faits en amont…
+
+  // 1) Choix de la classe au niveau de la <td> et du texte
+  let classeGare = '';
+  let texteGare  = s.stop_point.name;
+
+  // nouvelle gare de départ
+  if (effect==='REDUCED_SERVICE'
+      && imp.stop_time_effect==='deleted'
+      && imp.arrival_status==='deleted'
+      && imp.departure_status==='unchanged'
+      && i===firstRealDepartureIndex && i!==0) {
+    classeGare = 'new-start';
+    texteGare += ' (Nouvelle gare de départ)';
+  }
+  // nouveau terminus
+  else if (effect==='REDUCED_SERVICE' && i===lastRealArrivalIndex) {
+    classeGare = 'new-end';
+    texteGare += ' (Nouveau terminus)';
+  }
+  // suppression totale ou hors intervalle
+  if (effect==='NO_SERVICE' || i<firstRealDepartureIndex || i>lastRealArrivalIndex || imp.stop_time_effect==='deleted') {
+    classeGare = 'deleted';
+    texteGare = s.stop_point.name;  // si tu veux conserver juste le nom barré, sans label
+  }
+
+  // 2) cellule prévu
+  let classePrev = '';
+  let textePrev  = sd;
+  if (effect==='NO_SERVICE' || imp.stop_time_effect==='deleted' || imp.departure_status==='deleted') {
+    classePrev = 'deleted';
+  }
+
+  // 3) cellule retardé
+  let classeNew = '';
+  let texteNew   = '';
+  if (imp.amended_departure_time && imp.amended_departure_time!==s.departure_time) {
+    const nd = formatTime(imp.amended_departure_time);
+    const dt = computeDelay(s.departure_time, imp.amended_departure_time);
+    classeNew = 'delayed';
+    texteNew   = `➔ ${nd} <span class="small-gray">(+${dt}min)</span>`;
+  }
+
+  tableHtml += `
+    <tr>
+      <td class="${classeGare}">${texteGare}</td>
+      <td class="${classePrev}">${textePrev}</td>
+      <td class="${classeNew}">${texteNew}</td>
+    </tr>
+  `;
+});
 
         html+='</tbody></table>';
         $('#trainInfo').html(html);
