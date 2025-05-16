@@ -159,196 +159,198 @@
 
     <div id="trainInfo"></div>
 
-<script>
-$(document).ready(function () {
-    $('#getTrainData').click(function () {
-        const trainNumber = $('#trainNumber').val().trim();
-        const trainDate = $('#trainDate').val();
-        if (!trainNumber) {
-            $('#trainInfo').html('<p class="deleted">Veuillez entrer un numéro de train valide.</p>');
-            return;
-        }
-        if (!trainDate) {
-            $('#trainInfo').html('<p class="deleted">Veuillez sélectionner une date valide.</p>');
-            return;
-        }
-
-        $('#trainInfo').html('<p>Chargement des données...</p>');
-
-        const apiKey = '242fac11-6d98-45fb-93df-28174d362447';
-        const encodedApiKey = btoa(apiKey + ":");
-        const url = `https://api.sncf.com/v1/coverage/sncf/vehicle_journeys/vehicle_journey:SNCF:${trainDate}:${trainNumber}:1187:Train`;
-
-        $.ajax({
-            url: url,
-            method: 'GET',
-            headers: { 'Authorization': 'Basic ' + encodedApiKey },
-            success: function (response) {
-                if (!response.vehicle_journeys || response.vehicle_journeys.length === 0) {
-                    $('#trainInfo').html('<p class="deleted">Aucun train trouvé avec ce numéro et cette date.</p>');
+    <script>
+        $(document).ready(function () {
+            $('#getTrainData').click(function () {
+                const trainNumber = $('#trainNumber').val().trim();
+                const trainDate = $('#trainDate').val();
+                if (!trainNumber) {
+                    $('#trainInfo').html('<p class="deleted">Veuillez entrer un numéro de train valide.</p>');
                     return;
                 }
-                const train = response.vehicle_journeys[0];
-                const disruptions = response.disruptions || [];
-
-                // Construire une map des arrêts impactés pour accès rapide
-                let impactedStopsMap = {};
-                let effect = null;
-                let disruptionMessage = null;
-                if (disruptions.length > 0) {
-                    const disruption = disruptions[0];
-                    effect = disruption.severity?.effect || null;
-                    disruptionMessage = disruption.messages?.[0]?.text || 'Non précisée';
-                    disruption.impacted_objects?.forEach(obj => {
-                        obj.impacted_stops?.forEach(stop => {
-                            impactedStopsMap[stop.stop_point.id] = {
-                                arrival_status: stop.arrival_status,
-                                departure_status: stop.departure_status,
-                                stop_time_effect: stop.stop_time_effect,
-                                amended_arrival_time: stop.amended_arrival_time,
-                                amended_departure_time: stop.amended_departure_time
-                            };
-                        });
-                    });
+                if (!trainDate) {
+                    $('#trainInfo').html('<p class="deleted">Veuillez sélectionner une date valide.</p>');
+                    return;
                 }
 
-                const stops = train.stop_times;
+                $('#trainInfo').html('<p>Chargement des données...</p>');
 
-                // Trouver la nouvelle gare de départ et dernier arrêt réel
-                let firstRealDepartureIndex = -1;
-                let lastRealArrivalIndex = -1;
-                stops.forEach((stop, index) => {
-                    const impact = impactedStopsMap[stop.stop_point.id];
-                    if (!impact || impact.departure_status !== "deleted") {
-                        if (firstRealDepartureIndex === -1) firstRealDepartureIndex = index;
-                    }
-                    if (!impact || impact.arrival_status !== "deleted") {
-                        lastRealArrivalIndex = index;
+                const apiKey = '242fac11-6d98-45fb-93df-28174d362447';
+                const encodedApiKey = btoa(apiKey + ":");
+                const url = `https://api.sncf.com/v1/coverage/sncf/vehicle_journeys/vehicle_journey:SNCF:${trainDate}:${trainNumber}:1187:Train`;
+
+                $.ajax({
+                    url: url,
+                    method: 'GET',
+                    headers: { 'Authorization': 'Basic ' + encodedApiKey },
+                    success: function (response) {
+                        if (!response.vehicle_journeys || response.vehicle_journeys.length === 0) {
+                            $('#trainInfo').html('<p class="deleted">Aucun train trouvé avec ce numéro et cette date.</p>');
+                            return;
+                        }
+                        const train = response.vehicle_journeys[0];
+                        const disruptions = response.disruptions || [];
+                        let effect = null;
+                        let impactedStopsMap = {};
+                        if (disruptions.length > 0) {
+                            const disruption = disruptions[0];
+                            effect = disruption.severity?.effect || null;
+                            disruption.impacted_objects?.forEach(obj => {
+                                obj.impacted_stops?.forEach(stop => {
+                                    impactedStopsMap[stop.stop_point.id] = {
+                                        arrival_status: stop.arrival_status,
+                                        departure_status: stop.departure_status,
+                                        stop_time_effect: stop.stop_time_effect,
+                                        amended_arrival_time: stop.amended_arrival_time,
+                                        amended_departure_time: stop.amended_departure_time
+                                    };
+                                });
+                            });
+                        }
+
+                        const stops = train.stop_times;
+                        let firstRealDepartureIndex = -1;
+                        let lastRealArrivalIndex = -1;
+                        stops.forEach((stop, index) => {
+                            const impact = impactedStopsMap[stop.stop_point.id];
+                            if (!impact || impact.departure_status !== "deleted") {
+                                if (firstRealDepartureIndex === -1) firstRealDepartureIndex = index;
+                            }
+                            if (!impact || impact.arrival_status !== "deleted") {
+                                lastRealArrivalIndex = index;
+                            }
+                        });
+
+                        function formatTime(t) {
+                            if (!t) return '-';
+                            return t.substring(0, 2) + ':' + t.substring(2, 4);
+                        }
+
+                        function computeDelay(baseTime, amendedTime) {
+                            const base = parseInt(baseTime.substring(0, 2)) * 60 + parseInt(baseTime.substring(2, 4));
+                            const amended = parseInt(amendedTime.substring(0, 2)) * 60 + parseInt(amendedTime.substring(2, 4));
+                            return amended - base;
+                        }
+
+let tableHtml = `
+  <table>
+    <thead>
+      <tr>
+        <th>Gare</th>
+        <th>Horaire prévu</th>
+        <th>Horaire retardé</th>
+      </tr>
+    </thead>
+    <tbody>
+`;
+
+stops.forEach((stop, index) => {
+  const id     = stop.stop_point.id;
+  const name   = stop.stop_point.name;
+  const arr0   = formatTime(stop.arrival_time);
+  const dep0   = formatTime(stop.departure_time);
+  const imp    = impactedStopsMap[id] || {};
+  const delAll = imp.stop_time_effect === "deleted";
+  const delA   = imp.arrival_status    === "deleted";
+  const delD   = imp.departure_status  === "deleted";
+
+  // 1) Construire la cellule “Gare”
+  let cellGare = name;
+  // nouveau départ
+  if (effect === "REDUCED_SERVICE"
+      && delAll && delA && imp.departure_status==="unchanged"
+      && index===firstRealDepartureIndex && index!==0) {
+    cellGare += ` <span class="new-start">(Nouvelle gare de départ)</span>`;
+  }
+  // nouveau terminus
+  if (effect === "REDUCED_SERVICE"
+      && (imp.stop_time_effect==="delayed"||imp.stop_time_effect==="unchanged")
+      && delD && (imp.arrival_status==="unchanged"||delA)
+      && index===lastRealArrivalIndex && index!==stops.length-1) {
+    cellGare += ` <span class="new-end">(Nouveau terminus)</span>`;
+  }
+  if (effect==="NO_SERVICE" || index<firstRealDepartureIndex || index>lastRealArrivalIndex || delAll) {
+    cellGare = `<span class="deleted">${cellGare}</span>`;
+  }
+
+  // 2) Celle “Horaire prévu” (col. 2)
+  let cellPrev = dep0;
+  if (effect==="NO_SERVICE" || delAll || delD) {
+    cellPrev = `<span class="deleted">${dep0}</span>`;
+  }
+
+  // 3) Celle “Horaire retardé” (col. 3)
+  let cellNew = "";
+  if (imp.amended_departure_time && imp.amended_departure_time!==stop.departure_time) {
+    const dep1 = formatTime(imp.amended_departure_time);
+    const dt  = computeDelay(stop.departure_time, imp.amended_departure_time);
+    cellNew = `➔ <span class="delayed">${dep1}</span> <span class="small-gray">(+${dt}min)</span>`;
+  }
+
+  tableHtml += `
+      <tr>
+        <td>${cellGare}</td>
+        <td>${cellPrev}</td>
+        <td>${cellNew}</td>
+      </tr>
+  `;
+});
+
+tableHtml += `
+    </tbody>
+  </table>
+`;
+
+                        // --- Encadré perturbations avec couleurs et icônes (sans statut) ---
+                        let disruptionHtml = '';
+                        if (effect) {
+                            const cause = disruptions[0].messages?.[0]?.text || 'Non précisée';
+                            let effetTraduit = effect;
+                            let boxClass = '';
+                            let icon = '';
+
+                            if (effect === 'NO_SERVICE') {
+                                effetTraduit = 'Suppression totale';
+                                boxClass = 'red';
+                                icon = '❌';
+                            } else if (effect === 'REDUCED_SERVICE') {
+                                effetTraduit = 'Suppression partielle';
+                                boxClass = 'red';
+                                icon = '⚠️';
+                            } else if (effect === 'SIGNIFICANT_DELAYS') {
+                                effetTraduit = 'Retard important';
+                                boxClass = 'orange';
+                                icon = '⏰';
+                            } else {
+                                boxClass = 'orange';
+                                icon = '⚠️';
+                            }
+
+                            disruptionHtml = `
+                                <div class="disruption-box ${boxClass}">
+                                    <div class="disruption-icon">${icon}</div>
+                                    <div>
+                                        <div><strong>Effet :</strong> ${effetTraduit}</div>
+                                        <div><strong>Cause :</strong> ${cause}</div>
+                                    </div>
+                                </div>
+                            `;
+                        }
+
+                        $('#trainInfo').html(disruptionHtml + `<h2>Horaires de départ du train ${train.name} :</h2>` + tableHtml);
+                    },
+                    error: function () {
+                        $('#trainInfo').html('<p class="deleted">Erreur lors de la récupération des données. Veuillez réessayer plus tard.</p>');
                     }
                 });
-
-                // Fonction de formatage horaire HHMM -> HH:MM
-                function formatTime(t) {
-                    if (!t) return '-';
-                    return t.substring(0, 2) + ':' + t.substring(2, 4);
-                }
-
-                // Calcul du retard en minutes
-                function computeDelay(baseTime, amendedTime) {
-                    const base = parseInt(baseTime.substring(0, 2)) * 60 + parseInt(baseTime.substring(2, 4));
-                    const amended = parseInt(amendedTime.substring(0, 2)) * 60 + parseInt(amendedTime.substring(2, 4));
-                    return amended - base;
-                }
-
-                // Génération HTML des arrêts avec prise en compte des suppressions, retards, nouvelle gare départ/terminus
-                const stopHtml = stops.map((stop, index) => {
-                    const id = stop.stop_point.id;
-                    const name = stop.stop_point.name;
-                    const baseDeparture = formatTime(stop.departure_time);
-                    const baseArrival = formatTime(stop.arrival_time);
-
-                    const impact = impactedStopsMap[id];
-                    const stopDeleted = impact && impact.stop_time_effect === "deleted";
-                    const arrivalDeleted = impact?.arrival_status === "deleted";
-                    const departureDeleted = impact?.departure_status === "deleted";
-
-                    // Cas : suppression totale du service
-                    if (effect === "NO_SERVICE") {
-                        return `<p class="deleted" style="color:red;">${name} - ${baseDeparture}</p>`;
-                    }
-
-                    // Cas : suppression partielle (service réduit)
-                    if (effect === "REDUCED_SERVICE") {
-                        // Nouvelle gare de départ
-                        if (
-                            stopDeleted && arrivalDeleted && !departureDeleted &&
-                            index === firstRealDepartureIndex && index !== 0
-                        ) {
-                            const amendedDeparture = impact?.amended_departure_time ? formatTime(impact.amended_departure_time) : baseDeparture;
-                            const delay = impact?.amended_departure_time ? computeDelay(stop.departure_time, impact.amended_departure_time) : 0;
-                            const retardTxt = delay > 0 ? ` <span class="small-gray">(+${delay}min)</span>` : '';
-                            return `<p class="new-start"><strong>${name}</strong> - <strong>${amendedDeparture}</strong>${retardTxt} (Nouvelle gare de départ)</p>`;
-                        }
-                        // Nouveau terminus
-                        if (
-                            (impact?.stop_time_effect === "delayed" || impact?.stop_time_effect === "unchanged") &&
-                            departureDeleted &&
-                            (arrivalDeleted || impact?.arrival_status === "unchanged") &&
-                            index === lastRealArrivalIndex &&
-                            index !== stops.length - 1
-                        ) {
-                            const amendedArrival = impact?.amended_arrival_time ? formatTime(impact.amended_arrival_time) : baseArrival;
-                            const delay = impact?.amended_arrival_time ? computeDelay(stop.arrival_time, impact.amended_arrival_time) : 0;
-                            const retardTxt = delay > 0 ? ` <span class="small-gray">(+${delay}min)</span>` : '';
-                            return `<p class="new-end"><strong>${name}</strong> - <strong>${amendedArrival}</strong>${retardTxt} (Nouveau terminus)</p>`;
-                        }
-                        // Arrêts supprimés avant nouvelle gare départ ou après nouveau terminus
-                        if (index < firstRealDepartureIndex || index > lastRealArrivalIndex || stopDeleted) {
-                            return `<p class="deleted" style="color:red;">${name} - ${baseDeparture}</p>`;
-                        }
-                    }
-
-                    // Affichage retard simple
-                    if (impact && impact.amended_departure_time && impact.amended_departure_time !== stop.departure_time) {
-                        const amendedDeparture = formatTime(impact.amended_departure_time);
-                        const delay = computeDelay(stop.departure_time, impact.amended_departure_time);
-                        return `<p>${name} - <span class="delay-strike">${baseDeparture}</span> ➔ <strong class="delayed">${amendedDeparture}</strong> <span class="small-gray">(+${delay}min)</span></p>`;
-                    }
-
-                    // Affichage normal
-                    return `<p>${name} - ${baseDeparture}</p>`;
-                }).join('');
-
-                // Encadré perturbations
-                let disruptionHtml = '';
-                if (effect) {
-                    let effetTraduit = effect;
-                    let boxClass = '';
-                    let icon = '';
-
-                    if (effect === 'NO_SERVICE') {
-                        effetTraduit = 'Suppression totale';
-                        boxClass = 'red';
-                        icon = '❌';
-                    } else if (effect === 'REDUCED_SERVICE') {
-                        effetTraduit = 'Suppression partielle';
-                        boxClass = 'red';
-                        icon = '⚠️';
-                    } else if (effect === 'SIGNIFICANT_DELAYS') {
-                        effetTraduit = 'Retard important';
-                        boxClass = 'orange';
-                        icon = '⏰';
-                    } else {
-                        boxClass = 'orange';
-                        icon = '⚠️';
-                    }
-
-                    disruptionHtml = `
-                        <div class="disruption-box ${boxClass}">
-                            <div class="disruption-icon">${icon}</div>
-                            <div>
-                                <div><strong>Effet :</strong> ${effetTraduit}</div>
-                                <div><strong>Cause :</strong> ${disruptionMessage}</div>
-                            </div>
-                        </div>
-                    `;
-                }
-
-                $('#trainInfo').html(disruptionHtml + `<h2>Horaires de départ du train ${train.name} :</h2>` + stopHtml);
-            },
-            error: function () {
-                $('#trainInfo').html('<p class="deleted">Erreur lors de la récupération des données. Veuillez réessayer plus tard.</p>');
-            }
+            });
         });
+            // Remplir la date du jour automatiquement
+    document.addEventListener("DOMContentLoaded", function () {
+        const today = new Date().toISOString().split("T")[0];
+        document.getElementById("trainDate").value = today;
     });
-});
-
-// Initialisation automatique de la date
-document.addEventListener("DOMContentLoaded", function () {
-    const today = new Date().toISOString().split("T")[0];
-    document.getElementById("trainDate").value = today;
-});
-</script>
+    </script>
     
 </body>
 </html>
