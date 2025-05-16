@@ -318,7 +318,130 @@
                         
                         $('#trainInfo').html(disruptionHtml + `<h2>Détails des arrêts</h2><table id="stopsTable"><thead><tr><th>Gare</th><th>Horaire</th><th>Retard</th></tr></thead><tbody></tbody></table>`);
                         
-                        // Suite dans la PARTIE 2 pour remplir tbody
+const tbody = $('#stopsTable tbody');
+
+// On détermine la nouvelle gare de départ si suppression partielle (REDUCED_SERVICE)
+let newStartIndex = 0;
+if (effect === 'REDUCED_SERVICE') {
+    for (let i = 0; i < stops.length; i++) {
+        const stopId = stops[i].stop_point.id;
+        const impact = impactedStopsMap[stopId];
+        if (!impact || impact.departure_status !== 'deleted') {
+            newStartIndex = i;
+            break;
+        }
+    }
+}
+
+// De même, on cherche la nouvelle gare de fin si elle a changé (nouveau terminus)
+let newEndIndex = stops.length - 1;
+for (let i = stops.length - 1; i >= 0; i--) {
+    const stopId = stops[i].stop_point.id;
+    const impact = impactedStopsMap[stopId];
+    if (!impact || impact.arrival_status !== 'deleted') {
+        newEndIndex = i;
+        break;
+    }
+}
+
+for (let i = 0; i < stops.length; i++) {
+    const stop = stops[i];
+    const stopId = stop.stop_point.id;
+    const impact = impactedStopsMap[stopId] || {};
+
+    // Récupération des horaires d'origine
+    const baseArrival = stop.arrival_time;
+    const baseDeparture = stop.departure_time;
+
+    // Horaires amendés (modifiés par perturbation)
+    const amendedArrival = impact.amended_arrival_time || baseArrival;
+    const amendedDeparture = impact.amended_departure_time || baseDeparture;
+
+    // États suppressions
+    const arrivalDeleted = (impact.arrival_status === 'deleted');
+    const departureDeleted = (impact.departure_status === 'deleted');
+
+    // Gestion affichage horaire :  
+    // Pour gare de départ (i === 0), on affiche que l'heure de départ si non supprimée
+    // Pour gare terminus (i === stops.length-1), on affiche que l'heure d'arrivée si non supprimée
+    // Pour autres, affichage en horaire d'arrivée ou départ suivant contexte
+    let displayedTime = '-';
+    if (i === 0) {
+        // Gare origine : afficher départ uniquement si non supprimé
+        if (!departureDeleted) {
+            displayedTime = formatTime(amendedDeparture);
+        }
+    } else if (i === stops.length - 1) {
+        // Gare terminus : afficher arrivée uniquement si non supprimée
+        if (!arrivalDeleted) {
+            displayedTime = formatTime(amendedArrival);
+        }
+    } else {
+        // Gare intermédiaire : afficher arrivée si arrivée non supprimée, sinon '-'
+        if (!arrivalDeleted) {
+            displayedTime = formatTime(amendedArrival);
+        } else if (!departureDeleted) {
+            displayedTime = formatTime(amendedDeparture);
+        }
+    }
+
+    // Calcul du retard en minutes, si amendé et différent
+    let delayMinutes = 0;
+    let delayText = '';
+    if ((amendedArrival && baseArrival && amendedArrival !== baseArrival) || 
+        (amendedDeparture && baseDeparture && amendedDeparture !== baseDeparture)) {
+        let delayA = 0, delayD = 0;
+        if (amendedArrival && baseArrival) delayA = computeDelay(baseArrival, amendedArrival);
+        if (amendedDeparture && baseDeparture) delayD = computeDelay(baseDeparture, amendedDeparture);
+        delayMinutes = Math.max(delayA, delayD);
+        if (delayMinutes > 0) {
+            delayText = `+${delayMinutes} min`;
+        } else if (delayMinutes < 0) {
+            delayText = `${delayMinutes} min`;
+        }
+    }
+
+    // Détermine classes CSS pour ligne
+    let rowClass = '';
+    if (effect === 'NO_SERVICE') {
+        // Suppression totale => barrer tout
+        rowClass = 'deleted-row';
+    } else if (effect === 'REDUCED_SERVICE' && i < newStartIndex) {
+        // Suppression partielle avant nouvelle gare de départ
+        rowClass = 'partial-row';
+    } else if (arrivalDeleted || departureDeleted) {
+        rowClass = 'partial-row';
+    }
+
+    // Détermine classes CSS pour cellule gare (nouvelle gare départ / terminus)
+    let gareClass = '';
+    if (i === newStartIndex && effect === 'REDUCED_SERVICE') {
+        gareClass = 'new-start';
+    } else if (i === newEndIndex && effect === 'REDUCED_SERVICE') {
+        gareClass = 'new-end';
+    }
+
+    // Nom de la gare
+    let stationName = stop.stop_point.name;
+
+    // Si gare supprimée en totalité (arrival et departure deleted), on garde nom mais barré
+    // Le rowClass gère cela déjà
+
+    // Construction ligne tableau
+    const tr = $('<tr></tr>').addClass(rowClass);
+    const tdStation = $('<td></td>').text(stationName).addClass(gareClass);
+    const tdTime = $('<td></td>').text(displayedTime);
+    const tdDelay = $('<td></td>');
+
+    if (delayText) {
+        tdDelay.text(delayText).addClass('delay-text');
+    } else {
+        tdDelay.text('-').addClass('delay-small');
+    }
+
+    tr.append(tdStation, tdTime, tdDelay);
+    tbody.append(tr);
+}
                         
                     },
                     error: function () {
