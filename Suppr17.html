@@ -6,7 +6,7 @@
   <title>Informations Train SNCF - Horaires Départ</title>
   <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
   <style>
-    body { font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif; background: #f9f9f9; color: #222; margin:0; padding:20px; max-width:720px; margin:auto; }
+    body { font-family:"Segoe UI", Tahoma, Geneva, Verdana, sans-serif; background:#f9f9f9; color:#222; margin:0; padding:20px; max-width:720px; margin:auto; }
     h1 { text-align:center; color:#0055a5; margin-bottom:1rem; }
     .input-container { background:#fff; padding:20px; border-radius:12px; box-shadow:0 4px 12px rgba(0,85,165,0.1); margin-bottom:30px; display:flex; flex-direction:column; gap:16px; }
     label { font-weight:600; color:#004080; }
@@ -14,7 +14,7 @@
     button { background:#0077cc; color:#fff; border:none; padding:12px 24px; border-radius:8px; cursor:pointer; }
     button:hover { background:#005999; }
     #trainInfo { background:#fff; padding:20px; border-radius:8px; box-shadow:0 3px 10px rgba(0,0,0,0.1); min-height:100px; }
-    h2 { border-bottom:2px solid #0077cc; color:#004080; margin-bottom:14px; padding-bottom:6px; }
+    h2 { border-bottom:2px solid #0077cc; color:#004080; padding-bottom:6px; margin-bottom:14px; }
     .deleted    { color:#cc0000; text-decoration:line-through; }
     .delayed    { color:#ff6600; font-weight:600; }
     .small-gray { color:#888; font-size:0.9rem; margin-left:6px; }
@@ -73,11 +73,11 @@
             d.impacted_objects?.forEach(o=>{
               o.impacted_stops?.forEach(s=>{
                 impacted[s.stop_point.id]={
-                  stop_time_effect: s.stop_time_effect,
-                  arrival_status:   s.arrival_status,
-                  departure_status: s.departure_status,
-                  amended_arrival_time:   s.amended_arrival_time,
-                  amended_departure_time: s.amended_departure_time
+                  stop_time_effect:        s.stop_time_effect,
+                  arrival_status:          s.arrival_status,
+                  departure_status:        s.departure_status,
+                  amended_arrival_time:    s.amended_arrival_time,
+                  amended_departure_time:  s.amended_departure_time
                 };
               });
             });
@@ -95,10 +95,10 @@
             }
           });
 
-          function ft(t){ return t? t.slice(0,2)+':'+t.slice(2):'-'; }
+          function ft(t){ return t? t.slice(0,2)+':'+t.slice(2,4):'-'; }
           function dl(b,a){
-            return (parseInt(a.slice(0,2))*60+parseInt(a.slice(2)))
-                 - (parseInt(b.slice(0,2))*60+parseInt(b.slice(2)));
+            return (parseInt(a.slice(0,2))*60+parseInt(a.slice(2,4))) -
+                   (parseInt(b.slice(0,2))*60+parseInt(b.slice(2,4)));
           }
 
           let html='';
@@ -107,63 +107,71 @@
             if(effect==='NO_SERVICE'){box='red'; icon='❌'; txt='Suppression totale';}
             if(effect==='REDUCED_SERVICE'){box='red'; icon='⚠️'; txt='Suppression partielle';}
             if(effect==='SIGNIFICANT_DELAYS'){box='orange'; icon='⏰'; txt='Retard important';}
-            html+=`<div class="disruption-box ${box}">
-                     <div class="disruption-icon">${icon}</div>
-                     <div><strong>Effet :</strong> ${txt}<br/>
-                          <strong>Cause :</strong> ${message}
-                     </div>
+            html+=`<div class="disruption-box ${box}"><div class="disruption-icon">${icon}</div>
+                     <div><strong>Effet :</strong> ${txt}<br/><strong>Cause :</strong> ${message}</div>
                    </div>`;
           }
 
           html+=`<h2>Horaires du train ${train.name}</h2>
-                 <table><thead><tr><th>Gare</th><th>Prévu</th><th>Retardé</th></tr></thead><tbody>`;
+                 <table><thead><tr><th>Gare</th><th>Horaire prévu</th><th>Horaire retardé</th></tr></thead><tbody>`;
 
           stops.forEach((s,i)=>{
             const imp = impacted[s.stop_point.id]||{};
-            const sd  = ft(s.departure_time);
+            // par défaut on garde initial
+            let classeG='', texteG=s.stop_point.name;
+            let classeP='', texteP=ft(s.arrival_time||s.departure_time);
+            let classeN='', texteN='';
 
-            // 1) Gare
-            let cG='', txtG=s.stop_point.name;
-            if(effect==='REDUCED_SERVICE' && i===firstDep && i!==0
-               && imp.stop_time_effect==='deleted' && imp.arrival_status==='deleted' && imp.departure_status==='unchanged'){
-              cG='new-start';
-              txtG+=' (Nouvelle gare de départ)';
-            } else if(effect==='REDUCED_SERVICE' && i===lastArr){
-              cG='new-end';
-              txtG+=' (Nouveau terminus)';
+            // --- gare ---
+            if(effect==='REDUCED_SERVICE'&&i===firstDep&&i!==0
+               &&imp.stop_time_effect==='deleted'
+               &&imp.arrival_status==='deleted'
+               &&imp.departure_status==='unchanged'){
+              classeG='new-start';
+              texteG+=' (Nouvelle gare de départ)';
             }
-            if((effect==='NO_SERVICE' || i<firstDep || i>lastArr || imp.stop_time_effect==='deleted')
-               && !(effect==='REDUCED_SERVICE'&&i===lastArr)){
-              cG='deleted';
+            if(effect==='REDUCED_SERVICE'&&i===lastArr){
+              classeG='new-end';
+              texteG+=' (Nouveau terminus)';
             }
-
-            // 2) Prévu
-            let cP='', txtP=sd;
-            if(effect==='NO_SERVICE'||imp.stop_time_effect==='deleted'||imp.departure_status==='deleted'){
-              cP='deleted';
-            }
-            // déverrouille la cellule prévu si nouveau terminus et retard
-            if(effect==='REDUCED_SERVICE'&&i===lastArr&&imp.amended_departure_time){
-              cP='';
+            // barrer hors intervalle sauf terminus
+            if((effect==='NO_SERVICE'||i<firstDep||i>lastArr||imp.stop_time_effect==='deleted')
+               &&!(effect==='REDUCED_SERVICE'&&i===lastArr)){
+              classeG='deleted';
             }
 
-            // 3) Retardé
-            let cN='', txtN='';
-            if(imp.amended_departure_time&&imp.amended_departure_time!==s.departure_time){
-              const nd=ft(imp.amended_departure_time);
-              const dt=dl(s.departure_time,imp.amended_departure_time);
-              txtN=`➔ ${nd} <span class="small-gray">(+${dt}min)</span>`;
-              if(effect==='REDUCED_SERVICE'&&i===lastArr){
-                cN='new-end';
-              } else {
-                cN='delayed';
-              }
+            // --- horaire prévu ---
+            // pour terminus on affiche arrival, sinon departure
+            texteP = (i===lastArr && imp.amended_arrival_time)? ft(s.base_arrival_time||s.arrival_time) : ft(s.base_departure_time||s.departure_time);
+            if(effect==='NO_SERVICE'
+               ||imp.stop_time_effect==='deleted'
+               ||imp.departure_status==='deleted'){
+              classeP='deleted';
+            }
+            if(effect==='REDUCED_SERVICE'&&i===lastArr&&imp.amended_arrival_time){
+              classeP='';
+            }
+
+            // --- horaire retardé ---
+            // pour terminus on utilise amended_arrival_time
+            if(i===lastArr && imp.amended_arrival_time){
+              const nd = ft(imp.amended_arrival_time);
+              const dt = dl(s.base_arrival_time||s.arrival_time, imp.amended_arrival_time);
+              texteN = `➔ ${nd} <span class="small-gray">(+${dt}min)</span>`;
+              classeN = 'new-end';
+            }
+            // sinon départ retardé
+            else if(imp.amended_departure_time){
+              const nd = ft(imp.amended_departure_time);
+              const dt = dl(s.base_departure_time||s.departure_time, imp.amended_departure_time);
+              texteN = `➔ ${nd} <span class="small-gray">(+${dt}min)</span>`;
+              classeN = 'delayed';
             }
 
             html+=`<tr>
-                     <td class="${cG}">${txtG}</td>
-                     <td class="${cP}">${txtP}</td>
-                     <td class="${cN}">${txtN}</td>
+                     <td class="${classeG}">${texteG}</td>
+                     <td class="${classeP}">${texteP}</td>
+                     <td class="${classeN}">${texteN}</td>
                    </tr>`;
           });
 
@@ -176,7 +184,7 @@
       });
     });
 
-    // initialise la date
+    // initialise date
     $('#trainDate').val(new Date().toISOString().split('T')[0]);
   });
   </script>
