@@ -1,85 +1,151 @@
 <!DOCTYPE html>
 <html lang="fr">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Détails des trains</title>
+  <meta charset="UTF-8">
+  <title>Informations train SNCF</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      padding: 20px;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 15px;
+    }
+    th, td {
+      border: 1px solid #aaa;
+      padding: 8px;
+      text-align: center;
+    }
+    th {
+      background-color: #f2f2f2;
+    }
+    .deleted {
+      text-decoration: line-through;
+      color: red;
+    }
+    .new-start, .new-end {
+      background-color: #ffffcc;
+    }
+    .status-info {
+      margin-top: 20px;
+      font-weight: bold;
+    }
+  </style>
 </head>
 <body>
-    <h1>Détails des trains</h1>
-    <div id="trainDetails"></div>
+  <h1>Infos Train SNCF</h1>
+  <label for="trainId">Numéro du train :</label>
+  <input type="text" id="trainId" placeholder="Ex: 891725">
+  <label for="date">Date :</label>
+  <input type="date" id="date">
+  <button onclick="fetchTrain()">Afficher</button>
 
-    <script>
-        // Remplacez ceci par votre clé API SNCF
-        const apiKey = '242fac11-6d98-45fb-93df-28174d362447';  
-        const baseUrl = 'https://api.sncf.com/v1/coverage/sncf/vehicle_journeys/vehicle_journey:SNCF:';
-        
-        // Liste des numéros de train
-        const trainNumbers = [88530, 88532, 88534, 88747, 88745, 88749, 88751];
+  <div id="results"></div>
 
-        // Fonction pour récupérer la date actuelle au format YYYY-MM-DD
-        function getCurrentDate() {
-            const today = new Date();
-            const year = today.getFullYear();
-            const month = String(today.getMonth() + 1).padStart(2, '0');
-            const day = String(today.getDate()).padStart(2, '0');
-            return `${year}-${month}-${day}`;
-        }
+  <script>
+    async function fetchTrain() {
+      const trainId = document.getElementById('trainId').value.trim();
+      const date = document.getElementById('date').value;
+      const resultsDiv = document.getElementById('results');
+      resultsDiv.innerHTML = '';
 
-        // Fonction pour afficher les détails du train
-        function displayTrainDetails(trainNumber, status, cause) {
-            const trainDetailsDiv = document.getElementById('trainDetails');
-            const trainElement = document.createElement('div');
-            trainElement.innerHTML = `
-                <h2>Train ${trainNumber}</h2>
-                <p>Status : ${status}</p>
-                <p>Cause : ${cause}</p>
-                <hr>
-            `;
-            trainDetailsDiv.appendChild(trainElement);
-        }
+      if (!trainId || !date) {
+        resultsDiv.innerText = 'Veuillez entrer un numéro de train et une date.';
+        return;
+      }
 
-        // Fonction pour récupérer et afficher les détails de chaque train
-        function fetchTrainDetails(trainNumber) {
-            const date = getCurrentDate(); // Récupère la date actuelle au format YYYY-MM-DD
-            const url = `${baseUrl}${date}:${trainNumber}:1187:Train`;
-            fetch(url, {
-                headers: {
-                    'Authorization': `Bearer ${apiKey}`
-                }
-            })
-            .then(response => response.json())
-            .then(data => {
-                const disruptions = data.disruptions || [];  // Récupère les disruptions (s'il y en a)
-                
-                let status = 'À l\'heure';  // Par défaut, on suppose que le train est à l'heure
-                let cause = 'Aucune perturbation signalée.';  // Si aucune perturbation
+      const apiKey = '242fac11-6d98-45fb-93df-28174d362447'; // Remplace par ta clé
+      const formattedDate = date.replace(/-/g, '') + 'T000000';
+      const url = `https://api.sncf.com/v1/coverage/sncf/journeys?train_number=${trainId}&datetime=${formattedDate}&count=1`;
 
-                // Vérifier si des disruptions existent
-                if (disruptions.length > 0) {
-                    const disruption = disruptions[0];
-                    // Si "effect" est REDUCED_SERVICE ou ANNULÉ, afficher la perturbation
-                    if (disruption.effect === 'REDUCED_SERVICE' || disruption.effect === 'CANCELED') {
-                        status = disruption.effect === 'REDUCED_SERVICE' ? 'Service réduit' : 'Annulé';
-                        cause = disruption.messages && disruption.messages[0] ? disruption.messages[0].text : 'Aucune cause précisée';
-                    }
-                    else if (disruption.status === "future" && !disruption.effect) {
-                        // Cas où la perturbation est à venir sans effet spécifique
-                        status = 'À l\'heure';  // Toujours à l'heure si aucune perturbation claire
-                        cause = 'Aucune perturbation signalée.';
-                    }
-                }
-
-                // Affiche les détails du train
-                displayTrainDetails(trainNumber, status, cause);
-            })
-            .catch(error => console.error('Erreur lors de la récupération des données :', error));
-        }
-
-        // Pour chaque train, on récupère ses détails
-        trainNumbers.forEach(trainNumber => {
-            fetchTrainDetails(trainNumber);
+      try {
+        const response = await fetch(url, {
+          headers: { Authorization: `Basic ${btoa(apiKey + ':')}` }
         });
-    </script>
+        const data = await response.json();
+
+        const journey = data.journeys[0];
+        if (!journey) {
+          resultsDiv.innerText = 'Aucun trajet trouvé.';
+          return;
+        }
+
+        const publicSection = journey.sections.find(sec => sec.type === "public_transport");
+        if (!publicSection || !publicSection.display_informations) {
+          resultsDiv.innerText = 'Aucune section publique trouvée.';
+          return;
+        }
+
+        const stops = publicSection.stop_date_times;
+        const start = stops.find(s => s.departure_status !== 'deleted');
+        const end = [...stops].reverse().find(s => s.arrival_status !== 'deleted');
+
+        const table = document.createElement('table');
+        const header = document.createElement('tr');
+        header.innerHTML = `
+          <th>Gare</th>
+          <th>Arrivée</th>
+          <th>Départ</th>
+          <th>Statut</th>
+        `;
+        table.appendChild(header);
+
+        for (const stop of stops) {
+          const row = document.createElement('tr');
+          const isDeleted = (stop.departure_status === 'deleted' && stop.arrival_status === 'deleted');
+          const isNewStart = stop.stop_point.label === start.stop_point.label && stops[0].stop_point.label !== start.stop_point.label;
+          const isNewEnd = stop.stop_point.label === end.stop_point.label && stops[stops.length - 1].stop_point.label !== end.stop_point.label;
+
+          let status = '';
+          if (isDeleted) status = 'Supprimé';
+          else if (isNewStart) status = 'Nouveau départ';
+          else if (isNewEnd) status = 'Nouveau terminus';
+
+          row.className = `${isDeleted ? 'deleted' : ''} ${isNewStart ? 'new-start' : ''} ${isNewEnd ? 'new-end' : ''}`;
+          row.innerHTML = `
+            <td>${stop.stop_point.label}</td>
+            <td>${stop.arrival_date_time ? formatHour(stop.arrival_date_time) : '-'}</td>
+            <td>${stop.departure_date_time ? formatHour(stop.departure_date_time) : '-'}</td>
+            <td>${status}</td>
+          `;
+          table.appendChild(row);
+        }
+
+        resultsDiv.appendChild(table);
+
+        // Statut global
+        let statusText = '';
+        if (journey.status === 'cancelled') {
+          statusText = '⚠️ Train supprimé.';
+        } else if (journey.durations?.departure_delay || journey.durations?.arrival_delay) {
+          const delay = journey.durations.departure_delay || journey.durations.arrival_delay;
+          statusText = `🚨 Retard estimé : ${Math.round(delay / 60)} min.`;
+        }
+
+        // Cause perturbation
+        const causes = publicSection.display_informations.links?.filter(link => link.type === 'cause');
+        if (causes?.length) {
+          statusText += `<br>💬 Cause : ${causes.map(c => c.value).join(', ')}`;
+        }
+
+        if (statusText) {
+          const statusDiv = document.createElement('div');
+          statusDiv.className = 'status-info';
+          statusDiv.innerHTML = statusText;
+          resultsDiv.appendChild(statusDiv);
+        }
+
+      } catch (error) {
+        console.error(error);
+        resultsDiv.innerText = 'Erreur lors de la récupération des données.';
+      }
+    }
+
+    function formatHour(dateTime) {
+      return dateTime?.substring(9, 11) + 'h' + dateTime?.substring(11, 13);
+    }
+  </script>
 </body>
 </html>
