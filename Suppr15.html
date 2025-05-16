@@ -22,7 +22,6 @@
             margin-bottom: 1rem;
         }
 
-        /* Nouveau bloc stylé pour la saisie */
         .input-container {
             background-color: #fff;
             padding: 20px;
@@ -141,46 +140,15 @@
             flex-shrink: 0;
         }
 
-        /* Styles du tableau */
-        table {
+        /* Style tableau */
+        .train-table {
             width: 100%;
             border-collapse: collapse;
-            margin-top: 15px;
+            margin-top: 1rem;
         }
-        th, td {
-            padding: 10px 12px;
-            border-bottom: 1px solid #ddd;
-            text-align: left;
-            vertical-align: middle;
-        }
-        th {
-            background-color: #0077cc;
-            color: white;
-            font-weight: 600;
-        }
-        tr.deleted {
-            color: #cc0000;
-            text-decoration: line-through;
-            font-weight: 600;
-            background-color: #ffe6e6;
-        }
-        tr.new-start {
-            color: #0055cc;
-            font-weight: 700;
-            background-color: #e0ebff;
-        }
-        tr.new-end {
-            color: #0055cc;
-            font-weight: 700;
-            background-color: #e0ebff;
-        }
-        .delayed {
-            color: #ff6600;
-            font-weight: 600;
-        }
-        .delay-strike {
-            color: #444;
-            text-decoration: line-through;
+        .train-table td {
+            padding: 8px 6px;
+            vertical-align: top;
         }
     </style>
 </head>
@@ -273,145 +241,123 @@
                             const amended = parseInt(amendedTime.substring(0, 2)) * 60 + parseInt(amendedTime.substring(2, 4));
                             return amended - base;
                         }
-
-                        // Construire les lignes du tableau avec colonnes Gare, Heure départ, Retard, Statut
-                        const rows = stops.map((stop, index) => {
-                            const id = stop.stop_point.id;
-                            const name = stop.stop_point.name;
-                            const baseDeparture = formatTime(stop.departure_time);
-                            const baseArrival = formatTime(stop.arrival_time);
-
-                            const impact = impactedStopsMap[id];
-                            const estSupprime = impact && impact.stop_time_effect === "deleted";
-                            const aDel = impact?.arrival_status === "deleted";
-                            const dDel = impact?.departure_status === "deleted";
-                            const dUnchanged = impact?.departure_status === "unchanged";
-                            const aUnchanged = impact?.arrival_status === "unchanged";
-                            const stopDel = impact?.stop_time_effect === "deleted";
-
-                            let displayDeparture = baseDeparture;
-                            let delayText = '';
-                            let delayMinutes = null;
-                            let statut = '';
-
-                            // Gestion délai et heure modifiée
-                            if (impact && impact.amended_departure_time && impact.amended_departure_time !== stop.departure_time) {
-                                const amendedDeparture = formatTime(impact.amended_departure_time);
-                                delayMinutes = computeDelay(stop.departure_time, impact.amended_departure_time);
-                                delayText = `<span class="delay-strike">${baseDeparture}</span> ➔ <strong class="delayed">${amendedDeparture}</strong> <span class="small-gray">(+${delayMinutes}min)</span>`;
-                                displayDeparture = delayText;
+                        function delayText(delayMinutes) {
+                            if (delayMinutes > 0) {
+                                return `<span class="delayed">+${delayMinutes} min</span>`;
+                            } else if (delayMinutes < 0) {
+                                return `<span class="delayed">${delayMinutes} min</span>`;
                             } else {
-                                displayDeparture = baseDeparture;
+                                return '';
                             }
-
-                            // Statut en priorité
-                            if (effect === "NO_SERVICE") {
-                                statut = "Suppression totale";
-                                return `
-                                    <tr class="deleted">
-                                        <td>${name}</td>
-                                        <td>${baseDeparture}</td>
-                                        <td></td>
-                                        <td>${statut}</td>
-                                    </tr>`;
-                            }
-
-                            if (effect === "REDUCED_SERVICE") {
-                                if (stopDel && aDel && dUnchanged && index === firstRealDepartureIndex && index !== 0) {
-                                    let amendedDeparture = impact?.amended_departure_time ? formatTime(impact.amended_departure_time) : baseDeparture;
-                                    let delay = '';
-                                    if (impact?.amended_departure_time && impact.amended_departure_time !== stop.departure_time) {
-                                        const delayMin = computeDelay(stop.departure_time, impact.amended_departure_time);
-                                        delay = `<span class="small-gray">(+${delayMin}min)</span>`;
-                                        amendedDeparture = `<strong class="delayed">${amendedDeparture}</strong>`;
-                                    }
-                                    statut = 'Nouvelle gare de départ';
-                                    return `
-                                        <tr class="new-start">
-                                            <td>${name}</td>
-                                            <td>${amendedDeparture} ${delay}</td>
-                                            <td></td>
-                                            <td>${statut}</td>
-                                        </tr>`;
-                                }
-                                if (index < firstRealDepartureIndex) {
-                                    statut = 'Suppression partielle';
-                                    return `
-                                        <tr class="deleted">
-                                            <td>${name}</td>
-                                            <td>${baseDeparture}</td>
-                                            <td></td>
-                                            <td>${statut}</td>
-                                        </tr>`;
-                                }
-                            }
-
-                            // Sinon ligne normale
-                            statut = (stopDel) ? "Suppression" : "Confirmé";
-                            let retard = '';
-                            if (delayMinutes !== null && delayMinutes > 0) {
-                                retard = `+${delayMinutes} min`;
-                                statut = "Retard";
-                            }
-
-                            // Pour terminus, ne pas afficher l'heure départ
-                            let heureDepartCell = displayDeparture;
-                            if (index === stops.length - 1) {
-                                heureDepartCell = '-';
-                            }
-
-                            return `
-                                <tr>
-                                    <td>${name}</td>
-                                    <td>${heureDepartCell}</td>
-                                    <td>${retard}</td>
-                                    <td>${statut}</td>
-                                </tr>`;
-                        }).join('');
-
-                        let disruptionBoxHTML = '';
-                        if (effect === "NO_SERVICE") {
-                            disruptionBoxHTML = `
-                                <div class="disruption-box red">
-                                    <div class="disruption-icon">🚫</div>
-                                    <div>Service totalement interrompu</div>
-                                </div>`;
-                        } else if (effect === "REDUCED_SERVICE") {
-                            disruptionBoxHTML = `
-                                <div class="disruption-box orange">
-                                    <div class="disruption-icon">⚠️</div>
-                                    <div>Service réduit avec suppressions partielles</div>
-                                </div>`;
                         }
 
-                        $('#trainInfo').html(`
-                            ${disruptionBoxHTML}
-                            <h2>Détails de votre bétaillère</h2>
-                            <table>
-                                <thead>
-                                    <tr>
-                                        <th>Gare</th>
-                                        <th>Heure départ</th>
-                                        <th>Retard</th>
-                                        <th>Statut</th>
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    ${rows}
-                                </tbody>
-                            </table>
-                        `);
+                        function createDisruptionBox(effect, disruption) {
+                            let cls = 'orange';
+                            let icon = '⚠️';
+                            if (effect === 'NO_SERVICE' || effect === 'CANCELLATION') {
+                                cls = 'red';
+                                icon = '⛔';
+                            } else if (effect === 'REDUCED_SERVICE') {
+                                cls = 'orange';
+                                icon = '🚧';
+                            }
+                            return `
+                                <div class="disruption-box ${cls}">
+                                    <div class="disruption-icon">${icon}</div>
+                                    <div>
+                                        <strong>Perturbation :</strong> ${disruption.headline || 'Indisponible'}
+                                        <br/>
+                                        <em>${disruption.description || ''}</em>
+                                    </div>
+                                </div>
+                            `;
+                        }
 
+                        // Construction affichage tableau
+                        let html = `<h2>Horaires du train ${trainNumber} du ${trainDate}</h2>`;
+
+                        if (disruptions.length > 0) {
+                            disruptions.forEach(disr => {
+                                html += createDisruptionBox(disr.severity?.effect, disr);
+                            });
+                        }
+
+                        html += `<table class="train-table" aria-label="Liste des arrêts et horaires du train">
+                            <thead>
+                                <tr>
+                                    <th>Gare</th>
+                                    <th>Horaire prévu</th>
+                                    <th>Horaire modifié / Retard</th>
+                                </tr>
+                            </thead>
+                            <tbody>`;
+
+                        stops.forEach((stop, i) => {
+                            const stopId = stop.stop_point.id;
+                            const impact = impactedStopsMap[stopId] || {};
+                            const arrTime = stop.arrival_time || '-';
+                            const depTime = stop.departure_time || '-';
+                            const arrAmended = impact.amended_arrival_time || '';
+                            const depAmended = impact.amended_departure_time || '';
+                            const arrStatus = impact.arrival_status || '';
+                            const depStatus = impact.departure_status || '';
+
+                            // Determine display time : for first stop show departure, for last stop show arrival
+                            let scheduledTime = '';
+                            let amendedTime = '';
+                            let delayMinutes = 0;
+
+                            // Pour la première gare, afficher uniquement départ prévu
+                            // Pour la dernière gare, afficher uniquement arrivée prévue
+                            // Pour autres, afficher arrivée et départ (on peut choisir ici d'afficher arrivée pour simplifier)
+                            if (i === 0) {
+                                scheduledTime = formatTime(depTime);
+                                amendedTime = arrAmended ? formatTime(depAmended) : (depAmended ? formatTime(depAmended) : '');
+                                delayMinutes = (depAmended) ? computeDelay(depTime, depAmended) : 0;
+                            } else if (i === stops.length - 1) {
+                                scheduledTime = formatTime(arrTime);
+                                amendedTime = arrAmended ? formatTime(arrAmended) : '';
+                                delayMinutes = (arrAmended) ? computeDelay(arrTime, arrAmended) : 0;
+                            } else {
+                                // pour les gares intermédiaires, afficher heure d'arrivée prévue
+                                scheduledTime = formatTime(arrTime);
+                                amendedTime = arrAmended ? formatTime(arrAmended) : '';
+                                delayMinutes = (arrAmended) ? computeDelay(arrTime, arrAmended) : 0;
+                            }
+
+                            // Gestion suppressions
+                            const isDeleted = arrStatus === 'deleted' || depStatus === 'deleted';
+
+                            // Style du nom gare selon suppression ou nouveau départ/terminus
+                            let gareClass = '';
+                            if (isDeleted) {
+                                gareClass = 'deleted';
+                            } else if (i === firstRealDepartureIndex) {
+                                gareClass = 'new-start';
+                            } else if (i === lastRealArrivalIndex) {
+                                gareClass = 'new-end';
+                            }
+
+                            // Pour supprimer les horaires de départ à la gare terminus et arrivée à la gare origine
+                            // on affiche juste une case vide pour l'autre colonne
+                            // Ici on affiche seulement un horaire par gare dans la colonne "Horaire prévu"
+
+                            html += `<tr>
+                                <td class="${gareClass}">${stop.stop_point.name}</td>
+                                <td class="${gareClass}">${scheduledTime}</td>
+                                <td>${isDeleted ? '<span class="deleted">Supprimé</span>' : delayText(delayMinutes)}</td>
+                            </tr>`;
+                        });
+
+                        html += '</tbody></table>';
+
+                        $('#trainInfo').html(html);
                     },
-                    error: function (xhr, status, error) {
-                        $('#trainInfo').html('<p class="deleted">Erreur lors de la récupération des données, réessayez plus tard.</p>');
+                    error: function () {
+                        $('#trainInfo').html('<p class="deleted">Erreur lors de la récupération des données. Veuillez réessayer.</p>');
                     }
                 });
             });
-
-            // Initialisation de la date au jour courant
-            const today = new Date().toISOString().split('T')[0];
-            $('#trainDate').val(today);
         });
     </script>
 </body>
