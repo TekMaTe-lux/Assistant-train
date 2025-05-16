@@ -15,14 +15,15 @@
     button:hover { background:#005999; }
     #trainInfo { background:#fff; padding:20px; border-radius:8px; box-shadow:0 3px 10px rgba(0,0,0,0.1); min-height:100px; }
     h2 { border-bottom:2px solid #0077cc; color:#004080; padding-bottom:6px; margin-bottom:14px; }
-    .deleted    { color:#cc0000; text-decoration:line-through; }
-    .delayed    { color:#ff6600; font-weight:600; }
-    .small-gray { color:#888; font-size:0.9rem; margin-left:6px; }
-    .new-start  { color:#0055cc; font-weight:700; }
-    .new-end    { color:#0055cc; font-weight:700; }
-    table { width:100%; border-collapse:collapse; margin-top:20px; }
-    th, td { border:1px solid #ddd; padding:8px; text-align:left; }
-    thead { background:#0077cc; color:white; }
+    .deleted     { color:#cc0000; text-decoration:line-through; }
+    .delayed     { color:#ff6600; font-weight:600; }
+    .delay-strike{ text-decoration:line-through; }
+    .small-gray  { color:#888; font-size:0.9rem; margin-left:6px; }
+    .new-start   { color:#0055cc; font-weight:700; }
+    .new-end     { color:#0055cc; font-weight:700; }
+    table        { width:100%; border-collapse:collapse; margin-top:20px; }
+    th, td       { border:1px solid #ddd; padding:8px; text-align:left; }
+    thead        { background:#0077cc; color:white; }
     .disruption-box { display:flex; align-items:center; gap:12px; padding:15px 20px; border-radius:8px; margin-bottom:20px; font-weight:600; }
     .disruption-box.red    { background:#ffe6e6; border:2px solid #cc0000; color:#cc0000; }
     .disruption-box.orange { background:#fff4e5; border:2px solid #ff6600; color:#ff6600; }
@@ -43,8 +44,8 @@
   <script>
   $(function(){
     $('#getTrainData').click(function(){
-      const num = $('#trainNumber').val().trim();
-      const date= $('#trainDate').val();
+      const num  = $('#trainNumber').val().trim();
+      const date = $('#trainDate').val();
       if(!num||!date){
         $('#trainInfo').html('<p class="deleted">Numéro et date requis.</p>');
         return;
@@ -73,11 +74,13 @@
             d.impacted_objects?.forEach(o=>{
               o.impacted_stops?.forEach(s=>{
                 impacted[s.stop_point.id]={
-                  stop_time_effect:        s.stop_time_effect,
-                  arrival_status:          s.arrival_status,
-                  departure_status:        s.departure_status,
-                  amended_arrival_time:    s.amended_arrival_time,
-                  amended_departure_time:  s.amended_departure_time
+                  stop_time_effect:       s.stop_time_effect,
+                  arrival_status:         s.arrival_status,
+                  departure_status:       s.departure_status,
+                  base_arrival_time:      s.base_arrival_time,
+                  base_departure_time:    s.base_departure_time,
+                  amended_arrival_time:   s.amended_arrival_time,
+                  amended_departure_time: s.amended_departure_time
                 };
               });
             });
@@ -107,71 +110,67 @@
             if(effect==='NO_SERVICE'){box='red'; icon='❌'; txt='Suppression totale';}
             if(effect==='REDUCED_SERVICE'){box='red'; icon='⚠️'; txt='Suppression partielle';}
             if(effect==='SIGNIFICANT_DELAYS'){box='orange'; icon='⏰'; txt='Retard important';}
-            html+=`<div class="disruption-box ${box}"><div class="disruption-icon">${icon}</div>
-                     <div><strong>Effet :</strong> ${txt}<br/><strong>Cause :</strong> ${message}</div>
+            html+=`<div class="disruption-box ${box}">
+                     <div class="disruption-icon">${icon}</div>
+                     <div><strong>Effet :</strong> ${txt}<br/>
+                          <strong>Cause :</strong> ${message}
+                     </div>
                    </div>`;
           }
 
           html+=`<h2>Horaires du train ${train.name}</h2>
-                 <table><thead><tr><th>Gare</th><th>Horaire prévu</th><th>Horaire retardé</th></tr></thead><tbody>`;
+                 <table>
+                   <thead><tr><th>Gare</th><th>Horaire prévu</th><th>Horaire retardé</th></tr></thead>
+                   <tbody>`;
 
           stops.forEach((s,i)=>{
             const imp = impacted[s.stop_point.id]||{};
-            // par défaut on garde initial
-            let classeG='', texteG=s.stop_point.name;
-            let classeP='', texteP=ft(s.arrival_time||s.departure_time);
-            let classeN='', texteN='';
-
-            // --- gare ---
-            if(effect==='REDUCED_SERVICE'&&i===firstDep&&i!==0
-               &&imp.stop_time_effect==='deleted'
-               &&imp.arrival_status==='deleted'
-               &&imp.departure_status==='unchanged'){
-              classeG='new-start';
-              texteG+=' (Nouvelle gare de départ)';
+            // 1) Gare
+            let cG='', txtG=s.stop_point.name;
+            if(effect==='REDUCED_SERVICE' && i===firstDep && i!==0
+               && imp.stop_time_effect==='deleted' && imp.arrival_status==='deleted' && imp.departure_status==='unchanged'){
+              cG='new-start';
+              txtG+=' (Nouvelle gare de départ)';
+            } else if(effect==='REDUCED_SERVICE' && i===lastArr){
+              cG='new-end';
+              txtG+=' (Nouveau terminus)';
             }
-            if(effect==='REDUCED_SERVICE'&&i===lastArr){
-              classeG='new-end';
-              texteG+=' (Nouveau terminus)';
-            }
-            // barrer hors intervalle sauf terminus
             if((effect==='NO_SERVICE'||i<firstDep||i>lastArr||imp.stop_time_effect==='deleted')
                &&!(effect==='REDUCED_SERVICE'&&i===lastArr)){
-              classeG='deleted';
+              cG='deleted';
             }
 
-            // --- horaire prévu ---
-            // pour terminus on affiche arrival, sinon departure
-            texteP = (i===lastArr && imp.amended_arrival_time)? ft(s.base_arrival_time||s.arrival_time) : ft(s.base_departure_time||s.departure_time);
-            if(effect==='NO_SERVICE'
-               ||imp.stop_time_effect==='deleted'
-               ||imp.departure_status==='deleted'){
-              classeP='deleted';
+            // 2) Horaire prévu
+            let cP='', txtP='';
+            // si terminus, on prend base_arrival_time, sinon base_departure_time
+            txtP = ft( imp.base_arrival_time   && i===lastArr ? imp.base_arrival_time   : imp.base_departure_time || s.departure_time );
+            // barrer partout où il y a un amended
+            if(imp.amended_departure_time || imp.amended_arrival_time){
+              cP = 'delay-strike';
             }
-            if(effect==='REDUCED_SERVICE'&&i===lastArr&&imp.amended_arrival_time){
-              classeP='';
+            // barrer aussi pour suppressions totales
+            if(effect==='NO_SERVICE'||imp.stop_time_effect==='deleted'||imp.departure_status==='deleted'){
+              cP = 'deleted';
             }
 
-            // --- horaire retardé ---
-            // pour terminus on utilise amended_arrival_time
+            // 3) Horaire retardé
+            let cN='', txtN='';
             if(i===lastArr && imp.amended_arrival_time){
-              const nd = ft(imp.amended_arrival_time);
-              const dt = dl(s.base_arrival_time||s.arrival_time, imp.amended_arrival_time);
-              texteN = `➔ ${nd} <span class="small-gray">(+${dt}min)</span>`;
-              classeN = 'new-end';
-            }
-            // sinon départ retardé
-            else if(imp.amended_departure_time){
-              const nd = ft(imp.amended_departure_time);
-              const dt = dl(s.base_departure_time||s.departure_time, imp.amended_departure_time);
-              texteN = `➔ ${nd} <span class="small-gray">(+${dt}min)</span>`;
-              classeN = 'delayed';
+              const nd=ft(imp.amended_arrival_time);
+              const dt=dl(imp.base_arrival_time||s.arrival_time, imp.amended_arrival_time);
+              txtN=`➔ ${nd} <span class="small-gray">(+${dt}min)</span>`;
+              cN='new-end';
+            } else if(imp.amended_departure_time){
+              const nd=ft(imp.amended_departure_time);
+              const dt=dl(imp.base_departure_time||s.departure_time, imp.amended_departure_time);
+              txtN=`➔ ${nd} <span class="small-gray">(+${dt}min)</span>`;
+              cN='delayed';
             }
 
             html+=`<tr>
-                     <td class="${classeG}">${texteG}</td>
-                     <td class="${classeP}">${texteP}</td>
-                     <td class="${classeN}">${texteN}</td>
+                     <td class="${cG}">${txtG}</td>
+                     <td class="${cP}">${txtP}</td>
+                     <td class="${cN}">${txtN}</td>
                    </tr>`;
           });
 
@@ -183,8 +182,6 @@
         }
       });
     });
-
-    // initialise date
     $('#trainDate').val(new Date().toISOString().split('T')[0]);
   });
   </script>
