@@ -6,13 +6,7 @@
   <title>Informations Train SNCF - Horaires Départ</title>
   <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
   <style>
-    body {
-      font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
-      background: #f9f9f9;
-      color: #222;
-      margin: 0; padding: 20px;
-      max-width: 720px; margin: auto;
-    }
+    body { font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif; background: #f9f9f9; color: #222; margin: 0; padding: 20px; max-width: 720px; margin:auto; }
     h1 { text-align:center; color:#0055a5; margin-bottom:1rem; }
     .input-container { background:#fff; padding:20px; border-radius:12px; box-shadow:0 4px 12px rgba(0,85,165,0.1); margin-bottom:30px; display:flex; flex-direction:column; align-items:center; gap:16px; }
     label { font-weight:600; color:#004080; margin-bottom:4px; }
@@ -28,7 +22,7 @@
     .new-end    { color:#0055cc; font-weight:700; }
     table { width:100%; border-collapse:collapse; margin-top:20px; }
     th, td { border:1px solid #ddd; padding:8px; text-align:left; }
-    thead { background:#0077cc; color:#fff; }
+    thead { background:#0077cc; color:white; }
     .disruption-box { display:flex; align-items:center; gap:12px; padding:15px 20px; border-radius:8px; margin-bottom:20px; font-weight:600; }
     .disruption-box.red    { background:#ffe6e6; border:2px solid #cc0000; color:#cc0000; }
     .disruption-box.orange { background:#fff4e5; border:2px solid #ff6600; color:#ff6600; }
@@ -37,7 +31,6 @@
 </head>
 <body>
   <h1>Informations sur votre bétaillère</h1>
-
   <div class="input-container">
     <label for="trainNumber">Numéro de votre Bétaillère :</label>
     <input type="text" id="trainNumber" value="88534" />
@@ -45,145 +38,148 @@
     <input type="date" id="trainDate" />
     <button id="getTrainData">Attention au départ</button>
   </div>
-
   <div id="trainInfo"></div>
 
   <script>
   $(function(){
     $('#getTrainData').click(function(){
-      const num = $('#trainNumber').val().trim();
+      const num  = $('#trainNumber').val().trim();
       const date = $('#trainDate').val();
-      if(!num||!date){
+      if(!num || !date){
         $('#trainInfo').html('<p class="deleted">Numéro et date requis.</p>');
         return;
       }
       $('#trainInfo').html('<p>Chargement…</p>');
 
-      const key = '242fac11-6d98-45fb-93df-28174d362447';
+      const key  = '242fac11-6d98-45fb-93df-28174d362447';
       const auth = btoa(key+':');
-      const url = `https://api.sncf.com/v1/coverage/sncf/vehicle_journeys/vehicle_journey:SNCF:${date}:${num}:1187:Train`;
+      const url  = `https://api.sncf.com/v1/coverage/sncf/vehicle_journeys/vehicle_journey:SNCF:${date}:${num}:1187:Train`;
 
-      $.ajax({url, headers:{Authorization:'Basic '+auth}, success:function(res){
-        if(!res.vehicle_journeys?.length){
-          $('#trainInfo').html('<p class="deleted">Aucun train trouvé.</p>');
-          return;
+      $.ajax({
+        url, headers:{Authorization:'Basic '+auth},
+        success: function(res){
+          if(!res.vehicle_journeys?.length){
+            $('#trainInfo').html('<p class="deleted">Aucun train trouvé.</p>');
+            return;
+          }
+          const train       = res.vehicle_journeys[0];
+          const disruptions = res.disruptions||[];
+          let effect=null, message='Non précisée';
+          const impacted = {};
+          if(disruptions.length){
+            const d = disruptions[0];
+            effect = d.severity.effect;
+            message= d.messages?.[0]?.text||message;
+            d.impacted_objects?.forEach(o=>{
+              o.impacted_stops?.forEach(s=>{
+                impacted[s.stop_point.id]={
+                  stop_time_effect: s.stop_time_effect,
+                  arrival_status:   s.arrival_status,
+                  departure_status: s.departure_status,
+                  amended_arrival_time: s.amended_arrival_time,
+                  amended_departure_time: s.amended_departure_time
+                };
+              });
+            });
+          }
+
+          const stops = train.stop_times;
+          let firstDep=-1, lastArr=-1;
+          stops.forEach((s,i)=>{
+            const imp = impacted[s.stop_point.id];
+            if(!imp || imp.departure_status!=='deleted'){
+              if(firstDep<0) firstDep = i;
+            }
+            if(!imp || imp.arrival_status!=='deleted'){
+              lastArr = i;
+            }
+          });
+
+          function ft(t){ return t? t.slice(0,2)+':'+t.slice(2):'-'; }
+          function dl(b,a){
+            return (parseInt(a.slice(0,2))*60+parseInt(a.slice(2))) - 
+                   (parseInt(b.slice(0,2))*60+parseInt(b.slice(2)));
+          }
+
+          let html = '';
+          if(effect){
+            let box='orange', icon='⚠️', txt=effect;
+            if(effect==='NO_SERVICE'){box='red'; icon='❌'; txt='Suppression totale';}
+            if(effect==='REDUCED_SERVICE'){box='red'; icon='⚠️'; txt='Suppression partielle';}
+            if(effect==='SIGNIFICANT_DELAYS'){box='orange'; icon='⏰'; txt='Retard important';}
+            html += `
+              <div class="disruption-box ${box}">
+                <div class="disruption-icon">${icon}</div>
+                <div>
+                  <strong>Effet :</strong> ${txt}<br/>
+                  <strong>Cause :</strong> ${message}
+                </div>
+              </div>`;
+          }
+
+          html += `<h2>Horaires du train ${train.name}</h2>
+                   <table>
+                     <thead>
+                       <tr><th>Gare</th><th>Prévu</th><th>Retardé</th></tr>
+                     </thead>
+                     <tbody>`;
+
+          stops.forEach((s,i)=>{
+            const imp = impacted[s.stop_point.id]||{};
+            const sd  = ft(s.departure_time);
+
+            // 1) gare
+            let cG='', txtG=s.stop_point.name;
+            if(effect==='REDUCED_SERVICE' && i===firstDep && i!==0){
+              cG='new-start';
+              txtG += ' (Nouvelle gare de départ)';
+            }
+            if(effect==='REDUCED_SERVICE' && i===lastArr){
+              cG='new-end';
+              txtG += ' (Nouveau terminus)';
+            }
+            if(effect==='NO_SERVICE' || i<firstDep || i>lastArr || imp.stop_time_effect==='deleted'){
+              cG='deleted';
+              // on conserve txtG pour garder le label si existant
+            }
+
+            // 2) prévu
+            let cP='', txtP=sd;
+            if(effect==='NO_SERVICE' || imp.stop_time_effect==='deleted' || imp.departure_status==='deleted'){
+              cP='deleted';
+            }
+
+            // 3) retardé
+            let cN='', txtN='';
+            if(imp.amended_departure_time && imp.amended_departure_time!==s.departure_time){
+              cN='delayed';
+              const nd = ft(imp.amended_departure_time);
+              const dt = dl(s.departure_time, imp.amended_departure_time);
+              txtN = `➔ ${nd} <span class="small-gray">(+${dt}min)</span>`;
+            }
+
+            html += `
+              <tr>
+                <td class="${cG}">${txtG}</td>
+                <td class="${cP}">${txtP}</td>
+                <td class="${cN}">${txtN}</td>
+              </tr>`;
+          });
+
+          html += `</tbody></table>`;
+          $('#trainInfo').html(html);
+
+        },
+        error: function(){
+          $('#trainInfo').html('<p class="deleted">Erreur réseau.</p>');
         }
-        const train = res.vehicle_journeys[0];
-        const disruptions = res.disruptions||[];
-        let effect=null, message='Non précisée';
-        const impacted = {};
-        if(disruptions.length){
-          const d = disruptions[0];
-          effect = d.severity.effect;
-          message = d.messages?.[0]?.text||message;
-          d.impacted_objects?.forEach(o=>o.impacted_stops?.forEach(s=>{
-            impacted[s.stop_point.id]={
-              stop_time_effect: s.stop_time_effect,
-              arrival_status: s.arrival_status,
-              departure_status: s.departure_status,
-              amended_arrival_time: s.amended_arrival_time,
-              amended_departure_time: s.amended_departure_time
-            };
-          }));
-        }
-
-        const stops = train.stop_times;
-        let firstDep=-1, lastArr=-1;
-        stops.forEach((s,i)=>{
-          const imp=impacted[s.stop_point.id];
-          if(!imp||imp.departure_status!=='deleted') if(firstDep<0) firstDep=i;
-          if(!imp||imp.arrival_status!=='deleted') lastArr=i;
-        });
-
-        function ft(t){return t? t.slice(0,2)+':'+t.slice(2):'-';}
-        function delay(b,a){return (parseInt(a.slice(0,2))*60+parseInt(a.slice(2)))-(parseInt(b.slice(0,2))*60+parseInt(b.slice(2)));}
-
-        let html = '';
-        if(effect){
-          let box='orange', icon='⚠️', txt=effect;
-          if(effect==='NO_SERVICE'){box='red'; icon='❌'; txt='Suppression totale'}
-          if(effect==='REDUCED_SERVICE'){box='red'; icon='⚠️'; txt='Suppression partielle'}
-          if(effect==='SIGNIFICANT_DELAYS'){box='orange'; icon='⏰'; txt='Retard important'}
-          html+=`<div class="disruption-box ${box}">
-                   <div class="disruption-icon">${icon}</div>
-                   <div><strong>Effet :</strong> ${txt}<br/><strong>Cause :</strong> ${message}</div>
-                 </div>`;
-        }
-        html+=`<h2>Horaires du train ${train.name}</h2>
-               <table><thead><tr><th>Gare</th><th>Prévu</th><th>Retardé</th></tr></thead><tbody>`;
-
-stops.forEach((s, i) => {
-  const imp = impacted[s.stop_point.id] || {};
-  const sd  = ft(s.departure_time);
-
-  // 1) initialisation
-  let classeGare = '';
-  let texteGare  = s.stop_point.name;
-
-  // 2) nouvelle gare de départ
-  if (effect === 'REDUCED_SERVICE'
-      && imp.stop_time_effect === 'deleted'
-      && imp.arrival_status === 'deleted'
-      && imp.departure_status === 'unchanged'
-      && i === firstRealDepartureIndex && i !== 0) {
-    classeGare = 'new-start';
-    texteGare += ' (Nouvelle gare de départ)';
-  }
-  // 3) nouveau terminus
-  else if (effect === 'REDUCED_SERVICE' && i === lastRealArrivalIndex) {
-    classeGare = 'new-end';
-    texteGare += ' (Nouveau terminus)';
-  }
-
-  // 4) suppression totale ou arrêts hors intervalle
-  //    * uniquement override la classe, PAS le texte *
-  if (effect === 'NO_SERVICE'
-      || i < firstRealDepartureIndex
-      || i > lastRealArrivalIndex
-      || imp.stop_time_effect === 'deleted') {
-    classeGare = 'deleted';
-    // NE PAS réinitialiser texteGare, pour préserver "(Nouveau terminus)"
-  }
-
-  // 5) cellule prévu
-  let classePrev = '';
-  let textePrev  = sd;
-  if (effect === 'NO_SERVICE'
-      || imp.stop_time_effect === 'deleted'
-      || imp.departure_status === 'deleted') {
-    classePrev = 'deleted';
-  }
-
-  // 6) cellule retardé
-  let classeNew = '';
-  let texteNew   = '';
-  if (imp.amended_departure_time && imp.amended_departure_time !== s.departure_time) {
-    const nd = ft(imp.amended_departure_time);
-    const dt = delay(s.departure_time, imp.amended_departure_time);
-    classeNew = 'delayed';
-    texteNew   = `➔ ${nd} <span class="small-gray">(+${dt}min)</span>`;
-  }
-
-  // 7) balise <tr>
-  html += `
-    <tr>
-      <td class="${classeGare}">${texteGare}</td>
-      <td class="${classePrev}">${textePrev}</td>
-      <td class="${classeNew}">${texteNew}</td>
-    </tr>
-  `;
-});
-
-        html+='</tbody></table>';
-        $('#trainInfo').html(html);
-
-      }, error:()=>$('#trainInfo').html('<p class="deleted">Erreur réseau.</p>')});
+      });
     });
 
-    // initialise date
-    const today=new Date().toISOString().split('T')[0];
-    $('#trainDate').val(today);
+    // initialise la date
+    $('#trainDate').val(new Date().toISOString().split('T')[0]);
   });
   </script>
+
 </body>
 </html>
