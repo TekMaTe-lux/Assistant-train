@@ -34,7 +34,7 @@
   <h1>Informations sur votre bétaillère</h1>
   <div class="input-container">
     <label for="trainNumber">Numéro de votre Bétaillère :</label>
-    <input type="text" id="trainNumber" value="88530" />
+    <input type="text" id="trainNumber" value="88534" />
     <label for="trainDate">Date de votre transhumance :</label>
     <input type="date" id="trainDate" />
     <button id="getTrainData">Attention au départ</button>
@@ -91,38 +91,25 @@ $(function(){
         }
 
         const stops = train.stop_times;
-
-        // Trouver la nouvelle gare de départ en cas de suppression partielle (REDUCED_SERVICE)
-        let firstDep = 0;
-        if(effect==='REDUCED_SERVICE'){
-          for(let i=0; i<stops.length; i++){
-            const imp = impacted[stops[i].stop_point.id];
-            if(!imp || imp.departure_status !== 'deleted'){
-              firstDep = i;
-              break;
-            }
+        let firstDep=-1, lastArr=-1;
+        stops.forEach((s,i)=>{
+          const imp=impacted[s.stop_point.id];
+          if(!imp||imp.departure_status!=='deleted'){
+            if(firstDep<0) firstDep=i;
           }
-        }
-
-        // La dernière gare normale (pas supprimée)
-        let lastArr = stops.length -1;
-        if(effect==='REDUCED_SERVICE'){
-          for(let i=stops.length-1; i>=0; i--){
-            const imp = impacted[stops[i].stop_point.id];
-            if(!imp || imp.arrival_status !== 'deleted'){
-              lastArr = i;
-              break;
-            }
+          if(!imp||imp.arrival_status!=='deleted'){
+            lastArr=i;
           }
-        }
+        });
 
         const originalFirstDep = 0;
         const originalLastArr  = stops.length - 1;
 
-        function ft(t){ return t ? t.slice(0,2)+':'+t.slice(2,4) : '-'; }
+        function ft(t){ return t? t.slice(0,2)+':'+t.slice(2,4):'-'; }
         function dl(b,a){
           return (parseInt(a.slice(0,2))*60+parseInt(a.slice(2,4))) - (parseInt(b.slice(0,2))*60+parseInt(b.slice(2,4)));
         }
+
         function isValidDelay(delay) {
           return delay > 0;
         }
@@ -146,50 +133,55 @@ $(function(){
 
         stops.forEach((s,i)=>{
           const imp = impacted[s.stop_point.id]||{};
+          let cG='', txtG=s.stop_point.name;
 
-          // Classe du nom de gare
-          let cG = '';
-          let txtG = s.stop_point.name;
-
-          if(effect==='REDUCED_SERVICE' && i === firstDep && i !== originalFirstDep){
-            cG = 'new-start';
-            txtG += ' (Nouvelle gare de départ)';
-          } else if(effect==='REDUCED_SERVICE' && i === lastArr && i !== originalLastArr){
-            cG = 'new-end';
-            txtG += ' (Nouveau terminus)';
-          } else if(effect==='REDUCED_SERVICE' && i < firstDep){
-            cG = 'deleted'; // barré en rouge les gares supprimées avant nouvelle gare départ
-          } else if(effect==='NO_SERVICE' || imp.stop_time_effect === 'deleted'){
-            cG = 'deleted';
+          // Priorité nouvelle gare de départ (en bleu)
+          if(effect==='REDUCED_SERVICE' && i===firstDep && i!==originalFirstDep){
+            cG='new-start';
+            txtG+=' (Nouvelle gare de départ)';
+          } 
+          // Nouvelle gare terminus en bleu
+          else if(effect==='REDUCED_SERVICE' && i===lastArr && i!==originalLastArr){
+            cG='new-end';
+            txtG+=' (Nouveau terminus)';
+          } 
+          // Sinon barré rouge si suppression sauf pour nouvelle gare de départ
+          else if((effect==='NO_SERVICE' || imp.stop_time_effect==='deleted' || imp.departure_status==='deleted') && i!==firstDep){
+            cG='deleted';
           }
 
-          // On affiche uniquement l'heure de départ si dispo, sinon '-'
-          let baseTime = imp.base_departure_time || s.departure_time || null;
-          let amendedTime = imp.amended_departure_time || null;
+          let heure='';
+          let base=null, amended=null;
 
-          // On détermine les classes et textes horaires
-          let cP = '', cN = '', txtP = '', txtN = '';
-
-          if(baseTime){
-            txtP = ft(baseTime);
+          // Pour afficher l'heure de départ à tous les arrêts sauf le dernier
+          if(i !== originalLastArr){
+            base    = imp.base_departure_time || s.departure_time;
+            amended = imp.amended_departure_time;
           } else {
-            txtP = '-';
+            // dernière gare : afficher heure d'arrivée
+            base    = imp.base_arrival_time || s.arrival_time;
+            amended = imp.amended_arrival_time;
           }
 
-          if(amendedTime && isValidDelay(dl(baseTime, amendedTime))){
-            txtN = `➔ ${ft(amendedTime)} <span class="small-gray">(+${dl(baseTime, amendedTime)}min)</span>`;
-            cN = 'delayed';
-            cP = 'delay-strike';
+          let cP='', cN='', txtP='', txtN='';
+          if(base){
+            txtP = ft(base);
+            if(amended && isValidDelay(dl(base, amended))){
+              txtN = `➔ ${ft(amended)} <span class="small-gray">(+${dl(base, amended)}min)</span>`;
+              cN = 'delayed';
+              cP = 'delay-strike';
+            }
           }
 
-          // Si suppression totale ou suppression à cet arrêt, barrer l'heure et la gare en rouge
-          if(effect==='NO_SERVICE' || imp.stop_time_effect === 'deleted' || imp.departure_status === 'deleted'){
-            cG = 'deleted';
-            cP = 'deleted';
-            txtN = '';
+          if(effect==='NO_SERVICE' || imp.stop_time_effect==='deleted' || imp.departure_status==='deleted'){
+            // sauf nouvelle gare de départ (bleue), barrer aussi l'heure prévue
+            if(i!==firstDep){
+              cP='deleted';
+              txtN='';
+            }
           }
 
-          // Pour la nouvelle gare de départ, on met l'heure en bleu, même si retard
+          // Affichage spécial heure en bleu pour nouvelle gare de départ
           if(i === firstDep){
             cP = 'new-start';
           }
