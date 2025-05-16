@@ -1,151 +1,118 @@
 <!DOCTYPE html>
 <html lang="fr">
 <head>
-  <meta charset="UTF-8">
-  <title>Informations train SNCF</title>
-  <style>
-    body {
-      font-family: Arial, sans-serif;
-      padding: 20px;
-    }
-    table {
-      width: 100%;
-      border-collapse: collapse;
-      margin-top: 15px;
-    }
-    th, td {
-      border: 1px solid #aaa;
-      padding: 8px;
-      text-align: center;
-    }
-    th {
-      background-color: #f2f2f2;
-    }
-    .deleted {
-      text-decoration: line-through;
-      color: red;
-    }
-    .new-start, .new-end {
-      background-color: #ffffcc;
-    }
-    .status-info {
-      margin-top: 20px;
-      font-weight: bold;
-    }
-  </style>
+<meta charset="UTF-8" />
+<title>Horaires en tableau</title>
+<style>
+  table {
+    border-collapse: collapse;
+    width: 100%;
+    max-width: 600px;
+  }
+  th, td {
+    border: 1px solid #ddd;
+    padding: 6px 10px;
+    text-align: left;
+    vertical-align: middle;
+  }
+  th {
+    background-color: #f2f8ff;
+    color: #003b7a;
+  }
+  .deleted {
+    color: red;
+    text-decoration: line-through;
+  }
+  .delayed {
+    color: darkorange;
+    font-weight: bold;
+  }
+  .info {
+    color: blue;
+    font-weight: bold;
+  }
+  .arrow {
+    margin: 0 4px;
+    color: black;
+  }
+</style>
 </head>
 <body>
-  <h1>Infos Train SNCF</h1>
-  <label for="trainId">Numéro du train :</label>
-  <input type="text" id="trainId" placeholder="Ex: 891725">
-  <label for="date">Date :</label>
-  <input type="date" id="date">
-  <button onclick="fetchTrain()">Afficher</button>
 
-  <div id="results"></div>
+<h3>Horaires de départ du train 18103 :</h3>
 
-  <script>
-    async function fetchTrain() {
-      const trainId = document.getElementById('trainId').value.trim();
-      const date = document.getElementById('date').value;
-      const resultsDiv = document.getElementById('results');
-      resultsDiv.innerHTML = '';
+<table>
+  <thead>
+    <tr>
+      <th>Gare</th>
+      <th>Horaire prévu</th>
+      <th>Horaire retardé</th>
+    </tr>
+  </thead>
+  <tbody id="scheduleBody">
+  </tbody>
+</table>
 
-      if (!trainId || !date) {
-        resultsDiv.innerText = 'Veuillez entrer un numéro de train et une date.';
-        return;
-      }
+<script>
+  const stops = [
+    { gare: "Besançon-Viotte", scheduled: "04:52", real: null, deleted: false },
+    { gare: "Besançon - Mouillère", scheduled: "04:57", real: "05:17", deleted: false, delayMinutes: 20 },
+    { gare: "Morre", scheduled: "05:04", real: "05:49", deleted: false, delayMinutes: 45 },
+    { gare: "Saône", scheduled: "05:09", real: "05:54", deleted: false, delayMinutes: 45 },
+    { gare: "Mamirolle", scheduled: "05:15", real: "06:00", deleted: false, delayMinutes: 45 },
+    { gare: "L'Hôpital-du-Grosbois", scheduled: "05:23", real: "06:08", deleted: false, delayMinutes: 45 },
+    { gare: "Étalans", scheduled: "05:28", real: "06:13", deleted: false, delayMinutes: 45 },
+    { gare: "Le Valdahon - Camp Militaire", scheduled: "05:32", real: "06:17", deleted: false, delayMinutes: 45 },
+    { gare: "Le Valdahon", scheduled: "05:43", real: "06:28", deleted: false, delayMinutes: 45 },
+    { gare: "Avoudrey", scheduled: "05:51", real: "06:36", deleted: false, delayMinutes: 45 },
+    { gare: "Gilley", scheduled: "06:04", real: "06:49", deleted: false, delayMinutes: 45 },
+    { gare: "Morteau", scheduled: "07:00", real: null, deleted: false, info: "(Nouveau terminus)" },
+    { gare: "Le Locle Col des Roches", scheduled: "06:40", real: null, deleted: true },
+    { gare: "Le Locle", scheduled: "06:44", real: null, deleted: true },
+    { gare: "Le Crêt du Locle", scheduled: "06:48", real: null, deleted: true },
+    { gare: "La Chaux-de-Fonds Les Forges", scheduled: "06:51", real: null, deleted: true },
+    { gare: "La Chaux-de-Fonds", scheduled: "06:54", real: null, deleted: true }
+  ];
 
-      const apiKey = '242fac11-6d98-45fb-93df-28174d362447'; // Remplace par ta clé
-      const formattedDate = date.replace(/-/g, '') + 'T000000';
-      const url = `https://api.sncf.com/v1/coverage/sncf/journeys?train_number=${trainId}&datetime=${formattedDate}&count=1`;
+  const tbody = document.getElementById("scheduleBody");
 
-      try {
-        const response = await fetch(url, {
-          headers: { Authorization: `Basic ${btoa(apiKey + ':')}` }
-        });
-        const data = await response.json();
+  stops.forEach(stop => {
+    const tr = document.createElement("tr");
 
-        const journey = data.journeys[0];
-        if (!journey) {
-          resultsDiv.innerText = 'Aucun trajet trouvé.';
-          return;
-        }
-
-        const publicSection = journey.sections.find(sec => sec.type === "public_transport");
-        if (!publicSection || !publicSection.display_informations) {
-          resultsDiv.innerText = 'Aucune section publique trouvée.';
-          return;
-        }
-
-        const stops = publicSection.stop_date_times;
-        const start = stops.find(s => s.departure_status !== 'deleted');
-        const end = [...stops].reverse().find(s => s.arrival_status !== 'deleted');
-
-        const table = document.createElement('table');
-        const header = document.createElement('tr');
-        header.innerHTML = `
-          <th>Gare</th>
-          <th>Arrivée</th>
-          <th>Départ</th>
-          <th>Statut</th>
-        `;
-        table.appendChild(header);
-
-        for (const stop of stops) {
-          const row = document.createElement('tr');
-          const isDeleted = (stop.departure_status === 'deleted' && stop.arrival_status === 'deleted');
-          const isNewStart = stop.stop_point.label === start.stop_point.label && stops[0].stop_point.label !== start.stop_point.label;
-          const isNewEnd = stop.stop_point.label === end.stop_point.label && stops[stops.length - 1].stop_point.label !== end.stop_point.label;
-
-          let status = '';
-          if (isDeleted) status = 'Supprimé';
-          else if (isNewStart) status = 'Nouveau départ';
-          else if (isNewEnd) status = 'Nouveau terminus';
-
-          row.className = `${isDeleted ? 'deleted' : ''} ${isNewStart ? 'new-start' : ''} ${isNewEnd ? 'new-end' : ''}`;
-          row.innerHTML = `
-            <td>${stop.stop_point.label}</td>
-            <td>${stop.arrival_date_time ? formatHour(stop.arrival_date_time) : '-'}</td>
-            <td>${stop.departure_date_time ? formatHour(stop.departure_date_time) : '-'}</td>
-            <td>${status}</td>
-          `;
-          table.appendChild(row);
-        }
-
-        resultsDiv.appendChild(table);
-
-        // Statut global
-        let statusText = '';
-        if (journey.status === 'cancelled') {
-          statusText = '⚠️ Train supprimé.';
-        } else if (journey.durations?.departure_delay || journey.durations?.arrival_delay) {
-          const delay = journey.durations.departure_delay || journey.durations.arrival_delay;
-          statusText = `🚨 Retard estimé : ${Math.round(delay / 60)} min.`;
-        }
-
-        // Cause perturbation
-        const causes = publicSection.display_informations.links?.filter(link => link.type === 'cause');
-        if (causes?.length) {
-          statusText += `<br>💬 Cause : ${causes.map(c => c.value).join(', ')}`;
-        }
-
-        if (statusText) {
-          const statusDiv = document.createElement('div');
-          statusDiv.className = 'status-info';
-          statusDiv.innerHTML = statusText;
-          resultsDiv.appendChild(statusDiv);
-        }
-
-      } catch (error) {
-        console.error(error);
-        resultsDiv.innerText = 'Erreur lors de la récupération des données.';
-      }
+    // Colonne Gare
+    const tdGare = document.createElement("td");
+    if (stop.deleted) {
+      tdGare.classList.add("deleted");
     }
-
-    function formatHour(dateTime) {
-      return dateTime?.substring(9, 11) + 'h' + dateTime?.substring(11, 13);
+    tdGare.textContent = stop.gare;
+    if (stop.info) {
+      const spanInfo = document.createElement("span");
+      spanInfo.textContent = " " + stop.info;
+      spanInfo.classList.add("info");
+      tdGare.appendChild(spanInfo);
     }
-  </script>
+    tr.appendChild(tdGare);
+
+    // Colonne Horaire prévu
+    const tdScheduled = document.createElement("td");
+    if (stop.deleted) {
+      tdScheduled.classList.add("deleted");
+    }
+    tdScheduled.textContent = stop.scheduled;
+    tr.appendChild(tdScheduled);
+
+    // Colonne Horaire retardé
+    const tdReal = document.createElement("td");
+    if (stop.real) {
+      tdReal.innerHTML = `<span class="arrow">➔</span> <span class="delayed">${stop.real}</span> <span>(${stop.delayMinutes}min)</span>`;
+    } else {
+      tdReal.textContent = "";
+    }
+    tr.appendChild(tdReal);
+
+    tbody.appendChild(tr);
+  });
+</script>
+
 </body>
 </html>
