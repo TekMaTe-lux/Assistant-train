@@ -1,4 +1,5 @@
-<!DOCTYPE html><html lang="fr">
+<!DOCTYPE html>
+<html lang="fr">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -51,129 +52,130 @@
     <input type="date" id="trainDate">
     <button id="loadTrains">Afficher</button>
   </div>
-  <div id="trainInfo"></div><script>
-$(function(){
-  $('#trainDate').val(new Date().toISOString().split('T')[0]);
+  <div id="trainInfo"></div>
+  <script>
+    $(function(){
+      $('#trainDate').val(new Date().toISOString().split('T')[0]);
 
-  $('#loadTrains').click(async function(){
-    const date = $('#trainDate').val();
-    const numbers = $('#trainNumbers').val().split(',').map(s => s.trim()).filter(Boolean);
+      $('#loadTrains').click(async function(){
+        const date = $('#trainDate').val();
+        const numbers = $('#trainNumbers').val().split(',').map(s => s.trim()).filter(Boolean);
 
-    if(!numbers.length || !date){
-      $('#trainInfo').html('<p class="deleted">Veuillez indiquer au moins un numéro de train et une date.</p>');
-      return;
-    }
-
-    $('#trainInfo').html('<p>Chargement…</p>');
-
-    const key  = '242fac11-6d98-45fb-93df-28174d362447';
-    const auth = btoa(key+':');
-    const results = {};
-
-    const fixedStops = [
-      "Luxembourg", "Howald", "Bettembourg", "Hettange-Grande", "Thionville",
-      "Uckange", "Hagondange", "Maizières-lès-Metz", "Woippy", "Metz Nord",
-      "Metz", "Pagny-sur-Moselle", "Pont-à-Mousson", "Nancy"
-    ];
-
-    const ft = t => t ? t.slice(0,2)+':'+t.slice(2,4) : '-';
-    const dl = (b,a) => (parseInt(a.slice(0,2))*60+parseInt(a.slice(2,4))) - (parseInt(b.slice(0,2))*60+parseInt(b.slice(2,4)));
-
-    for (const num of numbers) {
-      const url = `https://api.sncf.com/v1/coverage/sncf/vehicle_journeys/vehicle_journey:SNCF:${date}:${num}:1187:Train`;
-
-      try {
-        const res = await $.ajax({ url, headers: { Authorization: 'Basic ' + auth } });
-        const train = res.vehicle_journeys?.[0];
-        if (!train) {
-          results[num] = { error: 'Non trouvé' };
-          continue;
+        if(!numbers.length || !date){
+          $('#trainInfo').html('<p class="deleted">Veuillez indiquer au moins un numéro de train et une date.</p>');
+          return;
         }
 
-        const disruptions = res.disruptions || [];
-        const impacted = {};
-        let newStart = null, newEnd = null;
-        if (disruptions.length) {
-          for (const d of disruptions) {
-            for (const o of d.impacted_objects || []) {
-              for (const s of o.impacted_stops || []) {
-                impacted[s.stop_point.id] = s;
+        $('#trainInfo').html('<p>Chargement…</p>');
+
+        const key  = '242fac11-6d98-45fb-93df-28174d362447';
+        const auth = btoa(key+':');
+        const results = {};
+
+        const fixedStops = [
+          "Luxembourg", "Howald", "Bettembourg", "Hettange-Grande", "Thionville",
+          "Uckange", "Hagondange", "Maizières-lès-Metz", "Woippy", "Metz Nord",
+          "Metz", "Pagny-sur-Moselle", "Pont-à-Mousson", "Nancy"
+        ];
+
+        const ft = t => t ? t.slice(0,2)+':'+t.slice(2,4) : '-';
+        const dl = (b,a) => (parseInt(a.slice(0,2))*60+parseInt(a.slice(2,4))) - (parseInt(b.slice(0,2))*60+parseInt(b.slice(2,4)));
+
+        for (const num of numbers) {
+          const url = `https://api.sncf.com/v1/coverage/sncf/vehicle_journeys/vehicle_journey:SNCF:${date}:${num}:1187:Train`;
+          try {
+            const res = await $.ajax({ url, headers: { Authorization: 'Basic ' + auth } });
+            const train = res.vehicle_journeys?.[0];
+            if (!train) {
+              results[num] = { error: 'Non trouvé' };
+              continue;
+            }
+
+            const disruptions = res.disruptions || [];
+            const impacted = {};
+            let newStart = null, newEnd = null;
+            if (disruptions.length) {
+              for (const d of disruptions) {
+                for (const o of d.impacted_objects || []) {
+                  for (const s of o.impacted_stops || []) {
+                    impacted[s.stop_point.id] = s;
+                  }
+                }
+              }
+
+              for (let s of train.stop_times) {
+                const id = s.stop_point.id;
+                const imp = impacted[id];
+                if (imp && imp.departure_status !== 'deleted' && imp.arrival_status !== 'deleted') {
+                  newStart = id;
+                  break;
+                }
+              }
+
+              for (let i = train.stop_times.length - 1; i >= 0; i--) {
+                const s = train.stop_times[i];
+                const id = s.stop_point.id;
+                const imp = impacted[id];
+                if (imp && imp.departure_status !== 'deleted' && imp.arrival_status !== 'deleted') {
+                  newEnd = id;
+                  break;
+                }
               }
             }
-          }
 
-          for (let s of train.stop_times) {
-            const id = s.stop_point.id;
-            const imp = impacted[id];
-            if (imp && imp.departure_status !== 'deleted' && imp.arrival_status !== 'deleted') {
-              newStart = id;
-              break;
+            results[num] = { train, impacted, newStart, newEnd };
+          } catch {
+            results[num] = { error: 'Erreur API' };
+          }
+        }
+
+        let html = '<table><thead><tr><th>Gare</th>';
+        numbers.forEach(n => html += `<th>${n}</th>`);
+        html += '</tr></thead><tbody>';
+
+        for (const stopName of fixedStops) {
+          html += `<tr><td>${stopName}</td>`;
+          numbers.forEach(num => {
+            const result = results[num];
+            if (!result || result.error) {
+              html += `<td class="deleted">${result?.error || 'Erreur'}</td>`;
+              return;
             }
-          }
 
-          for (let i = train.stop_times.length - 1; i >= 0; i--) {
-            const s = train.stop_times[i];
-            const id = s.stop_point.id;
-            const imp = impacted[id];
-            if (imp && imp.departure_status !== 'deleted' && imp.arrival_status !== 'deleted') {
-              newEnd = id;
-              break;
+            const stop = result.train.stop_times.find(s => s.stop_point.name === stopName);
+            if (!stop) {
+              html += `<td>-</td>`;
+              return;
             }
-          }
+
+            const id = stop.stop_point.id;
+            const imp = result.impacted[id] || {};
+            const base = imp.base_departure_time || imp.base_arrival_time || stop.departure_time || stop.arrival_time;
+            const amended = imp.amended_departure_time || imp.amended_arrival_time;
+            const isDeleted = imp.stop_time_effect === 'deleted' || imp.departure_status === 'deleted' || imp.arrival_status === 'deleted';
+
+            let content = ft(base);
+            if (amended && dl(base, amended) > 0) {
+              content = `<span class="delay-strike">${content}</span><br><span class="delayed">➔ ${ft(amended)} (+${dl(base, amended)} min)</span>`;
+            }
+
+            if (id === result.newStart) {
+              content = `<span class="new-start">${content}<br>(Nouvelle origine)</span>`;
+            } else if (id === result.newEnd) {
+              content = `<span class="new-end">${content}<br>(Nouveau terminus)</span>`;
+            } else if (isDeleted) {
+              content = `<span class="deleted">${content}</span>`;
+            }
+
+            html += `<td>${content}</td>`;
+          });
+          html += '</tr>';
         }
 
-        results[num] = { train, impacted, newStart, newEnd };
-      } catch {
-        results[num] = { error: 'Erreur API' };
-      }
-    }
-
-    let html = '<table><thead><tr><th>Gare</th>';
-    numbers.forEach(n => html += `<th>${n}</th>`);
-    html += '</tr></thead><tbody>';
-
-    for (const stopName of fixedStops) {
-      html += `<tr><td>${stopName}</td>`;
-      numbers.forEach(num => {
-        const result = results[num];
-        if (!result || result.error) {
-          html += `<td class="deleted">${result?.error || 'Erreur'}</td>`;
-          return;
-        }
-
-        const stop = result.train.stop_times.find(s => s.stop_point.name === stopName);
-        if (!stop) {
-          html += `<td>-</td>`;
-          return;
-        }
-
-        const id = stop.stop_point.id;
-        const imp = result.impacted[id] || {};
-        const base = imp.base_departure_time || imp.base_arrival_time || stop.departure_time || stop.arrival_time;
-        const amended = imp.amended_departure_time || imp.amended_arrival_time;
-        const isDeleted = imp.stop_time_effect === 'deleted' || imp.departure_status === 'deleted' || imp.arrival_status === 'deleted';
-
-        let content = ft(base);
-        if (amended && dl(base, amended) > 0) {
-          content = `<span class="delay-strike">${content}</span><br><span class="delayed">➔ ${ft(amended)} (+${dl(base, amended)} min)</span>`;
-        }
-
-        if (id === result.newStart) {
-          content = `<span class="new-start">${content}<br>(Nouvelle origine)</span>`;
-        } else if (id === result.newEnd) {
-          content = `<span class="new-end">${content}<br>(Nouveau terminus)</span>`;
-        } else if (isDeleted) {
-          content = `<span class="deleted">${content}</span>`;
-        }
-
-        html += `<td>${content}</td>`;
+        html += '</tbody></table>';
+        $('#trainInfo').html(html);
       });
-      html += '</tr>';
-    }
-
-    html += '</tbody></table>';
-    $('#trainInfo').html(html);
-  });
-});
-</script></body>
+    });
+  </script>
+</body>
 </html>
