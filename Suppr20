@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Comparatif Trains SNCF</title>
+  <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+  <style>
+    body {
+      font-family:"Segoe UI",Tahoma,Geneva,Verdana,sans-serif;
+      background:#f9f9f9; color:#222; margin:0; padding:20px; max-width:1000px; margin:auto;
+    }
+    h1 { color:#0055a5; }
+    input, button { font-size:1rem; }
+    button {
+      background:#0077cc; color:#fff; border:none;
+      padding:12px 24px; border-radius:8px; cursor:pointer;
+    }
+    button:hover { background:#005999; }
+    .input-container {
+      background:#fff; padding:20px; border-radius:12px;
+      box-shadow:0 4px 12px rgba(0,85,165,0.1); margin-bottom:30px;
+      display:flex; flex-direction:column; gap:12px;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 20px;
+    }
+    th, td {
+      border: 1px solid #ccc;
+      padding: 8px;
+      text-align: center;
+      vertical-align: middle;
+    }
+    th {
+      background-color: #0077cc;
+      color: white;
+    }
+    .deleted      { color:#cc0000; text-decoration:line-through; }
+    .delay-strike { text-decoration:line-through; }
+    .delayed      { color:#ff6600; font-weight:600; }
+    .new-start, .new-end { color:#0055cc; font-weight:700; }
+  </style>
+</head>
+<body>
+  <h1>Comparatif des bétaillères</h1>
+  <div class="input-container">
+    <label for="trainNumbers">Numéros de Bétaillères (séparés par virgule) :</label>
+    <input type="text" id="trainNumbers" value="88534,88536">
+    <label for="trainDate">Date :</label>
+    <input type="date" id="trainDate">
+    <button id="loadTrains">Afficher</button>
+  </div>
+  <div id="trainInfo"></div>
+
+<script>
+$(function(){
+  $('#trainDate').val(new Date().toISOString().split('T')[0]);
+
+  $('#loadTrains').click(async function(){
+    const date = $('#trainDate').val();
+    const numbers = $('#trainNumbers').val().split(',').map(s => s.trim()).filter(Boolean);
+
+    if(!numbers.length || !date){
+      $('#trainInfo').html('<p class="deleted">Veuillez indiquer au moins un numéro de train et une date.</p>');
+      return;
+    }
+
+    $('#trainInfo').html('<p>Chargement…</p>');
+
+    const key  = '242fac11-6d98-45fb-93df-28174d362447';
+    const auth = btoa(key+':');
+    const stopsMap = new Map();
+    const results = {};
+
+    const ft = t => t ? t.slice(0,2)+':'+t.slice(2,4) : '-';
+    const dl = (b,a) => (parseInt(a.slice(0,2))*60+parseInt(a.slice(2,4))) - (parseInt(b.slice(0,2))*60+parseInt(b.slice(2,4)));
+
+    for (const num of numbers) {
+      const url = `https://api.sncf.com/v1/coverage/sncf/vehicle_journeys/vehicle_journey:SNCF:${date}:${num}:1187:Train`;
+
+      try {
+        const res = await $.ajax({ url, headers: { Authorization: 'Basic ' + auth } });
+        const train = res.vehicle_journeys?.[0];
+        if (!train) {
+          results[num] = { error: 'Non trouvé' };
+          continue;
+        }
+
+        const disruptions = res.disruptions || [];
+        const impacted = {};
+        if (disruptions.length) {
+          disruptions.forEach(d => {
+            d.impacted_objects?.forEach(o => {
+              o.impacted_stops?.forEach(s => {
+                impacted[s.stop_point.id] = s;
+              });
+            });
+          });
+        }
+
+        results[num] = { train, impacted };
+        train.stop_times.forEach(s => stopsMap.set(s.stop_point.name, true));
+      } catch {
+        results[num] = { error: 'Erreur API' };
+      }
+    }
+
+    const allStops = [...stopsMap.keys()];
+    let html = '<table><thead><tr><th>Gare</th>';
+    numbers.forEach(n => html += `<th>${n}</th>`);
+    html += '</tr></thead><tbody>';
+
+    for (const stopName of allStops) {
+      html += `<tr><td>${stopName}</td>`;
+      numbers.forEach(num => {
+        const result = results[num];
+        if (!result || result.error) {
+          html += `<td class="deleted">${result?.error || 'Erreur'}</td>`;
+          return;
+        }
+
+        const stop = result.train.stop_times.find(s => s.stop_point.name === stopName);
+        const imp = result.impacted[stop?.stop_point?.id] || {};
+        if (!stop) {
+          html += `<td>-</td>`;
+          return;
+        }
+
+        const base = imp.base_departure_time || imp.base_arrival_time || stop.departure_time || stop.arrival_time;
+        const amended = imp.amended_departure_time || imp.amended_arrival_time;
+        const isDeleted = imp.stop_time_effect === 'deleted' || imp.departure_status === 'deleted' || imp.arrival_status === 'deleted';
+
+        let content = ft(base);
+        if (amended && dl(base, amended) > 0) {
+          content = `<span class="delay-strike">${content}</span><br><span class="delayed">➔ ${ft(amended)} (+${dl(base, amended)} min)</span>`;
+        }
+
+        if (isDeleted) content = `<span class="deleted">${content}</span>`;
+
+        html += `<td>${content}</td>`;
+      });
+      html += '</tr>';
+    }
+
+    html += '</tbody></table>';
+    $('#trainInfo').html(html);
+  });
+});
+</script>
+</body>
+</html>
