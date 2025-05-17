@@ -53,15 +53,11 @@
       text-align: center;
       vertical-align: middle;
       border-bottom: 1px solid #ddd;
-      position: relative; /* pour positionner la bulle */
-      cursor: pointer; /* indique que c’est cliquable */
     }
     thead th {
       background-color: #0077cc;
       color: white;
       border-bottom: 2px solid #005499;
-      cursor: default;
-      position: static;
     }
     tbody tr:nth-child(even) {
       background-color: #f3f6fc;
@@ -92,35 +88,6 @@
     .supprimé {
       color: #cc0000;
     }
-    /* style bulle d’info */
-    .tooltip {
-      display: none;
-      position: absolute;
-      top: 110%;
-      left: 50%;
-      transform: translateX(-50%);
-      background: #333;
-      color: white;
-      padding: 6px 10px;
-      border-radius: 6px;
-      font-size: 0.85rem;
-      max-width: 220px;
-      z-index: 10;
-      box-shadow: 0 2px 8px rgba(0,0,0,0.3);
-      word-wrap: break-word;
-      pointer-events: none;
-    }
-    /* petit triangle sous la bulle */
-    .tooltip::after {
-      content: "";
-      position: absolute;
-      top: 0;
-      left: 50%;
-      margin-left: -6px;
-      border-width: 6px;
-      border-style: solid;
-      border-color: transparent transparent #333 transparent;
-    }
   </style>
 </head>
 <body>
@@ -145,11 +112,6 @@
 
       const ft = t => t ? t.slice(0, 2) + ':' + t.slice(2, 4) : '-';
       const dl = (b, a) => (parseInt(a.slice(0, 2)) * 60 + parseInt(a.slice(2, 4))) - (parseInt(b.slice(0, 2)) * 60 + parseInt(b.slice(2, 4)));
-
-      // fonction pour créer la bulle tooltip
-      function createTooltip(text) {
-        return $('<div class="tooltip"></div>').text(text);
-      }
 
       $('#loadTrains').click(async function () {
         const date = $('#trainDate').val();
@@ -250,105 +212,67 @@
           html += `<th title="${title.replace(/"/g, '&quot;')}">${icon}</th>`;
         });
         html += '</tr></thead><tbody>';
- // génération des lignes pour chaque gare fixe
-        fixedStops.forEach(station => {
-          html += `<tr><td>${station}</td>`;
+
+        for (const stopName of fixedStops) {
+          html += `<tr><td>${stopName}</td>`;
           numbers.forEach(num => {
             const result = results[num];
             if (!result || result.error) {
-              html += `<td class="deleted">-</td>`;
+              html += `<td class="deleted">${result?.error || 'Erreur'}</td>`;
               return;
             }
 
-            const train = result.train;
-            const impacted = result.impacted;
-            const newStart = result.newStart;
-            const newEnd = result.newEnd;
-
-            // Trouver l'arrêt correspondant à cette gare
-            const stopTime = train.stop_times.find(st => st.stop_point.name === station);
-            if (!stopTime) {
+            const stop = result.train.stop_times.find(s => s.stop_point.name === stopName);
+            if (!stop) {
               html += `<td>-</td>`;
               return;
             }
 
-            const stopId = stopTime.stop_point.id;
-            const imp = impacted[stopId];
-            const baseArr = stopTime.base_arrival_time || '';
-            const baseDep = stopTime.base_departure_time || '';
-            const amendedArr = imp?.amended_arrival_time || '';
-            const amendedDep = imp?.amended_departure_time || '';
-            const arrDelay = amendedArr && baseArr ? dl(baseArr, amendedArr) : 0;
-            const depDelay = amendedDep && baseDep ? dl(baseDep, amendedDep) : 0;
-            const arrivalTime = amendedArr || baseArr;
-            const departureTime = amendedDep || baseDep;
+            const id = stop.stop_point.id;
+            const imp = result.impacted[id] || {};
+            const base = imp.base_departure_time || imp.base_arrival_time || stop.departure_time || stop.arrival_time;
+            const amended = imp.amended_departure_time || imp.amended_arrival_time;
+            const departureDeleted = imp.departure_status === 'deleted';
+            const arrivalDeleted = imp.arrival_status === 'deleted';
+            const isStopDeleted = departureDeleted && arrivalDeleted;
 
-            // Décider si cette gare est supprimée (deleted)
-            const isDeleted = imp?.departure_status === 'deleted' || imp?.arrival_status === 'deleted';
+            const index = result.train.stop_times.findIndex(s => s.stop_point.id === id);
+            const newStartIndex = result.train.stop_times.findIndex(s => s.stop_point.id === result.newStart);
+            const newEndIndex = result.train.stop_times.findIndex(s => s.stop_point.id === result.newEnd);
+            const originalEndId = result.train.stop_times[result.train.stop_times.length - 1].stop_point.id;
 
-            // Décider si c’est avant nouvelle gare de départ dans cas de suppression partielle
-            const isBeforeNewStart = newStart && train.stop_times.findIndex(st => st.stop_point.id === stopId) < train.stop_times.findIndex(st => st.stop_point.id === newStart);
-            // Idem pour nouvelle gare de fin
-            const isAfterNewEnd = newEnd && train.stop_times.findIndex(st => st.stop_point.id === stopId) > train.stop_times.findIndex(st => st.stop_point.id === newEnd);
+            let content = ft(base);
+            const isFirstStop = stopName === result.train.stop_times[0]?.stop_point?.name;
+            const isLastStop = stopName === result.train.stop_times[result.train.stop_times.length - 1]?.stop_point?.name;
 
-            // Texte horaire à afficher : on affiche l’heure d’arrivée sauf si gare origine (afficher départ), ou gare terminus (ne rien afficher pour éviter doublon)
-            let timeDisplay = '';
-            if (stopTime.stop_point.id === train.stop_times[0].stop_point.id) {
-              // gare origine : afficher départ
-              timeDisplay = ft(departureTime);
-            } else if (stopTime.stop_point.id === train.stop_times[train.stop_times.length -1].stop_point.id) {
-              // gare terminus : on n’affiche rien (éviter doublon)
-              timeDisplay = '';
+            if (amended && dl(base, amended) > 0) {
+              content = `<span class="delay-strike">${ft(base)}</span><br><span class="delayed">${ft(amended)}</span>`;
             } else {
-              // gare intermédiaire : afficher arrivée
-              timeDisplay = ft(arrivalTime);
+              if (isFirstStop || isLastStop) {
+                content = `<strong>${content}</strong>`;
+              }
             }
 
-            // Construction de la classe css
-            let cls = '';
-            if (isDeleted) cls = 'deleted';
-            else if (isBeforeNewStart) cls = 'deleted';
-            else if (isAfterNewEnd) cls = 'deleted';
+            if (id === result.newStart && index !== 0) {
+              content = `<span class="new-start">${content}</span>`;
+            } else if (
+              (newEndIndex !== -1 && id === result.newEnd && id !== originalEndId) ||
+              isStopDeleted ||
+              (newStartIndex >= 0 && index < newStartIndex) ||
+              (newEndIndex >= 0 && index > newEndIndex)
+            ) {
+              content = `<span class="deleted">${content}</span>`;
+            }
 
-            // Retard affiché en orange si > 0 et pas supprimé
-            const delay = Math.max(arrDelay, depDelay);
-            const delayText = delay > 0 && !isDeleted ? ` +${delay} min` : '';
-
-            // Texte tooltip info
-            let tooltipText = '';
-            if (isDeleted) tooltipText = 'Trajet supprimé à cette gare';
-            else if (delay > 0) tooltipText = `Retard de ${delay} minutes`;
-            else tooltipText = 'Horaires normaux';
-
-            // Affichage avec span pour bulle tooltip
-            html += `<td class="${cls}" data-tooltip="${tooltipText}">${timeDisplay}<span class="retard">${delayText}</span></td>`;
+            html += `<td>${content}</td>`;
           });
           html += '</tr>';
-        });
+        }
 
         html += '</tbody></table>';
         $('#trainInfo').html(html);
-
-        // Gérer clic sur les cellules pour afficher la bulle tooltip
-        $('#trainInfo td[data-tooltip]').off('click').on('click', function (e) {
-          $('.tooltip').remove(); // supprimer les autres bulles
-
-          const text = $(this).attr('data-tooltip');
-          if (!text) return;
-
-          const tooltip = $('<div class="tooltip"></div>').text(text);
-          $(this).append(tooltip);
-          tooltip.fadeIn(200);
-
-          // Supprimer la bulle au clic ailleurs
-          $(document).one('click', function () {
-            tooltip.fadeOut(200, () => tooltip.remove());
-          });
-
-          e.stopPropagation();
-        });
       });
     });
   </script>
 </body>
-</html>       
+</html>
