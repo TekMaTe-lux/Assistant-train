@@ -37,9 +37,9 @@
       background-color: #0077cc;
       color: white;
     }
-    .deleted      { color:#cc0000; text-decoration:line-through; }
+    .deleted { color:#cc0000; text-decoration:line-through; }
     .delay-strike { text-decoration:line-through; }
-    .delayed      { color:#ff6600; font-weight:600; }
+    .delayed { color:#ff6600; font-weight:600; }
     .new-start, .new-end { color:#0055cc; font-weight:700; }
   </style>
 </head>
@@ -90,17 +90,40 @@ $(function(){
 
         const disruptions = res.disruptions || [];
         const impacted = {};
+        let newStart = null, newEnd = null;
         if (disruptions.length) {
-          disruptions.forEach(d => {
-            d.impacted_objects?.forEach(o => {
-              o.impacted_stops?.forEach(s => {
+          for (const d of disruptions) {
+            for (const o of d.impacted_objects || []) {
+              for (const s of o.impacted_stops || []) {
                 impacted[s.stop_point.id] = s;
-              });
-            });
-          });
+              }
+            }
+          }
+
+          // Nouvelle gare de départ
+          const stopList = train.stop_times;
+          for (let s of stopList) {
+            const id = s.stop_point.id;
+            const imp = impacted[id];
+            if (imp && imp.departure_status !== 'deleted' && imp.arrival_status !== 'deleted') {
+              newStart = id;
+              break;
+            }
+          }
+
+          // Nouvelle gare de fin
+          for (let i = train.stop_times.length - 1; i >= 0; i--) {
+            const s = train.stop_times[i];
+            const id = s.stop_point.id;
+            const imp = impacted[id];
+            if (imp && imp.departure_status !== 'deleted' && imp.arrival_status !== 'deleted') {
+              newEnd = id;
+              break;
+            }
+          }
         }
 
-        results[num] = { train, impacted };
+        results[num] = { train, impacted, newStart, newEnd };
         train.stop_times.forEach(s => stopsMap.set(s.stop_point.name, true));
       } catch {
         results[num] = { error: 'Erreur API' };
@@ -122,12 +145,13 @@ $(function(){
         }
 
         const stop = result.train.stop_times.find(s => s.stop_point.name === stopName);
-        const imp = result.impacted[stop?.stop_point?.id] || {};
         if (!stop) {
           html += `<td>-</td>`;
           return;
         }
 
+        const id = stop.stop_point.id;
+        const imp = result.impacted[id] || {};
         const base = imp.base_departure_time || imp.base_arrival_time || stop.departure_time || stop.arrival_time;
         const amended = imp.amended_departure_time || imp.amended_arrival_time;
         const isDeleted = imp.stop_time_effect === 'deleted' || imp.departure_status === 'deleted' || imp.arrival_status === 'deleted';
@@ -137,7 +161,13 @@ $(function(){
           content = `<span class="delay-strike">${content}</span><br><span class="delayed">➔ ${ft(amended)} (+${dl(base, amended)} min)</span>`;
         }
 
-        if (isDeleted) content = `<span class="deleted">${content}</span>`;
+        if (isDeleted) {
+          content = `<span class="deleted">${content}</span>`;
+        } else if (id === result.newStart) {
+          content = `<span class="new-start">${content}<br>(Nouvelle origine)</span>`;
+        } else if (id === result.newEnd) {
+          content = `<span class="new-end">${content}<br>(Nouveau terminus)</span>`;
+        }
 
         html += `<td>${content}</td>`;
       });
