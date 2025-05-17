@@ -1,0 +1,354 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Comparatif Trains SNCF</title>
+  <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+  <style>
+    body {
+      font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+      background: #f9f9f9;
+      color: #222;
+      margin: 0;
+      padding: 20px;
+      max-width: 1000px;
+      margin: auto;
+    }
+    h1 {
+      color: #0055a5;
+    }
+    input, button {
+      font-size: 1rem;
+    }
+    button {
+      background: #0077cc;
+      color: #fff;
+      border: none;
+      padding: 12px 24px;
+      border-radius: 8px;
+      cursor: pointer;
+    }
+    button:hover {
+      background: #005999;
+    }
+    .input-container {
+      background: #fff;
+      padding: 20px;
+      border-radius: 12px;
+      box-shadow: 0 4px 12px rgba(0, 85, 165, 0.1);
+      margin-bottom: 30px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 20px;
+      border-spacing: 0;
+    }
+    th, td {
+      padding: 12px 16px;
+      text-align: center;
+      vertical-align: middle;
+      border-bottom: 1px solid #ddd;
+      position: relative; /* pour positionner la bulle */
+      cursor: pointer; /* indique que c’est cliquable */
+    }
+    thead th {
+      background-color: #0077cc;
+      color: white;
+      border-bottom: 2px solid #005499;
+      cursor: default;
+      position: static;
+    }
+    tbody tr:nth-child(even) {
+      background-color: #f3f6fc;
+    }
+    tbody tr:hover {
+      background-color: #e1e9ff;
+    }
+    .deleted {
+      color: #cc0000;
+      text-decoration: line-through;
+    }
+    .delay-strike {
+      text-decoration: line-through;
+    }
+    .delayed {
+      color: #ff6600;
+      font-weight: 600;
+    }
+    .new-start {
+      color: #0055cc;
+      font-weight: 700;
+    }
+    .retard {
+      color: #ff6600;
+      font-weight: 600;
+      font-size: 0.9em;
+    }
+    .supprimé {
+      color: #cc0000;
+    }
+    /* style bulle d’info */
+    .tooltip {
+      display: none;
+      position: absolute;
+      top: 110%;
+      left: 50%;
+      transform: translateX(-50%);
+      background: #333;
+      color: white;
+      padding: 6px 10px;
+      border-radius: 6px;
+      font-size: 0.85rem;
+      max-width: 220px;
+      z-index: 10;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+      word-wrap: break-word;
+      pointer-events: none;
+    }
+    /* petit triangle sous la bulle */
+    .tooltip::after {
+      content: "";
+      position: absolute;
+      top: 0;
+      left: 50%;
+      margin-left: -6px;
+      border-width: 6px;
+      border-style: solid;
+      border-color: transparent transparent #333 transparent;
+    }
+  </style>
+</head>
+<body>
+  <h1>Comparatif des bétaillères</h1>
+  <div class="input-container">
+    <label for="trainNumbers">Numéros de Bétaillères (séparés par virgule) :</label>
+    <input type="text" id="trainNumbers" value="88534,88536">
+    <label for="trainDate">Date :</label>
+    <input type="date" id="trainDate">
+    <button id="loadTrains">Afficher</button>
+  </div>
+  <div id="trainInfo"></div>
+  <script>
+    $(function () {
+      $('#trainDate').val(new Date().toISOString().split('T')[0]);
+
+      const fixedStops = [
+        "Luxembourg", "Howald", "Bettembourg", "Hettange-Grande", "Thionville",
+        "Uckange", "Hagondange", "Maizières-lès-Metz", "Woippy", "Metz Nord",
+        "Metz", "Pagny-sur-Moselle", "Pont-à-Mousson", "Nancy"
+      ];
+
+      const ft = t => t ? t.slice(0, 2) + ':' + t.slice(2, 4) : '-';
+      const dl = (b, a) => (parseInt(a.slice(0, 2)) * 60 + parseInt(a.slice(2, 4))) - (parseInt(b.slice(0, 2)) * 60 + parseInt(b.slice(2, 4)));
+
+      // fonction pour créer la bulle tooltip
+      function createTooltip(text) {
+        return $('<div class="tooltip"></div>').text(text);
+      }
+
+      $('#loadTrains').click(async function () {
+        const date = $('#trainDate').val();
+        const numbers = $('#trainNumbers').val().split(',').map(s => s.trim()).filter(Boolean);
+
+        if (!numbers.length || !date) {
+          $('#trainInfo').html('<p class="deleted">Veuillez indiquer au moins un numéro de train et une date.</p>');
+          return;
+        }
+
+        $('#trainInfo').html('<p>Chargement…</p>');
+
+        const key = '242fac11-6d98-45fb-93df-28174d362447';
+        const auth = btoa(key + ':');
+        const results = {};
+
+        for (const num of numbers) {
+          const url = `https://api.sncf.com/v1/coverage/sncf/vehicle_journeys/vehicle_journey:SNCF:${date}:${num}:1187:Train`;
+          try {
+            const res = await $.ajax({ url, headers: { Authorization: 'Basic ' + auth } });
+            const train = res.vehicle_journeys?.[0];
+            if (!train) {
+              results[num] = { error: 'Non trouvé' };
+              continue;
+            }
+
+            const disruptions = res.disruptions || [];
+            const impacted = {};
+            let newStart = null, newEnd = null;
+
+            for (const d of disruptions) {
+              for (const o of d.impacted_objects || []) {
+                for (const s of o.impacted_stops || []) {
+                  impacted[s.stop_point.id] = s;
+                }
+              }
+            }
+
+            for (let s of train.stop_times) {
+              const id = s.stop_point.id;
+              const imp = impacted[id];
+              if (imp && imp.departure_status !== 'deleted') {
+                newStart = id;
+                break;
+              }
+            }
+
+            for (let i = train.stop_times.length - 1; i >= 0; i--) {
+              const s = train.stop_times[i];
+              const id = s.stop_point.id;
+              const imp = impacted[id];
+              if (imp && imp.arrival_status !== 'deleted') {
+                newEnd = id;
+                break;
+              }
+            }
+
+            results[num] = { train, impacted, newStart, newEnd, disruptions };
+          } catch {
+            results[num] = { error: 'Erreur API' };
+          }
+        }
+
+        let html = '<table><thead>';
+        html += '<tr><th>Gare</th>';
+        numbers.forEach(num => {
+          html += `<th>${num}</th>`;
+        });
+        html += '</tr><tr><th></th>';
+        numbers.forEach(num => {
+          const result = results[num];
+          let icon = '', title = '';
+          if (!result || result.error) {
+            icon = '❌';
+            title = result?.error || 'Erreur';
+          } else {
+            const disruptions = result.disruptions || [];
+            const hasDelay = Object.values(result.impacted).some(s =>
+              (s.amended_departure_time || s.amended_arrival_time) &&
+              (s.base_departure_time || s.base_arrival_time) &&
+              dl(s.base_departure_time || s.base_arrival_time, s.amended_departure_time || s.amended_arrival_time) > 0
+            );
+            const newStartId = result.newStart;
+            const originalStartId = result.train.stop_times[0].stop_point.id;
+            const isPartial = newStartId && newStartId !== originalStartId;
+            const isFull = disruptions.some(d => d.severity?.effect === 'CANCELLATION');
+
+            if (isFull) {
+              icon = '❌';
+            } else if (isPartial) {
+              icon = '⚠️';
+            } else if (hasDelay) {
+              icon = '⏰';
+            }
+
+            title = disruptions.map(d => d.cause || d.messages?.[0]?.text).filter(Boolean).join('; ') || '';
+          }
+          html += `<th title="${title.replace(/"/g, '&quot;')}">${icon}</th>`;
+        });
+        html += '</tr></thead><tbody>';
+ // génération des lignes pour chaque gare fixe
+        fixedStops.forEach(station => {
+          html += `<tr><td>${station}</td>`;
+          numbers.forEach(num => {
+            const result = results[num];
+            if (!result || result.error) {
+              html += `<td class="deleted">-</td>`;
+              return;
+            }
+
+            const train = result.train;
+            const impacted = result.impacted;
+            const newStart = result.newStart;
+            const newEnd = result.newEnd;
+
+            // Trouver l'arrêt correspondant à cette gare
+            const stopTime = train.stop_times.find(st => st.stop_point.name === station);
+            if (!stopTime) {
+              html += `<td>-</td>`;
+              return;
+            }
+
+            const stopId = stopTime.stop_point.id;
+            const imp = impacted[stopId];
+            const baseArr = stopTime.base_arrival_time || '';
+            const baseDep = stopTime.base_departure_time || '';
+            const amendedArr = imp?.amended_arrival_time || '';
+            const amendedDep = imp?.amended_departure_time || '';
+            const arrDelay = amendedArr && baseArr ? dl(baseArr, amendedArr) : 0;
+            const depDelay = amendedDep && baseDep ? dl(baseDep, amendedDep) : 0;
+            const arrivalTime = amendedArr || baseArr;
+            const departureTime = amendedDep || baseDep;
+
+            // Décider si cette gare est supprimée (deleted)
+            const isDeleted = imp?.departure_status === 'deleted' || imp?.arrival_status === 'deleted';
+
+            // Décider si c’est avant nouvelle gare de départ dans cas de suppression partielle
+            const isBeforeNewStart = newStart && train.stop_times.findIndex(st => st.stop_point.id === stopId) < train.stop_times.findIndex(st => st.stop_point.id === newStart);
+            // Idem pour nouvelle gare de fin
+            const isAfterNewEnd = newEnd && train.stop_times.findIndex(st => st.stop_point.id === stopId) > train.stop_times.findIndex(st => st.stop_point.id === newEnd);
+
+            // Texte horaire à afficher : on affiche l’heure d’arrivée sauf si gare origine (afficher départ), ou gare terminus (ne rien afficher pour éviter doublon)
+            let timeDisplay = '';
+            if (stopTime.stop_point.id === train.stop_times[0].stop_point.id) {
+              // gare origine : afficher départ
+              timeDisplay = ft(departureTime);
+            } else if (stopTime.stop_point.id === train.stop_times[train.stop_times.length -1].stop_point.id) {
+              // gare terminus : on n’affiche rien (éviter doublon)
+              timeDisplay = '';
+            } else {
+              // gare intermédiaire : afficher arrivée
+              timeDisplay = ft(arrivalTime);
+            }
+
+            // Construction de la classe css
+            let cls = '';
+            if (isDeleted) cls = 'deleted';
+            else if (isBeforeNewStart) cls = 'deleted';
+            else if (isAfterNewEnd) cls = 'deleted';
+
+            // Retard affiché en orange si > 0 et pas supprimé
+            const delay = Math.max(arrDelay, depDelay);
+            const delayText = delay > 0 && !isDeleted ? ` +${delay} min` : '';
+
+            // Texte tooltip info
+            let tooltipText = '';
+            if (isDeleted) tooltipText = 'Trajet supprimé à cette gare';
+            else if (delay > 0) tooltipText = `Retard de ${delay} minutes`;
+            else tooltipText = 'Horaires normaux';
+
+            // Affichage avec span pour bulle tooltip
+            html += `<td class="${cls}" data-tooltip="${tooltipText}">${timeDisplay}<span class="retard">${delayText}</span></td>`;
+          });
+          html += '</tr>';
+        });
+
+        html += '</tbody></table>';
+        $('#trainInfo').html(html);
+
+        // Gérer clic sur les cellules pour afficher la bulle tooltip
+        $('#trainInfo td[data-tooltip]').off('click').on('click', function (e) {
+          $('.tooltip').remove(); // supprimer les autres bulles
+
+          const text = $(this).attr('data-tooltip');
+          if (!text) return;
+
+          const tooltip = $('<div class="tooltip"></div>').text(text);
+          $(this).append(tooltip);
+          tooltip.fadeIn(200);
+
+          // Supprimer la bulle au clic ailleurs
+          $(document).one('click', function () {
+            tooltip.fadeOut(200, () => tooltip.remove());
+          });
+
+          e.stopPropagation();
+        });
+      });
+    });
+  </script>
+</body>
+</html>       
