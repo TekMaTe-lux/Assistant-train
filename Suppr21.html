@@ -88,15 +88,51 @@
     .supprimé {
       color: #cc0000;
     }
+    /* Style pour les icônes avec tooltip */
+    .icon {
+      cursor: default;
+      font-size: 1.3em;
+      position: relative;
+      display: inline-block;
+    }
+    .icon[title]:hover::after {
+      content: attr(title);
+      position: absolute;
+      bottom: 125%;
+      left: 50%;
+      transform: translateX(-50%);
+      background: rgba(0,0,0,0.75);
+      color: white;
+      padding: 6px 10px;
+      border-radius: 5px;
+      white-space: nowrap;
+      font-size: 0.9em;
+      z-index: 1000;
+      pointer-events: none;
+      opacity: 1;
+    }
+    .icon[title]:hover::before {
+      content: "";
+      position: absolute;
+      bottom: 115%;
+      left: 50%;
+      transform: translateX(-50%);
+      border-width: 6px;
+      border-style: solid;
+      border-color: rgba(0,0,0,0.75) transparent transparent transparent;
+      z-index: 1001;
+      pointer-events: none;
+      opacity: 1;
+    }
   </style>
 </head>
 <body>
   <h1>Comparatif des bétaillères</h1>
   <div class="input-container">
     <label for="trainNumbers">Numéros de Bétaillères (séparés par virgule) :</label>
-    <input type="text" id="trainNumbers" value="88534,88536">
+    <input type="text" id="trainNumbers" value="88534,88536" />
     <label for="trainDate">Date :</label>
-    <input type="date" id="trainDate">
+    <input type="date" id="trainDate" />
     <button id="loadTrains">Afficher</button>
   </div>
   <div id="trainInfo"></div>
@@ -142,7 +178,12 @@
             const impacted = {};
             let newStart = null, newEnd = null;
 
+            // Extraire les causes des perturbations globales
+            let disruptionCauses = [];
             for (const d of disruptions) {
+              if (d.cause && !disruptionCauses.includes(d.cause)) {
+                disruptionCauses.push(d.cause);
+              }
               for (const o of d.impacted_objects || []) {
                 for (const s of o.impacted_stops || []) {
                   impacted[s.stop_point.id] = s;
@@ -169,7 +210,7 @@
               }
             }
 
-            results[num] = { train, impacted, newStart, newEnd, disruptions };
+            results[num] = { train, impacted, newStart, newEnd, disruptions, disruptionCauses };
           } catch {
             results[num] = { error: 'Erreur API' };
           }
@@ -183,13 +224,15 @@
         html += '</tr><tr><th></th>';
         numbers.forEach(num => {
           const result = results[num];
-          let icon = '', title = '';
+          let icon = '';
+          let title = '';
           if (!result || result.error) {
             icon = '❌';
             title = result?.error || 'Erreur';
           } else {
             const disruptions = result.disruptions || [];
-            const hasDelay = Object.values(result.impacted).some(s =>
+            const impacted = result.impacted;
+            const hasDelay = Object.values(impacted).some(s =>
               (s.amended_departure_time || s.amended_arrival_time) &&
               (s.base_departure_time || s.base_arrival_time) &&
               dl(s.base_departure_time || s.base_arrival_time, s.amended_departure_time || s.amended_arrival_time) > 0
@@ -201,15 +244,24 @@
 
             if (isFull) {
               icon = '❌';
-            } else if (isPartial) {
-              icon = '⚠️';
-            } else if (hasDelay) {
-              icon = '⏰';
+              title = 'Train annulé';
+              if (result.disruptionCauses.length) title += ' : ' + result.disruptionCauses.join(', ');
             }
-
-            title = disruptions.map(d => d.cause || d.messages?.[0]?.text).filter(Boolean).join('; ') || '';
+            else if (isPartial) {
+              icon = '⚠️';
+              title = 'Suppression partielle';
+              if (result.disruptionCauses.length) title += ' : ' + result.disruptionCauses.join(', ');
+            }
+            else if (hasDelay) {
+              icon = '⏰';
+              title = 'Retard';
+              if (result.disruptionCauses.length) title += ' : ' + result.disruptionCauses.join(', ');
+            } else {
+              icon = '✔️';
+              title = 'Sans perturbation';
+            }
           }
-          html += `<th title="${title.replace(/"/g, '&quot;')}">${icon}</th>`;
+          html += `<th><span class="icon" title="${title}">${icon}</span></th>`;
         });
         html += '</tr></thead><tbody>';
 
