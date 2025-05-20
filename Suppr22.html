@@ -372,44 +372,55 @@ const isFull = result.disruptions.some(d => ['NO_SERVICE','CANCELLATION'].includ
 let disruptionsHtml = '';
 
 function extractTrainNumber(name) {
-  // Extrait la première suite de chiffres dans la chaîne
-  const match = name.match(/\d+/);
-  return match ? match[0] : name;
+  if (!name) return '';
+  const match = name.match(/\b\d{4,6}\b/);
+  return match ? match[0] : '';
 }
 
-const groupedDisruptions = {};
+let groupedDisruptions = {};
 
-// Regroupement des disruptions par effet + cause
 numbers.forEach(num => {
   const result = results[num];
   if (result && result.disruptions && result.disruptions.length > 0) {
     result.disruptions.forEach(disruption => {
       const effect = disruption.severity?.effect || 'Inconnu';
-      const cause = disruption.messages && disruption.messages.length > 0
-        ? disruption.messages[0].text
-        : (disruption.cause || 'Pas de cause renseignée');
-
-      const key = effect + '||' + cause;
+      const causeMessage = disruption.messages?.[0]?.text || 'Pas de cause renseignée';
+      const key = effect + '||' + causeMessage;
 
       if (!groupedDisruptions[key]) {
         groupedDisruptions[key] = {
-          effect: effect,
-          cause: cause,
-          trains: new Set()
+          effect,
+          cause: causeMessage,
+          trains: new Set(),
+          box: 'orange',
+          icon: '⚠️',
+          txt: effect,
         };
+
+        if (effect === 'NO_SERVICE') {
+          groupedDisruptions[key].box = 'red';
+          groupedDisruptions[key].icon = '❌';
+          groupedDisruptions[key].txt = 'Suppression totale';
+        } else if (effect === 'REDUCED_SERVICE') {
+          groupedDisruptions[key].box = 'red';
+          groupedDisruptions[key].icon = '⚠️';
+          groupedDisruptions[key].txt = 'Suppression partielle';
+        } else if (effect === 'SIGNIFICANT_DELAYS') {
+          groupedDisruptions[key].box = 'orange';
+          groupedDisruptions[key].icon = '⏰';
+          groupedDisruptions[key].txt = 'Retard important';
+        }
       }
 
-      // Ajouter le train actuel au Set, nettoyé
+      // Ajout du train principal (num)
       groupedDisruptions[key].trains.add(num);
 
-      // Ajouter les trains impactés éventuels
+      // Ajout des trains impactés (uniquement numéro extrait)
       if (disruption.impacted_objects) {
         disruption.impacted_objects.forEach(obj => {
           if (obj.pt_object && obj.pt_object.name) {
             const trainNum = extractTrainNumber(obj.pt_object.name);
-            if (trainNum && trainNum !== 'Train') {
-              groupedDisruptions[key].trains.add(trainNum);
-            }
+            if (trainNum) groupedDisruptions[key].trains.add(trainNum);
           }
         });
       }
@@ -417,34 +428,27 @@ numbers.forEach(num => {
   }
 });
 
-// Construction du HTML à partir des groupes
-for (const key in groupedDisruptions) {
-  const group = groupedDisruptions[key];
+let disruptionsHtml = '';
 
-  // Choix style + icône selon effet
-  let box = 'orange', icon = '⚠️', txt = group.effect;
-  if (group.effect === 'NO_SERVICE') { box = 'red'; icon = '❌'; txt = 'Suppression totale'; }
-  else if (group.effect === 'REDUCED_SERVICE') { box = 'red'; icon = '⚠️'; txt = 'Suppression partielle'; }
-  else if (group.effect === 'SIGNIFICANT_DELAYS') { box = 'orange'; icon = '⏰'; txt = 'Retard important'; }
-
-  const trainsArray = [...group.trains].sort();
-
-  const trainsHtml = trainsArray.length
-    ? '<ul>' + trainsArray.map(t => `<li>${t}</li>`).join('') + '</ul>'
+// Génération du HTML
+Object.values(groupedDisruptions).forEach(disr => {
+  let trainsList = Array.from(disr.trains).sort((a,b) => a.localeCompare(b));
+  let trainsHtml = trainsList.length
+    ? '<ul>' + trainsList.map(t => `<li>${t}</li>`).join('') + '</ul>'
     : '<p>Aucun train impacté listé</p>';
 
   disruptionsHtml += `
-    <div class="disruption-box ${box}">
-      <div class="disruption-icon">${icon}</div>
-      <div>
-        <strong>Effet :</strong> ${txt}<br/>
-        <strong>Cause :</strong> ${group.cause}<br/>
+    <div class="disruption-box ${disr.box}" style="border:1px solid #ccc; padding:10px; margin-bottom:10px; border-radius:5px; background:#f9f9f9;">
+      <div class="disruption-icon" style="font-size:24px; float:left; margin-right:10px;">${disr.icon}</div>
+      <div style="overflow:hidden;">
+        <strong>Effet :</strong> ${disr.txt}<br/>
+        <strong>Cause :</strong> ${disr.cause}<br/>
         <strong>Trains impactés :</strong> ${trainsHtml}
       </div>
     </div>
   `;
-}
-        
+});
+
         $('#disruptionsSummary').html(disruptionsHtml);
         $('#trainInfo').html(html);
       });
