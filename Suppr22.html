@@ -129,11 +129,12 @@
   <h1>Comparatif des bétaillères</h1>
   <div class="input-container">
     <label for="trainNumbers">Numéros de Bétaillères (séparés par virgule) :</label>
-    <input type="text" id="trainNumbers" value="88534,88536" />
+    <input type="text" id="trainNumbers" value="88530,88532,88755,88759,88813,88815,88534,88763,88765" />
     <label for="trainDate">Date :</label>
     <input type="date" id="trainDate" />
     <button id="loadTrains">Afficher</button>
   </div>
+  <div id="disruptionsSummary"></div>
   <div id="trainInfo"></div>
   <script>
     $(function () {
@@ -324,6 +325,75 @@ const isFull = result.disruptions.some(d => ['NO_SERVICE','CANCELLATION'].includ
         }
 
         html += '</tbody></table>';
+
+        let groupedDisruptions = {};
+
+// Regroupement des perturbations par cause + effet
+numbers.forEach(num => {
+  const result = results[num];
+  if (result && result.disruptions && result.disruptions.length > 0) {
+    result.disruptions.forEach(disruption => {
+      let effect = disruption.severity?.effect || 'Inconnu';
+
+      // Récupère le message de cause
+      let message = 'Pas de cause renseignée';
+      if (disruption.messages && disruption.messages.length > 0 && disruption.messages[0].text) {
+        message = disruption.messages[0].text;
+      }
+
+      // Clé unique : effet + message
+      let key = effect + '||' + message;
+
+      // Initialise la clé si besoin
+      if (!groupedDisruptions[key]) {
+        groupedDisruptions[key] = {
+          effect,
+          message,
+          trains: new Set(),
+          boxes: { 'NO_SERVICE': ['red', '❌', 'Suppression totale'], 'REDUCED_SERVICE': ['red', '⚠️', 'Suppression partielle'], 'SIGNIFICANT_DELAYS': ['orange', '⏰', 'Retard important'] }
+        };
+      }
+      groupedDisruptions[key].trains.add(num);
+
+      // Ajout des trains impactés dans disruption.impacted_objects si présents
+      if (disruption.impacted_objects) {
+        disruption.impacted_objects.forEach(obj => {
+          if (obj.pt_object && obj.pt_object.name) groupedDisruptions[key].trains.add(obj.pt_object.name);
+        });
+      }
+    });
+  }
+});
+
+let disruptionsHtml = '';
+
+// Construction HTML à partir du regroupement
+for (let key in groupedDisruptions) {
+  let group = groupedDisruptions[key];
+  let box = 'orange', icon = '⚠️', txt = group.effect;
+
+  if (group.boxes[group.effect]) {
+    [box, icon, txt] = group.boxes[group.effect];
+  }
+
+  let trainsArr = Array.from(group.trains);
+  let trainsHtml = trainsArr.length
+    ? '<ul>' + trainsArr.map(t => `<li>${t}</li>`).join('') + '</ul>'
+    : '<p>Aucun train impacté listé</p>';
+
+  disruptionsHtml += `
+    <div class="disruption-box ${box}">
+      <div class="disruption-icon">${icon}</div>
+      <div>
+        <strong>Effet :</strong> ${txt}<br/>
+        <strong>Cause :</strong> ${group.message}<br/>
+        <strong>Trains impactés :</strong> ${trainsHtml}
+      </div>
+    </div>
+  `;
+}
+        
+        $('#disruptionsSummary').html(disruptionsHtml);
         $('#trainInfo').html(html);
       });
     });
