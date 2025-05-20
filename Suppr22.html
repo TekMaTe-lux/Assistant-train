@@ -372,74 +372,86 @@ const isFull = result.disruptions.some(d => ['NO_SERVICE','CANCELLATION'].includ
 let disruptionsHtml = '';
 
 function extractTrainNumber(name) {
-  // Extrait la première suite de chiffres dans la chaîne
-  const match = name.match(/\d+/);
-  return match ? match[0] : name;
+  if (!name) return '';
+  const parts = name.split(':');
+  if (parts.length >= 3 && /^\d+$/.test(parts[2])) {
+    return parts[2];
+  }
+  const match = name.match(/\d+/g);
+  if (match && match.length > 0) {
+    return match[match.length - 1];
+  }
+  return name;
 }
+
+let disruptionsHtml = '';
 
 const groupedDisruptions = {};
 
-// Regroupement des disruptions par effet + cause
+// Regroupement par cause + effet
 numbers.forEach(num => {
   const result = results[num];
   if (result && result.disruptions && result.disruptions.length > 0) {
     result.disruptions.forEach(disruption => {
       const effect = disruption.severity?.effect || 'Inconnu';
-      const cause = disruption.messages && disruption.messages.length > 0
-        ? disruption.messages[0].text
-        : (disruption.cause || 'Pas de cause renseignée');
-
-      const key = effect + '||' + cause;
+      const causeMessage = disruption.messages?.[0]?.text || 'Pas de cause renseignée';
+      const key = effect + '||' + causeMessage;
 
       if (!groupedDisruptions[key]) {
         groupedDisruptions[key] = {
-          effect: effect,
-          cause: cause,
-          trains: new Set()
+          effect,
+          cause: causeMessage,
+          trains: new Set(),
+          box: 'orange',
+          icon: '⚠️',
+          txt: effect,
         };
+
+        if (effect === 'NO_SERVICE') {
+          groupedDisruptions[key].box = 'red';
+          groupedDisruptions[key].icon = '❌';
+          groupedDisruptions[key].txt = 'Suppression totale';
+        } else if (effect === 'REDUCED_SERVICE') {
+          groupedDisruptions[key].box = 'red';
+          groupedDisruptions[key].icon = '⚠️';
+          groupedDisruptions[key].txt = 'Suppression partielle';
+        } else if (effect === 'SIGNIFICANT_DELAYS') {
+          groupedDisruptions[key].box = 'orange';
+          groupedDisruptions[key].icon = '⏰';
+          groupedDisruptions[key].txt = 'Retard important';
+        }
       }
 
-      // Ajouter le train actuel au Set, nettoyé
-      groupedDisruptions[key].trains.add(num);
-
-      // Ajouter les trains impactés éventuels
+      // Récupérer les trains impactés dans disruption.impacted_objects
       if (disruption.impacted_objects) {
         disruption.impacted_objects.forEach(obj => {
           if (obj.pt_object && obj.pt_object.name) {
-            const trainNum = extractTrainNumber(obj.pt_object.name);
-            if (trainNum && trainNum !== 'Train') {
-              groupedDisruptions[key].trains.add(trainNum);
-            }
+            groupedDisruptions[key].trains.add(extractTrainNumber(obj.pt_object.name));
           }
         });
       }
+      // Ajouter aussi le train courant
+      groupedDisruptions[key].trains.add(num);
     });
   }
 });
 
-// Construction du HTML à partir des groupes
+// Génération du HTML
 for (const key in groupedDisruptions) {
   const group = groupedDisruptions[key];
-
-  // Choix style + icône selon effet
-  let box = 'orange', icon = '⚠️', txt = group.effect;
-  if (group.effect === 'NO_SERVICE') { box = 'red'; icon = '❌'; txt = 'Suppression totale'; }
-  else if (group.effect === 'REDUCED_SERVICE') { box = 'red'; icon = '⚠️'; txt = 'Suppression partielle'; }
-  else if (group.effect === 'SIGNIFICANT_DELAYS') { box = 'orange'; icon = '⏰'; txt = 'Retard important'; }
-
-  const trainsArray = [...group.trains].sort();
-
-  const trainsHtml = trainsArray.length
-    ? '<ul>' + trainsArray.map(t => `<li>${t}</li>`).join('') + '</ul>'
+  const trainsList = Array.from(group.trains).sort((a,b) => a - b);
+  const trainsHtml = trainsList.length
+    ? '<ul>' + trainsList.map(t => `<li>${t}</li>`).join('') + '</ul>'
     : '<p>Aucun train impacté listé</p>';
 
   disruptionsHtml += `
-    <div class="disruption-box ${box}">
-      <div class="disruption-icon">${icon}</div>
-      <div>
-        <strong>Effet :</strong> ${txt}<br/>
-        <strong>Cause :</strong> ${group.cause}<br/>
-        <strong>Trains impactés :</strong> ${trainsHtml}
+    <div class="disruption-box ${group.box}" style="border-radius:8px; padding:10px; margin-bottom:12px; background:#fff; box-shadow:0 2px 6px rgba(0,0,0,0.1); display:flex; gap:10px; align-items:center;">
+      <div class="disruption-icon" style="font-size:24px; flex-shrink:0;">${group.icon}</div>
+      <div style="flex-grow:1;">
+        <p><strong>Effet :</strong> ${group.txt}</p>
+        <p><strong>Cause :</strong> ${group.cause}</p>
+        <p><strong>Trains impactés :</strong></p>
+        ${trainsHtml}
       </div>
     </div>
   `;
