@@ -414,36 +414,78 @@ numbers.forEach(num => {
   }
 });
 
-let disruptionsHtml = '';
+let groupedDisruptions = {};
 
-for (let key in groupedDisruptions) {
-  let group = groupedDisruptions[key];
-  let box = 'orange', icon = '⚠️', txt = group.effect;
+numbers.forEach(num => {
+  const result = results[num];
+  if (result && result.disruptions && result.disruptions.length > 0) {
+    result.disruptions.forEach(disruption => {
+      let effect = disruption.severity?.effect || 'Inconnu';
+      let cause = disruption.cause || '';
 
-  if (group.boxes[group.effect]) {
-    [box, icon, txt] = group.boxes[group.effect];
+      // Récupérer le message détaillé si cause vide
+      let message = cause;
+      if (!message && disruption.messages && disruption.messages.length > 0) {
+        message = disruption.messages[0].text || '';
+      }
+      if (!message) message = 'Pas de cause renseignée';
+
+      // Clé pour grouper par effet + cause + message
+      let key = effect + '|' + cause + '|' + message;
+
+      if (!groupedDisruptions[key]) {
+        groupedDisruptions[key] = {
+          effect,
+          cause: message,  // afficher le message détaillé
+          trains: new Set()
+        };
+      }
+
+      // Ajouter les trains impactés, en filtrant "Train"
+      if (disruption.impacted_objects) {
+        disruption.impacted_objects.forEach(obj => {
+          if (obj.pt_object && obj.pt_object.name) {
+            let trainName = obj.pt_object.name;
+            if (trainName !== 'Train') {
+              groupedDisruptions[key].trains.add(trainName);
+            }
+          }
+        });
+      }
+
+      // Ajouter aussi le train courant s'il n'est pas "Train"
+      if (num !== 'Train') {
+        groupedDisruptions[key].trains.add(num);
+      }
+    });
   }
+});
 
-  // Transformer Set en Array, trier par numéro, puis créer la liste HTML
-  let trainsArr = Array.from(group.trains);
-  trainsArr = trainsArr.filter(t => t); // filtre les valeurs vides si besoin
-  trainsArr.sort((a, b) => a.localeCompare(b, undefined, {numeric: true}));
-  let trainsHtml = trainsArr.length
-    ? '<ul>' + trainsArr.map(t => `<li>${t}</li>`).join('') + '</ul>'
+// Construire le HTML
+let disruptionsHtml = '';
+Object.values(groupedDisruptions).forEach(disruption => {
+  let box = 'orange', icon = '⚠️', txt = disruption.effect;
+
+  if (disruption.effect === 'NO_SERVICE') { box = 'red'; icon = '❌'; txt = 'Suppression totale'; }
+  else if (disruption.effect === 'REDUCED_SERVICE') { box = 'red'; icon = '⚠️'; txt = 'Suppression partielle'; }
+  else if (disruption.effect === 'SIGNIFICANT_DELAYS') { box = 'orange'; icon = '⏰'; txt = 'Retard important'; }
+
+  let trainsHtml = [...disruption.trains].length
+    ? '<ul>' + [...disruption.trains].map(t => `<li>${t}</li>`).join('') + '</ul>'
     : '<p>Aucun train impacté listé</p>';
 
   disruptionsHtml += `
-    <div class="disruption-box ${box}">
-      <div class="disruption-icon">${icon}</div>
-      <div class="disruption-content">
-        <div><strong>Effet :</strong> ${txt}</div>
-        <div><strong>Cause :</strong> ${group.message}</div>
-        <div><strong>Trains impactés :</strong> ${trainsHtml}</div>
+    <div class="disruption-box ${box}" style="border:1px solid ${box}; padding:10px; margin-bottom:10px; border-radius:6px; background:#fff;">
+      <div style="font-size:24px; margin-bottom:6px;">${icon}</div>
+      <div style="font-family:sans-serif; line-height:1.4;">
+        <strong>Effet :</strong> ${txt}<br/>
+        <strong>Cause :</strong> ${disruption.cause}<br/>
+        <strong>Trains impactés :</strong> ${trainsHtml}
       </div>
     </div>
   `;
-}
-
+});
+        
         $('#disruptionsSummary').html(disruptionsHtml);
         $('#trainInfo').html(html);
       });
