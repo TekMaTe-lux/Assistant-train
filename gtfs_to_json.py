@@ -9,7 +9,7 @@ TRIPS_URL = 'https://raw.githubusercontent.com/TekMaTe-lux/Assistant-train/gtfs/
 STOPS_URL = 'https://raw.githubusercontent.com/TekMaTe-lux/Assistant-train/gtfs/stops.txt'
 STOP_TIMES_URL = 'https://raw.githubusercontent.com/TekMaTe-lux/Assistant-train/gtfs/stop_times.txt'
 
-train_ids = ["88745", "88747"]  # ta liste de trains à filtrer
+train_ids = ["88741", "88743", "88747", "88530", "88749", "88751", "88753", "88532", "88755", "88813", "88759", "88761", "88815", "88534", "88763", "88765", "88767", "88769"]  # ta liste de trains à filtrer
 
 def load_csv_from_url(url):
     response = requests.get(url)
