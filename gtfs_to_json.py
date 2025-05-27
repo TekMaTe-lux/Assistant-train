@@ -29,6 +29,12 @@ for entity in feed.entity:
 # Ne garder que les trains d’intérêt
 retards_filtres = [r for r in retards if any(r["train_id"].endswith(num) for num in trains_suivis)]
 
-# Sauvegarde en JSON
-with open("retards.json", "w") as f:
+import os
+
+# Création du dossier si besoin
+os.makedirs("Assistant-train", exist_ok=True)
+
+# Sauvegarde dans le bon dossier
+with open("Assistant-train/retards.json", "w") as f:
     json.dump(retards_filtres, f)
+
