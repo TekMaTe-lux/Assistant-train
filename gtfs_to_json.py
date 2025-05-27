@@ -1,5 +1,6 @@
 import requests
 import json
+import re
 from google.transit import gtfs_realtime_pb2
 import os
 
@@ -29,8 +30,12 @@ for entity in feed.entity:
 
 print(f"Nombre total retards détectés : {len(retards)}")
 
-# Ne garder que les trains d’intérêt
-retards_filtres = [r for r in retards if any(r["train_id"].endswith(num) for num in train_ids)]
+# Filtrage sur les trip_id SNCF (ex: OCESN88745...)
+retards_filtres = []
+for r in retards:
+    match = re.match(r'^OCESN(\d+)', r["train_id"])
+    if match and match.group(1) in train_ids:
+        retards_filtres.append(r)
 
 print(f"Nombre retards après filtrage : {len(retards_filtres)}")
 
@@ -39,4 +44,4 @@ os.makedirs("Assistant-train", exist_ok=True)
 
 # Sauvegarde dans le bon dossier
 with open("Assistant-train/retards.json", "w") as f:
-    json.dump(retards_filtres, f)
+    json.dump(retards_filtres, f, indent=2)
