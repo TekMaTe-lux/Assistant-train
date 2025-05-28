@@ -65,45 +65,30 @@ for entity in feed.entity:
             cleaned_stop_id = extraire_id_numerique(raw_stop_id)
             stop_name = stop_id_to_name.get(cleaned_stop_id, raw_stop_id)
 
-            comparaison_entry = {
+            data = {
                 "train_id": trip_id_complet,
-                "stop_id": raw_stop_id,
-                "stop_name": stop_name,
-                "static_arrival": None,
-                "realtime_arrival": None,
-                "arrival_delay_minutes": None,
-                "static_departure": None,
-                "realtime_departure": None,
-                "departure_delay_minutes": None
+                "stop_id": cleaned_stop_id,
+                "stop_name": stop_name
             }
 
-            for static_stop in trip_static:
-                if extraire_id_numerique(static_stop["stop_id"]) == cleaned_stop_id:
-                    comparaison_entry["static_arrival"] = static_stop["arrival_time"]
-                    comparaison_entry["static_departure"] = static_stop["departure_time"]
+            if stu.HasField("arrival") and stu.arrival.HasField("delay"):
+                data["arrival_delay_minutes"] = stu.arrival.delay // 60
+            if stu.HasField("departure") and stu.departure.HasField("delay"):
+                data["departure_delay_minutes"] = stu.departure.delay // 60
+
+            # Ajout de l'heure théorique (si dispo)
+            for stop in trip_static:
+                if extraire_id_numerique(stop["stop_id"]) == cleaned_stop_id:
+                    data["scheduled_arrival"] = stop["arrival_time"]
+                    data["scheduled_departure"] = stop["departure_time"]
                     break
 
-            if stu.HasField("arrival") and stu.arrival.HasField("delay"):
-                comparaison_entry["arrival_delay_minutes"] = stu.arrival.delay // 60
-                if comparaison_entry["static_arrival"]:
-                    h, m, s = map(int, comparaison_entry["static_arrival"].split(":"))
-                    heure_prevue = timedelta(hours=h, minutes=m, seconds=s)
-                    heure_reelle = heure_prevue + timedelta(seconds=stu.arrival.delay)
-                    comparaison_entry["realtime_arrival"] = str(heure_reelle)
+            if "arrival_delay_minutes" in data or "departure_delay_minutes" in data:
+                comparaison.append(data)
 
-            if stu.HasField("departure") and stu.departure.HasField("delay"):
-                comparaison_entry["departure_delay_minutes"] = stu.departure.delay // 60
-                if comparaison_entry["static_departure"]:
-                    h, m, s = map(int, comparaison_entry["static_departure"].split(":"))
-                    heure_prevue = timedelta(hours=h, minutes=m, seconds=s)
-                    heure_reelle = heure_prevue + timedelta(seconds=stu.departure.delay)
-                    comparaison_entry["realtime_departure"] = str(heure_reelle)
-
-            comparaison.append(comparaison_entry)
-
-# 💾 Sauvegarde dans un fichier
+# 💾 Enregistrement du fichier
 os.makedirs("Assistant-train", exist_ok=True)
-with open("Assistant-train/comparaison_horaires.json", "w", encoding='utf-8') as f:
+with open("Assistant-train/retards_gtfs.json", "w", encoding='utf-8') as f:
     json.dump(comparaison, f, indent=2, ensure_ascii=False)
 
-print("✅ Fichier comparaison_horaires.json généré avec succès.")
+print(f"{len(comparaison)} retards enregistrés dans retards_gtfs.json")
