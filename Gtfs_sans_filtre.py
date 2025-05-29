@@ -4,48 +4,50 @@ import re
 import csv
 from collections import defaultdict
 from google.transit import gtfs_realtime_pb2
+import io
 import os
 
 # --- Télécharger stops.txt depuis GitHub ---
 stops_url = "https://raw.githubusercontent.com/TekMaTe-lux/Assistant-train/main/stops.txt"
 stops_response = requests.get(stops_url)
-stops_content = stops_response.content.decode("utf-8").splitlines()
+stops_text = stops_response.content.decode("utf-8")
 
-# Charger les noms de gares dans un dictionnaire
+# Lire stops.txt dans un dictionnaire robuste
 stop_id_to_name = {}
-reader = csv.DictReader(stops_content)
+reader = csv.DictReader(io.StringIO(stops_text))
 for row in reader:
-    stop_id_to_name[row["stop_id"]] = row["stop_name"]
+    stop_id = row["stop_id"].strip()
+    stop_name = row["stop_name"].strip()
+    stop_id_to_name[stop_id] = stop_name
 
-# Fonction pour nettoyer le stop_id et obtenir la version à 8 chiffres
+# Fonction pour extraire le vrai stop_id à 8 chiffres
 def nettoyer_stop_id(stop_id):
-    match = re.search(r'(\d{8})', stop_id)
-    return match.group(1) if match else stop_id
+    match = re.search(r"(\d{8})", stop_id)
+    return match.group(1) if match else stop_id.strip()
 
-# Gares principales à surveiller
+# Liste des gares d'intérêt
 gares_nancy_metz_lux = {"87141002", "87192039", "87191007", "82001000"}
 
-# Télécharger le flux GTFS-RT
+# Charger le GTFS-RT
 url = "https://proxy.transport.data.gouv.fr/resource/sncf-all-gtfs-rt-trip-updates"
 response = requests.get(url)
 
 feed = gtfs_realtime_pb2.FeedMessage()
 feed.ParseFromString(response.content)
 
-# Préparer la structure finale
+# Structure des trains filtrés
 trains_filtrés_groupés = defaultdict(lambda: {
     "train_id": "",
     "train_number": "",
     "stops": []
 })
 
-# On ne garde que les trains commençant par 885, 887 ou 888
 prefixes_autorisés = ("885", "887", "888")
 
 for entity in feed.entity:
     if entity.HasField("trip_update"):
         trip_id_complet = entity.trip_update.trip.trip_id
-        match = re.search(r'(\d{5})', trip_id_complet)
+        match = re.search(r"(\d{5})", trip_id_complet)
         train_number = match.group(1) if match else "?????"
 
         if not train_number.startswith(prefixes_autorisés):
@@ -57,7 +59,7 @@ for entity in feed.entity:
         for stu in entity.trip_update.stop_time_update:
             raw_stop_id = stu.stop_id
             stop_id_clean = nettoyer_stop_id(raw_stop_id)
-            stop_name = stop_id_to_name.get(stop_id_clean, f"Stop {stop_id_clean}")
+            stop_name = stop_id_to_name.get(stop_id_clean, f"StopPoint {stop_id_clean}")
 
             data = {
                 "stop_id": stop_id_clean,
@@ -79,9 +81,9 @@ for entity in feed.entity:
             trains_filtrés_groupés[train_number]["train_number"] = train_number
             trains_filtrés_groupés[train_number]["stops"].extend(retard_trip)
 
-# Sauvegarder dans retard_nancymetzlux.json
+# Enregistrement dans un seul fichier
 os.makedirs("Assistant-train", exist_ok=True)
 with open("Assistant-train/retards_nancymetzlux.json", "w", encoding="utf-8") as f:
     json.dump(list(trains_filtrés_groupés.values()), f, indent=2, ensure_ascii=False)
 
-print(f"{len(trains_filtrés_groupés)} trains enregistrés dans retards_nancymetzlux.json")
+print(f"{len(trains_filtrés_groupés)} trains enregistrés dans retards_nancymetzlux.json avec noms de gares lisibles")
