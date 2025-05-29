@@ -12,13 +12,17 @@ stops_url = "https://raw.githubusercontent.com/TekMaTe-lux/Assistant-train/main/
 stops_response = requests.get(stops_url)
 stops_text = stops_response.content.decode("utf-8")
 
-# Lire stops.txt dans un dictionnaire robuste
+# Lire stops.txt dans un dictionnaire basé sur l’ID numérique (ex: 87192039)
 stop_id_to_name = {}
 reader = csv.DictReader(io.StringIO(stops_text))
 for row in reader:
-    stop_id = row["stop_id"].strip()
+    stop_id_raw = row["stop_id"].strip()
     stop_name = row["stop_name"].strip()
-    stop_id_to_name[stop_id] = stop_name
+    match = re.search(r"(\d{8})", stop_id_raw)
+    if match:
+        id_num = match.group(1)
+        if id_num not in stop_id_to_name:
+            stop_id_to_name[id_num] = stop_name  # Ne garde que le premier nom trouvé
 
 # Fonction pour extraire le vrai stop_id à 8 chiffres
 def nettoyer_stop_id(stop_id):
