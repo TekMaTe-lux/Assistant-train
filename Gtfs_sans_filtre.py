@@ -80,7 +80,7 @@ for entity in feed.entity:
 
 # --- Sauvegarder dans retard_nancymetzlux.json ---
 os.makedirs("Assistant-train", exist_ok=True)
-with open("Assistant-train/retard_nancymetzlux.json", "w", encoding="utf-8") as f:
+with open("Assistant-train/retards_nancymetzlux.json", "w", encoding="utf-8") as f:
     json.dump(list(trains_filtrés_groupés.values()), f, indent=2, ensure_ascii=False)
 
-print(f"{len(trains_filtrés_groupés)} trains sauvegardés dans retard_nancymetzlux.json")
+print(f"{len(trains_filtrés_groupés)} trains sauvegardés dans retards_nancymetzlux.json")
