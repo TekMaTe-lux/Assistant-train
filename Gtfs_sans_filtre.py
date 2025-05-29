@@ -15,9 +15,14 @@ with open("stops.txt", newline='', encoding='utf-8') as csvfile:
 # Fonction pour extraire l'ID numérique à la fin du stop_id GTFS-RT
 def extraire_id_numerique(stop_id):
     match = re.search(r'(\d{8})$', stop_id)
-    return match.group(1) if match else stop_id  # Retourne tel quel si pas trouvé
+    return match.group(1) if match else stop_id
 
-# Liste des codes stop_id des gares à surveiller
+# Fonction pour extraire le numéro à 5 chiffres depuis le trip_id
+def extraire_numero_train(trip_id):
+    match = re.search(r'(\d{5})', trip_id)
+    return match.group(1) if match else trip_id
+
+# Liste des codes stop_id des gares à surveiller (Nancy, Metz, Thionville, Luxembourg)
 gares_nancy_metz_lux = {"87141002", "87192039", "87191007", "82001000"}
 
 # Récupération du flux GTFS-RT (trip updates)
@@ -33,6 +38,7 @@ retards = []
 for entity in feed.entity:
     if entity.HasField("trip_update"):
         trip_id_complet = entity.trip_update.trip.trip_id
+        train_number = extraire_numero_train(trip_id_complet)
         retard_trip = []
         contient_gare_region = False
 
@@ -43,7 +49,8 @@ for entity in feed.entity:
 
             data = {
                 "train_id": trip_id_complet,
-                "stop_id": raw_stop_id,
+                "train_number": train_number,
+                "stop_id": cleaned_stop_id,
                 "stop_name": stop_name
             }
 
