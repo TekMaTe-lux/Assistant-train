@@ -17,12 +17,12 @@ reader = csv.DictReader(stops_content)
 for row in reader:
     stop_id_to_name[row["stop_id"]] = row["stop_name"]
 
-# Fonction pour extraire un stop_id numérique de 8 chiffres
-def extraire_id_numerique(stop_id):
-    match = re.search(r'(\d{8})$', stop_id)
+# Fonction pour nettoyer le stop_id et obtenir la version à 8 chiffres
+def nettoyer_stop_id(stop_id):
+    match = re.search(r'(\d{8})', stop_id)
     return match.group(1) if match else stop_id
 
-# Gares à surveiller
+# Gares principales à surveiller
 gares_nancy_metz_lux = {"87141002", "87192039", "87191007", "82001000"}
 
 # Télécharger le flux GTFS-RT
@@ -32,13 +32,14 @@ response = requests.get(url)
 feed = gtfs_realtime_pb2.FeedMessage()
 feed.ParseFromString(response.content)
 
-# --- Préparer la structure finale avec filtrage ---
+# Préparer la structure finale
 trains_filtrés_groupés = defaultdict(lambda: {
     "train_id": "",
     "train_number": "",
     "stops": []
 })
 
+# On ne garde que les trains commençant par 885, 887 ou 888
 prefixes_autorisés = ("885", "887", "888")
 
 for entity in feed.entity:
@@ -55,11 +56,11 @@ for entity in feed.entity:
 
         for stu in entity.trip_update.stop_time_update:
             raw_stop_id = stu.stop_id
-            cleaned_stop_id = extraire_id_numerique(raw_stop_id)
-            stop_name = stop_id_to_name.get(cleaned_stop_id, raw_stop_id)
+            stop_id_clean = nettoyer_stop_id(raw_stop_id)
+            stop_name = stop_id_to_name.get(stop_id_clean, f"Stop {stop_id_clean}")
 
             data = {
-                "stop_id": cleaned_stop_id,
+                "stop_id": stop_id_clean,
                 "stop_name": stop_name
             }
 
@@ -70,7 +71,7 @@ for entity in feed.entity:
 
             if "arrival_delay_minutes" in data or "departure_delay_minutes" in data:
                 retard_trip.append(data)
-                if cleaned_stop_id in gares_nancy_metz_lux:
+                if stop_id_clean in gares_nancy_metz_lux:
                     contient_gare_region = True
 
         if contient_gare_region and retard_trip:
@@ -78,9 +79,9 @@ for entity in feed.entity:
             trains_filtrés_groupés[train_number]["train_number"] = train_number
             trains_filtrés_groupés[train_number]["stops"].extend(retard_trip)
 
-# --- Sauvegarder dans retard_nancymetzlux.json ---
+# Sauvegarder dans retard_nancymetzlux.json
 os.makedirs("Assistant-train", exist_ok=True)
 with open("Assistant-train/retards_nancymetzlux.json", "w", encoding="utf-8") as f:
     json.dump(list(trains_filtrés_groupés.values()), f, indent=2, ensure_ascii=False)
 
-print(f"{len(trains_filtrés_groupés)} trains sauvegardés dans retards_nancymetzlux.json")
+print(f"{len(trains_filtrés_groupés)} trains enregistrés dans retards_nancymetzlux.json")
