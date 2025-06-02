@@ -588,56 +588,57 @@ fetch(urlAlertes)
     console.error('Erreur lors du chargement des alertes:', err);
   });
   
-// Fonction pour charger et traiter les données de retards
-async function chargerRetardsSupplementaires() {
-  try {
-    const response = await fetch('https://raw.githubusercontent.com/TekMaTe-lux/Assistant-train/main/Assistant-train/retards_nancymetzlux.json');
-    const retardsData = await response.json();
+fetch('https://raw.githubusercontent.com/TekMaTe-lux/Assistant-train/main/Assistant-train/retards_nancymetzlux.json')
+  .then(response => response.json())
+  .then(retardData => {
+    // Parcours des colonnes de trains visibles
+    const colonneTrains = document.querySelectorAll('thead th.train-header');
+    colonneTrains.forEach((th, indexColonne) => {
+      const trainNum = th.getAttribute('data-train-number');
 
-    // Parcourir les données de retards
-    retardsData.forEach(train => {
-      const trainNumber = train.train_number;
-      const stops = train.stops;
+      // Cherche les données de retard correspondant à ce train
+      const trainRetardé = retardData.find(t => t.train_number === trainNum);
+      if (!trainRetardé) return;
 
-      stops.forEach(stop => {
+      // Parcours des arrêts de ce train
+      trainRetardé.stops.forEach(stop => {
         const stopName = stop.stop_name;
-        const delay = stop.departure_delay_minutes || 0;
+        const delay = stop.departure_delay_minutes;
 
-        if (delay > 0) {
-          // Identifier la cellule correspondante dans le tableau
-          const cell = document.querySelector(`td[data-train="${trainNumber}"][data-stop="${stopName}"]`);
-          if (cell) {
-            const originalTime = cell.textContent.trim();
-            const delayedTime = calculerNouvelHoraire(originalTime, delay);
+        if (!delay || delay <= 0) return;
 
-            // Mettre à jour la cellule avec l'horaire prévu barré et l'horaire retardé en orange
-            cell.innerHTML = `<s>${originalTime}</s><br><span style="color: orange;">${delayedTime}</span>`;
-          }
-        }
+        // Recherche de la ligne du stop_name
+        const ligneStop = [...document.querySelectorAll('tbody tr')]
+          .find(tr => tr.querySelector('th')?.textContent.trim() === stopName);
+
+        if (!ligneStop) return;
+
+        // Trouve la cellule correspondante (même index de colonne que dans le header)
+        const cellules = ligneStop.querySelectorAll('td');
+        const cellule = cellules[indexColonne];
+        if (!cellule) return;
+
+        // Vérifie si un horaire retardé est déjà affiché (cas API SNCF)
+        const contenu = cellule.innerHTML;
+        const aDéjàRetard = contenu.includes('<br>') || contenu.includes('orange');
+
+        if (aDéjàRetard) return; // ne pas écraser un retard déjà détecté
+
+        // Extraire l’horaire affiché (horaire prévu)
+        const horairePrévu = contenu.trim();
+        if (!/^\d{2}:\d{2}$/.test(horairePrévu)) return;
+
+        // Calcul de l’horaire retardé
+        const [h, m] = horairePrévu.split(':').map(Number);
+        const date = new Date(0, 0, 0, h, m + delay);
+        const retardé = date.toTimeString().slice(0, 5);
+
+        // Affichage avec horaire barré + retardé en orange
+        cellule.innerHTML = `<span style="text-decoration: line-through; color: gray;">${horairePrévu}</span><br><span style="color: orange;">${retardé}</span>`;
       });
     });
-  } catch (error) {
-    console.error('Erreur lors du chargement des retards supplémentaires:', error);
-  }
-}
-
-// Fonction pour calculer le nouvel horaire en ajoutant le retard
-function calculerNouvelHoraire(horaire, retardMinutes) {
-  const [heures, minutes] = horaire.split(':').map(Number);
-  const date = new Date();
-  date.setHours(heures);
-  date.setMinutes(minutes + retardMinutes);
-
-  const heuresStr = String(date.getHours()).padStart(2, '0');
-  const minutesStr = String(date.getMinutes()).padStart(2, '0');
-
-  return `${heuresStr}:${minutesStr}`;
-}
-
-// Appeler la fonction après le chargement de la page
-document.addEventListener('DOMContentLoaded', () => {
-  chargerRetardsSupplementaires();
-});
+  })
+  .catch(err => console.error('Erreur lors du chargement des retards GTFS-RT :', err));
 </script>
 </body>
 </html>
