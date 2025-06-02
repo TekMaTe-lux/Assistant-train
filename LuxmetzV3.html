@@ -607,47 +607,77 @@ fetch(urlAlertes)
     console.error('Erreur lors du chargement des alertes:', err);
   });
   </script>
-  <script>
-const gtfsRTUrl = "https://raw.githubusercontent.com/TekMaTe-lux/Assistant-train/blob/main/Assistant-train/retards_nancymetzlux.json";
+<script>
+document.addEventListener('DOMContentLoaded', function () {
+  // URL du fichier JSON contenant les retards
+  const retardsUrl = 'https://tekmate-lux.github.io/Assistant-train/retards_nancymetzlux.json';
 
-async function fetchGTFSRT() {
-  try {
-    const response = await fetch(gtfsRTUrl, {cache: "no-store"});
-    const data = await response.json();
-    return data;
-  } catch (error) {
-    console.error("Erreur lors du chargement des données GTFS-RT :", error);
-    return [];
+  // Fonction pour ajouter les retards au tableau
+  function ajouterRetards(retardsData) {
+    // Sélectionner toutes les colonnes de trains (à partir de la 2ème colonne)
+    const colonnesTrains = document.querySelectorAll('table tr');
+
+    // Parcourir chaque ligne du tableau (chaque gare)
+    colonnesTrains.forEach((ligne, indexLigne) => {
+      // Ignorer la première cellule (nom de la gare)
+      const cellules = ligne.querySelectorAll('td, th');
+      if (cellules.length < 2) return;
+
+      // Parcourir chaque cellule de train (à partir de la 2ème cellule)
+      for (let i = 1; i < cellules.length; i++) {
+        const cellule = cellules[i];
+        const trainNumber = cellule.getAttribute('data-train-number');
+        const stopId = cellule.getAttribute('data-stop-id');
+        const horairePrevu = cellule.getAttribute('data-horaire-prevu');
+
+        if (!trainNumber || !stopId || !horairePrevu) continue;
+
+        // Rechercher le train dans les données de retards
+        const trainRetard = retardsData.find(train => train.train_number === trainNumber);
+        if (!trainRetard) continue;
+
+        // Rechercher l'arrêt correspondant
+        const stopRetard = trainRetard.stops.find(stop => stop.stop_id === stopId);
+        if (!stopRetard) continue;
+
+        // Déterminer le retard (priorité au départ, sinon arrivée)
+        const retardMinutes = stopRetard.departure_delay_minutes !== undefined
+          ? stopRetard.departure_delay_minutes
+          : stopRetard.arrival_delay_minutes;
+
+        if (!retardMinutes || retardMinutes === 0) continue;
+
+        // Calculer le nouvel horaire
+        const [heures, minutes] = horairePrevu.split(':').map(Number);
+        const date = new Date();
+        date.setHours(heures);
+        date.setMinutes(minutes + retardMinutes);
+        const nouvelHoraire = date.toTimeString().slice(0, 5);
+
+        // Mettre à jour la cellule
+        cellule.innerHTML = `
+          <span style="text-decoration: line-through;">${horairePrevu}</span><br>
+          <span style="color: orange; font-weight: bold;">${nouvelHoraire}</span>
+        `;
+      }
+    });
   }
-}
 
-// Exemple d'intégration avec un tableau déjà affiché
-async function afficherRetardsGTFS() {
-  const gtfsData = await fetchGTFSRT();
-
-  // Pour chaque train dans la page (ex. identifié par un attribut "data-train-number")
-  document.querySelectorAll("[data-train-number]").forEach(el => {
-    const trainNumber = el.dataset.trainNumber;
-    const trainGTFS = gtfsData.find(t => t.train_number === trainNumber);
-    if (trainGTFS) {
-      trainGTFS.stops.forEach(stop => {
-        const stopEl = el.querySelector(`[data-stop-id="${stop.stop_id}"]`);
-        if (stopEl) {
-          const arr = stop.arrival_delay_minutes ?? "-";
-          const dep = stop.departure_delay_minutes ?? "-";
-          const delayText = arr === dep
-            ? `${arr} min`
-            : `+${arr} / +${dep} min`;
-          if (arr > 0 || dep > 0) {
-            stopEl.innerHTML += ` <span style="color:red;">(retard ${delayText})</span>`;
-          }
-        }
-      });
-    }
-  });
-}
-
-document.addEventListener("DOMContentLoaded", afficherRetardsGTFS);
+  // Charger le fichier JSON des retards
+  fetch(retardsUrl)
+    .then(response => {
+      if (!response.ok) {
+        throw new Error('Erreur lors du chargement du fichier des retards.');
+      }
+      return response.json();
+    })
+    .then(data => {
+      ajouterRetards(data);
+    })
+    .catch(error => {
+      console.error('Erreur:', error);
+    });
+});
 </script>
 </body>
 </html>
