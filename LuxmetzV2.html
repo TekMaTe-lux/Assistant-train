@@ -564,65 +564,79 @@ fetch(urlAlertes)
     titreGeneral.style.marginBottom = "15px";
     container.appendChild(titreGeneral);
 
-    let count = 0;
+    // Filtrer les alertes qui concernent nos mots clés
+    let alertesFiltres = alertes.filter(alerte => {
+      const titre = alerte.header_text || '';
+      const descriptionHTML = alerte.description_text || '';
+      const description = descriptionHTML.replace(/<[^>]*>?/gm, '');
+      return contientMotCle(titre, motsCles) || contientMotCle(description, motsCles);
+    });
 
-    alertes.forEach(alerte => {
+    // Trier par priorité croissante (1 = plus haute priorité)
+    alertesFiltres.sort((a, b) => {
+      const prioA = getStyleParCauseCode(a.cause || 0).prio;
+      const prioB = getStyleParCauseCode(b.cause || 0).prio;
+      return prioA - prioB;
+    });
+
+    if (alertesFiltres.length === 0) {
+      container.innerHTML += '<p>Aucune alerte pour Luxembourg, Metz ou Thionville actuellement.</p>';
+      return;
+    }
+
+    alertesFiltres.forEach(alerte => {
       const titre = alerte.header_text || '';
       const descriptionHTML = alerte.description_text || '';
       const description = descriptionHTML.replace(/<[^>]*>?/gm, '');
 
-      if (contientMotCle(titre, motsCles) || contientMotCle(description, motsCles)) {
-        count++;
+      const debutTS = alerte.active_period_start ? new Date(alerte.active_period_start * 1000) : null;
+      const finTS = alerte.active_period_end ? new Date(alerte.active_period_end * 1000) : null;
 
-        const debutTS = alerte.active_period_start ? new Date(alerte.active_period_start * 1000) : null;
-        const finTS = alerte.active_period_end ? new Date(alerte.active_period_end * 1000) : null;
+      const causeCode = alerte.cause || 0;
+      const style = getStyleParCauseCode(causeCode);
 
-        const causeCode = alerte.cause || 0;
-        const style = getStyleParCauseCode(causeCode);
+      const div = document.createElement('div');
+      div.style.border = `1px solid ${style.couleur}`;
+      div.style.marginBottom = "15px";
+      div.style.borderRadius = "5px";
+      div.style.backgroundColor = style.couleur;
 
-        const div = document.createElement('div');
-        div.style.border = `1px solid ${style.couleur}`;
-        div.style.marginBottom = "15px";
-        div.style.borderRadius = "5px";
-        div.style.backgroundColor = style.couleur;
+      // Création du span pour l'icône, avec style visible
+      const iconeSpan = document.createElement('span');
+      iconeSpan.textContent = style.icone;
+      iconeSpan.style.marginRight = '8px';
+      iconeSpan.style.fontSize = '1.2em';
+      iconeSpan.style.verticalAlign = 'middle';
 
-        // Création du span pour l'icône
-        const iconeSpan = document.createElement('span');
-        iconeSpan.textContent = style.icone;
-        iconeSpan.style.marginRight = '8px';
+      const titreDiv = document.createElement('div');
+      titreDiv.style.fontWeight = "bold";
+      titreDiv.style.padding = "10px";
+      titreDiv.style.cursor = "pointer";
+      titreDiv.style.userSelect = "none";
+      titreDiv.style.display = "flex";
+      titreDiv.style.alignItems = "center";
 
-        const titreDiv = document.createElement('div');
-        titreDiv.style.fontWeight = "bold";
-        titreDiv.style.padding = "10px";
-        titreDiv.style.cursor = "pointer";
-        titreDiv.style.userSelect = "none";
+      // Ajout de l'icône puis du texte dans titreDiv
+      titreDiv.appendChild(iconeSpan);
+      titreDiv.appendChild(document.createTextNode(titre));
 
-        // Ajout de l'icône puis du texte dans titreDiv
-        titreDiv.appendChild(iconeSpan);
-        titreDiv.appendChild(document.createTextNode(titre));
+      const detailDiv = document.createElement('div');
+      detailDiv.style.padding = "10px";
+      detailDiv.style.display = "none";
+      detailDiv.innerHTML = `
+        <p>${description}</p>
+        <p><em>Date début : ${formatDate(debutTS)} - Date fin : ${formatDate(finTS)}</em></p>
+        <p><strong>Cause :</strong> ${style.label} (code ${causeCode})</p>
+      `;
 
-        const detailDiv = document.createElement('div');
-        detailDiv.style.padding = "10px";
-        detailDiv.style.display = "none";
-        detailDiv.innerHTML = `
-          <p>${description}</p>
-          <p><em>Date début : ${formatDate(debutTS)} - Date fin : ${formatDate(finTS)}</em></p>
-          <p><strong>Cause :</strong> ${style.label} (code ${causeCode})</p>
-        `;
+      titreDiv.addEventListener('click', () => {
+        detailDiv.style.display = detailDiv.style.display === "none" ? "block" : "none";
+      });
 
-        titreDiv.addEventListener('click', () => {
-          detailDiv.style.display = detailDiv.style.display === "none" ? "block" : "none";
-        });
-
-        div.appendChild(titreDiv);
-        div.appendChild(detailDiv);
-        container.appendChild(div);
-      }
+      div.appendChild(titreDiv);
+      div.appendChild(detailDiv);
+      container.appendChild(div);
     });
-
-    if (count === 0) {
-      container.innerHTML += '<p>Aucune alerte pour Luxembourg, Metz ou Thionville actuellement.</p>';
-    }
   })
   .catch(err => {
     console.error('Erreur lors du chargement des alertes:', err);
