@@ -588,52 +588,46 @@ fetch(urlAlertes)
     console.error('Erreur lors du chargement des alertes:', err);
   });
   
-// Après avoir affiché le tableau de résultats API, on applique les retards détectés via GTFS-RT
-fetch('https://raw.githubusercontent.com/TekMaTe-lux/Assistant-train/main/Assistant-train/retards_nancymetzlux.json')
-  .then(response => response.json())
-  .then(retardData => {
-    const colonneTrains = document.querySelectorAll('thead th.train-header');
-    const fixedStops = [
-      "Luxembourg", "Howald", "Bettembourg", "Hettange-Grande", "Thionville",
-      "Uckange", "Hagondange", "Maizières-lès-Metz", "Woippy", "Metz Nord",
-      "Metz", "Pagny-sur-Moselle", "Pont-à-Mousson", "Nancy"
-    ];
-
-    colonneTrains.forEach((th, indexColonne) => {
-      const trainNum = th.getAttribute('data-train-number');
-      const trainRetardé = retardData.find(t => t.train_number === trainNum);
-      if (!trainRetardé) return;
-
-      trainRetardé.stops.forEach(stop => {
-        const stopName = stop.stop_name;
-        const delay = stop.departure_delay_minutes;
-        if (!delay || delay <= 0) return;
-
-        const indexLigne = fixedStops.findIndex(name => name === stopName);
-        if (indexLigne === -1) return;
-
-        const ligne = document.querySelectorAll('tbody tr')[indexLigne];
-        if (!ligne) return;
-
-        const cellule = ligne.querySelectorAll('td')[indexColonne];
-        if (!cellule) return;
-
-        const contenu = cellule.innerHTML.trim();
-        const aDéjàRetard = contenu.includes('<br>') || contenu.includes('orange');
-        if (aDéjàRetard) return;
-
-        const matchHeure = contenu.match(/^(\d{2}):(\d{2})$/);
-        if (!matchHeure) return;
-
-        const [_, h, m] = matchHeure;
-        const date = new Date(0, 0, 0, parseInt(h), parseInt(m) + delay);
-        const retardé = date.toTimeString().slice(0, 5);
-
-        cellule.innerHTML = `<span style="text-decoration: line-through; color: gray;">${contenu}</span><br><span style="color: orange;">${retardé}</span>`;
-      });
-    });
+// Charger le fichier JSON des retards GTFS-RT
+fetch("https://raw.githubusercontent.com/TekMaTe-lux/Assistant-train/main/Assistant-train/retards_nancymetzlux.json")
+  .then(r => r.json())
+  .then(retardsGTFS => {
+    applyRetardsFromGTFS(retardsGTFS);
   })
-  .catch(err => console.error('Erreur chargement retards GTFS-RT :', err));
+  .catch(err => console.error("Erreur lors du chargement des retards GTFS-RT :", err));
+
+function applyRetardsFromGTFS(retardsGTFS) {
+  const fixedStops = [
+    "Luxembourg", "Howald", "Bettembourg", "Hettange-Grande", "Thionville",
+    "Uckange", "Hagondange", "Maizières-lès-Metz", "Woippy", "Metz Nord",
+    "Metz", "Pagny-sur-Moselle", "Pont-à-Mousson", "Nancy"
+  ];
+
+  // Parcourir toutes les cellules du tableau après qu'il a été généré
+  fixedStops.forEach((gare, rowIndex) => {
+    const row = document.querySelectorAll("table tr")[rowIndex + 1]; // +1 car la 1ère ligne est l'entête
+
+    if (!row) return;
+
+    // Les colonnes commencent à 1 car la première cellule est le nom de l’arrêt
+    Array.from(row.cells).forEach((cell, colIndex) => {
+      if (colIndex === 0) return; // ignorer la 1ère cellule (nom de l’arrêt)
+
+      const trainHeader = document.querySelectorAll("table tr th")[colIndex]; // th contient le numéro de train
+      if (!trainHeader) return;
+
+      const trainNumber = trainHeader.dataset.trainNumber?.trim();
+
+      if (trainNumber && retardsGTFS[trainNumber]) {
+        const retardMinutes = retardsGTFS[trainNumber][gare];
+        if (retardMinutes && retardMinutes > 0) {
+          // Ajouter sous l’horaire prévu le retard
+          cell.innerHTML += `<div style="color:red; font-size: 0.8em;">+${retardMinutes} min</div>`;
+        }
+      }
+    });
+  });
+}
   </script>
 </body>
 </html>
