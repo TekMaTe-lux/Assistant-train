@@ -27,16 +27,16 @@ def parse_alertes_gtfs_rt(url):
             }
 
             for entity_info in alert.informed_entity:
-                info = {}
-                if entity_info.HasField("stop_id"):
-                    info["stop_id"] = entity_info.stop_id
-                if entity_info.HasField("route_id"):
-                    info["route_id"] = entity_info.route_id
-                if entity_info.HasField("direction_id"):
-                    info["direction_id"] = entity_info.direction_id
-                alert_dict["informed_entities"].append(info)
-
-            alertes_simplifiees.append(alert_dict)
+            info = {}
+            if entity_info.HasField("stop_id"):
+                info["stop_id"] = entity_info.stop_id
+            if entity_info.HasField("route_id"):
+                info["route_id"] = entity_info.route_id
+            if entity_info.HasField("direction_id"):
+                info["direction_id"] = entity_info.direction_id
+            if entity_info.HasField("trip"):
+                info["trip_id"] = entity_info.trip.trip_id
+            alert_dict["informed_entities"].append(info)
 
     return alertes_simplifiees
 
