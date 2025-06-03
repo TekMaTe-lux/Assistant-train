@@ -587,20 +587,32 @@ fetch(urlAlertes)
   .catch(err => {
     console.error('Erreur lors du chargement des alertes:', err);
   });
-  
+
 // Charger le fichier JSON des retards GTFS-RT
-fetch("https://raw.githubusercontent.com/TekMaTe-lux/Assistant-train/main/Assistant-train/retards_nancymetzlux.json")
-  .then(r => r.json())
-  .then(retardsGTFS => {
-    applyRetardsFromGTFS(retardsGTFS);
-  })
-  .catch(err => console.error("Erreur lors du chargement des retards GTFS-RT :", err));
+window.onload = function() {
+  fetch("https://raw.githubusercontent.com/TekMaTe-lux/Assistant-train/main/Assistant-train/retards_nancymetzlux.json")
+    .then(r => r.json())
+    .then(retardsGTFS => {
+      const observer = new MutationObserver(() => {
+        const table = document.querySelector("table");
+        if (table) {
+          console.log("📊 Tableau détecté, application des retards GTFS !");
+          applyRetardsFromGTFS(retardsGTFS);
+          observer.disconnect(); // Stopper l'observation
+        }
+      });
+
+      // Observer tout changement dans le body
+      observer.observe(document.body, { childList: true, subtree: true });
+    })
+    .catch(err => console.error("Erreur lors du chargement des retards GTFS-RT :", err));
+};
 
 function applyRetardsFromGTFS(retardsGTFS) {
   const table = document.querySelector("table");
   if (!table) {
-    console.log("Le tableau n'est pas encore généré !");
-    return;  // On arrête car on ne peut pas appliquer les retards sans tableau
+    console.log("⛔ Le tableau n'est pas encore généré !");
+    return;
   }
 
   const fixedStops = [
@@ -609,87 +621,30 @@ function applyRetardsFromGTFS(retardsGTFS) {
     "Metz", "Pagny-sur-Moselle", "Pont-à-Mousson", "Nancy"
   ];
 
-  fixedStops.forEach((gare, rowIndex) => {
-    const row = document.querySelectorAll("table tr")[rowIndex + 1]; // +1 car 1ère ligne = entête
+  const allRows = Array.from(document.querySelectorAll("table tr"));
+  const headerCount = allRows.findIndex(row =>
+    row.querySelector("td") !== null
+  );
 
-    if (!row) {
-      console.log(`Pas de ligne pour la gare ${gare} (index ${rowIndex + 1})`);
-      return;
-    }
+  fixedStops.forEach((gare, rowIndex) => {
+    const row = allRows[headerCount + rowIndex];
+    if (!row) return;
 
     Array.from(row.cells).forEach((cell, colIndex) => {
-      if (colIndex === 0) return; // ignorer la 1ère cellule (nom gare)
+      if (colIndex === 0) return;
 
       const trainHeader = document.querySelectorAll("table tr th")[colIndex];
-      if (!trainHeader) {
-        console.log(`Pas d'en-tête pour la colonne ${colIndex}`);
-        return;
-      }
+      const trainNumber = trainHeader?.dataset.trainNumber?.trim();
 
-      const trainNumber = trainHeader.dataset.trainNumber?.trim();
-
-      if (trainNumber) {
-        console.log(`Colonne ${colIndex} correspond au train n°${trainNumber}`);
-
-        if (retardsGTFS[trainNumber]) {
-          const retardMinutes = retardsGTFS[trainNumber][gare];
-          if (retardMinutes && retardMinutes > 0) {
-            console.log(`Retard détecté : Train ${trainNumber} à ${gare} = +${retardMinutes} min`);
-            cell.innerHTML += `<div style="color:red; font-size: 0.8em;">+${retardMinutes} min</div>`;
-          } else {
-            console.log(`Pas de retard pour train ${trainNumber} à ${gare}`);
-          }
-        } else {
-          console.log(`Aucune donnée de retard pour le train ${trainNumber} dans le JSON`);
-        }
-      } else {
-        console.log(`Aucun numéro de train trouvé pour la colonne ${colIndex}`);
-      }
-    });
-  });
-}
-
-fetch("https://raw.githubusercontent.com/TekMaTe-lux/Assistant-train/main/Assistant-train/retards_nancymetzlux.json")
-  .then(r => r.json())
-  .then(retardsGTFS => {
-    applyRetardsFromGTFS(retardsGTFS);
-  })
-  .catch(err => console.error("Erreur lors du chargement des retards GTFS-RT :", err));
-
-function applyRetardsFromGTFS(retardsGTFS) {
-  const table = document.querySelector("table");
-  if (!table) return;
-
-  // 1. Extraire les numéros de train depuis les <th data-train-number="">
-  const headerRow = table.querySelector("thead tr");
-  const trainHeaders = Array.from(headerRow.querySelectorAll("th"));
-  const trainNumbers = trainHeaders.map((th, i) => ({
-    index: i,
-    number: th.dataset.trainNumber
-  })).filter(t => t.number);
-
-  // 2. Traiter chaque ligne de gare
-  const bodyRows = table.querySelectorAll("tbody tr");
-  bodyRows.forEach(row => {
-    const cells = row.querySelectorAll("td");
-    const gare = cells[0]?.textContent.trim();
-    if (!gare) return;
-
-    trainNumbers.forEach(({ index, number }) => {
-      const cell = cells[index]; // index correspond bien ici (car <td> dès la première colonne)
-      if (!cell) return;
-
-      const retard = retardsGTFS[number]?.[gare];
-      if (retard && retard > 0) {
-        const originalTime = cell.textContent.trim();
-        // N'ajoute pas plusieurs fois si déjà affiché
-        if (!originalTime.includes(`+${retard} min`)) {
-          cell.innerHTML = `${originalTime} <span style="color:red;">(+${retard} min)</span>`;
+      if (trainNumber && retardsGTFS[trainNumber]) {
+        const retardMinutes = retardsGTFS[trainNumber][gare];
+        if (retardMinutes && retardMinutes > 0) {
+          cell.innerHTML += `<div style="color:red; font-size: 0.8em;">+${retardMinutes} min</div>`;
         }
       }
     });
   });
 }
-  </script>
+</script>
 </body>
 </html>
