@@ -1,5 +1,6 @@
 import requests
 import json
+import os
 from google.transit import gtfs_realtime_pb2
 
 # URL GTFS-RT alertes SNCF (service alerts)
@@ -39,7 +40,8 @@ def parse_alertes_gtfs_rt(url):
 
     return alertes_simplifiees
 
-def sauvegarder_json(data, fichier="alertes_sncftoutes.json"):
+def sauvegarder_json(data, fichier="Assistant-train/alertes_sncftoutes.json"):
+    os.makedirs("Assistant-train", exist_ok=True)  # 🔧 Crée le dossier si absent
     with open(fichier, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
     print(f"{len(data)} alertes enregistrées dans {fichier}")
