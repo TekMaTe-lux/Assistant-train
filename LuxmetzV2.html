@@ -521,8 +521,56 @@ Object.values(groupedDisruptions).forEach(disr => {
 }
       });
     });
-    
-const urlAlertes = 'https://raw.githubusercontent.com/tekmate-lux/Assistant-train/main/Assistant-train/alertes_sncftoutes.json';
+
+// Charger le fichier JSON des retards GTFS-RT
+window.onload = function() {
+  fetch("https://raw.githubusercontent.com/TekMaTe-lux/Assistant-train/main/Assistant-train/retards_nancymetzlux.json")
+    .then(r => r.json())
+    .then(data => {
+      retardsGTFS = data;
+      console.log("Retards GTFS chargés !");
+    })
+    .catch(err => console.error("Erreur lors du chargement des retards GTFS-RT :", err));
+};
+
+function applyRetardsFromGTFS(retardsGTFS) {
+  const table = document.querySelector("table");
+  if (!table) {
+    console.log("⛔ Le tableau n'est pas encore généré !");
+    return;
+  }
+
+  const fixedStops = [
+    "Luxembourg", "Howald", "Bettembourg", "Hettange-Grande", "Thionville",
+    "Uckange", "Hagondange", "Maizières-lès-Metz", "Woippy", "Metz Nord",
+    "Metz", "Pagny-sur-Moselle", "Pont-à-Mousson", "Nancy"
+  ];
+
+  const allRows = Array.from(document.querySelectorAll("table tr"));
+  const headerCount = allRows.findIndex(row =>
+    row.querySelector("td") !== null
+  );
+
+  fixedStops.forEach((gare, rowIndex) => {
+    const row = allRows[headerCount + rowIndex];
+    if (!row) return;
+
+    Array.from(row.cells).forEach((cell, colIndex) => {
+      if (colIndex === 0) return;
+
+      const trainHeader = document.querySelectorAll("table tr th")[colIndex];
+      const trainNumber = trainHeader?.dataset.trainNumber?.trim();
+
+      if (trainNumber && retardsGTFS[trainNumber]) {
+        const retardMinutes = retardsGTFS[trainNumber][gare];
+        if (retardMinutes && retardMinutes > 0) {
+          cell.innerHTML += `<div class="gtfs-retard">+${retardMinutes} min</div>`;
+        }
+      }
+    });
+  });
+}
+    const urlAlertes = 'https://raw.githubusercontent.com/tekmate-lux/Assistant-train/main/Assistant-train/alertes_sncftoutes.json';
 
 const motsCles = ['Luxembourg', 'Metz', 'Thionville'];
 
@@ -553,6 +601,11 @@ function formatDate(d) {
   return `${pad(d.getDate())}/${pad(d.getMonth() + 1)}/${d.getFullYear()} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
+function extraireNumeroTrainDepuisTripId(tripId) {
+  const match = tripId.match(/\d{5}/); // Ex : "OCESN88731F" → "88731"
+  return match ? match[0] : null;
+}
+    
 fetch(urlAlertes)
   .then(response => response.json())
   .then(alertes => {
@@ -590,9 +643,24 @@ fetch(urlAlertes)
       container.innerHTML += '<p>Aucune alerte pour Luxembourg, Metz ou Thionville actuellement.</p>';
       return;
     }
+    
+alertesFiltres.forEach(alerte => {
+  const titreBase = alerte.header_text || '';
 
-    alertesFiltres.forEach(alerte => {
-      const titre = alerte.header_text || '';
+  // Extraire le numéro train depuis informed_entities (premier trip_id trouvé)
+  let numeroTrain = null;
+  if (alerte.informed_entities && alerte.informed_entities.length > 0) {
+    for (const ent of alerte.informed_entities) {
+      if (ent.trip_id) {
+        numeroTrain = extraireNumeroTrainDepuisTripId(ent.trip_id);
+        if (numeroTrain) break;
+      }
+    }
+  }
+
+  const titre = numeroTrain ? `Train ${numeroTrain} - ${titreBase}` : titreBase;
+
+      
       const descriptionHTML = alerte.description_text || '';
       const description = descriptionHTML.replace(/<[^>]*>?/gm, '');
 
@@ -648,55 +716,6 @@ fetch(urlAlertes)
   .catch(err => {
     console.error('Erreur lors du chargement des alertes:', err);
   });
-
-// Charger le fichier JSON des retards GTFS-RT
-window.onload = function() {
-  fetch("https://raw.githubusercontent.com/tekmate-lux/Assistant-train/main/Assistant-train/alertes_sncftoutes.json")
-    .then(r => r.json())
-    .then(data => {
-      retardsGTFS = data;
-      console.log("Retards GTFS chargés !");
-    })
-    .catch(err => console.error("Erreur lors du chargement des retards GTFS-RT :", err));
-};
-
-function applyRetardsFromGTFS(retardsGTFS) {
-  const table = document.querySelector("table");
-  if (!table) {
-    console.log("⛔ Le tableau n'est pas encore généré !");
-    return;
-  }
-
-  const fixedStops = [
-    "Luxembourg", "Howald", "Bettembourg", "Hettange-Grande", "Thionville",
-    "Uckange", "Hagondange", "Maizières-lès-Metz", "Woippy", "Metz Nord",
-    "Metz", "Pagny-sur-Moselle", "Pont-à-Mousson", "Nancy"
-  ];
-
-  const allRows = Array.from(document.querySelectorAll("table tr"));
-  const headerCount = allRows.findIndex(row =>
-    row.querySelector("td") !== null
-  );
-
-  fixedStops.forEach((gare, rowIndex) => {
-    const row = allRows[headerCount + rowIndex];
-    if (!row) return;
-
-    Array.from(row.cells).forEach((cell, colIndex) => {
-      if (colIndex === 0) return;
-
-      const trainHeader = document.querySelectorAll("table tr th")[colIndex];
-      const trainNumber = trainHeader?.dataset.trainNumber?.trim();
-
-      if (trainNumber && retardsGTFS[trainNumber]) {
-        const retardMinutes = retardsGTFS[trainNumber][gare];
-        if (retardMinutes && retardMinutes > 0) {
-          cell.innerHTML += `<div class="gtfs-retard">+${retardMinutes} min</div>`;
-        }
-      }
-    });
-  });
-}
 </script>
 </body>
 </html>
