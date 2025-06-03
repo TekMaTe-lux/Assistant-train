@@ -223,30 +223,6 @@
   <script>
     $(function () {
       $('#trainDate').val(new Date().toISOString().split('T')[0]);
-
-        // Objet associant nom de gare => code UIC
-  const fixedStopsWithUIC = {
-    "Luxembourg": "82001000",
-    "Howald": "82002501",
-    "Bettembourg": "82006030",
-    "Hettange-Grande": "87191163",
-    "Thionville": "87191007",
-    "Uckange": "87191130",
-    "Hagondange": "87191114",
-    "Maizières-lès-Metz": "87191106",
-    "Woippy": "87192088",
-    "Metz Nord": "87192070",
-    "Metz": "87192039",
-    "Pagny-sur-Moselle": "87192468",
-    "Pont-à-Mousson": "87141820",
-    "Nancy": "87141002"
-  };
-      // Génère automatiquement un mapping UIC => nom de gare
-const uicToStopName = {};
-for (const [name, uic] of Object.entries(fixedStopsWithUIC)) {
-  uicToStopName[uic] = name;
-}
-      // Liste simple des gares 
       const fixedStops = [
         "Luxembourg", "Howald", "Bettembourg", "Hettange-Grande", "Thionville",
         "Uckange", "Hagondange", "Maizières-lès-Metz", "Woippy", "Metz Nord",
@@ -272,23 +248,14 @@ for (const [name, uic] of Object.entries(fixedStopsWithUIC)) {
         const results = {};
 
         for (const num of numbers) {
-        const url = `https://api.sncf.com/v1/coverage/sncf/vehicle_journeys/vehicle_journey:SNCF:${date}:${num}:1187:Train`;
-        try {
-          const res = await $.ajax({ url, headers: { Authorization: 'Basic ' + auth } });
-          const train = res.vehicle_journeys?.[0];
-
-        if (!train) {
-          results[num] = { error: 'Non trouvé' };
-          continue;
-       }
-
-    // Extraire numéro de train réel (parfois différent du numéro saisi)
-    const trainIdCourt = train.name?.match(/OCESN(\d{5})/)?.[1];
-    if (trainIdCourt) {
-      await ajouterRetardsGtfs(trainIdCourt); // Met à jour retardsGtfs global
-    } else {
-      console.warn("Numéro court non trouvé dans train.name :", train.name);
-    }
+          const url = `https://api.sncf.com/v1/coverage/sncf/vehicle_journeys/vehicle_journey:SNCF:${date}:${num}:1187:Train`;
+          try {
+            const res = await $.ajax({ url, headers: { Authorization: 'Basic ' + auth } });
+            const train = res.vehicle_journeys?.[0];
+            if (!train) {
+              results[num] = { error: 'Non trouvé' };
+              continue;
+            }
 
             const disruptions = res.disruptions || [];
             const impacted = {};
@@ -335,8 +302,8 @@ for (const [name, uic] of Object.entries(fixedStopsWithUIC)) {
 
         let html = '<table><thead><tr><th>Gare</th>';
         numbers.forEach(num => {
-          html += `<th>${num}</th>`;
-        });
+        html += `<th class="train-header" data-train-number="${num}"> ${num}</th>`;
+       });
         html += '</tr><tr><th></th>';
 
         numbers.forEach(num => {
@@ -620,55 +587,64 @@ fetch(urlAlertes)
   .catch(err => {
     console.error('Erreur lors du chargement des alertes:', err);
   });
-    const urlGtfsRetards = 'https://raw.githubusercontent.com/tekmate-lux/Assistant-train/main/retards_nancymetzlux.json';
 
-function extraireCodeUIC(stop_id) {
-  const match = stop_id.match(/(\d{8})$/);
-  return match ? match[1] : null;
-}
-
-function ajouterRetardsGtfs(trainIdCourt) {
-  fetch(urlGtfsRetards)
+// Charger le fichier JSON des retards GTFS-RT
+window.onload = function() {
+  fetch("https://raw.githubusercontent.com/TekMaTe-lux/Assistant-train/main/Assistant-train/retards_nancymetzlux.json")
     .then(r => r.json())
-    .then(retards => {
-      const retardsTrain = retards.filter(r => r.train_id.includes(trainIdCourt));
-      retardsTrain.forEach(retard => {
-        const codeUIC = extraireCodeUIC(retard.stop_id);
-        if (!codeUIC) return;
-
-        // Nom de gare lisible via UIC
-        const nomGare = uicToStopName[codeUIC] || codeUIC;
-
-        let delay = 0;
-        if (typeof retard.arrival_delay_minutes === 'number' && retard.arrival_delay_minutes > 0) {
-          delay = retard.arrival_delay_minutes;
-        } else if (typeof retard.departure_delay_minutes === 'number' && retard.departure_delay_minutes > 0) {
-          delay = retard.departure_delay_minutes;
-        }
-
-        if (delay > 0) {
-          // Sélecteur avec data-uic
-          const row = document.querySelector(`[data-uic="${codeUIC}"]`);
-          if (!row) return;
-
-          const spanPrevu = row.querySelector(".horaire-prevu");
-          const spanReel = row.querySelector(".horaire-reel");
-
-          if (spanPrevu && spanReel && spanReel.textContent.trim() === "") {
-            spanPrevu.style.textDecoration = "line-through";
-            spanReel.textContent = "+" + delay + " min";
-
-            // Optionnel : affiche aussi le nom de gare lisible quelque part si besoin
-            // Ex: spanReel.title = nomGare;
-
-            spanReel.style.color = "orange";
-          }
+    .then(retardsGTFS => {
+      const observer = new MutationObserver(() => {
+        const table = document.querySelector("table");
+        if (table) {
+          console.log("📊 Tableau détecté, application des retards GTFS !");
+          applyRetardsFromGTFS(retardsGTFS);
+          observer.disconnect(); // Stopper l'observation
         }
       });
-    })
-    .catch(err => console.error("Erreur chargement GTFS retards :", err));
-}
 
-  </script>
+      // Observer tout changement dans le body
+      observer.observe(document.body, { childList: true, subtree: true });
+    })
+    .catch(err => console.error("Erreur lors du chargement des retards GTFS-RT :", err));
+};
+
+function applyRetardsFromGTFS(retardsGTFS) {
+  const table = document.querySelector("table");
+  if (!table) {
+    console.log("⛔ Le tableau n'est pas encore généré !");
+    return;
+  }
+
+  const fixedStops = [
+    "Luxembourg", "Howald", "Bettembourg", "Hettange-Grande", "Thionville",
+    "Uckange", "Hagondange", "Maizières-lès-Metz", "Woippy", "Metz Nord",
+    "Metz", "Pagny-sur-Moselle", "Pont-à-Mousson", "Nancy"
+  ];
+
+  const allRows = Array.from(document.querySelectorAll("table tr"));
+  const headerCount = allRows.findIndex(row =>
+    row.querySelector("td") !== null
+  );
+
+  fixedStops.forEach((gare, rowIndex) => {
+    const row = allRows[headerCount + rowIndex];
+    if (!row) return;
+
+    Array.from(row.cells).forEach((cell, colIndex) => {
+      if (colIndex === 0) return;
+
+      const trainHeader = document.querySelectorAll("table tr th")[colIndex];
+      const trainNumber = trainHeader?.dataset.trainNumber?.trim();
+
+      if (trainNumber && retardsGTFS[trainNumber]) {
+        const retardMinutes = retardsGTFS[trainNumber][gare];
+        if (retardMinutes && retardMinutes > 0) {
+          cell.innerHTML += `<div style="color:red; font-size: 0.8em;">+${retardMinutes} min</div>`;
+        }
+      }
+    });
+  });
+}
+</script>
 </body>
 </html>
