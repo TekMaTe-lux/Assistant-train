@@ -2,9 +2,10 @@ import requests
 import re
 import csv
 import json
+import os
+import io
 from collections import defaultdict
 from google.transit import gtfs_realtime_pb2
-import io
 
 # --- Télécharger stops.txt depuis GitHub ---
 stops_url = "https://raw.githubusercontent.com/TekMaTe-lux/Assistant-train/main/stops.txt"
@@ -28,14 +29,14 @@ def nettoyer_stop_id(stop_id):
     match = re.search(r"(\d{8})", stop_id)
     return match.group(1) if match else stop_id.strip()
 
-# Charger le GTFS-RT
+# Charger le GTFS-RT depuis Transport Data Gouv
 url = "https://proxy.transport.data.gouv.fr/resource/sncf-all-gtfs-rt-trip-updates"
 response = requests.get(url)
 
 feed = gtfs_realtime_pb2.FeedMessage()
 feed.ParseFromString(response.content)
 
-# Stockage des trains
+# Stockage des trains regroupés par trip_id
 trains_groupés = defaultdict(lambda: {
     "train_id": "",
     "train_number": "",
@@ -67,8 +68,12 @@ for entity in feed.entity:
                 "departure": departure
             })
 
-# Sauvegarder en JSON
-with open("gtfs_rt_trains_complets.json", "w", encoding="utf-8") as f:
+# Créer le dossier de sortie si nécessaire
+os.makedirs("Assistant-train", exist_ok=True)
+
+# Sauvegarder en JSON dans le dossier correct
+output_path = "Assistant-train/gtfs_rt_trains_complets.json"
+with open(output_path, "w", encoding="utf-8") as f:
     json.dump(list(trains_groupés.values()), f, ensure_ascii=False, indent=2)
 
-print(f"{len(trains_groupés)} trains exportés dans gtfs_rt_trains_complets.json")
+print(f"{len(trains_groupés)} trains exportés dans {output_path}")
