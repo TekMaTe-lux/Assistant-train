@@ -99,6 +99,7 @@ for train in trains_filtrés_groupés.values():
 
 # --- Enregistrement du fichier simplifié ---
 os.makedirs("Assistant-train", exist_ok=True)
-with open("Assistant-train/retards_nancymetzlux.json", "w", encoding="utf-8") as f:
-    json.dump(retards_s
-print(f"{len(retards_simplifie)} trains enregistrés dans retards_nancymetzlux.json (format simplifié)")
+with open("Assistant-train/retards_nancymetzluxv1.json", "w", encoding="utf-8") as f:
+    json.dump(retards_simplifie, f, ensure_ascii=False, indent=2)
+
+print(f"{len(retards_simplifie)} trains enregistrés dans retards_nancymetzluxv1.json (format simplifié)")
