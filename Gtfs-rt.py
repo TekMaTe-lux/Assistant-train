@@ -1,7 +1,7 @@
 import requests
-import json
 import re
 import csv
+import json
 from collections import defaultdict
 from google.transit import gtfs_realtime_pb2
 import io
@@ -42,33 +42,33 @@ trains_groupés = defaultdict(lambda: {
     "stops": []
 })
 
+# Traiter chaque trip_update
 for entity in feed.entity:
     if entity.HasField("trip_update"):
         trip_update = entity.trip_update
-        trip_id_complet = trip_update.trip.trip_id
-        match = re.search(r"(\d{5})", trip_id_complet)
+        trip_id = trip_update.trip.trip_id
+        match = re.search(r"(\d{5})", trip_id)
         train_number = match.group(1) if match else "?????"
-        
-        train_id = trip_update.trip.trip_id
-        trains_groupés[train_id]["train_id"] = train_id
-        trains_groupés[train_id]["train_number"] = train_number
+
+        trains_groupés[trip_id]["train_id"] = trip_id
+        trains_groupés[trip_id]["train_number"] = train_number
 
         for stu in trip_update.stop_time_update:
             stop_id_clean = nettoyer_stop_id(stu.stop_id)
-            stop_name = stop_id_to_name.get(stop_id_clean, "Inconnu")
-            arrival = stu.arrival.time if stu.HasField("arrival") else None
-            departure = stu.departure.time if stu.HasField("departure") else None
-            
-            trains_groupés[train_id]["stops"].append({
+            stop_name = stop_id_to_name.get(stop_id_clean, stu.stop_id)
+
+            arrival = stu.arrival.time if stu.HasField("arrival") and stu.arrival.HasField("time") else None
+            departure = stu.departure.time if stu.HasField("departure") and stu.departure.HasField("time") else None
+
+            trains_groupés[trip_id]["stops"].append({
                 "stop_id": stop_id_clean,
                 "stop_name": stop_name,
                 "arrival": arrival,
                 "departure": departure
             })
 
-# Exemple d'affichage
-for train_id, train_data in list(trains_groupés.items())[:5]:  # affiche les 5 premiers trains
-    print(f"Train {train_data['train_number']} ({train_id})")
-    for stop in train_data["stops"]:
-        print(f"  - {stop['stop_name']} ({stop['stop_id']}), arrivée: {stop['arrival']}, départ: {stop['departure']}")
-    print()
+# Sauvegarder en JSON
+with open("gtfs_rt_trains_complets.json", "w", encoding="utf-8") as f:
+    json.dump(list(trains_groupés.values()), f, ensure_ascii=False, indent=2)
+
+print(f"{len(trains_groupés)} trains exportés dans gtfs_rt_trains_complets.json")
