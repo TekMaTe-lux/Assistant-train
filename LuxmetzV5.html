@@ -674,6 +674,40 @@ $('#loadTrains').click(async function () {
                 }
               }
             }
+            const urlAlertes = 'https://raw.githubusercontent.com/tekmate-lux/Assistant-train/main/Assistant-train/alertes_sncftoutes.json';
+const motsCles = ['Luxembourg', 'Metz', 'Thionville'];
+const alertesGTFS = new Set();
+
+function extraireNumeroTrainDepuisTripId(tripId) {
+  const match = tripId.match(/\d{5}/); // Ex: "OCESN88731F" → "88731"
+  return match ? match[0] : null;
+}
+
+// Chargement et préparation des alertes
+const chargerAlertesGTFS = () =>
+  fetch(urlAlertes)
+    .then(response => response.json())
+    .then(data => {
+      if (!data.entity) return;
+
+      data.entity.forEach(entite => {
+        const alerte = entite.alert;
+        if (!alerte || !alerte.informed_entity || alerte.effect !== 8) return;
+
+        const resumeTexte = alerte.header_text?.translation?.[0]?.text || '';
+        const descriptionTexte = alerte.description_text?.translation?.[0]?.text || '';
+        const texteComplet = (resumeTexte + ' ' + descriptionTexte).toLowerCase();
+
+        const concerne = motsCles.some(mot => texteComplet.includes(mot.toLowerCase()));
+        if (!concerne) return;
+
+        alerte.informed_entity.forEach(entiteInfo => {
+          const tripId = entiteInfo.trip?.trip_id;
+          const numeroTrain = tripId ? extraireNumeroTrainDepuisTripId(tripId) : null;
+          if (numeroTrain) alertesGTFS.add(numeroTrain);
+        });
+      });
+    });
 
             // Recherche nouvelle gare de départ (premier stop non supprimé)
             for (let s of train.stop_times) {
@@ -701,7 +735,9 @@ $('#loadTrains').click(async function () {
             results[num] = { error: 'Erreur API' };
           }
         }
-
+  
+        chargerAlertesGTFS().then(() => {
+          
         let html = '<table><thead><tr><th>Gare</th>';
         numbers.forEach(num => {
         html += `<th class="train-header" data-train-number="${num}"> ${num}</th>`;
@@ -749,6 +785,10 @@ $('#loadTrains').click(async function () {
              title = 'Sans perturbation';
             }
           }
+          // Vérifie si le train est concerné par l’alerte GTFS-RT effet 8
+         const hasGtfsReduction = alertesGTFS.has(num);
+         const gtfsIcon = hasGtfsReduction ? ' <span title="Réduction de capacité (GTFS-RT)">🔽</span>' : '';
+          
           html += `<th><span class="icon" title="${title}">${icon}</span></th>`;
         });
 
