@@ -663,7 +663,102 @@ $('#loadTrains').click(async function () {
    
         const key = '242fac11-6d98-45fb-93df-28174d362447';
         const auth = btoa(key + ':');
+
+  // Chargement des GTFS alertes
+async function loadGTFSAlertes() {
+  try {
+    const response = await fetch('https://raw.githubusercontent.com/TekMaTe-lux/Assistant-train/main/Assistant-train/alertes_sncftoutes.json');
+    const data = await response.json();
+    return data;
+  } catch (err) {
+    console.error("Erreur GTFS:", err);
+    return [];
+  }
+}
+
+// Fusion API SNCF + GTFS
+async function fusionnerDisruptions(apiDisruptions, trainNumbers, gtfsAlertes) {
+  const toutesDisruptions = [...apiDisruptions];
+
+  trainNumbers.forEach(trainNum => {
+    gtfsAlertes.forEach(alert => {
+      const tripId = alert.informed_entities?.[0]?.trip_id || "";
+      const match = tripId.match(/\d{5,6}/);
+      const trainNumFromGTFS = match ? match[0] : "";
+
+      if (trainNum == trainNumFromGTFS && alert.effect === 8) {
+        toutesDisruptions.push({
+          box: 'orange-box',
+          icon: '🪑❌',
+          txt: 'Capacité réduite',
+          cause: alert.header_text || 'Capacité limitée',
+          trains: [trainNum]
+        });
+      }
+    });
+  });
+
+  return toutesDisruptions;
+}
+
+// Génération du bloc Perturbations
+function afficherPerturbationsFusionnees(disruptionsFusionnees) {
+  let disruptionsHtml = '';
+
+  disruptionsFusionnees.forEach(disr => {
+    const color = disr.box === 'red-box' ? '#FF4C4C' :
+                  disr.box === 'orange-box' ? '#FFA500' :
+                  disr.box === 'yellow-box' ? '#FFFF00' : '#FFFFFF';
+
+    const trainsHtml = disr.trains ? disr.trains.map(t => `🚆 ${t}`).join(', ') : '';
+
+    disruptionsHtml += `
+      <div class="disruption-box ${disr.box}">
+        <div style="display: flex; align-items: center; gap: 8px; color: ${color}; font-weight: 700; font-size: 1.2rem;">
+          <div class="disruption-icon">${disr.icon}</div>
+          <div>${disr.txt}</div>
+        </div>
+        <div style="color: ${color}; margin-top: 6px; font-style: italic;">
+          ${disr.cause}
+        </div>
+        <div style="color: ${color}; margin-top: 8px;">
+          ${trainsHtml}
+        </div>
+      </div>`;
+  });
+
+  $('#disruptionsContent').html(`<div class="disruption-grid">${disruptionsHtml}</div>`);
+  $('#disruptionsSummary').css('display', disruptionsHtml.trim() !== '' ? 'flex' : 'none');
+}
+
+// Ajout d’icônes sur les trains concernés
+function ajouterIconesGTFS(gtfsAlertes, trainNumbers) {
+  trainNumbers.forEach(trainNum => {
+    const concerne = gtfsAlertes.some(alert => {
+      const tripId = alert.informed_entities?.[0]?.trip_id || "";
+      const match = tripId.match(/\d{5,6}/);
+      const trainNumFromGTFS = match ? match[0] : "";
+      return (trainNum == trainNumFromGTFS && alert.effect === 8);
+    });
+
+    if (concerne) {
+      $(`.train-header[data-train-number="${trainNum}"]`).append('<div class="small-icon">🪑❌</div>');
+    }
+  });
+}
+
+// === ACTION SUR BOUTON "AFFICHER" ===
+
+$('#loadTrains').click(async function() {
+  const numbers = ($('#trainNumbers').val() || '').split(',').map(e => e.trim());
+  const date = $('#trainDate').val();
+  if (!date || numbers.length === 0) {
+    alert('Saisir une date et au moins un numéro de train');
+    return;
+  }
         const results = {};
+        const allDisruptions = [];
+        const gtfsAlertes = await loadGTFSAlertes();
 
         for (const num of numbers) {
           const url = `https://api.sncf.com/v1/coverage/sncf/vehicle_journeys/vehicle_journey:SNCF:${date}:${num}:1187:Train`;
@@ -711,10 +806,14 @@ $('#loadTrains').click(async function () {
                 break;
               }
             }
-
             results[num] = { train, impacted, newStart, newEnd, disruptions, disruptionCauses };
-          } catch {
+
+             allDisruptions.push(...trainDisruptions);
+             results[num] = { train };
+            
+          } catch (err) {
             results[num] = { error: 'Erreur API' };
+            console.error(err);
           }
         }
 
