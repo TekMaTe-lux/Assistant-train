@@ -1051,6 +1051,7 @@ function applyRetardsFromGTFS(retardsGTFS) {
   }
 }
    const urlAlertes = 'https://raw.githubusercontent.com/tekmate-lux/Assistant-train/main/Assistant-train/alertes_sncftoutes.json';
+
 const motsCles = ['Luxembourg', 'Metz', 'Thionville'];
 
 const causesMap = {
@@ -1131,14 +1132,8 @@ function chargerEtAfficherAlertes() {
       });
 
       alertesFiltres.sort((a, b) => {
-        const prioA = (() => {
-          const p = getStyleParCauseCode(a.cause || 0).prio;
-          return (a.cause === 0 || p === 999) ? 9999 : p;
-        })();
-        const prioB = (() => {
-          const p = getStyleParCauseCode(b.cause || 0).prio;
-          return (b.cause === 0 || p === 999) ? 9999 : p;
-        })();
+        const prioA = getStyleParCauseCode(a.cause || 0).prio;
+        const prioB = getStyleParCauseCode(b.cause || 0).prio;
         return prioA - prioB;
       });
 
@@ -1150,7 +1145,7 @@ function chargerEtAfficherAlertes() {
       alertesFiltres.forEach(alerte => {
         const titreBase = alerte.header_text || '';
         let numeroTrain = null;
-        if (alerte.informed_entities && alerte.informed_entities.length > 0) {
+        if (alerte.informed_entities) {
           for (const ent of alerte.informed_entities) {
             if (ent.trip_id) {
               numeroTrain = extraireNumeroTrainDepuisTripId(ent.trip_id);
@@ -1162,10 +1157,8 @@ function chargerEtAfficherAlertes() {
         const titre = numeroTrain ? `Train ${numeroTrain} - ${titreBase}` : titreBase;
         const descriptionHTML = alerte.description_text || '';
         const description = descriptionHTML.replace(/<[^>]*>?/gm, '');
-
         const debutTS = alerte.active_period_start ? new Date(alerte.active_period_start * 1000) : null;
         const finTS = alerte.active_period_end ? new Date(alerte.active_period_end * 1000) : null;
-
         const causeCode = alerte.cause || 0;
         const style = getStyleParCauseCode(causeCode);
 
@@ -1189,7 +1182,6 @@ function chargerEtAfficherAlertes() {
         titreDiv.style.userSelect = "none";
         titreDiv.style.display = "flex";
         titreDiv.style.alignItems = "center";
-
         titreDiv.appendChild(iconeSpan);
         titreDiv.appendChild(document.createTextNode(titre));
 
@@ -1198,7 +1190,6 @@ function chargerEtAfficherAlertes() {
         detailDiv.style.display = "none";
         detailDiv.style.color = '#d1ecf1';
         detailDiv.style.fontWeight = 'normal';
-
         detailDiv.innerHTML = `
           <p>${description}</p>
           <p><em>Date début : ${formatDate(debutTS)} - Date fin : ${formatDate(finTS)}</em></p>
@@ -1220,43 +1211,34 @@ function chargerEtAfficherAlertes() {
     });
 }
 
-// Nouvelle version sécurisée
 function waitForTableAndLoadAlerts() {
-  const verifierSiTableComplete = () => {
-    const headers = document.querySelectorAll("table tr th[data-train-number]");
-    return headers.length > 0;
-  };
-
-  const lancerChargement = () => {
-    setTimeout(() => {
+  const observer = new MutationObserver((mutations, obs) => {
+    const table = document.querySelector('table');
+    if (table) {
+      obs.disconnect();
       chargerEtAfficherAlertes();
-    }, 300);
-  };
+    }
+  });
 
-  if (verifierSiTableComplete()) {
-    lancerChargement();
-  } else {
-    const observer = new MutationObserver((mutations, obs) => {
-      if (verifierSiTableComplete()) {
-        obs.disconnect();
-        lancerChargement();
-      }
-    });
+  // Démarre l'observateur immédiatement
+  observer.observe(document.body, {childList: true, subtree: true});
 
-    observer.observe(document.body, { childList: true, subtree: true });
-    setTimeout(() => observer.disconnect(), 5000);
+  // On vérifie aussi tout de suite si la table est déjà là (ex. F5)
+  const table = document.querySelector('table');
+  if (table) {
+    observer.disconnect();
+    chargerEtAfficherAlertes();
   }
 }
 
+// Appel initial au chargement
 window.addEventListener('load', () => {
   waitForTableAndLoadAlerts();
 
-  const consoleCommande = document.getElementById('consoleCommande');
-  if (consoleCommande) {
-    consoleCommande.addEventListener('change', () => {
-      setTimeout(() => {
-        waitForTableAndLoadAlerts();
-      }, 500); // on relance la détection après changement de recherche
+  const boutonAfficher = document.getElementById('loadTrains');
+  if (boutonAfficher) {
+    boutonAfficher.addEventListener('click', () => {
+      waitForTableAndLoadAlerts();
     });
   }
 });
