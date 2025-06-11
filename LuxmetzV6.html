@@ -655,16 +655,16 @@ $('#loadTrains').click(async function () {
 
   $('#trainInfo').html('<p>Chargement…</p>');
 
-  // Debug console
-  console.log("Sens inverse ?", sensInverse);
-  console.log("Liste des arrêts utilisés :", fixedStops);
-  console.log("Numéros de trains :", numbers);
-  console.log("Date :", date);
-   
-        const key = '242fac11-6d98-45fb-93df-28174d362447';
-        const auth = btoa(key + ':');
+// Debug console
+console.log("Sens inverse ?", sensInverse);
+console.log("Liste des arrêts utilisés :", fixedStops);
+console.log("Numéros de trains :", numbers);
+console.log("Date :", date);
 
-  // Chargement des GTFS alertes
+const key = '242fac11-6d98-45fb-93df-28174d362447';
+const auth = btoa(key + ':');
+
+// Chargement des GTFS alertes
 async function loadGTFSAlertes() {
   try {
     const response = await fetch('https://raw.githubusercontent.com/TekMaTe-lux/Assistant-train/main/Assistant-train/alertes_sncftoutes.json');
@@ -686,7 +686,7 @@ async function fusionnerDisruptions(apiDisruptions, trainNumbers, gtfsAlertes) {
       const match = tripId.match(/\d{5,6}/);
       const trainNumFromGTFS = match ? match[0] : "";
 
-      if (trainNum == trainNumFromGTFS && alert.effect === 8) {
+      if (trainNum == trainNumFromGTFS && alert.effect === 8) { // effet capacité réduite
         toutesDisruptions.push({
           box: 'orange-box',
           icon: '🪑❌',
@@ -701,54 +701,7 @@ async function fusionnerDisruptions(apiDisruptions, trainNumbers, gtfsAlertes) {
   return toutesDisruptions;
 }
 
-// Génération du bloc Perturbations
-function afficherPerturbationsFusionnees(disruptionsFusionnees) {
-  let disruptionsHtml = '';
-
-  disruptionsFusionnees.forEach(disr => {
-    const color = disr.box === 'red-box' ? '#FF4C4C' :
-                  disr.box === 'orange-box' ? '#FFA500' :
-                  disr.box === 'yellow-box' ? '#FFFF00' : '#FFFFFF';
-
-    const trainsHtml = disr.trains ? disr.trains.map(t => `🚆 ${t}`).join(', ') : '';
-
-    disruptionsHtml += `
-      <div class="disruption-box ${disr.box}">
-        <div style="display: flex; align-items: center; gap: 8px; color: ${color}; font-weight: 700; font-size: 1.2rem;">
-          <div class="disruption-icon">${disr.icon}</div>
-          <div>${disr.txt}</div>
-        </div>
-        <div style="color: ${color}; margin-top: 6px; font-style: italic;">
-          ${disr.cause}
-        </div>
-        <div style="color: ${color}; margin-top: 8px;">
-          ${trainsHtml}
-        </div>
-      </div>`;
-  });
-
-  $('#disruptionsContent').html(`<div class="disruption-grid">${disruptionsHtml}</div>`);
-  $('#disruptionsSummary').css('display', disruptionsHtml.trim() !== '' ? 'flex' : 'none');
-}
-
-// Ajout d’icônes sur les trains concernés
-function ajouterIconesGTFS(gtfsAlertes, trainNumbers) {
-  trainNumbers.forEach(trainNum => {
-    const concerne = gtfsAlertes.some(alert => {
-      const tripId = alert.informed_entities?.[0]?.trip_id || "";
-      const match = tripId.match(/\d{5,6}/);
-      const trainNumFromGTFS = match ? match[0] : "";
-      return (trainNum == trainNumFromGTFS && alert.effect === 8);
-    });
-
-    if (concerne) {
-      $(`.train-header[data-train-number="${trainNum}"]`).append('<div class="small-icon">🪑❌</div>');
-    }
-  });
-}
-
-// === ACTION SUR BOUTON "AFFICHER" ===
-
+// === BOUTON "AFFICHER" ===
 $('#loadTrains').click(async function() {
   const numbers = ($('#trainNumbers').val() || '').split(',').map(e => e.trim());
   const date = $('#trainDate').val();
@@ -756,36 +709,38 @@ $('#loadTrains').click(async function() {
     alert('Saisir une date et au moins un numéro de train');
     return;
   }
-        const results = {};
-        const allDisruptions = [];
-        const gtfsAlertes = await loadGTFSAlertes();
 
-        for (const num of numbers) {
-          const url = `https://api.sncf.com/v1/coverage/sncf/vehicle_journeys/vehicle_journey:SNCF:${date}:${num}:1187:Train`;
-          try {
-            const res = await $.ajax({ url, headers: { Authorization: 'Basic ' + auth } });
-            const train = res.vehicle_journeys?.[0];
-            if (!train) {
-              results[num] = { error: 'Non trouvé' };
-              continue;
-            }
+  const results = {};
+  let allDisruptions = [];
 
-            const disruptions = res.disruptions || [];
-            const impacted = {};
-            let newStart = null, newEnd = null;
+  // Chargement alertes GTFS
+  const gtfsAlertes = await loadGTFSAlertes();
 
-            let disruptionCauses = [];
-            for (const d of disruptions) {
-              if (d.cause && !disruptionCauses.includes(d.cause)) {
-                disruptionCauses.push(d.cause);
-              }
-              for (const o of d.impacted_objects || []) {
-                for (const s of o.impacted_stops || []) {
-                  impacted[s.stop_point.id] = s;
-                }
-              }
-            }
+  for (const num of numbers) {
+    const url = `https://api.sncf.com/v1/coverage/sncf/vehicle_journeys/vehicle_journey:SNCF:${date}:${num}:1187:Train`;
+    try {
+      const res = await $.ajax({ url, headers: { Authorization: 'Basic ' + auth } });
+      const train = res.vehicle_journeys?.[0];
+      if (!train) {
+        results[num] = { error: 'Non trouvé' };
+        continue;
+      }
 
+      const disruptions = res.disruptions || [];
+      const impacted = {};
+      let newStart = null, newEnd = null;
+      let disruptionCauses = [];
+
+      for (const d of disruptions) {
+        if (d.cause && !disruptionCauses.includes(d.cause)) {
+          disruptionCauses.push(d.cause);
+        }
+        for (const o of d.impacted_objects || []) {
+          for (const s of o.impacted_stops || []) {
+            impacted[s.stop_point.id] = s;
+          }
+        }
+      }
             // Recherche nouvelle gare de départ (premier stop non supprimé)
             for (let s of train.stop_times) {
               const id = s.stop_point.id;
@@ -806,17 +761,25 @@ $('#loadTrains').click(async function() {
                 break;
               }
             }
-            results[num] = { train, impacted, newStart, newEnd, disruptions, disruptionCauses };
+              results[num] = { train, impacted, newStart, newEnd, disruptions, disruptionCauses };
 
-             allDisruptions.push(...trainDisruptions);
-             results[num] = { train };
-            
-          } catch (err) {
-            results[num] = { error: 'Erreur API' };
-            console.error(err);
-          }
-        }
+      // Récupérer disruptions fusionnées (API + GTFS)
+      const disruptionsFusionnees = await fusionnerDisruptions(disruptions, [num], gtfsAlertes);
+      allDisruptions = allDisruptions.concat(disruptionsFusionnees);
 
+    } catch (err) {
+      results[num] = { error: 'Erreur API' };
+      console.error(err);
+    }
+  }
+
+  // Affichage perturbations fusionnées
+  afficherPerturbationsFusionnees(allDisruptions);
+
+  // Ajout des icônes aux trains concernés par GTFS
+  ajouterIconesGTFS(gtfsAlertes, numbers);
+
+  // Construction tableau
         let html = '<table><thead><tr><th>Gare</th>';
         numbers.forEach(num => {
         html += `<th class="train-header" data-train-number="${num}"> ${num}</th>`;
@@ -936,11 +899,61 @@ const isFull = result.disruptions.some(d => ['NO_SERVICE','CANCELLATION'].includ
 }
 
   html += `<td>${content}</td>`;
-});
-          html += '</tr>';
-        }
+    });
+    html += '</tr>';
+  }
 
-        html += '</tbody></table>';
+  html += '</tbody></table>';
+
+  $('#trainInfo').html(html);
+
+  // --- FONCTIONS INTERNES ---
+
+  function ft(t) {
+    if (!t) return '';
+    return t.substring(0, 2) + ':' + t.substring(2, 4);
+  }
+
+  function dl(t1, t2) {
+    if (!t1 || !t2) return 0;
+    const m1 = parseInt(t1.substring(0, 2)) * 60 + parseInt(t1.substring(2, 4));
+    const m2 = parseInt(t2.substring(0, 2)) * 60 + parseInt(t2.substring(2, 4));
+    return m2 - m1;
+  }
+
+  function afficherPerturbationsFusionnees(allDisruptions) {
+    let div = $('#allDisruptions');
+    if (!div.length) {
+      div = $('<div id="allDisruptions"></div>');
+      $('#trainInfo').before(div);
+    }
+    if (allDisruptions.length === 0) {
+      div.html('<p>Aucune perturbation détectée.</p>');
+      return;
+    }
+    let htmlDisrupt = '<ul>';
+    allDisruptions.forEach(d => {
+      htmlDisrupt += `<li class="${d.box}" title="${d.cause || ''}">${d.icon || ''} ${d.txt || ''} - Trains: ${d.trains.join(', ')}</li>`;
+    });
+    htmlDisrupt += '</ul>';
+    div.html(htmlDisrupt);
+  }
+
+  function ajouterIconesGTFS(gtfsAlertes, numbers) {
+    // Ajoute une icône à côté des numéros de train dans le tableau si GTFS détecte capacité réduite
+    numbers.forEach(num => {
+      const hasCapReduite = gtfsAlertes.some(alert => {
+        const tripId = alert.informed_entities?.[0]?.trip_id || '';
+        const match = tripId.match(/\d{5,6}/);
+        const trainNumFromGTFS = match ? match[0] : '';
+        return trainNumFromGTFS === num && alert.effect === 8;
+      });
+      if (hasCapReduite) {
+        $(`th.train-header[data-train-number="${num}"]`).append(' <span title="Capacité réduite" style="color:orange;">🪑❌</span>');
+      }
+    });
+  }
+});
 
       function extractTrainNumber(name) {
   if (!name) return '';
