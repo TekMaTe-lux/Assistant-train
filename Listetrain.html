@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Trains arrivant et partant de Luxembourg (24h)</title>
+<title>Bétaillères arrivant et partant de Luxembourg</title>
 <style>
   body {
     font-family: Arial, sans-serif;
@@ -18,24 +18,6 @@
     text-shadow: 0 0 10px #00f0ff;
     text-align: center;
   }
-  .date-picker {
-    text-align: center;
-    margin-bottom: 1em;
-  }
-  label {
-    color: #00ffff;
-    font-weight: bold;
-    margin-right: 0.5em;
-  }
-  input[type="date"] {
-    padding: 0.3em 0.5em;
-    font-size: 1.1rem;
-    border-radius: 6px;
-    border: 2px solid #00f0ff55;
-    background: #001122;
-    color: #00ffff;
-    box-shadow: 0 0 12px #00f0ff88 inset;
-  }
   .container-selects {
     display: flex;
     gap: 1em;
@@ -46,6 +28,12 @@
   .select-wrapper {
     flex: 1 1 45%;
     min-width: 280px;
+  }
+  label {
+    display: block;
+    margin-bottom: 0.3em;
+    font-weight: bold;
+    color: #00ffff;
   }
   select {
     width: 100%;
@@ -85,30 +73,25 @@
 </head>
 <body>
 
-<h1>Trains arrivant et partant de Luxembourg (24h)</h1>
-
-<div class="date-picker">
-  <label for="dateInput">Choisissez une date :</label>
-  <input type="date" id="dateInput" />
-</div>
+<h1>Bétaillères arrivant et partant de Luxembourg</h1>
 
 <div class="container-selects">
   <div class="select-wrapper">
-    <label for="arrivalSelect">Trains arrivant à Luxembourg :</label>
+    <label for="arrivalSelect">Bétaillères arrivant à Luxembourg :</label>
     <select id="arrivalSelect" disabled>
-      <option>Chargement des trains arrivées...</option>
+      <option>Chargement des bétaillères arrivées...</option>
     </select>
   </div>
   <div class="select-wrapper">
-    <label for="departureSelect">Trains partant de Luxembourg :</label>
+    <label for="departureSelect">Bétaillères partant de Luxembourg :</label>
     <select id="departureSelect" disabled>
-      <option>Chargement des trains départs...</option>
+      <option>Chargement des bétaillères départs...</option>
     </select>
   </div>
 </div>
 
 <div id="trainDetails">
-  <p>Sélectionnez un train pour voir les détails.</p>
+  <p>Sélectionnez une bétaillères pour voir les détails.</p>
 </div>
 
 <script>
@@ -134,14 +117,13 @@ function formatTime(date) {
   return date.toLocaleTimeString('fr-FR', {hour:'2-digit', minute:'2-digit'});
 }
 
-// Convertit date YYYY-MM-DD en datetime SNCF YYYYMMDDT000000
-function toDatetimeSncf(dateStr) {
-  // Pour être sûr que c'est bien en heure locale et éviter décalage, on crée un Date et reconvertit
-  const d = new Date(dateStr + 'T00:00:00');
-  const y = d.getFullYear();
-  const m = (d.getMonth()+1).toString().padStart(2,'0');
-  const day = d.getDate().toString().padStart(2,'0');
-  return `${y}${m}${day}T000000`;
+// Date du jour minuit au format SNCF
+function getTodayDatetime() {
+  const now = new Date();
+  const y = now.getFullYear();
+  const m = String(now.getMonth()+1).padStart(2,'0');
+  const d = String(now.getDate()).padStart(2,'0');
+  return `${y}${m}${d}T000000`;
 }
 
 // Fetch arrivals ou departures, selon URL passée
@@ -228,97 +210,38 @@ function showDetails(train, isArrival) {
   container.innerHTML = html;
 }
 
-async function loadTrainsForDate(dateStr) {
-  const datetime = toDatetimeSncf(dateStr);
+(async function(){
+  const datetime = getTodayDatetime();
   const stopAreaId = 'stop_area:SNCF:82001000'; // Luxembourg
   const baseUrl = `https://api.sncf.com/v1/coverage/sncf/stop_areas/${stopAreaId}`;
 
-  // Disable selects and show loading
-  const arrivalSelect = document.getElementById('arrivalSelect');
-  const departureSelect = document.getElementById('departureSelect');
-  arrivalSelect.innerHTML = '<option>Chargement des trains arrivées...</option>';
-  departureSelect.innerHTML = '<option>Chargement des trains départs...</option>';
-  arrivalSelect.disabled = true;
-  departureSelect.disabled = true;
-
-  // Fetch arrivals et departures
-  const [arrivals, departures] = await Promise.all([
-    fetchTrains(`${baseUrl}/arrivals?datetime=${datetime}&duration=86400&count=100`),
-    fetchTrains(`${baseUrl}/departures?datetime=${datetime}&duration=86400&count=100`)
-  ]);
-
+  // Fetch arrivals
+  const arrivals = await fetchTrains(`${baseUrl}/arrivals?datetime=${datetime}&duration=86400&count=100`);
   populateSelect('arrivalSelect', arrivals, true);
+
+  // Fetch departures
+  const departures = await fetchTrains(`${baseUrl}/departures?datetime=${datetime}&duration=86400&count=100`);
   populateSelect('departureSelect', departures, false);
 
-  // Clear details
-  document.getElementById('trainDetails').innerHTML = '<p>Sélectionnez un train pour voir les détails.</p>';
-}
-
-document.getElementById('dateInput').addEventListener('change', (e) => {
-  const dateValue = e.target.value;
-  if (dateValue) {
-    loadTrainsForDate(dateValue);
-  }
-});
-
-document.getElementById('arrivalSelect').addEventListener('change', e => {
-  const idx = e.target.value;
-  if (idx === '') {
-    showDetails(null);
-    return;
-  }
-  const selectedTrain = arrivalsGlobal[parseInt(idx)];
-  showDetails(selectedTrain, true);
-});
-
-document.getElementById('departureSelect').addEventListener('change', e => {
-  const idx = e.target.value;
-  if (idx === '') {
-    showDetails(null);
-    return;
-  }
-  const selectedTrain = departuresGlobal[parseInt(idx)];
-  showDetails(selectedTrain, false);
-});
-
-let arrivalsGlobal = [];
-let departuresGlobal = [];
-
-async function loadTrainsForDate(dateStr) {
-  const datetime = toDatetimeSncf(dateStr);
-  const stopAreaId = 'stop_area:SNCF:82001000'; // Luxembourg
-  const baseUrl = `https://api.sncf.com/v1/coverage/sncf/stop_areas/${stopAreaId}`;
-
-  // Disable selects and show loading
-  const arrivalSelect = document.getElementById('arrivalSelect');
-  const departureSelect = document.getElementById('departureSelect');
-  arrivalSelect.innerHTML = '<option>Chargement des trains arrivées...</option>';
-  departureSelect.innerHTML = '<option>Chargement des trains départs...</option>';
-  arrivalSelect.disabled = true;
-  departureSelect.disabled = true;
-
-  // Fetch arrivals et departures
-  const [arrivals, departures] = await Promise.all([
-    fetchTrains(`${baseUrl}/arrivals?datetime=${datetime}&duration=86400&count=100`),
-    fetchTrains(`${baseUrl}/departures?datetime=${datetime}&duration=86400&count=100`)
-  ]);
-
-  arrivalsGlobal = arrivals;
-  departuresGlobal = departures;
-
-  populateSelect('arrivalSelect', arrivals, true);
-  populateSelect('departureSelect', departures, false);
-
-  // Clear details
-  document.getElementById('trainDetails').innerHTML = '<p>Sélectionnez un train pour voir les détails.</p>';
-}
-
-// Initialise à la date d'aujourd'hui
-window.addEventListener('load', () => {
-  const today = new Date().toISOString().slice(0,10);
-  document.getElementById('dateInput').value = today;
-  loadTrainsForDate(today);
-});
+  // Écouteurs
+  document.getElementById('arrivalSelect').addEventListener('change', function(){
+    const idx = parseInt(this.value, 10);
+    if(isNaN(idx)) {
+      showDetails(null, true);
+      return;
+    }
+    showDetails(arrivals[idx], true);
+  });
+  document.getElementById('departureSelect').addEventListener('change', function(){
+    const idx = parseInt(this.value, 10);
+    if(isNaN(idx)) {
+      showDetails(null, false);
+      return;
+    }
+    showDetails(departures[idx], false);
+  });
+})();
 </script>
+
 </body>
 </html>
