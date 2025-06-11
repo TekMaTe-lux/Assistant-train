@@ -2,110 +2,45 @@
 <html lang="fr">
 <head>
 <meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Trains arrivant à Luxembourg (24h)</title>
 <style>
-  body {
-    font-family: Arial, sans-serif;
-    background: #101828;
-    color: #e0f0ff;
-    max-width: 800px;
-    margin: 2em auto;
-    padding: 1em;
-  }
-  h1 {
-    color: #00ffff;
-    text-shadow: 0 0 10px #00f0ff;
-  }
-  select {
-    width: 100%;
-    padding: 0.5em;
-    font-size: 1.1rem;
-    margin-bottom: 1em;
-    border-radius: 6px;
-    border: 2px solid #00f0ff55;
-    background: #001122;
-    color: #00ffff;
-    box-shadow: 0 0 12px #00f0ff88 inset;
-  }
-  option {
-    background: #001122;
-    color: #00ffff;
-  }
-  #trainDetails {
-    border: 1px solid #00f0ff55;
-    padding: 1em;
-    border-radius: 10px;
-    background: linear-gradient(145deg, #101828, #0a0e1a);
-    box-shadow: 0 0 20px #00ffff44 inset;
-    font-family: 'Orbitron', monospace;
-    white-space: pre-wrap;
-  }
-  .train-number {
-    font-weight: bold;
-    font-size: 1.2rem;
-    color: #00ffff;
-  }
-  .train-time {
-    font-style: italic;
-    margin-top: 0.3em;
-  }
-  .alert-suppression {
-    color: #ff5555;
-    font-weight: bold;
-  }
-  .alert-retard {
-    color: #ffaa00;
-    font-weight: bold;
-  }
+  body { font-family: Arial, sans-serif; margin: 20px; }
+  select { padding: 5px; font-size: 16px; }
+  #trainDetails { margin-top: 20px; white-space: pre-wrap; }
 </style>
 </head>
 <body>
 
-<h1>Trains arrivant à Luxembourg (24h)</h1>
+<h2>Trains arrivant à Luxembourg (24h)</h2>
 
-<label for="trainSelect">Sélectionner un train :</label>
-<select id="trainSelect" disabled>
-  <option>Chargement des trains...</option>
+<label for="trainSelect">Sélectionner un train :</label><br />
+<select id="trainSelect">
+  <option value="">Sélectionnez un train</option>
 </select>
 
-<div id="trainDetails">
-  <p>Sélectionnez un train pour voir les détails.</p>
-</div>
+<div id="trainDetails">Sélectionnez un train pour voir les détails.</div>
 
 <script>
 const apiKey = '242fac11-6d98-45fb-93df-28174d362447';
 
-// Parse la date SNCF "YYYYMMDDTHHMMSS" en Date JS
-function parseSNCFDate(sncfDateStr) {
-  if (!sncfDateStr) return null;
-  const datePart = sncfDateStr.substr(0,8);
-  const timePart = sncfDateStr.substr(9,6);
-  const year = parseInt(datePart.substr(0,4),10);
-  const month = parseInt(datePart.substr(4,2),10)-1;
-  const day = parseInt(datePart.substr(6,2),10);
-  const hour = parseInt(timePart.substr(0,2),10);
-  const minute = parseInt(timePart.substr(2,2),10);
-  const second = parseInt(timePart.substr(4,2),10);
-  return new Date(year, month, day, hour, minute, second);
-}
-
-// Format HH:MM
-function formatTime(date) {
-  if (!date) return 'N/A';
-  return date.toLocaleTimeString('fr-FR', {hour:'2-digit', minute:'2-digit'});
-}
-
-// Date du jour minuit au format SNCF
+// Retourne la date au format "YYYYMMDDTHHmmss" pour maintenant (timezone Europe/Paris)
 function getTodayDatetime() {
   const now = new Date();
-  const y = now.getFullYear();
-  const m = String(now.getMonth()+1).padStart(2,'0');
-  const d = String(now.getDate()).padStart(2,'0');
-  return `${y}${m}${d}T000000`;
+  // Décalage horaire Paris (CET/CEST)
+  const tzOffset = now.getTimezoneOffset() * 60000;
+  const localTime = new Date(now.getTime() - tzOffset);
+
+  const year = localTime.getFullYear();
+  const month = String(localTime.getMonth() + 1).padStart(2, '0');
+  const day = String(localTime.getDate()).padStart(2, '0');
+  const hours = String(localTime.getHours()).padStart(2, '0');
+  const minutes = String(localTime.getMinutes()).padStart(2, '0');
+  const seconds = String(localTime.getSeconds()).padStart(2, '0');
+
+  return `${year}${month}${day}T${hours}${minutes}${seconds}`;
 }
 
-// Récupère les arrivées 24h
+// Récupère les arrivées 24h à Luxembourg
 async function fetchArrivals() {
   const stopAreaId = 'stop_area:SNCF:82001000'; // Luxembourg
   const datetime = getTodayDatetime();
@@ -113,112 +48,92 @@ async function fetchArrivals() {
   const url = `https://api.sncf.com/v1/coverage/sncf/stop_areas/${stopAreaId}/arrivals?datetime=${datetime}&duration=${duration}&count=100`;
 
   try {
-    const resp = await fetch(url, {
-      headers: { 'Authorization': 'Basic ' + btoa(apiKey + ':') }
+    const response = await fetch(url, {
+      headers: {
+        'Authorization': 'Basic ' + btoa(apiKey + ':')
+      }
     });
-    if(!resp.ok) throw new Error(`Erreur API: ${resp.status}`);
-    const data = await resp.json();
+    if (!response.ok) throw new Error(`Erreur HTTP ${response.status}`);
+
+    const data = await response.json();
     return data.arrivals || [];
-  } catch(err) {
-    console.error(err);
+  } catch (error) {
+    console.error("Erreur API SNCF:", error);
+    document.getElementById('trainDetails').textContent = "Erreur lors du chargement des trains.";
     return [];
   }
 }
 
-// Remplit le menu déroulant avec le numéro de train (headsign)
-function populateSelect(trains) {
-  const select = document.getElementById('trainSelect');
-  select.innerHTML = '';
-  if(trains.length === 0) {
-    select.innerHTML = '<option>Aucun train trouvé</option>';
-    select.disabled = true;
-    return;
-  }
-  select.disabled = false;
-  const defaultOption = document.createElement('option');
-  defaultOption.value = '';
-  defaultOption.textContent = '-- Choisir un train --';
-  select.appendChild(defaultOption);
-
-  trains.sort((a,b) => {
-    const d1 = parseSNCFDate(a.stop_date_time.arrival_date_time);
-    const d2 = parseSNCFDate(b.stop_date_time.arrival_date_time);
-    return d1 - d2;
-  });
-
-  trains.forEach(train => {
-    const info = train.display_informations || {};
-    const headsign = info.headsign || 'N° inconnu';
-    const arrival = parseSNCFDate(train.stop_date_time.arrival_date_time);
-    const timeStr = formatTime(arrival);
-
-    const option = document.createElement('option');
-    option.value = train.trip ? train.trip.id : headsign;
-    option.textContent = `Train ${headsign} - Arrivée à ${timeStr}`;
-    select.appendChild(option);
-  });
+function formatDate(dateStr) {
+  if (!dateStr) return "";
+  // Format "YYYYMMDDTHHmmss" -> "JJ/MM/YYYY HH:mm:ss"
+  const year = dateStr.slice(0,4);
+  const month = dateStr.slice(4,6);
+  const day = dateStr.slice(6,8);
+  const hour = dateStr.slice(9,11);
+  const min = dateStr.slice(11,13);
+  const sec = dateStr.slice(13,15);
+  return `${day}/${month}/${year} ${hour}:${min}:${sec}`;
 }
 
-// Affiche les détails importants du train sélectionné
-function showDetails(train) {
-  const container = document.getElementById('trainDetails');
-  if(!train) {
-    container.innerHTML = '<p>Sélectionnez un train pour voir les détails.</p>';
-    return;
-  }
-
+function showTrainDetails(train) {
   const info = train.display_informations || {};
-  const trainNumber = info.headsign || 'N/A';
-  const direction = info.direction || 'Inconnue';
+  const stopTime = train.stop_date_time || {};
+  const route = train.route || {};
+  const stopPoint = train.stop_point || {};
 
-  const arrivalDateStr = train.stop_date_time.arrival_date_time;
-  const departureDateStr = train.stop_date_time.departure_date_time;
-
-  const arrivalDate = parseSNCFDate(arrivalDateStr);
-  const departureDate = parseSNCFDate(departureDateStr);
-
-  // Retards et statut suppression
-  const arrivalStatus = train.stop_date_time.arrival_status || 'scheduled'; // ex: 'delayed', 'cancelled'
-  const departureStatus = train.stop_date_time.departure_status || 'scheduled';
-
-  // Causes des perturbations (si présentes)
-  let cause = '';
-  if (train.cause) cause = train.cause;
-  else if(train.messages && train.messages.length) {
-    cause = train.messages.map(m => m.text).join('\n');
-  }
-
-  let alertHTML = '';
-  if(arrivalStatus === 'cancelled' || departureStatus === 'cancelled') {
-    alertHTML = `<div class="alert-suppression">⚠️ Train supprimé</div>`;
-  } else if(arrivalStatus === 'delayed' || departureStatus === 'delayed') {
-    alertHTML = `<div class="alert-retard">⏰ Train en retard</div>`;
-  }
-
-  container.innerHTML = `
-    <div>
-      <div class="train-number">Train n° ${trainNumber}</div>
-      <div>Direction : <strong>${direction}</strong></div>
-      <div class="train-time">Arrivée prévue : ${formatTime(arrivalDate)} (${arrivalStatus})</div>
-      <div class="train-time">Départ prévu : ${formatTime(departureDate)} (${departureStatus})</div>
-      ${alertHTML}
-      ${cause ? `<pre>${cause}</pre>` : ''}
-    </div>
+  const html = `
+    <h3>Détails du train ${info.headsign || "N/A"}</h3>
+    <p><strong>Ligne :</strong> ${route.name || "N/A"}</p>
+    <p><strong>Direction :</strong> ${info.direction || "N/A"}</p>
+    <p><strong>Arrivée prévue :</strong> ${formatDate(stopTime.arrival_date_time) || "N/A"}</p>
+    <p><strong>Départ prévu :</strong> ${formatDate(stopTime.departure_date_time) || "N/A"}</p>
+    <p><strong>Gare :</strong> ${stopPoint.name || "N/A"}</p>
   `;
+
+  document.getElementById('trainDetails').innerHTML = html;
 }
 
-// Script principal
-(async function(){
-  const trains = await fetchArrivals();
-  populateSelect(trains);
-
+async function main() {
+  const arrivals = await fetchArrivals();
   const select = document.getElementById('trainSelect');
+
+  // Vider la liste
+  select.innerHTML = '<option value="">Sélectionnez un train</option>';
+
+  arrivals.forEach(train => {
+    const info = train.display_informations || {};
+    const headsign = info.headsign || info.label || "Train inconnu";
+    const vehicleLink = train.links.find(l => l.type === "vehicle_journey");
+    const vehicleId = vehicleLink ? vehicleLink.id : "";
+
+    if(vehicleId) {
+      const option = document.createElement('option');
+      option.value = vehicleId;
+      option.textContent = `${headsign} (${info.direction || "?"})`;
+      select.appendChild(option);
+    }
+  });
+
   select.addEventListener('change', () => {
     const selectedId = select.value;
-    const selectedTrain = trains.find(t => t.trip && t.trip.id === selectedId);
-    showDetails(selectedTrain || null);
+    if (!selectedId) {
+      document.getElementById('trainDetails').textContent = "Sélectionnez un train pour voir les détails.";
+      return;
+    }
+    const selectedTrain = arrivals.find(t =>
+      t.links.some(l => l.type === "vehicle_journey" && l.id === selectedId)
+    );
+    if (selectedTrain) {
+      showTrainDetails(selectedTrain);
+    } else {
+      document.getElementById('trainDetails').textContent = "Détails non trouvés.";
+    }
   });
-})();
+}
+
+// Lancement au chargement
+main();
 </script>
 
 </body>
