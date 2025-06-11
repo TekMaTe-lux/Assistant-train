@@ -3,26 +3,42 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Trains arrivant à Luxembourg (24h)</title>
+<title>Trains arrivant et partant de Luxembourg (24h)</title>
 <style>
-  /* mêmes styles que précédemment */
   body {
     font-family: Arial, sans-serif;
     background: #101828;
     color: #e0f0ff;
-    max-width: 800px;
+    max-width: 900px;
     margin: 2em auto;
     padding: 1em;
   }
   h1 {
     color: #00ffff;
     text-shadow: 0 0 10px #00f0ff;
+    text-align: center;
+  }
+  .container-selects {
+    display: flex;
+    gap: 1em;
+    justify-content: center;
+    margin-bottom: 1em;
+    flex-wrap: wrap;
+  }
+  .select-wrapper {
+    flex: 1 1 45%;
+    min-width: 280px;
+  }
+  label {
+    display: block;
+    margin-bottom: 0.3em;
+    font-weight: bold;
+    color: #00ffff;
   }
   select {
     width: 100%;
     padding: 0.5em;
     font-size: 1.1rem;
-    margin-bottom: 1em;
     border-radius: 6px;
     border: 2px solid #00f0ff55;
     background: #001122;
@@ -41,34 +57,38 @@
     box-shadow: 0 0 20px #00ffff44 inset;
     font-family: 'Orbitron', monospace;
     white-space: pre-wrap;
+    min-height: 120px;
   }
   .train-number {
     font-weight: bold;
     font-size: 1.2rem;
     color: #00ffff;
+    margin-bottom: 0.3em;
   }
   .train-time {
     font-style: italic;
     margin-top: 0.3em;
   }
-  .alert-suppression {
-    color: #ff5555;
-    font-weight: bold;
-  }
-  .alert-retard {
-    color: #ffaa00;
-    font-weight: bold;
-  }
 </style>
 </head>
 <body>
 
-<h1>Trains arrivant à Luxembourg (24h)</h1>
+<h1>Trains arrivant et partant de Luxembourg (24h)</h1>
 
-<label for="trainSelect">Sélectionner un train :</label>
-<select id="trainSelect" disabled>
-  <option>Chargement des trains...</option>
-</select>
+<div class="container-selects">
+  <div class="select-wrapper">
+    <label for="arrivalSelect">Trains arrivant à Luxembourg :</label>
+    <select id="arrivalSelect" disabled>
+      <option>Chargement des trains arrivées...</option>
+    </select>
+  </div>
+  <div class="select-wrapper">
+    <label for="departureSelect">Trains partant de Luxembourg :</label>
+    <select id="departureSelect" disabled>
+      <option>Chargement des trains départs...</option>
+    </select>
+  </div>
+</div>
 
 <div id="trainDetails">
   <p>Sélectionnez un train pour voir les détails.</p>
@@ -106,32 +126,27 @@ function getTodayDatetime() {
   return `${y}${m}${d}T000000`;
 }
 
-// Récupère les arrivées 24h
-async function fetchArrivals() {
-  const stopAreaId = 'stop_area:SNCF:82001000'; // Luxembourg
-  const datetime = getTodayDatetime();
-  const duration = 86400; // 24h en secondes
-  const url = `https://api.sncf.com/v1/coverage/sncf/stop_areas/${stopAreaId}/arrivals?datetime=${datetime}&duration=${duration}&count=100`;
-
+// Fetch arrivals ou departures, selon URL passée
+async function fetchTrains(url) {
   try {
     const resp = await fetch(url, {
       headers: { 'Authorization': 'Basic ' + btoa(apiKey + ':') }
     });
     if(!resp.ok) throw new Error(`Erreur API: ${resp.status}`);
     const data = await resp.json();
-    return data.arrivals || [];
+    return data.arrivals || data.departures || [];
   } catch(err) {
     console.error(err);
     return [];
   }
 }
 
-// Remplit le menu déroulant avec le numéro de train (headsign)
-function populateSelect(trains) {
-  const select = document.getElementById('trainSelect');
+// Remplit un select avec les trains reçus
+function populateSelect(selectId, trains, isArrival) {
+  const select = document.getElementById(selectId);
   select.innerHTML = '';
   if(trains.length === 0) {
-    select.innerHTML = '<option>Aucun train trouvé</option>';
+    select.innerHTML = `<option>Aucun train trouvé</option>`;
     select.disabled = true;
     return;
   }
@@ -141,27 +156,28 @@ function populateSelect(trains) {
   defaultOption.textContent = '-- Choisir un train --';
   select.appendChild(defaultOption);
 
+  // Trie par heure arrivée ou départ
   trains.sort((a,b) => {
-    const d1 = parseSNCFDate(a.stop_date_time.arrival_date_time);
-    const d2 = parseSNCFDate(b.stop_date_time.arrival_date_time);
-    return d1 - d2;
+    const dateA = parseSNCFDate(isArrival ? a.stop_date_time.arrival_date_time : a.stop_date_time.departure_date_time);
+    const dateB = parseSNCFDate(isArrival ? b.stop_date_time.arrival_date_time : b.stop_date_time.departure_date_time);
+    return dateA - dateB;
   });
 
   trains.forEach((train, index) => {
     const info = train.display_informations || {};
     const headsign = info.headsign || 'N° inconnu';
-    const arrival = parseSNCFDate(train.stop_date_time.arrival_date_time);
-    const timeStr = formatTime(arrival);
+    const dtStr = isArrival ? train.stop_date_time.arrival_date_time : train.stop_date_time.departure_date_time;
+    const timeStr = formatTime(parseSNCFDate(dtStr));
 
     const option = document.createElement('option');
-    option.value = index;  // on met l'index
-    option.textContent = `Train ${headsign} - Arrivée à ${timeStr}`;
+    option.value = index;
+    option.textContent = `Train ${headsign} - ${isArrival ? 'Arrivée' : 'Départ'} à ${timeStr}`;
     select.appendChild(option);
   });
 }
 
-// Affiche les détails importants du train sélectionné
-function showDetails(train) {
+// Affiche les détails du train sélectionné
+function showDetails(train, isArrival) {
   const container = document.getElementById('trainDetails');
   if(!train) {
     container.innerHTML = '<p>Sélectionnez un train pour voir les détails.</p>';
@@ -172,59 +188,57 @@ function showDetails(train) {
   const trainNumber = info.headsign || 'N/A';
   const direction = info.direction || 'Inconnue';
 
-  const arrivalDateStr = train.stop_date_time.arrival_date_time;
-  const arrivalDate = parseSNCFDate(arrivalDateStr);
+  // Dates formatées
+  const arrivalDate = parseSNCFDate(train.stop_date_time.arrival_date_time);
+  const departureDate = parseSNCFDate(train.stop_date_time.departure_date_time);
 
-  // Retards et statut suppression
-  const arrivalStatus = train.stop_date_time.arrival_status || 'scheduled'; // ex: 'delayed', 'cancelled'
-  const departureStatus = train.stop_date_time.departure_status || 'scheduled';
+  // Affichage sans "(scheduled)" ni indication retard/suppression
+  const arrivalText = arrivalDate ? formatTime(arrivalDate) : 'N/A';
+  const departureText = departureDate ? formatTime(departureDate) : 'N/A';
 
-  // Causes des perturbations (si présentes)
-  let cause = '';
-  if (train.cause) cause = train.cause;
-  else if(train.messages && train.messages.length) {
-    cause = train.messages.map(m => m.text).join('\n');
+  // Construction texte selon arrivée ou départ
+  let html = `<div>
+    <div class="train-number">Train n° ${trainNumber}</div>
+    <div>Direction : <strong>${direction}</strong></div>`;
+  if(isArrival) {
+    html += `<div class="train-time">Arrivée prévue : ${arrivalText}</div>`;
+  } else {
+    html += `<div class="train-time">Départ prévu : ${departureText}</div>`;
   }
+  html += `</div>`;
 
-  let alertHTML = '';
-  if(arrivalStatus === 'cancelled' || departureStatus === 'cancelled') {
-    alertHTML = `<div class="alert-suppression">⚠️ Train supprimé</div>`;
-  } else if(arrivalStatus === 'delayed' || departureStatus === 'delayed') {
-    alertHTML = `<div class="alert-retard">⏰ Train en retard</div>`;
-  }
-
-  // Ne plus afficher "(scheduled)" ni la ligne départ prévue
-  // Affiche uniquement l'heure d'arrivée sans statut quand c'est "scheduled"
-  let arrivalText = formatTime(arrivalDate);
-  if(arrivalStatus !== 'scheduled') {
-    arrivalText += ` (${arrivalStatus})`;
-  }
-
-  container.innerHTML = `
-    <div>
-      <div class="train-number">Train n° ${trainNumber}</div>
-      <div>Direction : <strong>${direction}</strong></div>
-      <div class="train-time">Arrivée prévue : ${arrivalText}</div>
-      ${alertHTML}
-      ${cause ? `<pre>${cause}</pre>` : ''}
-    </div>
-  `;
+  container.innerHTML = html;
 }
 
-// Script principal
 (async function(){
-  const trains = await fetchArrivals();
-  populateSelect(trains);
+  const datetime = getTodayDatetime();
+  const stopAreaId = 'stop_area:SNCF:82001000'; // Luxembourg
+  const baseUrl = `https://api.sncf.com/v1/coverage/sncf/stop_areas/${stopAreaId}`;
 
-  const select = document.getElementById('trainSelect');
-  select.addEventListener('change', () => {
-    const idx = parseInt(select.value, 10);
+  // Fetch arrivals
+  const arrivals = await fetchTrains(`${baseUrl}/arrivals?datetime=${datetime}&duration=86400&count=100`);
+  populateSelect('arrivalSelect', arrivals, true);
+
+  // Fetch departures
+  const departures = await fetchTrains(`${baseUrl}/departures?datetime=${datetime}&duration=86400&count=100`);
+  populateSelect('departureSelect', departures, false);
+
+  // Écouteurs
+  document.getElementById('arrivalSelect').addEventListener('change', function(){
+    const idx = parseInt(this.value, 10);
     if(isNaN(idx)) {
-      showDetails(null);
+      showDetails(null, true);
       return;
     }
-    const selectedTrain = trains[idx];
-    showDetails(selectedTrain || null);
+    showDetails(arrivals[idx], true);
+  });
+  document.getElementById('departureSelect').addEventListener('change', function(){
+    const idx = parseInt(this.value, 10);
+    if(isNaN(idx)) {
+      showDetails(null, false);
+      return;
+    }
+    showDetails(departures[idx], false);
   });
 })();
 </script>
