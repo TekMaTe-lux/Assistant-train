@@ -39,6 +39,7 @@
     background: linear-gradient(145deg, #101828, #0a0e1a);
     box-shadow: 0 0 20px #00ffff44 inset;
     font-family: 'Orbitron', monospace;
+    white-space: pre-wrap;
   }
   .train-number {
     font-weight: bold;
@@ -48,6 +49,14 @@
   .train-time {
     font-style: italic;
     margin-top: 0.3em;
+  }
+  .alert-suppression {
+    color: #ff5555;
+    font-weight: bold;
+  }
+  .alert-retard {
+    color: #ffaa00;
+    font-weight: bold;
   }
 </style>
 </head>
@@ -67,9 +76,9 @@
 <script>
 const apiKey = '242fac11-6d98-45fb-93df-28174d362447';
 
-// Convertit une date SNCF au format "YYYYMMDDTHHMMSS" en objet Date JS
+// Parse la date SNCF "YYYYMMDDTHHMMSS" en Date JS
 function parseSNCFDate(sncfDateStr) {
-  // ex: "20250711T072200"
+  if (!sncfDateStr) return null;
   const datePart = sncfDateStr.substr(0,8);
   const timePart = sncfDateStr.substr(9,6);
   const year = parseInt(datePart.substr(0,4),10);
@@ -81,12 +90,13 @@ function parseSNCFDate(sncfDateStr) {
   return new Date(year, month, day, hour, minute, second);
 }
 
-// Formate un objet Date en HH:MM (heure locale FR)
+// Format HH:MM
 function formatTime(date) {
+  if (!date) return 'N/A';
   return date.toLocaleTimeString('fr-FR', {hour:'2-digit', minute:'2-digit'});
 }
 
-// Renvoie la date du jour à minuit au format SNCF YYYYMMDDT000000
+// Date du jour minuit au format SNCF
 function getTodayDatetime() {
   const now = new Date();
   const y = now.getFullYear();
@@ -95,7 +105,7 @@ function getTodayDatetime() {
   return `${y}${m}${d}T000000`;
 }
 
-// Récupère la liste des arrivées sur 24h
+// Récupère les arrivées 24h
 async function fetchArrivals() {
   const stopAreaId = 'stop_area:SNCF:82001000'; // Luxembourg
   const datetime = getTodayDatetime();
@@ -115,7 +125,7 @@ async function fetchArrivals() {
   }
 }
 
-// Remplit le menu déroulant avec les trains
+// Remplit le menu déroulant avec le numéro de train (headsign)
 function populateSelect(trains) {
   const select = document.getElementById('trainSelect');
   select.innerHTML = '';
@@ -138,39 +148,61 @@ function populateSelect(trains) {
 
   trains.forEach(train => {
     const info = train.display_informations || {};
-    const label = info.label || info.headsign || info.direction || (train.route ? train.route.id : 'N° inconnu');
+    const headsign = info.headsign || 'N° inconnu';
     const arrival = parseSNCFDate(train.stop_date_time.arrival_date_time);
     const timeStr = formatTime(arrival);
 
     const option = document.createElement('option');
-    option.value = train.trip ? train.trip.id : label;
-    option.textContent = `Train ${label} - Arrivée à ${timeStr}`;
+    option.value = train.trip ? train.trip.id : headsign;
+    option.textContent = `Train ${headsign} - Arrivée à ${timeStr}`;
     select.appendChild(option);
   });
 }
 
-// Affiche les détails du train sélectionné
+// Affiche les détails importants du train sélectionné
 function showDetails(train) {
   const container = document.getElementById('trainDetails');
   if(!train) {
     container.innerHTML = '<p>Sélectionnez un train pour voir les détails.</p>';
     return;
   }
+
   const info = train.display_informations || {};
-  const trainNumber = info.label || info.headsign || info.direction || 'N/A';
-  const destination = info.direction || 'Inconnue';
-  const arrivalDate = parseSNCFDate(train.stop_date_time.arrival_date_time);
-  const arrivalTime = formatTime(arrivalDate);
+  const trainNumber = info.headsign || 'N/A';
+  const direction = info.direction || 'Inconnue';
+
+  const arrivalDateStr = train.stop_date_time.arrival_date_time;
   const departureDateStr = train.stop_date_time.departure_date_time;
-  const departureDate = departureDateStr ? parseSNCFDate(departureDateStr) : null;
-  const departureTime = departureDate ? formatTime(departureDate) : 'N/A';
+
+  const arrivalDate = parseSNCFDate(arrivalDateStr);
+  const departureDate = parseSNCFDate(departureDateStr);
+
+  // Retards et statut suppression
+  const arrivalStatus = train.stop_date_time.arrival_status || 'scheduled'; // ex: 'delayed', 'cancelled'
+  const departureStatus = train.stop_date_time.departure_status || 'scheduled';
+
+  // Causes des perturbations (si présentes)
+  let cause = '';
+  if (train.cause) cause = train.cause;
+  else if(train.messages && train.messages.length) {
+    cause = train.messages.map(m => m.text).join('\n');
+  }
+
+  let alertHTML = '';
+  if(arrivalStatus === 'cancelled' || departureStatus === 'cancelled') {
+    alertHTML = `<div class="alert-suppression">⚠️ Train supprimé</div>`;
+  } else if(arrivalStatus === 'delayed' || departureStatus === 'delayed') {
+    alertHTML = `<div class="alert-retard">⏰ Train en retard</div>`;
+  }
 
   container.innerHTML = `
     <div>
-      <div class="train-number">Train ${trainNumber}</div>
-      <div>Destination : <strong>${destination}</strong></div>
-      <div class="train-time">Arrivée prévue à : ${arrivalTime}</div>
-      <div class="train-time">Départ prévu à : ${departureTime}</div>
+      <div class="train-number">Train n° ${trainNumber}</div>
+      <div>Direction : <strong>${direction}</strong></div>
+      <div class="train-time">Arrivée prévue : ${formatTime(arrivalDate)} (${arrivalStatus})</div>
+      <div class="train-time">Départ prévu : ${formatTime(departureDate)} (${departureStatus})</div>
+      ${alertHTML}
+      ${cause ? `<pre>${cause}</pre>` : ''}
     </div>
   `;
 }
@@ -183,10 +215,6 @@ function showDetails(train) {
   const select = document.getElementById('trainSelect');
   select.addEventListener('change', () => {
     const selectedId = select.value;
-    if(!selectedId) {
-      showDetails(null);
-      return;
-    }
     const selectedTrain = trains.find(t => t.trip && t.trip.id === selectedId);
     showDetails(selectedTrain || null);
   });
