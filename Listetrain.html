@@ -18,6 +18,24 @@
     text-shadow: 0 0 10px #00f0ff;
     text-align: center;
   }
+  .date-picker {
+    text-align: center;
+    margin-bottom: 1em;
+  }
+  label {
+    color: #00ffff;
+    font-weight: bold;
+    margin-right: 0.5em;
+  }
+  input[type="date"] {
+    padding: 0.3em 0.5em;
+    font-size: 1.1rem;
+    border-radius: 6px;
+    border: 2px solid #00f0ff55;
+    background: #001122;
+    color: #00ffff;
+    box-shadow: 0 0 12px #00f0ff88 inset;
+  }
   .container-selects {
     display: flex;
     gap: 1em;
@@ -28,12 +46,6 @@
   .select-wrapper {
     flex: 1 1 45%;
     min-width: 280px;
-  }
-  label {
-    display: block;
-    margin-bottom: 0.3em;
-    font-weight: bold;
-    color: #00ffff;
   }
   select {
     width: 100%;
@@ -74,6 +86,11 @@
 <body>
 
 <h1>Trains arrivant et partant de Luxembourg (24h)</h1>
+
+<div class="date-picker">
+  <label for="dateInput">Choisissez une date :</label>
+  <input type="date" id="dateInput" />
+</div>
 
 <div class="container-selects">
   <div class="select-wrapper">
@@ -117,13 +134,9 @@ function formatTime(date) {
   return date.toLocaleTimeString('fr-FR', {hour:'2-digit', minute:'2-digit'});
 }
 
-// Date du jour minuit au format SNCF
-function getTodayDatetime() {
-  const now = new Date();
-  const y = now.getFullYear();
-  const m = String(now.getMonth()+1).padStart(2,'0');
-  const d = String(now.getDate()).padStart(2,'0');
-  return `${y}${m}${d}T000000`;
+// Convertit date YYYY-MM-DD en datetime SNCF YYYYMMDDT000000
+function toDatetimeSncf(dateStr) {
+  return dateStr.replace(/-/g,'') + 'T000000';
 }
 
 // Fetch arrivals ou departures, selon URL passée
@@ -210,37 +223,55 @@ function showDetails(train, isArrival) {
   container.innerHTML = html;
 }
 
-(async function(){
-  const datetime = getTodayDatetime();
+async function loadTrainsForDate(dateStr) {
+  const datetime = toDatetimeSncf(dateStr);
   const stopAreaId = 'stop_area:SNCF:82001000'; // Luxembourg
   const baseUrl = `https://api.sncf.com/v1/coverage/sncf/stop_areas/${stopAreaId}`;
 
-  // Fetch arrivals
-  const arrivals = await fetchTrains(`${baseUrl}/arrivals?datetime=${datetime}&duration=86400&count=100`);
-  populateSelect('arrivalSelect', arrivals, true);
+  // Disable selects and show loading
+  const arrivalSelect = document.getElementById('arrivalSelect');
+  const departureSelect = document.getElementById('departureSelect');
+  arrivalSelect.innerHTML = '<option>Chargement des trains arrivées...</option>';
+  departureSelect.innerHTML = '<option>Chargement des trains départs...</option>';
+  arrivalSelect.disabled = true;
+  departureSelect.disabled = true;
 
-  // Fetch departures
-  const departures = await fetchTrains(`${baseUrl}/departures?datetime=${datetime}&duration=86400&count=100`);
+  // Fetch arrivals et departures
+  const [arrivals, departures] = await Promise.all([
+    fetchTrains(`${baseUrl}/arrivals?datetime=${datetime}&duration=86400&count=100`),
+    fetchTrains(`${baseUrl}/departures?datetime=${datetime}&duration=86400&count=100`)
+  ]);
+
+  populateSelect('arrivalSelect', arrivals, true);
   populateSelect('departureSelect', departures, false);
 
-  // Écouteurs
-  document.getElementById('arrivalSelect').addEventListener('change', function(){
-    const idx = parseInt(this.value, 10);
-    if(isNaN(idx)) {
-      showDetails(null, true);
-      return;
-    }
-    showDetails(arrivals[idx], true);
-  });
-  document.getElementById('departureSelect').addEventListener('change', function(){
-    const idx = parseInt(this.value, 10);
-    if(isNaN(idx)) {
-      showDetails(null, false);
-      return;
-    }
-    showDetails(departures[idx], false);
-  });
-})();
+  // Clear details
+  document.getElementById('trainDetails').innerHTML = '<p>Sélectionnez un train pour voir les détails.</p>';
+
+  // Gestion du clic
+  arrivalSelect.onchange = () => {
+    const idx = parseInt(arrivalSelect.value, 10);
+    showDetails(isNaN(idx) ? null : arrivals[idx], true);
+  };
+  departureSelect.onchange = () => {
+    const idx = parseInt(departureSelect.value, 10);
+    showDetails(isNaN(idx) ? null : departures[idx], false);
+  };
+}
+
+// Initialisation avec date du jour
+const dateInput = document.getElementById('dateInput');
+const todayISO = new Date().toISOString().slice(0,10);
+dateInput.value = todayISO;
+
+dateInput.addEventListener('change', () => {
+  if(dateInput.value) {
+    loadTrainsForDate(dateInput.value);
+  }
+});
+
+loadTrainsForDate(todayISO);
+
 </script>
 
 </body>
