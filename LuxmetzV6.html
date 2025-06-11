@@ -833,75 +833,82 @@ $('#loadTrains').click(async function() {
         html += '</tr></thead><tbody>';
 
         for (const stopName of fixedStops) {
-          html += `<tr><td>${stopName}</td>`;
-          numbers.forEach(num => {
-            const result = results[num];
-            if (!result || result.error) {
-              html += `<td class="deleted">${result?.error || 'Erreur'}</td>`;
-              return;
-            }
+  html += `<tr><td>${stopName}</td>`;
+  numbers.forEach(num => {
+    const result = results[num];
+    if (!result || result.error) {
+      html += `<td class="deleted">${result?.error || 'Erreur'}</td>`;
+      return;
+    }
 
-            const stop = result.train.stop_times.find(s => s.stop_point.name === stopName);
-            if (!stop) {
-              html += `<td>-</td>`;
-              return;
-            }
+    const stop = result.train.stop_times.find(s => s.stop_point.name === stopName);
+    if (!stop) {
+      html += `<td>-</td>`;
+      return;
+    }
 
-            const id = stop.stop_point.id;
-            const imp = result.impacted[id] || {};
+    const id = stop.stop_point.id;
+    const imp = result.impacted[id] || {};
 
-            const amended = imp.amended_departure_time || imp.amended_arrival_time;
-            const departureDeleted = imp.departure_status === 'deleted';
-            const arrivalDeleted = imp.arrival_status === 'deleted';
-            const isStopDeleted = departureDeleted && arrivalDeleted;
-            const base = imp.base_departure_time || imp.base_arrival_time || stop.departure_time || stop.arrival_time;
-            const index = result.train.stop_times.findIndex(s => s.stop_point.id === id);
-            const newStartIndex = result.train.stop_times.findIndex(s => s.stop_point.id === result.newStart);
-            const newEndIndex = result.train.stop_times.findIndex(s => s.stop_point.id === result.newEnd);
-            const originalEndId = result.train.stop_times[result.train.stop_times.length - 1].stop_point.id;
+    const amended = imp.amended_departure_time || imp.amended_arrival_time;
+    const departureDeleted = imp.departure_status === 'deleted';
+    const arrivalDeleted = imp.arrival_status === 'deleted';
+    const isStopDeleted = departureDeleted && arrivalDeleted;
 
-            let content = ft(base);
-            const isFirstStop = stopName === result.train.stop_times[0]?.stop_point?.name;
-            const isLastStop = stopName === result.train.stop_times[result.train.stop_times.length - 1]?.stop_point?.name;
+    const base = imp.base_departure_time || imp.base_arrival_time || stop.departure_time || stop.arrival_time;
 
-            // Cas spécial : gare ancien terminus barré rouge, sans horaire retardé
-if (id === originalEndId && result.newEnd && result.newEnd !== originalEndId) {
-  content = `<span class="delay-strike blink-red">${ft(base)}</span>`;
+    const index = result.train.stop_times.findIndex(s => s.stop_point.id === id);
+    const newStartIndex = result.train.stop_times.findIndex(s => s.stop_point.id === result.newStart);
+    const newEndIndex = result.train.stop_times.findIndex(s => s.stop_point.id === result.newEnd);
+    const originalEndId = result.train.stop_times[result.train.stop_times.length - 1].stop_point.id;
+
+    let content = ft(base);
+    const isFirstStop = stopName === result.train.stop_times[0]?.stop_point?.name;
+    const isLastStop = stopName === result.train.stop_times[result.train.stop_times.length - 1]?.stop_point?.name;
+
+    // Cas spécial : gare ancien terminus barré rouge clignotant, sans horaire retardé
+    if (id === originalEndId && result.newEnd && result.newEnd !== originalEndId) {
+      content = `<span class="delay-strike blink-red">${ft(base)}</span>`;
+    }
+    // Sinon affichage normal avec retard si nécessaire
+    else if (amended && dl(base, amended) > 0) {
+      content = `<span class="delay-strike">${ft(base)}</span><br><span class="delayed">${ft(amended)}</span>`;
+    } else {
+      if (isFirstStop || isLastStop) {
+        content = `<strong>${content}</strong>`;
+      }
+    }
+
+    const isFull = result.disruptions.some(d => ['NO_SERVICE','CANCELLATION'].includes(d.severity?.effect));
+
+    if (isFull) {
+      // Train supprimé, barrer tout en rouge
+      content = `<span class="deleted">${content}</span>`;
+    } else if (id === result.newStart && index !== 0) {
+      // Nouvelle gare de départ (supprimer les arrêts avant)
+      content = `<span class="new-start">${content}</span>`;
+    } else if (id === result.newEnd && id !== originalEndId) {
+      // Nouvelle gare de fin (terminus anticipé)
+      if (amended && dl(base, amended) > 0) {
+        // base barré rouge clignotant + affichage de l'horaire modifié normal
+        content = `<span class="delay-strike blink-red">${ft(base)}</span><br><span class="delayed">${ft(amended)}</span>`;
+      } else {
+        // Pas de retard : base en rouge clignotant barré
+        content = `<span class="delay-strike blink-red">${ft(base)}</span>`;
+      }
+    } else if (
+      isStopDeleted ||
+      (newStartIndex >= 0 && index < newStartIndex) ||
+      (newEndIndex >= 0 && index > newEndIndex)
+    ) {
+      // Arrêts supprimés ou hors tronçon desservi, barré rouge et texte rouge
+      content = `<span class="deleted">${content}</span>`;
+    }
+
+    html += `<td>${content}</td>`;
+  });
+  html += `</tr>`;
 }
-// Sinon affichage normal avec retard si nécessaire
-else if (amended && dl(base, amended) > 0) {
-  content = `<span class="delay-strike">${ft(base)}</span><br><span class="delayed">${ft(amended)}</span>`;
-} else {
-  if (isFirstStop || isLastStop) {
-    content = `<strong>${content}</strong>`;
-  }
-}
-const isFull = result.disruptions.some(d => ['NO_SERVICE','CANCELLATION'].includes(d.severity?.effect));
-
-  if (isFull) {
-  content = `<span class="deleted">${content}</span>`;
-} else if (id === result.newStart && index !== 0) {
-  content = `<span class="new-start">${content}</span>`;
-} else if (id === result.newEnd && id !== originalEndId) {
-  if (amended && dl(base, amended) > 0) {
-    // base barré rouge clignotant + affichage de l'horaire modifié normal
-    content = `<span class="delay-strike blink-red">${ft(base)}</span><br><span class="delayed">${ft(amended)}</span>`;
-  } else {
-    // Pas de retard : juste base en rouge clignotant barré
-    content = `<span class="delay-strike blink-red">${ft(base)}</span>`;
-  }
-} else if (
-  isStopDeleted ||
-  (newStartIndex >= 0 && index < newStartIndex) ||
-  (newEndIndex >= 0 && index > newEndIndex)
-) {
-  content = `<span class="deleted">${content}</span>`;
-}
-
-  html += `<td>${content}</td>`;
-    });
-    html += '</tr>';
-  }
 
   html += '</tbody></table>';
 
