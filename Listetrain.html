@@ -136,7 +136,12 @@ function formatTime(date) {
 
 // Convertit date YYYY-MM-DD en datetime SNCF YYYYMMDDT000000
 function toDatetimeSncf(dateStr) {
-  return dateStr.replace(/-/g,'') + 'T000000';
+  // Pour être sûr que c'est bien en heure locale et éviter décalage, on crée un Date et reconvertit
+  const d = new Date(dateStr + 'T00:00:00');
+  const y = d.getFullYear();
+  const m = (d.getMonth()+1).toString().padStart(2,'0');
+  const day = d.getDate().toString().padStart(2,'0');
+  return `${y}${m}${day}T000000`;
 }
 
 // Fetch arrivals ou departures, selon URL passée
@@ -247,32 +252,73 @@ async function loadTrainsForDate(dateStr) {
 
   // Clear details
   document.getElementById('trainDetails').innerHTML = '<p>Sélectionnez un train pour voir les détails.</p>';
-
-  // Gestion du clic
-  arrivalSelect.onchange = () => {
-    const idx = parseInt(arrivalSelect.value, 10);
-    showDetails(isNaN(idx) ? null : arrivals[idx], true);
-  };
-  departureSelect.onchange = () => {
-    const idx = parseInt(departureSelect.value, 10);
-    showDetails(isNaN(idx) ? null : departures[idx], false);
-  };
 }
 
-// Initialisation avec date du jour
-const dateInput = document.getElementById('dateInput');
-const todayISO = new Date().toISOString().slice(0,10);
-dateInput.value = todayISO;
-
-dateInput.addEventListener('change', () => {
-  if(dateInput.value) {
-    loadTrainsForDate(dateInput.value);
+document.getElementById('dateInput').addEventListener('change', (e) => {
+  const dateValue = e.target.value;
+  if (dateValue) {
+    loadTrainsForDate(dateValue);
   }
 });
 
-loadTrainsForDate(todayISO);
+document.getElementById('arrivalSelect').addEventListener('change', e => {
+  const idx = e.target.value;
+  if (idx === '') {
+    showDetails(null);
+    return;
+  }
+  const selectedTrain = arrivalsGlobal[parseInt(idx)];
+  showDetails(selectedTrain, true);
+});
 
+document.getElementById('departureSelect').addEventListener('change', e => {
+  const idx = e.target.value;
+  if (idx === '') {
+    showDetails(null);
+    return;
+  }
+  const selectedTrain = departuresGlobal[parseInt(idx)];
+  showDetails(selectedTrain, false);
+});
+
+let arrivalsGlobal = [];
+let departuresGlobal = [];
+
+async function loadTrainsForDate(dateStr) {
+  const datetime = toDatetimeSncf(dateStr);
+  const stopAreaId = 'stop_area:SNCF:82001000'; // Luxembourg
+  const baseUrl = `https://api.sncf.com/v1/coverage/sncf/stop_areas/${stopAreaId}`;
+
+  // Disable selects and show loading
+  const arrivalSelect = document.getElementById('arrivalSelect');
+  const departureSelect = document.getElementById('departureSelect');
+  arrivalSelect.innerHTML = '<option>Chargement des trains arrivées...</option>';
+  departureSelect.innerHTML = '<option>Chargement des trains départs...</option>';
+  arrivalSelect.disabled = true;
+  departureSelect.disabled = true;
+
+  // Fetch arrivals et departures
+  const [arrivals, departures] = await Promise.all([
+    fetchTrains(`${baseUrl}/arrivals?datetime=${datetime}&duration=86400&count=100`),
+    fetchTrains(`${baseUrl}/departures?datetime=${datetime}&duration=86400&count=100`)
+  ]);
+
+  arrivalsGlobal = arrivals;
+  departuresGlobal = departures;
+
+  populateSelect('arrivalSelect', arrivals, true);
+  populateSelect('departureSelect', departures, false);
+
+  // Clear details
+  document.getElementById('trainDetails').innerHTML = '<p>Sélectionnez un train pour voir les détails.</p>';
+}
+
+// Initialise à la date d'aujourd'hui
+window.addEventListener('load', () => {
+  const today = new Date().toISOString().slice(0,10);
+  document.getElementById('dateInput').value = today;
+  loadTrainsForDate(today);
+});
 </script>
-
 </body>
 </html>
