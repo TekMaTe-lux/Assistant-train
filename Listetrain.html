@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Liste des trains arrivant à Luxembourg</title>
+<style>
+  body {
+    font-family: Arial, sans-serif;
+    margin: 20px;
+    background: #0a0e1a;
+    color: #e0f0ff;
+  }
+  select {
+    font-size: 1rem;
+    padding: 6px;
+    width: 100%;
+    max-width: 600px;
+    margin-bottom: 20px;
+    background: #101828;
+    border: 2px solid #00f0ff55;
+    color: #00f0ff;
+    border-radius: 6px;
+  }
+  option {
+    background: #001122;
+    color: #00f0ff;
+  }
+</style>
+</head>
+<body>
+
+<h1>Trains arrivant à Luxembourg (24h)</h1>
+
+<select id="trainList">
+  <option>Chargement des trains...</option>
+</select>
+
+<script>
+const apiKey = "242fac11-6d98-45fb-93df-28174d362447";
+
+function getTodayDateTimeSNCF() {
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, '0');
+  const day = String(now.getDate()).padStart(2, '0');
+  const hours = String(now.getHours()).padStart(2, '0');
+  const minutes = String(now.getMinutes()).padStart(2, '0');
+  const seconds = String(now.getSeconds()).padStart(2, '0');
+  return `${year}${month}${day}T${hours}${minutes}${seconds}`;
+}
+
+async function fetchTrainArrivals() {
+  const datetime = getTodayDateTimeSNCF();
+  const url = `https://api.sncf.com/v1/coverage/sncf/stop_areas/stop_area:SNCF:82001000/arrivals?datetime=${datetime}&duration=86400&count=100`;
+  const select = document.getElementById('trainList');
+
+  try {
+    const response = await fetch(url, {
+      headers: {
+        'Authorization': 'Basic ' + btoa(apiKey + ':')
+      }
+    });
+
+    if (!response.ok) {
+      throw new Error(`Erreur API: ${response.status} ${response.statusText}`);
+    }
+
+    const data = await response.json();
+
+    if (!data.arrivals || data.arrivals.length === 0) {
+      select.innerHTML = '<option>Aucun train trouvé pour aujourd\'hui</option>';
+      return;
+    }
+
+    // Trier les trains par date d'arrivée
+    const trains = data.arrivals.sort((a, b) => {
+      const dateA = new Date(a.stop_date_time.arrival_date_time);
+      const dateB = new Date(b.stop_date_time.arrival_date_time);
+      return dateA - dateB;
+    });
+
+    // Construire les options du select
+    select.innerHTML = ''; // Vide le select
+
+    trains.forEach(train => {
+      const trainNum = train.display_informations.headsign || train.display_informations.physical_mode || train.route.id || "N° inconnu";
+      const trainId = train.trip ? train.trip.id : "ID inconnu";
+
+      // Formatage de la date d'arrivée lisible
+      const arrivalDateTime = new Date(train.stop_date_time.arrival_date_time);
+      const dateStr = arrivalDateTime.toLocaleDateString('fr-FR');
+      const timeStr = arrivalDateTime.toLocaleTimeString('fr-FR', {hour: '2-digit', minute: '2-digit'});
+
+      const optionText = `Train ${train.display_informations.headsign || train.display_informations.label || train.display_informations.direction || trainNum} — Arrivée : ${dateStr} ${timeStr}`;
+      const option = document.createElement('option');
+      option.value = trainId;
+      option.textContent = optionText;
+
+      select.appendChild(option);
+    });
+
+  } catch (error) {
+    select.innerHTML = `<option>Erreur lors du chargement : ${error.message}</option>`;
+  }
+}
+
+fetchTrainArrivals();
+</script>
+
+</body>
+</html>
