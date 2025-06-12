@@ -43,7 +43,7 @@ def parse_siri_sx(url):
 
 def sauvegarder_json(data, fichier="Assistant-train/siri_sx_alertes.json"):
     os.makedirs("Assistant-train", exist_ok=True)
-    with open(fichier, "w", encoding="utf-8") as f:
+    with open("Assistant-train/retards.json", "w") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
     print(f"{len(data)} situations enregistrées dans {fichier}")
 
