@@ -4,71 +4,16 @@
 <meta charset="UTF-8" />
 <title>Selectrain V3 - Sens et Sélection affinée</title>
 <style>
-  body {
-    background: #101828;
-    font-family: 'Orbitron', monospace;
-    color: #00ffff;
-    padding: 20px;
-  }
-  h1 {
-    text-align: center;
-    color: #00ffff;
-    text-shadow: 0 0 15px cyan;
-  }
-  .button-container {
-    text-align: center;
-    margin-bottom: 20px;
-  }
-  .sens-button {
-    padding: 10px 20px;
-    margin: 5px;
-    font-size: 1.2em;
-    background: cyan;
-    color: black;
-    border: none;
-    border-radius: 10px;
-    cursor: pointer;
-  }
-  .train-container {
-    display: flex;
-    flex-wrap: wrap;
-    justify-content: center;
-    gap: 15px;
-  }
-  .train-card {
-    background: #001122;
-    border: 2px solid cyan;
-    padding: 20px;
-    border-radius: 15px;
-    box-shadow: 0 0 20px cyan;
-    cursor: pointer;
-    width: 200px;
-    text-align: center;
-    transition: all 0.3s ease;
-  }
-  .train-card:hover {
-    transform: scale(1.1);
-    box-shadow: 0 0 30px lime;
-  }
-  .selected {
-    border: 2px solid lime;
-    box-shadow: 0 0 30px lime;
-  }
-  .selection-zone {
-    margin-top: 30px;
-    padding: 20px;
-    border: 2px dashed lime;
-  }
-  button.validate {
-    padding: 10px 20px;
-    font-size: 1.2em;
-    margin-top: 20px;
-    background: cyan;
-    color: black;
-    border: none;
-    border-radius: 10px;
-    cursor: pointer;
-  }
+  body { background: #101828; font-family: 'Orbitron', monospace; color: #00ffff; padding: 20px; }
+  h1 { text-align: center; color: #00ffff; text-shadow: 0 0 15px cyan; }
+  .button-container { text-align: center; margin-bottom: 20px; }
+  .sens-button { padding: 10px 20px; margin: 5px; font-size: 1.2em; background: cyan; color: black; border: none; border-radius: 10px; cursor: pointer; }
+  .train-container { display: flex; flex-wrap: wrap; justify-content: center; gap: 15px; }
+  .train-card { background: #001122; border: 2px solid cyan; padding: 20px; border-radius: 15px; box-shadow: 0 0 20px cyan; cursor: pointer; width: 200px; text-align: center; transition: all 0.3s ease; }
+  .train-card:hover { transform: scale(1.1); box-shadow: 0 0 30px lime; }
+  .selected { border: 2px solid lime; box-shadow: 0 0 30px lime; }
+  .selection-zone { margin-top: 30px; padding: 20px; border: 2px dashed lime; }
+  button.validate { padding: 10px 20px; font-size: 1.2em; margin-top: 20px; background: cyan; color: black; border: none; border-radius: 10px; cursor: pointer; }
 </style>
 </head>
 <body>
@@ -118,9 +63,7 @@ function getTodayDatetime() {
 
 async function fetchTrains(url) {
   try {
-    const resp = await fetch(url, {
-      headers: { 'Authorization': 'Basic ' + btoa(apiKey + ':') }
-    });
+    const resp = await fetch(url, { headers: { 'Authorization': 'Basic ' + btoa(apiKey + ':') } });
     if(!resp.ok) throw new Error(`Erreur API: ${resp.status}`);
     const data = await resp.json();
     return data.arrivals || data.departures || [];
@@ -143,7 +86,34 @@ async function chargerTrains(sens) {
 
   let trains = await fetchTrains(baseUrl);
   trains = filterTrains(trains);
+
+  if (sens === 'arrivals') {
+    // On enrichit les trains avec l'origine exacte
+    trains = await enrichirOrigine(trains);
+  }
+
   afficherCartes(trains, sens);
+}
+
+async function enrichirOrigine(trains) {
+  const enriched = [];
+  for (const train of trains) {
+    try {
+      const vehicleJourneyId = train.vehicle_journey.id;
+      const url = `https://api.sncf.com/v1/coverage/sncf/vehicle_journeys/${vehicleJourneyId}`;
+      const resp = await fetch(url, { headers: { 'Authorization': 'Basic ' + btoa(apiKey + ':') } });
+      const data = await resp.json();
+      const firstStop = data.vehicle_journeys[0].stop_times[0];
+      train.true_origin = firstStop.stop_point.name;
+      train.true_origin_time = firstStop.departure_time;
+    } catch (err) {
+      console.error("Erreur enrichissement :", err);
+      train.true_origin = "Origine inconnue";
+      train.true_origin_time = null;
+    }
+    enriched.push(train);
+  }
+  return enriched;
 }
 
 function afficherCartes(trains, sens) {
@@ -164,16 +134,15 @@ function afficherCartes(trains, sens) {
         : parseSNCFDate(train.stop_date_time.departure_date_time);
     const timeStr = formatTime(heure);
 
-    // Traitement des origines et directions selon le sens
     let affichage = `<h3>Train ${trainNumber}</h3><p>Heure : ${timeStr}</p>`;
 
     if (sens === 'departures') {
       const direction = info.direction || 'Destination inconnue';
       affichage += `<p>Vers : ${direction}</p>`;
     } else if (sens === 'arrivals') {
-      let direction = info.direction || 'Destination inconnue';
-      direction = direction.replace(/\s*.*?/g, ''); // Supprime le texte entre parenthèses
-      affichage += `<p>De : ${direction}</p>`;
+      let origine = train.true_origin || (info.direction || 'Origine inconnue');
+      origine = origine.replace(/\s*.*?/g, '');
+      affichage += `<p>De : ${origine}</p>`;
     }
 
     const div = document.createElement('div');
