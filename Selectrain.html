@@ -4,16 +4,71 @@
 <meta charset="UTF-8" />
 <title>Selectrain V3 - Sens et Sélection affinée</title>
 <style>
-  body { background: #101828; font-family: 'Orbitron', monospace; color: #00ffff; padding: 20px; }
-  h1 { text-align: center; color: #00ffff; text-shadow: 0 0 15px cyan; }
-  .button-container { text-align: center; margin-bottom: 20px; }
-  .sens-button { padding: 10px 20px; margin: 5px; font-size: 1.2em; background: cyan; color: black; border: none; border-radius: 10px; cursor: pointer; }
-  .train-container { display: flex; flex-wrap: wrap; justify-content: center; gap: 15px; }
-  .train-card { background: #001122; border: 2px solid cyan; padding: 20px; border-radius: 15px; box-shadow: 0 0 20px cyan; cursor: pointer; width: 200px; text-align: center; transition: all 0.3s ease; }
-  .train-card:hover { transform: scale(1.1); box-shadow: 0 0 30px lime; }
-  .selected { border: 2px solid lime; box-shadow: 0 0 30px lime; }
-  .selection-zone { margin-top: 30px; padding: 20px; border: 2px dashed lime; }
-  button.validate { padding: 10px 20px; font-size: 1.2em; margin-top: 20px; background: cyan; color: black; border: none; border-radius: 10px; cursor: pointer; }
+  body {
+    background: #101828;
+    font-family: 'Orbitron', monospace;
+    color: #00ffff;
+    padding: 20px;
+  }
+  h1 {
+    text-align: center;
+    color: #00ffff;
+    text-shadow: 0 0 15px cyan;
+  }
+  .button-container {
+    text-align: center;
+    margin-bottom: 20px;
+  }
+  .sens-button {
+    padding: 10px 20px;
+    margin: 5px;
+    font-size: 1.2em;
+    background: cyan;
+    color: black;
+    border: none;
+    border-radius: 10px;
+    cursor: pointer;
+  }
+  .train-container {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 15px;
+  }
+  .train-card {
+    background: #001122;
+    border: 2px solid cyan;
+    padding: 20px;
+    border-radius: 15px;
+    box-shadow: 0 0 20px cyan;
+    cursor: pointer;
+    width: 250px;
+    text-align: center;
+    transition: all 0.3s ease;
+  }
+  .train-card:hover {
+    transform: scale(1.1);
+    box-shadow: 0 0 30px lime;
+  }
+  .selected {
+    border: 2px solid lime;
+    box-shadow: 0 0 30px lime;
+  }
+  .selection-zone {
+    margin-top: 30px;
+    padding: 20px;
+    border: 2px dashed lime;
+  }
+  button.validate {
+    padding: 10px 20px;
+    font-size: 1.2em;
+    margin-top: 20px;
+    background: cyan;
+    color: black;
+    border: none;
+    border-radius: 10px;
+    cursor: pointer;
+  }
 </style>
 </head>
 <body>
@@ -22,7 +77,7 @@
 
 <div class="button-container">
   <button class="sens-button" onclick="chargerTrains('departures')">Depuis Luxembourg</button>
-  <button class="sens-button" onclick="chargerTrains('versLux')">Vers Luxembourg</button>
+  <button class="sens-button" onclick="chargerTrainsVersLux()">Vers Luxembourg</button>
 </div>
 
 <div class="train-container" id="trainContainer"></div>
@@ -35,7 +90,13 @@
 
 <script>
 const apiKey = '242fac11-6d98-45fb-93df-28174d362447';
+const stopAreasVersLux = [
+  { id: 'stop_area:SNCF:87141002', label: 'Nancy' },
+  { id: 'stop_area:SNCF:87192039', label: 'Metz' },
+  { id: 'stop_area:SNCF:87191007', label: 'Thionville' }
+];
 
+// Fonctions de formatage date
 function parseSNCFDate(sncfDateStr) {
   if (!sncfDateStr) return null;
   const datePart = sncfDateStr.substr(0,8);
@@ -62,52 +123,98 @@ function getTodayDatetime() {
 
 async function fetchTrains(url) {
   try {
-    const resp = await fetch(url, { headers: { 'Authorization': 'Basic ' + btoa(apiKey + ':') } });
+    const resp = await fetch(url, {
+      headers: { 'Authorization': 'Basic ' + btoa(apiKey + ':') }
+    });
     if(!resp.ok) throw new Error(`Erreur API: ${resp.status}`);
     const data = await resp.json();
-    return data.departures || data.arrivals || [];
+    return data.departures || [];
   } catch(err) {
     console.error(err);
     return [];
   }
 }
 
-function filterTrains(trains, versLux = false) {
+function filterTrains(trains) {
   const allowedRoutes = ['C40+', 'C50', 'C50+'];
-  return trains.filter(train => {
-    const routeOk = train.route && allowedRoutes.includes(train.route.name);
-    const directionOk = versLux ? (train.display_informations.direction || '').includes('Luxembourg') : true;
-    return routeOk && directionOk;
-  });
+  return trains.filter(train => train.route && allowedRoutes.includes(train.route.name));
 }
 
 async function chargerTrains(sens) {
   document.getElementById("trainContainer").innerHTML = "<p>Chargement...</p>";
   const datetime = getTodayDatetime();
+  const stopAreaId = 'stop_area:SNCF:82001000'; // Luxembourg
+  const baseUrl = `https://api.sncf.com/v1/coverage/sncf/stop_areas/${stopAreaId}/${sens}?datetime=${datetime}&duration=86400&count=100`;
 
-  if (sens === 'departures') {
-    const stopAreaId = 'stop_area:SNCF:82001000';
-    const baseUrl = `https://api.sncf.com/v1/coverage/sncf/stop_areas/${stopAreaId}/departures?datetime=${datetime}&duration=86400&count=100`;
-    let trains = await fetchTrains(baseUrl);
+  let trains = await fetchTrains(baseUrl);
+  trains = filterTrains(trains);
+  afficherCartes(trains, sens);
+}
+
+async function chargerTrainsVersLux() {
+  document.getElementById("trainContainer").innerHTML = "<p>Chargement...</p>";
+  const datetime = getTodayDatetime();
+  let tousLesTrains = [];
+
+  for (const gare of stopAreasVersLux) {
+    const url = `https://api.sncf.com/v1/coverage/sncf/stop_areas/${gare.id}/departures?datetime=${datetime}&duration=86400&count=100`;
+    let trains = await fetchTrains(url);
     trains = filterTrains(trains);
-    afficherCartes(trains, sens);
+    trains.forEach(t => t.gareDepart = gare.label); // on stocke la gare d'origine
+    tousLesTrains = tousLesTrains.concat(trains);
   }
 
-  if (sens === 'versLux') {
-    const stopAreas = [
-      'stop_area:SNCF:87141002', // Nancy
-      'stop_area:SNCF:87192039', // Metz
-      'stop_area:SNCF:87191007'  // Thionville
-    ];
-    let allTrains = [];
-    for (const stopAreaId of stopAreas) {
-      const url = `https://api.sncf.com/v1/coverage/sncf/stop_areas/${stopAreaId}/departures?datetime=${datetime}&duration=86400&count=100`;
-      let trains = await fetchTrains(url);
-      trains = filterTrains(trains, true); // ici on filtre vers Luxembourg uniquement
-      allTrains = allTrains.concat(trains);
+  afficherCartesVersLux(tousLesTrains);
+}
+
+function afficherCartesVersLux(trains) {
+  const container = document.getElementById("trainContainer");
+  container.innerHTML = '';
+
+  trains.sort((a,b)=>{
+    const dA = parseSNCFDate(a.stop_date_time.departure_date_time);
+    const dB = parseSNCFDate(b.stop_date_time.departure_date_time);
+    return dA - dB;
+  });
+
+  trains.forEach(train => {
+    const info = train.display_informations || {};
+    const trainNumber = info.headsign || 'Inconnu';
+    const heureDepart = parseSNCFDate(train.stop_date_time.departure_date_time);
+    const timeDepart = formatTime(heureDepart);
+
+    let affichage = `<h3>Train ${trainNumber}</h3><p>Départ ${train.gareDepart} : ${timeDepart}</p>`;
+
+    // Maintenant on va chercher les horaires à Metz et Thionville
+    let metzTime = '', thionvilleTime = '';
+    if (train.stop_date_times) {
+      train.stop_date_times.forEach(stop => {
+        if (stop.stop_point.label.includes('Metz')) {
+          const t = parseSNCFDate(stop.departure_date_time);
+          metzTime = formatTime(t);
+        }
+        if (stop.stop_point.label.includes('Thionville')) {
+          const t = parseSNCFDate(stop.departure_date_time);
+          thionvilleTime = formatTime(t);
+        }
+      });
     }
-    afficherCartes(allTrains, sens);
-  }
+
+    if (metzTime) affichage += `<p>Metz : ${metzTime}</p>`;
+    if (thionvilleTime) affichage += `<p>Thionville : ${thionvilleTime}</p>`;
+
+    const div = document.createElement('div');
+    div.className = 'train-card';
+    div.dataset.trainNumber = trainNumber;
+    div.innerHTML = affichage;
+
+    div.addEventListener('click', () => {
+      div.classList.toggle('selected');
+      majSelection();
+    });
+
+    container.appendChild(div);
+  });
 }
 
 function afficherCartes(trains, sens) {
@@ -125,10 +232,9 @@ function afficherCartes(trains, sens) {
     const trainNumber = info.headsign || 'Inconnu';
     const heure = parseSNCFDate(train.stop_date_time.departure_date_time);
     const timeStr = formatTime(heure);
-
-    let affichage = `<h3>Train ${trainNumber}</h3><p>Départ : ${timeStr}</p>`;
     const direction = info.direction || 'Destination inconnue';
-    affichage += `<p>Vers : ${direction}</p>`;
+
+    let affichage = `<h3>Train ${trainNumber}</h3><p>Départ : ${timeStr}</p><p>Vers : ${direction}</p>`;
 
     const div = document.createElement('div');
     div.className = 'train-card';
