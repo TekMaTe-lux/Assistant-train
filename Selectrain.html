@@ -164,50 +164,53 @@ async function chargerTrainsVersLux() {
     tousLesTrains = tousLesTrains.concat(trains);
   }
 
-  afficherCartesVersLux(tousLesTrains);
+  // Regrouper les trains par numéro et ne garder que ceux à destination de Luxembourg
+  const trainsGroupes = {};
+
+  tousLesTrains.forEach(train => {
+    const info = train.display_informations || {};
+    const trainNumber = info.headsign || 'Inconnu';
+    const direction = info.direction || '';
+
+    if(direction.toLowerCase().includes('luxembourg')) {
+      if(!trainsGroupes[trainNumber]) {
+        trainsGroupes[trainNumber] = {
+          trainNumber,
+          direction,
+          horaires: []
+        };
+      }
+      const heureDepart = parseSNCFDate(train.stop_date_time.departure_date_time);
+      const timeDepart = formatTime(heureDepart);
+      trainsGroupes[trainNumber].horaires.push({
+        gare: train.gareDepart,
+        heure: timeDepart
+      });
+    }
+  });
+
+  afficherCartesGroupes(trainsGroupes);
 }
 
-function afficherCartesVersLux(trains) {
+function afficherCartesGroupes(trainsGroupes) {
   const container = document.getElementById("trainContainer");
   container.innerHTML = '';
 
-  // Filtrer pour ne garder que les trains à destination de Luxembourg
-  const trainsFiltres = trains.filter(train => {
-    const info = train.display_informations || {};
-    if (!info.direction) return false;
-    return info.direction.toLowerCase().includes('luxembourg');
+  // Trier par heure la première gare de départ de chaque train
+  const trainsTries = Object.values(trainsGroupes).sort((a,b) => {
+    if(a.horaires.length === 0 || b.horaires.length === 0) return 0;
+    return a.horaires[0].heure.localeCompare(b.horaires[0].heure);
   });
 
-  // Trier par heure de départ
-  trainsFiltres.sort((a,b)=>{
-    const dA = parseSNCFDate(a.stop_date_time.departure_date_time);
-    const dB = parseSNCFDate(b.stop_date_time.departure_date_time);
-    return dA - dB;
-  });
-
-  // Regrouper par numéro de train (headsign)
-  const grouped = {};
-  trainsFiltres.forEach(train => {
-    const info = train.display_informations || {};
-    const trainNumber = info.headsign || 'Inconnu';
-    if (!grouped[trainNumber]) grouped[trainNumber] = [];
-    grouped[trainNumber].push(train);
-  });
-
-  // Construire et afficher les cartes regroupées
-  Object.entries(grouped).forEach(([trainNumber, trainsGroup]) => {
-    let affichage = `<h3>Train ${trainNumber}</h3>`;
-
-    trainsGroup.forEach(train => {
-      const gareDepart = train.gareDepart || 'Inconnu';
-      const heureDepart = parseSNCFDate(train.stop_date_time.departure_date_time);
-      const timeDepart = formatTime(heureDepart);
-      affichage += `<p>Départ ${gareDepart} : ${timeDepart}</p>`;
+  trainsTries.forEach(train => {
+    let affichage = `<h3>Train ${train.trainNumber}</h3><p>Destination : ${train.direction}</p>`;
+    train.horaires.forEach(h => {
+      affichage += `<p>Départ ${h.gare} : ${h.heure}</p>`;
     });
 
     const div = document.createElement('div');
     div.className = 'train-card';
-    div.dataset.trainNumber = trainNumber;
+    div.dataset.trainNumber = train.trainNumber;
     div.innerHTML = affichage;
 
     div.addEventListener('click', () => {
@@ -265,8 +268,13 @@ function majSelection() {
 function validerSelection() {
   const selected = document.querySelectorAll('.train-card.selected');
   const trains = Array.from(selected).map(el => el.dataset.trainNumber);
+  if(trains.length === 0) {
+    alert("Aucun train sélectionné.");
+    return;
+  }
   alert("Trains sélectionnés : " + trains.join(', '));
-  </script>
+}
+</script>
 
 </body>
 </html>
