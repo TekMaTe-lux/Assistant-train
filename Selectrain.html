@@ -22,7 +22,7 @@
 
 <div class="button-container">
   <button class="sens-button" onclick="chargerTrains('departures')">Depuis Luxembourg</button>
-  <button class="sens-button" onclick="chargerTrains('arrivals')">Vers Luxembourg</button>
+  <button class="sens-button" onclick="chargerTrains('versLux')">Vers Luxembourg</button>
 </div>
 
 <div class="train-container" id="trainContainer"></div>
@@ -36,7 +36,6 @@
 <script>
 const apiKey = '242fac11-6d98-45fb-93df-28174d362447';
 
-// Fonctions de formatage date
 function parseSNCFDate(sncfDateStr) {
   if (!sncfDateStr) return null;
   const datePart = sncfDateStr.substr(0,8);
@@ -66,7 +65,7 @@ async function fetchTrains(url) {
     const resp = await fetch(url, { headers: { 'Authorization': 'Basic ' + btoa(apiKey + ':') } });
     if(!resp.ok) throw new Error(`Erreur API: ${resp.status}`);
     const data = await resp.json();
-    return data.arrivals || data.departures || [];
+    return data.departures || data.arrivals || [];
   } catch(err) {
     console.error(err);
     return [];
@@ -81,39 +80,32 @@ function filterTrains(trains) {
 async function chargerTrains(sens) {
   document.getElementById("trainContainer").innerHTML = "<p>Chargement...</p>";
   const datetime = getTodayDatetime();
-  const stopAreaId = 'stop_area:SNCF:82001000';
-  const baseUrl = `https://api.sncf.com/v1/coverage/sncf/stop_areas/${stopAreaId}/${sens}?datetime=${datetime}&duration=86400&count=100`;
 
-  let trains = await fetchTrains(baseUrl);
-  trains = filterTrains(trains);
-
-  if (sens === 'arrivals') {
-    // On enrichit les trains avec l'origine exacte
-    trains = await enrichirOrigine(trains);
+  if (sens === 'departures') {
+    // Comme avant depuis Luxembourg
+    const stopAreaId = 'stop_area:SNCF:82001000';
+    const baseUrl = `https://api.sncf.com/v1/coverage/sncf/stop_areas/${stopAreaId}/departures?datetime=${datetime}&duration=86400&count=100`;
+    let trains = await fetchTrains(baseUrl);
+    trains = filterTrains(trains);
+    afficherCartes(trains, sens);
   }
 
-  afficherCartes(trains, sens);
-}
-
-async function enrichirOrigine(trains) {
-  const enriched = [];
-  for (const train of trains) {
-    try {
-      const vehicleJourneyId = train.vehicle_journey.id;
-      const url = `https://api.sncf.com/v1/coverage/sncf/vehicle_journeys/${vehicleJourneyId}`;
-      const resp = await fetch(url, { headers: { 'Authorization': 'Basic ' + btoa(apiKey + ':') } });
-      const data = await resp.json();
-      const firstStop = data.vehicle_journeys[0].stop_times[0];
-      train.true_origin = firstStop.stop_point.name;
-      train.true_origin_time = firstStop.departure_time;
-    } catch (err) {
-      console.error("Erreur enrichissement :", err);
-      train.true_origin = "Origine inconnue";
-      train.true_origin_time = null;
+  if (sens === 'versLux') {
+    // Nouveau : depuis Nancy, Metz, Thionville
+    const stopAreas = [
+      'stop_area:SNCF:87141002', // Nancy
+      'stop_area:SNCF:87192039', // Metz
+      'stop_area:SNCF:87191007'  // Thionville
+    ];
+    let allTrains = [];
+    for (const stopAreaId of stopAreas) {
+      const url = `https://api.sncf.com/v1/coverage/sncf/stop_areas/${stopAreaId}/departures?datetime=${datetime}&duration=86400&count=100`;
+      let trains = await fetchTrains(url);
+      trains = filterTrains(trains);
+      allTrains = allTrains.concat(trains);
     }
-    enriched.push(train);
+    afficherCartes(allTrains, sens);
   }
-  return enriched;
 }
 
 function afficherCartes(trains, sens) {
@@ -121,29 +113,20 @@ function afficherCartes(trains, sens) {
   container.innerHTML = '';
 
   trains.sort((a,b)=>{
-    const dA = parseSNCFDate(sens === 'arrivals' ? a.stop_date_time.arrival_date_time : a.stop_date_time.departure_date_time);
-    const dB = parseSNCFDate(sens === 'arrivals' ? b.stop_date_time.arrival_date_time : b.stop_date_time.departure_date_time);
+    const dA = parseSNCFDate(a.stop_date_time.departure_date_time);
+    const dB = parseSNCFDate(b.stop_date_time.departure_date_time);
     return dA - dB;
   });
 
   trains.forEach(train => {
     const info = train.display_informations || {};
     const trainNumber = info.headsign || 'Inconnu';
-    const heure = sens === 'arrivals' 
-        ? parseSNCFDate(train.stop_date_time.arrival_date_time)
-        : parseSNCFDate(train.stop_date_time.departure_date_time);
+    const heure = parseSNCFDate(train.stop_date_time.departure_date_time);
     const timeStr = formatTime(heure);
 
     let affichage = `<h3>Train ${trainNumber}</h3><p>Heure : ${timeStr}</p>`;
-
-    if (sens === 'departures') {
-      const direction = info.direction || 'Destination inconnue';
-      affichage += `<p>Vers : ${direction}</p>`;
-    } else if (sens === 'arrivals') {
-      let origine = train.true_origin || (info.direction || 'Origine inconnue');
-      origine = origine.replace(/\s*.*?/g, '');
-      affichage += `<p>De : ${origine}</p>`;
-    }
+    const direction = info.direction || 'Destination inconnue';
+    affichage += `<p>Vers : ${direction}</p>`;
 
     const div = document.createElement('div');
     div.className = 'train-card';
