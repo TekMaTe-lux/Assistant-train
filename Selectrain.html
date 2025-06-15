@@ -3,129 +3,164 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Sélection des trains</title>
+<title>Bétaillères arrivant et partant de Luxembourg</title>
 <style>
   body {
+    font-family: Arial, sans-serif;
     background: #101828;
     color: #e0f0ff;
-    font-family: 'Orbitron', sans-serif;
-    padding: 2em;
+    max-width: 1000px;
+    margin: 2em auto;
+    padding: 1em;
   }
   h1 {
-    text-align: center;
     color: #00ffff;
     text-shadow: 0 0 10px #00f0ff;
+    text-align: center;
   }
-  .train-list {
+  .columns {
     display: flex;
+    gap: 2em;
     flex-wrap: wrap;
-    gap: 1em;
     justify-content: center;
   }
+  .column {
+    flex: 1 1 450px;
+  }
   .train-card {
-    background: linear-gradient(145deg, #0a0e1a, #101828);
-    border: 2px solid #00f0ff55;
-    box-shadow: 0 0 20px #00ffff44 inset;
+    background: linear-gradient(145deg, #101828, #0a0e1a);
+    border: 1px solid #00f0ff55;
     border-radius: 10px;
+    box-shadow: 0 0 20px #00ffff44 inset;
+    margin: 1em 0;
     padding: 1em;
-    width: 250px;
-    cursor: pointer;
-    transition: transform 0.2s, box-shadow 0.2s;
+    font-family: 'Orbitron', monospace;
   }
-  .train-card:hover {
-    transform: scale(1.05);
-    box-shadow: 0 0 30px #00ffffaa;
+  .train-number {
+    font-weight: bold;
+    font-size: 1.2rem;
+    color: #00ffff;
   }
-  .selected {
-    border-color: #ff00ff;
-    box-shadow: 0 0 30px #ff00ffaa;
+  .train-info {
+    margin-top: 0.5em;
   }
 </style>
 </head>
 <body>
 
-<h1>Sélectionnez vos trains</h1>
+<h1>Bétaillères arrivant et partant de Luxembourg</h1>
 
-<div class="train-list" id="trainList">
-  Chargement des trains...
+<div class="columns">
+  <div class="column">
+    <h2>Arrivées à Luxembourg</h2>
+    <div id="arrivalsContainer"></div>
+  </div>
+  <div class="column">
+    <h2>Départs de Luxembourg</h2>
+    <div id="departuresContainer"></div>
+  </div>
 </div>
 
 <script>
 const apiKey = '242fac11-6d98-45fb-93df-28174d362447';
 
-async function fetchAPI(url) {
-  const resp = await fetch(url, { headers: { 'Authorization': 'Basic ' + btoa(apiKey + ':') } });
-  if (!resp.ok) throw new Error("Erreur API: " + resp.status);
-  return await resp.json();
-}
-
-function parseDate(sncfDateStr) {
+// Parse la date SNCF "YYYYMMDDTHHMMSS" en Date JS
+function parseSNCFDate(sncfDateStr) {
   if (!sncfDateStr) return null;
-  const year = parseInt(sncfDateStr.substr(0,4));
-  const month = parseInt(sncfDateStr.substr(4,2))-1;
-  const day = parseInt(sncfDateStr.substr(6,2));
-  const hour = parseInt(sncfDateStr.substr(9,2));
-  const min = parseInt(sncfDateStr.substr(11,2));
-  return new Date(year, month, day, hour, min);
+  const datePart = sncfDateStr.substr(0,8);
+  const timePart = sncfDateStr.substr(9,6);
+  const year = parseInt(datePart.substr(0,4),10);
+  const month = parseInt(datePart.substr(4,2),10)-1;
+  const day = parseInt(datePart.substr(6,2),10);
+  const hour = parseInt(timePart.substr(0,2),10);
+  const minute = parseInt(timePart.substr(2,2),10);
+  const second = parseInt(timePart.substr(4,2),10);
+  return new Date(year, month, day, hour, minute, second);
 }
 
+// Format HH:MM
 function formatTime(date) {
-  return date.toLocaleTimeString('fr-FR', {hour: '2-digit', minute: '2-digit'});
+  if (!date) return 'N/A';
+  return date.toLocaleTimeString('fr-FR', {hour:'2-digit', minute:'2-digit'});
 }
 
-async function getVehicleJourney(vehicle_journey_id) {
-  const url = `https://api.sncf.com/v1/coverage/sncf/vehicle_journeys/${vehicle_journey_id}`;
-  const data = await fetchAPI(url);
-  return data.vehicle_journeys[0];
-}
-
-async function loadTrains() {
+// Date du jour minuit au format SNCF
+function getTodayDatetime() {
   const now = new Date();
-  const dateStr = `${now.getFullYear()}${String(now.getMonth()+1).padStart(2,'0')}${String(now.getDate()).padStart(2,'0')}T000000`;
+  const y = now.getFullYear();
+  const m = String(now.getMonth()+1).padStart(2,'0');
+  const d = String(now.getDate()).padStart(2,'0');
+  return `${y}${m}${d}T000000`;
+}
 
-  const stopArea = 'stop_area:SNCF:82001000'; // Luxembourg
-  const baseUrl = `https://api.sncf.com/v1/coverage/sncf/stop_areas/${stopArea}/departures?datetime=${dateStr}&duration=86400&count=100`;
-
-  const data = await fetchAPI(baseUrl);
-  const departures = data.departures || [];
-
-  const allowedRoutes = ['C40+', 'C50', 'C50+'];
-  const filtered = departures.filter(dep => dep.route && allowedRoutes.includes(dep.route.name));
-
-  const trainList = document.getElementById('trainList');
-  trainList.innerHTML = '';
-
-  for (const dep of filtered) {
-    const info = dep.display_informations || {};
-    const vj = await getVehicleJourney(info.vehicle_journey.id);
-    const stops = vj.stop_times;
-
-    const originStop = stops[0];
-    const destStop = stops[stops.length - 1];
-
-    const trainNumber = info.headsign || '???';
-    const origin = originStop.stop_point.name || 'Inconnu';
-    const destination = destStop.stop_point.name || 'Inconnu';
-
-    const departureDate = parseDate(originStop.departure_time);
-    const arrivalDate = parseDate(destStop.arrival_time);
-
-    const card = document.createElement('div');
-    card.className = 'train-card';
-    card.innerHTML = `
-      <h3>Train ${trainNumber}</h3>
-      <p>${origin} ➔ ${destination}</p>
-      <p>Départ : ${formatTime(departureDate)}</p>
-      <p>Arrivée : ${formatTime(arrivalDate)}</p>
-    `;
-    card.addEventListener('click', () => {
-      card.classList.toggle('selected');
+async function fetchTrains(url) {
+  try {
+    const resp = await fetch(url, {
+      headers: { 'Authorization': 'Basic ' + btoa(apiKey + ':') }
     });
-    trainList.appendChild(card);
+    if(!resp.ok) throw new Error(`Erreur API: ${resp.status}`);
+    const data = await resp.json();
+    return data.arrivals || data.departures || [];
+  } catch(err) {
+    console.error(err);
+    return [];
   }
 }
 
-loadTrains();
+function filterTrainsByRouteName(trains) {
+  const allowedRoutes = ['C40+', 'C50', 'C50+'];
+  return trains.filter(train => train.route && allowedRoutes.includes(train.route.name));
+}
+
+function createTrainCard(train, isArrival) {
+  const info = train.display_informations || {};
+  const trainNumber = info.headsign || 'N/A';
+  const origin = info.origin || 'Origine inconnue';
+  const destination = info.destination || 'Terminus inconnu';
+
+  const arrivalDate = parseSNCFDate(train.stop_date_time.arrival_date_time);
+  const departureDate = parseSNCFDate(train.stop_date_time.departure_date_time);
+
+  const arrivalText = arrivalDate ? formatTime(arrivalDate) : 'N/A';
+  const departureText = departureDate ? formatTime(departureDate) : 'N/A';
+
+  return `
+    <div class="train-card">
+      <div class="train-number">Train ${trainNumber}</div>
+      <div class="train-info">Origine : <strong>${origin}</strong></div>
+      <div class="train-info">Terminus : <strong>${destination}</strong></div>
+      <div class="train-info">Départ : ${departureText}</div>
+      <div class="train-info">Arrivée : ${arrivalText}</div>
+    </div>
+  `;
+}
+
+(async function(){
+  const datetime = getTodayDatetime();
+  const stopAreaId = 'stop_area:SNCF:82001000'; // Luxembourg
+  const baseUrl = `https://api.sncf.com/v1/coverage/sncf/stop_areas/${stopAreaId}`;
+
+  // Fetch arrivals
+  let arrivals = await fetchTrains(`${baseUrl}/arrivals?datetime=${datetime}&duration=86400&count=100`);
+  arrivals = filterTrainsByRouteName(arrivals);
+  arrivals.sort((a,b) => parseSNCFDate(a.stop_date_time.arrival_date_time) - parseSNCFDate(b.stop_date_time.arrival_date_time));
+
+  const arrivalsContainer = document.getElementById('arrivalsContainer');
+  arrivals.forEach(train => {
+    arrivalsContainer.innerHTML += createTrainCard(train, true);
+  });
+
+  // Fetch departures
+  let departures = await fetchTrains(`${baseUrl}/departures?datetime=${datetime}&duration=86400&count=100`);
+  departures = filterTrainsByRouteName(departures);
+  departures.sort((a,b) => parseSNCFDate(a.stop_date_time.departure_date_time) - parseSNCFDate(b.stop_date_time.departure_date_time));
+
+  const departuresContainer = document.getElementById('departuresContainer');
+  departures.forEach(train => {
+    departuresContainer.innerHTML += createTrainCard(train, false);
+  });
+
+})();
 </script>
 
 </body>
