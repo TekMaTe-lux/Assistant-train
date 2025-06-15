@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8" />
+<title>Sélection Tron des trains</title>
+<style>
+  body {
+    background: #101828;
+    font-family: 'Orbitron', monospace;
+    color: #00ffff;
+    padding: 20px;
+  }
+  h1 {
+    text-align: center;
+    color: #00ffff;
+    text-shadow: 0 0 15px cyan;
+  }
+  .train-container {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 15px;
+  }
+  .train-card {
+    background: #001122;
+    border: 2px solid cyan;
+    padding: 20px;
+    border-radius: 15px;
+    box-shadow: 0 0 20px cyan;
+    cursor: pointer;
+    width: 150px;
+    text-align: center;
+    transition: all 0.3s ease;
+  }
+  .train-card:hover {
+    transform: scale(1.1);
+    box-shadow: 0 0 30px lime;
+  }
+  .selected {
+    border: 2px solid lime;
+    box-shadow: 0 0 30px lime;
+  }
+  .selection-zone {
+    margin-top: 30px;
+    padding: 20px;
+    border: 2px dashed lime;
+  }
+  button {
+    padding: 10px 20px;
+    font-size: 1.2em;
+    margin-top: 20px;
+    background: cyan;
+    color: black;
+    border: none;
+    border-radius: 10px;
+    cursor: pointer;
+  }
+</style>
+</head>
+<body>
+
+<h1>Sélectionnez vos bétaillères</h1>
+
+<div class="train-container" id="trainContainer"></div>
+
+<div class="selection-zone">
+  <h2>Votre sélection :</h2>
+  <div id="selectedTrains"></div>
+  <button onclick="validerSelection()">Valider la sélection</button>
+</div>
+
+<script>
+const apiKey = '242fac11-6d98-45fb-93df-28174d362447';
+
+// Fonctions de formatage date
+function parseSNCFDate(sncfDateStr) {
+  if (!sncfDateStr) return null;
+  const datePart = sncfDateStr.substr(0,8);
+  const timePart = sncfDateStr.substr(9,6);
+  const year = parseInt(datePart.substr(0,4),10);
+  const month = parseInt(datePart.substr(4,2),10)-1;
+  const day = parseInt(datePart.substr(6,2),10);
+  const hour = parseInt(timePart.substr(0,2),10);
+  const minute = parseInt(timePart.substr(2,2),10);
+  const second = parseInt(timePart.substr(4,2),10);
+  return new Date(year, month, day, hour, minute, second);
+}
+function formatTime(date) {
+  if (!date) return 'N/A';
+  return date.toLocaleTimeString('fr-FR', {hour:'2-digit', minute:'2-digit'});
+}
+function getTodayDatetime() {
+  const now = new Date();
+  const y = now.getFullYear();
+  const m = String(now.getMonth()+1).padStart(2,'0');
+  const d = String(now.getDate()).padStart(2,'0');
+  return `${y}${m}${d}T000000`;
+}
+
+async function fetchTrains(url) {
+  try {
+    const resp = await fetch(url, {
+      headers: { 'Authorization': 'Basic ' + btoa(apiKey + ':') }
+    });
+    if(!resp.ok) throw new Error(`Erreur API: ${resp.status}`);
+    const data = await resp.json();
+    return data.arrivals || data.departures || [];
+  } catch(err) {
+    console.error(err);
+    return [];
+  }
+}
+
+function filterTrains(trains) {
+  const allowedRoutes = ['C40+', 'C50', 'C50+'];
+  return trains.filter(train => train.route && allowedRoutes.includes(train.route.name));
+}
+
+async function loadTrains() {
+  const datetime = getTodayDatetime();
+  const stopAreaId = 'stop_area:SNCF:82001000';
+  const baseUrl = `https://api.sncf.com/v1/coverage/sncf/stop_areas/${stopAreaId}`;
+
+  let arrivals = await fetchTrains(`${baseUrl}/arrivals?datetime=${datetime}&duration=86400&count=100`);
+  arrivals = filterTrains(arrivals);
+
+  let departures = await fetchTrains(`${baseUrl}/departures?datetime=${datetime}&duration=86400&count=100`);
+  departures = filterTrains(departures);
+
+  const allTrains = arrivals.concat(departures);
+
+  afficherCartes(allTrains);
+}
+
+function afficherCartes(trains) {
+  const container = document.getElementById("trainContainer");
+  trains.sort((a,b)=>{
+    const dA = parseSNCFDate(a.stop_date_time.departure_date_time);
+    const dB = parseSNCFDate(b.stop_date_time.departure_date_time);
+    return dA - dB;
+  });
+
+  trains.forEach(train => {
+    const info = train.display_informations || {};
+    const trainNumber = info.headsign || 'Inconnu';
+    const date = parseSNCFDate(train.stop_date_time.departure_date_time);
+    const timeStr = formatTime(date);
+
+    const div = document.createElement('div');
+    div.className = 'train-card';
+    div.dataset.trainNumber = trainNumber;
+    div.innerHTML = `<h3>${trainNumber}</h3><p>${timeStr}</p>`;
+
+    div.addEventListener('click', () => {
+      div.classList.toggle('selected');
+      majSelection();
+    });
+
+    container.appendChild(div);
+  });
+}
+
+function majSelection() {
+  const selected = document.querySelectorAll('.train-card.selected');
+  const zone = document.getElementById("selectedTrains");
+  zone.innerHTML = '';
+  selected.forEach(el => {
+    const clone = el.cloneNode(true);
+    zone.appendChild(clone);
+  });
+}
+
+function validerSelection() {
+  const selected = document.querySelectorAll('.train-card.selected');
+  const trains = Array.from(selected).map(el => el.dataset.trainNumber);
+  alert("Trains sélectionnés : " + trains.join(', '));
+  // Ici tu pourras envoyer la liste vers ton analyse
+}
+
+loadTrains();
+</script>
+
+</body>
+</html>
