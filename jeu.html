@@ -3,323 +3,344 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Train Bétail - Jeu Snake amélioré</title>
+<title>Train Bétail - Jeu</title>
 <style>
   body {
-    background-color: #000;
+    background: black;
     color: #0ff;
     font-family: 'Orbitron', monospace;
     display: flex;
     flex-direction: column;
     align-items: center;
     margin: 0; padding: 0;
-    user-select: none;
   }
-  h1 {
+  canvas {
+    background: #111;
     margin-top: 20px;
+    border: 2px solid #0ff;
+    box-shadow: 0 0 20px #0ff99;
   }
-  #gameCanvas {
-    background-color: #111;
-    border: 3px solid #0ff;
-    margin-top: 20px;
-    display: block;
-  }
-  #info {
-    margin-top: 15px;
-    font-size: 18px;
-    text-align: center;
-    max-width: 400px;
-  }
-  #scoreDisplay {
+  #score {
+    font-size: 1.2em;
     margin-top: 10px;
-    font-size: 24px;
-    font-weight: bold;
-    color: yellow;
-  }
-  #gameOverOverlay {
-    position: fixed;
-    top:0; left:0; right:0; bottom:0;
-    background: rgba(0,0,0,0.9);
-    color: #f33;
-    display: flex;
-    flex-direction: column;
-    justify-content: center;
-    align-items: center;
-    font-family: 'Orbitron', monospace;
-    font-size: 32px;
-    z-index: 1000;
-    visibility: hidden;
-  }
-  #gameOverOverlay button {
-    margin-top: 20px;
-    font-size: 20px;
-    padding: 10px 20px;
-    background: #0ff;
-    border: none;
-    color: #000;
-    cursor: pointer;
-    border-radius: 5px;
-    font-weight: bold;
-  }
-  #gameOverOverlay button:hover {
-    background: #0cc;
   }
 </style>
 </head>
 <body>
 
-<h1>Train Bétail - Évite les suppressions !</h1>
-<canvas id="gameCanvas" width="400" height="400"></canvas>
-<div id="info">
-  Utilise <b>flèches</b> pour tourner.<br>
-  Mange le <span style="color: yellow;">bétail jaune</span> pour grandir.<br>
-  Évite les <span style="color: red;">cases rouges (suppression)</span>.<br>
-  Les <span style="color: orange;">cases oranges</span> ralentissent ou accélèrent le train pendant 2s.<br>
-  La vitesse augmente progressivement avec le temps.<br>
-</div>
-<div id="scoreDisplay">Score : 0</div>
-
-<div id="gameOverOverlay">
-  <div id="gameOverText"></div>
-  <button id="restartBtn">Recommencer</button>
-</div>
+<h1>Train Bétail - Évite les suppressions et traversées de vaches !</h1>
+<canvas id="game" width="400" height="400"></canvas>
+<div id="score">Score: 0</div>
 
 <script>
 (() => {
-  const canvas = document.getElementById("gameCanvas");
-  const ctx = canvas.getContext("2d");
-
-  const scoreDisplay = document.getElementById("scoreDisplay");
-  const gameOverOverlay = document.getElementById("gameOverOverlay");
-  const gameOverText = document.getElementById("gameOverText");
-  const restartBtn = document.getElementById("restartBtn");
-
+  const canvas = document.getElementById('game');
+  const ctx = canvas.getContext('2d');
   const gridSize = 20;
-  const cols = canvas.width / gridSize;
-  const rows = canvas.height / gridSize;
+  const tileCount = canvas.width / gridSize; // 20x20 grille
 
-  const colorTrainHead = "#0ff";
-  const colorTrainBody = "#088";
-  const colorSuppression = "#f33";
-  const colorAcceleration = "#f90";
-  const colorBetail = "#ff0";
+  let train = [{x:10, y:10}]; // tête au centre
+  let direction = 'right';
+  let pendingDirection = null;
+  let vitesseTrain = 10; // frames par seconde
+  let vitesseActuelle = vitesseTrain;
+  let vitesseBonus = 0;
+  let vitesseMalus = 0;
 
-  let train = [{ x: Math.floor(cols/2), y: Math.floor(rows/2) }];
-  let direction = { x: 0, y: -1 }; // initial vers le haut
-  let nextDirection = direction;
+  let betail = {x:5, y:5};
+  let caseOrange = null; // accélération ou ralentissement temporaire
+  let orangeTimer = 0;
 
-  let speed = 300;
-  let baseSpeed = 300;
-  let speedModifier = 0; // en ms, ajouté ou retiré temporairement
-  let speedEffectTimeout = null;
+  let suppressions = []; // cases rouges à éviter (statique)
+  // Exemples de suppressions fixes (à changer)
+  suppressions.push({x:15, y:10});
+  suppressions.push({x:3, y:12});
+  suppressions.push({x:17, y:5});
 
-  let betail = null; // case jaune (bétail)
-  let suppressions = [];
-  let oranges = [];
+  let traverses = []; // traversées de vaches violettes
 
   let score = 0;
+  let gameOver = false;
 
-  let gameRunning = true;
-  let speedIncreaseTimeout;
-
-  function randomFreePosition() {
-    let pos;
-    do {
-      pos = { x: Math.floor(Math.random() * cols), y: Math.floor(Math.random() * rows) };
-    } while (
-      isOnTrain(pos) ||
-      isOnSuppression(pos) ||
-      isOnOrange(pos) ||
-      (betail && betail.x === pos.x && betail.y === pos.y)
-    );
-    return pos;
-  }
-
-  function isOnTrain(pos) {
-    return train.some(t => t.x === pos.x && t.y === pos.y);
-  }
-
-  function isOnSuppression(pos) {
-    return suppressions.some(p => p.x === pos.x && p.y === pos.y);
-  }
-
-  function isOnOrange(pos) {
-    return oranges.some(p => p.x === pos.x && p.y === pos.y);
-  }
-
-  function placePerturbations() {
-    suppressions = [];
-    for(let i = 0; i < 8; i++) {
-      suppressions.push(randomFreePosition());
+  function placeBetail() {
+    while(true) {
+      let x = Math.floor(Math.random() * tileCount);
+      let y = Math.floor(Math.random() * tileCount);
+      if (!train.some(t => t.x === x && t.y === y) &&
+          !suppressions.some(s => s.x === x && s.y === y) &&
+          !traverses.some(tr => tr.cells.some(c => c.x === x && c.y === y))) {
+        betail = {x, y};
+        break;
+      }
     }
-    oranges = [];
-    for(let i = 0; i < 5; i++) {
-      oranges.push(randomFreePosition());
+  }
+
+  function placeOrange() {
+    while(true) {
+      let x = Math.floor(Math.random() * tileCount);
+      let y = Math.floor(Math.random() * tileCount);
+      if (!train.some(t => t.x === x && t.y === y) &&
+          !suppressions.some(s => s.x === x && s.y === y) &&
+          !(betail.x === x && betail.y === y) &&
+          !traverses.some(tr => tr.cells.some(c => c.x === x && c.y === y))) {
+        caseOrange = {x, y};
+        break;
+      }
     }
-    betail = randomFreePosition();
+  }
+
+  // Génère une traversée de 3 vaches violet
+  // direction 'h' = horizontale, 'v' = verticale
+  // vitesse en frames (plus bas = plus rapide)
+  function addTraverse() {
+    let dir = Math.random() < 0.5 ? 'h' : 'v';
+    let speed = Math.floor(Math.random() * 5) + 3; // 3 à 7 frames par déplacement
+    let start;
+    let cells = [];
+
+    if (dir === 'h') {
+      // horizontale : ligne de 3 cases, départ gauche ou droite
+      let y = Math.floor(Math.random() * (tileCount - 2)) + 1; // pas tout en bordure
+      let fromLeft = Math.random() < 0.5;
+      for (let i=0; i<3; i++) {
+        cells.push({x: fromLeft ? -i : tileCount + i, y});
+      }
+      start = fromLeft ? 1 : -1;
+      traverses.push({dir, speed, counter: 0, cells, movingForward: fromLeft});
+    } else {
+      // verticale : ligne de 3 cases, départ haut ou bas
+      let x = Math.floor(Math.random() * (tileCount - 2)) + 1;
+      let fromTop = Math.random() < 0.5;
+      for (let i=0; i<3; i++) {
+        cells.push({x, y: fromTop ? -i : tileCount + i});
+      }
+      start = fromTop ? 1 : -1;
+      traverses.push({dir, speed, counter: 0, cells, movingForward: fromTop});
+    }
+  }
+
+  // Déplace toutes les traversées selon leur vitesse et sens
+  function moveTraverses() {
+    traverses.forEach(tr => {
+      tr.counter++;
+      if (tr.counter >= tr.speed) {
+        tr.counter = 0;
+        if (tr.dir === 'h') {
+          // horizontal, déplace x selon movingForward
+          tr.cells = tr.cells.map(c => ({
+            x: tr.movingForward ? c.x + 1 : c.x - 1,
+            y: c.y
+          }));
+          // Si toute la ligne est sortie, on supprime
+          if (tr.movingForward && tr.cells[0].x > tileCount) {
+            traverses.splice(traverses.indexOf(tr),1);
+          } else if (!tr.movingForward && tr.cells[0].x < -3) {
+            traverses.splice(traverses.indexOf(tr),1);
+          }
+        } else {
+          // vertical, déplace y selon movingForward
+          tr.cells = tr.cells.map(c => ({
+            x: c.x,
+            y: tr.movingForward ? c.y + 1 : c.y - 1
+          }));
+          if (tr.movingForward && tr.cells[0].y > tileCount) {
+            traverses.splice(traverses.indexOf(tr),1);
+          } else if (!tr.movingForward && tr.cells[0].y < -3) {
+            traverses.splice(traverses.indexOf(tr),1);
+          }
+        }
+      }
+    });
   }
 
   function draw() {
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-    // Grille
-    ctx.strokeStyle = "#222";
-    for(let x = 0; x <= cols; x++) {
+    // grille
+    ctx.strokeStyle = '#222';
+    for(let i=0; i <= tileCount; i++) {
       ctx.beginPath();
-      ctx.moveTo(x * gridSize, 0);
-      ctx.lineTo(x * gridSize, canvas.height);
+      ctx.moveTo(i*gridSize,0);
+      ctx.lineTo(i*gridSize,canvas.height);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(0,i*gridSize);
+      ctx.lineTo(canvas.width,i*gridSize);
       ctx.stroke();
     }
-    for(let y = 0; y <= rows; y++) {
-      ctx.beginPath();
-      ctx.moveTo(0, y * gridSize);
-      ctx.lineTo(canvas.width, y * gridSize);
-      ctx.stroke();
-    }
 
-    // Suppressions rouges
-    suppressions.forEach(p => {
-      ctx.fillStyle = colorSuppression;
-      ctx.fillRect(p.x * gridSize + 2, p.y * gridSize + 2, gridSize - 4, gridSize - 4);
+    // train (vert)
+    ctx.fillStyle = '#0f0';
+    train.forEach((part, i) => {
+      ctx.fillRect(part.x*gridSize, part.y*gridSize, gridSize, gridSize);
     });
 
-    // Oranges (bonus/malus)
-    oranges.forEach(p => {
-      ctx.fillStyle = colorAcceleration;
-      ctx.fillRect(p.x * gridSize + 4, p.y * gridSize + 4, gridSize - 8, gridSize - 8);
-    });
+    // bétail jaune
+    ctx.fillStyle = 'yellow';
+    ctx.fillRect(betail.x*gridSize, betail.y*gridSize, gridSize, gridSize);
 
-    // Bétail jaune
-    if (betail) {
-      ctx.fillStyle = colorBetail;
-      ctx.beginPath();
-      const cx = betail.x * gridSize + gridSize/2;
-      const cy = betail.y * gridSize + gridSize/2;
-      const radius = gridSize/3;
-      ctx.arc(cx, cy, radius, 0, 2*Math.PI);
-      ctx.fill();
+    // case orange (bonus/malus)
+    if (caseOrange) {
+      ctx.fillStyle = 'orange';
+      ctx.fillRect(caseOrange.x*gridSize, caseOrange.y*gridSize, gridSize, gridSize);
     }
 
-    // Train
-    train.forEach((pos, i) => {
-      ctx.fillStyle = (i === 0) ? colorTrainHead : colorTrainBody;
-      ctx.fillRect(pos.x * gridSize + 1, pos.y * gridSize + 1, gridSize - 2, gridSize - 2);
+    // suppressions rouges
+    ctx.fillStyle = 'red';
+    suppressions.forEach(s => {
+      ctx.fillRect(s.x*gridSize, s.y*gridSize, gridSize, gridSize);
+    });
+
+    // traversées violettes
+    ctx.fillStyle = 'purple';
+    traverses.forEach(tr => {
+      tr.cells.forEach(c => {
+        if (c.x >= 0 && c.x < tileCount && c.y >= 0 && c.y < tileCount)
+          ctx.fillRect(c.x*gridSize, c.y*gridSize, gridSize, gridSize);
+      });
     });
   }
 
-  function increaseSpeedOverTime() {
-    if (baseSpeed > 80) {
-      baseSpeed -= 10; // accélère le jeu
-    }
-    speedIncreaseTimeout = setTimeout(() => {
-      increaseSpeedOverTime();
-    }, 15000);
+  function gameOverFunc() {
+    gameOver = true;
+    alert("Collision avec une suppression ou une traversée de vaches ! Jeu terminé.\nScore: " + score);
+    document.location.reload();
   }
 
-  function applySpeedEffect(modifier) {
-    speedModifier = modifier;
-    if(speedEffectTimeout) clearTimeout(speedEffectTimeout);
-    speedEffectTimeout = setTimeout(() => {
-      speedModifier = 0;
-    }, 2000);
-  }
+  function update() {
+    if (gameOver) return;
 
-  function gameLoop() {
-    if (!gameRunning) return;
-
-    if ((nextDirection.x !== -direction.x || nextDirection.y !== -direction.y)) {
-      direction = nextDirection;
+    // Gestion de la direction pour éviter demi-tour
+    if (pendingDirection) {
+      if ( (pendingDirection === 'up' && direction !== 'down') ||
+           (pendingDirection === 'down' && direction !== 'up') ||
+           (pendingDirection === 'left' && direction !== 'right') ||
+           (pendingDirection === 'right' && direction !== 'left') ) {
+        direction = pendingDirection;
+      }
+      pendingDirection = null;
     }
 
-    const head = { x: train[0].x + direction.x, y: train[0].y + direction.y };
+    // déplace la tête selon direction
+    let head = {...train[0]};
+    switch(direction) {
+      case 'up': head.y--; break;
+      case 'down': head.y++; break;
+      case 'left': head.x--; break;
+      case 'right': head.x++; break;
+    }
 
-    if (head.x < 0) head.x = cols - 1;
-    else if (head.x >= cols) head.x = 0;
-    if (head.y < 0) head.y = rows - 1;
-    else if (head.y >= rows) head.y = 0;
+    // rebond grille ?
+    if (head.x < 0) head.x = tileCount-1;
+    else if (head.x >= tileCount) head.x = 0;
+    if (head.y < 0) head.y = tileCount-1;
+    else if (head.y >= tileCount) head.y = 0;
 
-    if (train.slice(0, -1).some(t => t.x === head.x && t.y === head.y)) {
-      gameOver("Collision avec votre propre train !");
+    // collision avec le corps
+    if (train.some(seg => seg.x === head.x && seg.y === head.y)) {
+      gameOverFunc();
       return;
     }
 
-    if (isOnSuppression(head)) {
-      gameOver("Votre train a rencontré une suppression !");
+    // collision avec suppression
+    if (suppressions.some(s => s.x === head.x && s.y === head.y)) {
+      gameOverFunc();
       return;
+    }
+
+    // collision avec traversée violette
+    for(let tr of traverses) {
+      if (tr.cells.some(c => c.x === head.x && c.y === head.y)) {
+        gameOverFunc();
+        return;
+      }
     }
 
     train.unshift(head);
 
-    if (betail && head.x === betail.x && head.y === betail.y) {
+    // ramasse betail
+    if (head.x === betail.x && head.y === betail.y) {
       score++;
-      scoreDisplay.textContent = "Score : " + score;
-      betail = randomFreePosition();
+      document.getElementById('score').textContent = "Score: " + score;
+      placeBetail();
+
+      // ajoute un nouveau segment (le train grandit)
     } else {
       train.pop();
     }
 
-    if (isOnOrange(head)) {
-      if (Math.random() < 0.5) {
-        applySpeedEffect(-100);
-      } else {
-        applySpeedEffect(150);
+    // gère l'orange (bonus/malus)
+    if (caseOrange) {
+      if (head.x === caseOrange.x && head.y === caseOrange.y) {
+        orangeTimer = 120; // 2 secondes à 60fps
+        // bonus ou malus aléatoire
+        if (Math.random() < 0.5) {
+          vitesseBonus = 5;
+          vitesseMalus = 0;
+        } else {
+          vitesseMalus = 5;
+          vitesseBonus = 0;
+        }
+        caseOrange = null;
+        placeOrange();
       }
-      oranges = oranges.filter(p => !(p.x === head.x && p.y === head.y));
-      oranges.push(randomFreePosition());
     }
 
-    speed = Math.max(80, baseSpeed + speedModifier);
+    if (orangeTimer > 0) {
+      orangeTimer--;
+      if (vitesseBonus > 0) {
+        vitesseActuelle = vitesseTrain + 5;
+      } else if (vitesseMalus > 0) {
+        vitesseActuelle = vitesseTrain - 5 > 1 ? vitesseTrain - 5 : 1;
+      }
+    } else {
+      vitesseActuelle = vitesseTrain;
+      vitesseBonus = 0;
+      vitesseMalus = 0;
+    }
 
-    draw();
-    setTimeout(gameLoop, speed);
-  }
+    // avance traversées de vaches
+    moveTraverses();
 
-  function resetGame() {
-    train = [{ x: Math.floor(cols / 2), y: Math.floor(rows / 2) }];
-    direction = { x: 0, y: -1 };
-    nextDirection = direction;
-    baseSpeed = 300;
-    speedModifier = 0;
-    score = 0;
-    scoreDisplay.textContent = "Score : " + score;
-    gameRunning = true;
-    placePerturbations();
-    draw();
-    clearTimeout(speedIncreaseTimeout);
-    increaseSpeedOverTime();
-    gameOverOverlay.style.visibility = "hidden";
-    gameLoop();
-  }
-
-  function gameOver(message) {
-    gameRunning = false;
-    clearTimeout(speedIncreaseTimeout);
-    gameOverText.textContent = message + "\nScore final : " + score;
-    gameOverOverlay.style.visibility = "visible";
+    // aléatoire : création de traversée avec probabilité 1/150 par frame (ajuste si besoin)
+    if (Math.random() < 1/150) {
+      addTraverse();
+    }
   }
 
   window.addEventListener("keydown", e => {
     switch(e.key) {
-      case "ArrowUp":
-        nextDirection = { x: 0, y: -1 };
+      case 'ArrowUp':
+        if (direction !== 'down') pendingDirection = 'up';
         break;
-      case "ArrowDown":
-        nextDirection = { x: 0, y: 1 };
+      case 'ArrowDown':
+        if (direction !== 'up') pendingDirection = 'down';
         break;
-      case "ArrowLeft":
-        nextDirection = { x: -1, y: 0 };
+      case 'ArrowLeft':
+        if (direction !== 'right') pendingDirection = 'left';
         break;
-      case "ArrowRight":
-        nextDirection = { x: 1, y: 0 };
+      case 'ArrowRight':
+        if (direction !== 'left') pendingDirection = 'right';
         break;
     }
   });
 
-  restartBtn.addEventListener("click", () => {
-    resetGame();
-  });
+  placeBetail();
+  placeOrange();
 
-  resetGame();
+  let lastTime = 0;
+  function gameLoop(time=0) {
+    if (!lastTime) lastTime = time;
+    const delta = time - lastTime;
+    if (delta > 1000 / vitesseActuelle) {
+      update();
+      draw();
+      lastTime = time;
+    }
+    requestAnimationFrame(gameLoop);
+  }
+  gameLoop();
+
 })();
 </script>
 
