@@ -3,12 +3,11 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Jeu Train Bétail - Pac-Man Style</title>
+<title>Train Snake - Jeu Bétail & Perturbations</title>
 <style>
   @import url('https://fonts.googleapis.com/css2?family=Orbitron&display=swap');
-
   body {
-    background-color: #000010;
+    background: #000010;
     color: #0ff;
     font-family: 'Orbitron', monospace;
     display: flex;
@@ -16,79 +15,67 @@
     align-items: center;
     margin: 0; padding: 0;
     height: 100vh;
-    overflow: hidden;
+    user-select: none;
   }
-
   h1 {
     margin-top: 10px;
-    text-shadow: 0 0 10px #0ff;
+    text-shadow: 0 0 12px #0ff;
   }
-
   #game-container {
     margin-top: 20px;
     position: relative;
   }
-
   #grid {
     display: grid;
-    grid-template-columns: repeat(14, 30px);
-    grid-template-rows: repeat(10, 30px);
-    gap: 3px;
+    grid-template-columns: repeat(20, 25px);
+    grid-template-rows: repeat(20, 25px);
+    gap: 2px;
     background: #111122;
     padding: 10px;
-    border-radius: 10px;
+    border-radius: 12px;
     box-shadow: 0 0 20px #0ff;
   }
-
   .cell {
-    width: 30px;
-    height: 30px;
+    width: 25px;
+    height: 25px;
     background: #001122;
     border-radius: 6px;
     box-shadow: inset 0 0 5px #0ff33;
     position: relative;
   }
-
-  /* Types de cases */
-  .train {
+  .train-head {
     background: linear-gradient(135deg, #00ffff, #0066ff);
-    box-shadow: 0 0 8px #00ffff;
+    box-shadow: 0 0 10px #00ffff;
+    border-radius: 8px 8px 8px 8px;
+    z-index: 10;
   }
-
+  .train-body {
+    background: #0099ff;
+    box-shadow: 0 0 6px #00ccff;
+  }
   .betail {
     background: #ffff33;
     box-shadow: 0 0 10px #ffff00;
   }
-
   .suppression {
     background: #ff2222;
     box-shadow: 0 0 12px #ff0000;
   }
-
   .retard {
     background: #ff7700;
     box-shadow: 0 0 10px #ff6600;
   }
-
-  .travaux {
-    background: #444444;
-    box-shadow: inset 0 0 6px #222222;
-  }
-
-  /* UI */
   #info {
     margin-top: 15px;
     text-align: center;
     font-size: 1.2em;
-    min-width: 300px;
+    min-width: 320px;
   }
-
-  #score, #timer {
+  #score, #speed {
     margin: 0 15px;
     display: inline-block;
     min-width: 120px;
   }
-
   #message {
     margin-top: 15px;
     font-size: 1.3em;
@@ -96,7 +83,6 @@
     text-shadow: 0 0 10px #0ff;
     min-height: 30px;
   }
-
   button {
     margin-top: 20px;
     background: #001122;
@@ -109,35 +95,32 @@
     cursor: pointer;
     transition: 0.3s;
   }
-
   button:hover {
     background: #003344;
     box-shadow: 0 0 15px #0ff;
   }
-
-  /* Responsive mobile */
   @media (max-width: 480px) {
     #grid {
-      grid-template-columns: repeat(14, 22px);
-      grid-template-rows: repeat(10, 22px);
-      gap: 2px;
+      grid-template-columns: repeat(20, 18px);
+      grid-template-rows: repeat(20, 18px);
+      gap: 1px;
       padding: 5px;
     }
     .cell {
-      width: 22px;
-      height: 22px;
+      width: 18px;
+      height: 18px;
       border-radius: 4px;
     }
     #info {
       font-size: 1em;
-      min-width: 250px;
+      min-width: 280px;
     }
   }
 </style>
 </head>
 <body>
 
-<h1>Train Bétail - Pac-Man</h1>
+<h1>Train Snake - Bétail & Perturbations</h1>
 
 <div id="game-container">
   <div id="grid"></div>
@@ -145,53 +128,48 @@
 
 <div id="info">
   <span id="score">Bétail ramassé : 0</span>
-  <span id="timer">Temps restant : 60s</span>
+  <span id="speed">Vitesse : 5</span>
   <div id="message"></div>
 </div>
 
 <button id="startBtn">Démarrer la partie</button>
 
 <script>
-  // Configuration
-  const ROWS = 10;
-  const COLS = 14;
-  const TOTAL_BETAIL = 15; // nombre de wagons à ramasser
-  const TOTAL_SUPPRESSION = 12;
-  const TOTAL_RETARD = 8;
-  const TOTAL_TRAVAUX = 8;
-  const TIME_LIMIT = 60; // en secondes
+  const ROWS = 20;
+  const COLS = 20;
 
   const gridElem = document.getElementById('grid');
   const scoreElem = document.getElementById('score');
-  const timerElem = document.getElementById('timer');
+  const speedElem = document.getElementById('speed');
   const messageElem = document.getElementById('message');
   const startBtn = document.getElementById('startBtn');
 
-  let grid = [];
-  let trainPos = {r: 9, c: 0}; // départ bas-gauche (Nancy)
-  let score = 0;
-  let timer = TIME_LIMIT;
-  let gameInterval = null;
-  let timerInterval = null;
-  let gameRunning = false;
-
-  // Types de cellules
+  // Cell types
   const CELL_TYPES = {
     EMPTY: 'empty',
-    TRAIN: 'train',
+    TRAIN_HEAD: 'train-head',
+    TRAIN_BODY: 'train-body',
     BETAIL: 'betail',
     SUPPRESSION: 'suppression',
-    RETARD: 'retard',
-    TRAVAUX: 'travaux'
+    RETARD: 'retard'
   };
 
-  // Création de la grille vide
+  let grid = [];
+  let train = []; // array of cells {r,c}
+  let direction = {r: 0, c: 1}; // start moving right
+  let nextDirection = null;
+  let score = 0;
+  let speed = 5; // ticks per second
+  let gameInterval = null;
+  let gameRunning = false;
+
+  // Création grille vide
   function createGrid() {
     gridElem.innerHTML = '';
     grid = [];
-    for (let r=0; r<ROWS; r++) {
+    for(let r=0; r<ROWS; r++){
       const row = [];
-      for (let c=0; c<COLS; c++) {
+      for(let c=0; c<COLS; c++){
         const cell = document.createElement('div');
         cell.classList.add('cell');
         gridElem.appendChild(cell);
@@ -201,139 +179,190 @@
     }
   }
 
-  // Placer un type dans une cellule
-  function setCell(r, c, type) {
+  // Set type cellule
+  function setCell(r,c,type){
     const cell = grid[r][c];
     cell.type = type;
-    cell.elem.className = 'cell'; // reset classes
-    if (type !== CELL_TYPES.EMPTY) {
-      cell.elem.classList.add(type);
-    }
+    cell.elem.className = 'cell';
+    if(type !== CELL_TYPES.EMPTY) cell.elem.classList.add(type);
   }
 
-  // Placement aléatoire sans chevauchement
-  function placeRandom(type, count) {
+  // Placer aléatoirement type donné, sans collision avec train ni autres items
+  function placeRandom(type, count){
     let placed = 0;
-    while (placed < count) {
+    while(placed < count){
       const r = Math.floor(Math.random() * ROWS);
       const c = Math.floor(Math.random() * COLS);
-      if (grid[r][c].type === CELL_TYPES.EMPTY && !(r === trainPos.r && c === trainPos.c)) {
-        setCell(r, c, type);
+      if(grid[r][c].type === CELL_TYPES.EMPTY && !train.some(pos => pos.r === r && pos.c === c)){
+        setCell(r,c,type);
         placed++;
       }
     }
   }
 
-  // Initialisation d'une partie
-  function initGame() {
+  // Initialisation jeu
+  function initGame(){
     createGrid();
     score = 0;
-    timer = TIME_LIMIT;
+    speed = 5;
+    direction = {r: 0, c: 1};
+    nextDirection = null;
     gameRunning = true;
     messageElem.textContent = '';
     scoreElem.textContent = `Bétail ramassé : ${score}`;
-    timerElem.textContent = `Temps restant : ${timer}s`;
+    speedElem.textContent = `Vitesse : ${speed}`;
 
-    // Placer train au départ
-    trainPos = {r: 9, c: 0};
-    setCell(trainPos.r, trainPos.c, CELL_TYPES.TRAIN);
+    // train départ bas-gauche taille 3 vers droite
+    train = [
+      {r: ROWS - 1, c: 0},
+      {r: ROWS - 1, c: 1},
+      {r: ROWS - 1, c: 2},
+    ];
+    train.forEach((pos, i) => {
+      setCell(pos.r, pos.c, i === train.length - 1 ? CELL_TYPES.TRAIN_HEAD : CELL_TYPES.TRAIN_BODY);
+    });
 
-    // Placer éléments
-    placeRandom(CELL_TYPES.BETAIL, TOTAL_BETAIL);
-    placeRandom(CELL_TYPES.SUPPRESSION, TOTAL_SUPPRESSION);
-    placeRandom(CELL_TYPES.RETARD, TOTAL_RETARD);
-    placeRandom(CELL_TYPES.TRAVAUX, TOTAL_TRAVAUX);
+    // Placer wagons bétail
+    placeRandom(CELL_TYPES.BETAIL, 10);
 
-    // Démarrer timer
-    if (timerInterval) clearInterval(timerInterval);
-    timerInterval = setInterval(() => {
-      if (!gameRunning) return;
-      timer--;
-      timerElem.textContent = `Temps restant : ${timer}s`;
-      if (timer <= 0) {
-        endGame(false, "Temps écoulé !");
-      }
-    }, 1000);
+    // Placer suppressions
+    placeRandom(CELL_TYPES.SUPPRESSION, 25);
+
+    // Placer retards
+    placeRandom(CELL_TYPES.RETARD, 15);
+
+    if(gameInterval) clearInterval(gameInterval);
+    gameInterval = setInterval(gameTick, 1000 / speed);
   }
 
-  // Fin de partie
-  function endGame(victoire, msg) {
-    gameRunning = false;
-    messageElem.textContent = msg;
-    if (victoire) {
-      messageElem.style.color = '#0f0';
-      messageElem.style.textShadow = '0 0 15px #0f0';
-    } else {
-      messageElem.style.color = '#f00';
-      messageElem.style.textShadow = '0 0 15px #f00';
+  // Mise à jour vitesse intervalle
+  function updateSpeed(){
+    clearInterval(gameInterval);
+    gameInterval = setInterval(gameTick, 1000 / speed);
+    speedElem.textContent = `Vitesse : ${speed}`;
+  }
+
+  // Tourner à gauche ou droite
+  // direction actuelle : {r,c}
+  // tourner à gauche : newDirection = { -c, r }
+  // tourner à droite : newDirection = { c, -r }
+  function turnLeft(){
+    const {r,c} = direction;
+    direction = {r: -c, c: r};
+  }
+  function turnRight(){
+    const {r,c} = direction;
+    direction = {r: c, c: -r};
+  }
+
+  // Tick du jeu
+  function gameTick(){
+    if(!gameRunning) return;
+
+    // Appliquer direction suivante si définie (gestion input plus fluide)
+    if(nextDirection){
+      direction = nextDirection;
+      nextDirection = null;
     }
-  }
 
-  // Déplacement du train
-  function moveTrain(dr, dc) {
-    if (!gameRunning) return;
-    const nr = trainPos.r + dr;
-    const nc = trainPos.c + dc;
+    const head = train[train.length -1];
+    const newHead = {r: head.r + direction.r, c: head.c + direction.c};
 
-    // Bordures
-    if (nr < 0 || nr >= ROWS || nc < 0 || nc >= COLS) return;
-
-    const nextCell = grid[nr][nc];
-
-    // Cas perturbations
-    if (nextCell.type === CELL_TYPES.SUPPRESSION || nextCell.type === CELL_TYPES.TRAVAUX) {
-      endGame(false, "Perdu : train bloqué sur une suppression ou travaux !");
+    // Vérifier collisions bord
+    if(newHead.r < 0 || newHead.r >= ROWS || newHead.c < 0 || newHead.c >= COLS){
+      endGame("Collision avec bord ! Partie terminée.");
+      return;
+    }
+    // Vérifier collision avec train
+    if(train.some(pos => pos.r === newHead.r && pos.c === newHead.c)){
+      endGame("Collision avec le train ! Partie terminée.");
       return;
     }
 
-    // Gérer retard (ralentissement)
-    if (nextCell.type === CELL_TYPES.RETARD) {
-      // ralentir déplacement : on ignore le déplacement toutes les 2 tentatives
-      if (moveTrain.wait) {
-        moveTrain.wait = false;
-        return;
-      } else {
-        moveTrain.wait = true;
-      }
+    // Vérifier type cellule nouvelle tête
+    const cellType = grid[newHead.r][newHead.c].type;
+
+    if(cellType === CELL_TYPES.SUPPRESSION){
+      endGame("Train supprimé ! Partie terminée.");
+      return;
     }
 
-    // Déplacer train
-    setCell(trainPos.r, trainPos.c, CELL_TYPES.EMPTY);
-    trainPos = {r: nr, c: nc};
+    let grow = false;
 
-    // Ramasser betail ?
-    if (nextCell.type === CELL_TYPES.BETAIL) {
+    if(cellType === CELL_TYPES.BETAIL){
       score++;
-      scoreElem.textContent = `Bétail ramassé : ${score}`;
-      if (score === TOTAL_BETAIL) {
-        endGame(true, "Victoire ! Tous les wagons ramassés.");
+      grow = true;
+      // Placer un nouveau bétail ailleurs
+      placeRandom(CELL_TYPES.BETAIL, 1);
+
+      // Tous les 3 bétails, augmenter vitesse
+      if(score % 3 === 0){
+        speed++;
+        updateSpeed();
       }
     }
 
-    setCell(trainPos.r, trainPos.c, CELL_TYPES.TRAIN);
-  }
-  moveTrain.wait = false;
+    if(cellType === CELL_TYPES.RETARD){
+      // Augmenter vitesse (train accélère)
+      speed++;
+      updateSpeed();
+      // retirer retard de cette case (car train est passé dessus)
+      setCell(newHead.r, newHead.c, CELL_TYPES.EMPTY);
+    }
 
-  // Écoute clavier
-  window.addEventListener('keydown', (e) => {
-    if (!gameRunning) return;
-    switch(e.key) {
-      case 'ArrowUp': moveTrain(-1, 0); break;
-      case 'ArrowDown': moveTrain(1, 0); break;
-      case 'ArrowLeft': moveTrain(0, -1); break;
-      case 'ArrowRight': moveTrain(0, 1); break;
+    // Déplacer train :
+    // Si pas croissance, retirer queue
+    if(!grow){
+      const tail = train.shift();
+      setCell(tail.r, tail.c, CELL_TYPES.EMPTY);
+    }
+
+    // Ajouter nouvelle tête
+    train.push(newHead);
+
+    // Réafficher train
+    train.forEach((pos, i) => {
+      setCell(pos.r, pos.c, i === train.length - 1 ? CELL_TYPES.TRAIN_HEAD : CELL_TYPES.TRAIN_BODY);
+    });
+
+    // Mettre à jour score
+    scoreElem.textContent = `Bétail ramassé : ${score}`;
+  }
+
+  // Fin du jeu
+  function endGame(msg){
+    gameRunning = false;
+    messageElem.textContent = msg + ` Score final: ${score}`;
+    startBtn.style.display = 'inline-block';
+    clearInterval(gameInterval);
+  }
+
+  // Gestion clavier : uniquement tourner à gauche ou droite (flèches gauche/droite)
+  window.addEventListener('keydown', e => {
+    if(!gameRunning) return;
+
+    if(e.key === 'ArrowLeft'){
+      // tourner gauche à partir de la direction actuelle
+      const {r,c} = direction;
+      nextDirection = {r: -c, c: r};
+      e.preventDefault();
+    } else if(e.key === 'ArrowRight'){
+      // tourner droite
+      const {r,c} = direction;
+      nextDirection = {r: c, c: -r};
+      e.preventDefault();
     }
   });
 
   // Bouton démarrer
   startBtn.addEventListener('click', () => {
+    startBtn.style.display = 'none';
     initGame();
-    startBtn.disabled = true;
-    startBtn.textContent = "Partie en cours...";
   });
 
+  // Initialisation grille à l'ouverture
+  createGrid();
 </script>
 
 </body>
 </html>
-
