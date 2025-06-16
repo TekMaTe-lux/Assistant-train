@@ -66,7 +66,7 @@
 <h2>Trains sélectionnés :</h2>
 <div id="selectedTrains"><p>Aucun train sélectionné.</p></div>
 
-<script>
+  <script>
 const apiKey = '242fac11-6d98-45fb-93df-28174d362447';
 
 const gares = [
@@ -75,7 +75,7 @@ const gares = [
   { id: 'stop_area:SNCF:87191007', label: 'Thionville' }
 ];
 
-const gareLuxId = 'stop_area:SNCF:82001000';
+const gareLuxId = 'stop_area:SNCF:82001000'; // Luxembourg
 
 const sensSelect = document.getElementById('sensSelect');
 const gareSelect = document.getElementById('gareSelect');
@@ -161,19 +161,22 @@ async function chargerTrainsDepuisLux(gareId) {
       return direction.toLowerCase().includes(getGareLabelById(gareId).toLowerCase());
     });
   }
-  trains.sort((a,b)=>{
-    const dateA = parseSNCFDate(a.stop_date_time.departure_date_time);
-    const dateB = parseSNCFDate(b.stop_date_time.departure_date_time);
-    return dateA - dateB;
-  });
+
+  trains = trierParDateHoraire(trains);
   afficherCartes(trains);
 }
 
 async function chargerTrainsVersLux(gareId) {
   const datetime = getTodayDatetime();
   let tousLesTrains = [];
+  let garesFiltrees = [];
 
-  let garesFiltrees = gareId === 'tous' ? gares : gares.filter(g => g.id === gareId);
+  if(gareId === 'tous'){
+    garesFiltrees = gares;
+  } else {
+    const g = gares.find(g => g.id === gareId);
+    if(g) garesFiltrees = [g];
+  }
 
   for (const gare of garesFiltrees) {
     const url = `https://api.sncf.com/v1/coverage/sncf/stop_areas/${gare.id}/departures?datetime=${datetime}&duration=86400&count=200`;
@@ -188,12 +191,7 @@ async function chargerTrainsVersLux(gareId) {
     return direction.toLowerCase().includes('luxembourg');
   });
 
-  tousLesTrains.sort((a,b)=>{
-    const dateA = parseSNCFDate(a.stop_date_time.departure_date_time);
-    const dateB = parseSNCFDate(b.stop_date_time.departure_date_time);
-    return dateA - dateB;
-  });
-
+  tousLesTrains = trierParDateHoraire(tousLesTrains);
   afficherCartesVersLux(tousLesTrains);
 }
 
@@ -204,7 +202,9 @@ function getGareLabelById(id) {
 
 async function fetchTrains(url) {
   try {
-    const resp = await fetch(url, { headers: { 'Authorization': 'Basic ' + btoa(apiKey + ':') } });
+    const resp = await fetch(url, {
+      headers: { 'Authorization': 'Basic ' + btoa(apiKey + ':') }
+    });
     if(!resp.ok) throw new Error(`Erreur API: ${resp.status}`);
     const data = await resp.json();
     return data.departures || [];
@@ -214,12 +214,30 @@ async function fetchTrains(url) {
   }
 }
 
+// Tri intelligent aujourd'hui > demain, puis par horaire
+function trierParDateHoraire(trains) {
+  const maintenant = new Date();
+  const aujourdHui = maintenant.getDate();
+  const mois = maintenant.getMonth();
+  const annee = maintenant.getFullYear();
+
+  trains.forEach(train => {
+    const dateObj = parseSNCFDate(train.stop_date_time.departure_date_time);
+    train.dateObj = dateObj;
+    train.isNextDay = !(dateObj.getDate() === aujourdHui && dateObj.getMonth() === mois && dateObj.getFullYear() === annee);
+  });
+
+  trains.sort((a, b) => {
+    if (a.isNextDay !== b.isNextDay) return a.isNextDay ? 1 : -1;
+    return a.dateObj - b.dateObj;
+  });
+
+  return trains;
+}
+
 function afficherCartesVersLux(trains) {
   const container = document.getElementById("trainContainer");
   container.innerHTML = '';
-  container.className = 'train-grid';
-
-  const today = new Date().getDate();
 
   const grouped = {};
   trains.forEach(train => {
@@ -229,8 +247,11 @@ function afficherCartesVersLux(trains) {
       grouped[trainNumber] = { trainNumber, horaires: [] };
     }
     const heureDepart = parseSNCFDate(train.stop_date_time.departure_date_time);
-    const timeDepart = formatTime(heureDepart);
-    grouped[trainNumber].horaires.push({ gare: train.gareDepart, heure: timeDepart, date: heureDepart });
+    grouped[trainNumber].horaires.push({
+      gare: train.gareDepart,
+      heure: formatTime(heureDepart),
+      isNextDay: train.isNextDay
+    });
   });
 
   for(const trainNum in grouped){
@@ -239,12 +260,9 @@ function afficherCartesVersLux(trains) {
     card.className = 'train-card';
     card.dataset.train = trainNum;
 
-    let isNextDay = train.horaires.some(h => h.date.getDate() !== today);
-    if (isNextDay) card.classList.add('next-day');
-
     let html = `<h3>Train ${train.trainNumber}</h3><ul>`;
     train.horaires.forEach(h => {
-      html += `<li>${h.gare} - ${h.heure}</li>`;
+      html += `<li ${h.isNextDay ? 'style="color:#999;"' : ''}>${h.gare} - ${h.heure}</li>`;
     });
     html += '</ul>';
 
@@ -253,18 +271,15 @@ function afficherCartesVersLux(trains) {
       card.classList.toggle('selected');
       mettreAJourSelection();
     });
+
     container.appendChild(card);
   }
-
   document.getElementById('selectedTrains').innerHTML = '';
 }
 
 function afficherCartes(trains) {
   const container = document.getElementById("trainContainer");
   container.innerHTML = '';
-  container.className = 'train-grid';
-
-  const today = new Date().getDate();
 
   if(trains.length === 0){
     container.innerHTML = `<p class="nogare">Aucun train trouvé pour ces critères.</p>`;
@@ -277,25 +292,22 @@ function afficherCartes(trains) {
     card.className = 'train-card';
     card.dataset.train = info.headsign || 'Inconnu';
 
-    const heureDepart = parseSNCFDate(train.stop_date_time.departure_date_time);
-    const depTime = formatTime(heureDepart);
-    if (heureDepart.getDate() !== today) card.classList.add('next-day');
+    const depTime = formatTime(parseSNCFDate(train.stop_date_time.departure_date_time));
+    const isNextDay = train.isNextDay;
 
     let html = `<h3>Train ${info.headsign || '???'}</h3>`;
+    html += `<p ${isNextDay ? 'style="color:#999;"' : ''}><strong>Départ :</strong> ${depTime}</p>`;
     const direction = info.direction || '';
-    if (direction.trim() !== "") {
-      html += `<p><strong>Destination :</strong> ${direction}</p>`;
-    }
-    html += `<p><strong>Départ :</strong> ${depTime}</p>`;
+    if (direction) html += `<p><strong>Destination :</strong> ${direction}</p>`;
 
     card.innerHTML = html;
     card.addEventListener('click', () => {
       card.classList.toggle('selected');
       mettreAJourSelection();
     });
+
     container.appendChild(card);
   });
-
   document.getElementById('selectedTrains').innerHTML = '';
 }
 
@@ -314,6 +326,9 @@ function mettreAJourSelection() {
   container.innerHTML = html;
 }
 </script>
+
+
+  
 
 </body>
 </html>
