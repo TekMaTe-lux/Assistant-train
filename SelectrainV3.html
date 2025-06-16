@@ -228,6 +228,14 @@ function afficherCartesVersLux(trains) {
   const todayMonth = today.getMonth();
   const todayYear = today.getFullYear();
 
+  // Fonction d’ajustement pour bien trier les horaires à cheval sur 2 jours
+  function ajusterHeure(dateHeure, dateReference) {
+    if (dateHeure < dateReference) {
+      return new Date(dateHeure.getTime() + 24 * 60 * 60 * 1000);
+    }
+    return dateHeure;
+  }
+
   // Regrouper trains par numéro
   const grouped = {};
   trains.forEach(train => {
@@ -239,7 +247,6 @@ function afficherCartesVersLux(trains) {
     }
 
     const heureDepart = parseSNCFDate(train.stop_date_time.departure_date_time);
-    // garder gare et date complète pour tri et comparaison
     grouped[trainNumber].horaires.push({ 
       gare: train.gareDepart, 
       date: heureDepart,
@@ -249,26 +256,30 @@ function afficherCartesVersLux(trains) {
 
   // Créer les cartes
   const cartes = Object.values(grouped).map(train => {
-    // Trier horaires par date croissante (ordre chronologique)
-    train.horaires.sort((a,b) => a.date - b.date);
+    // Prendre la première heure brute comme référence pour ajustement
+    const reference = train.horaires[0].date;
 
-    // Date du premier départ
+    // Ajuster chaque horaire pour simuler la continuité temporelle
+    train.horaires.forEach(h => {
+      h.dateAjustee = ajusterHeure(h.date, reference);
+    });
+
+    // Trier sur date ajustée
+    train.horaires.sort((a, b) => a.dateAjustee - b.dateAjustee);
+
     const firstDate = train.horaires[0].date;
 
-    // Vérifier si c’est un "lendemain" en comparant année, mois, jour
     let isNextDay = !(
       firstDate.getDate() === todayDay &&
       firstDate.getMonth() === todayMonth &&
       firstDate.getFullYear() === todayYear
     );
 
-    // Création du div carte
     const card = document.createElement('div');
     card.className = 'train-card';
     if (isNextDay) card.classList.add('next-day');
     card.dataset.train = train.trainNumber;
 
-    // HTML : numéro train en gros, puis liste des gares avec horaires
     let html = `<h2 style="font-weight:bold; font-size:1.8em; margin-bottom:0.3em;">${train.trainNumber}</h2><ul style="padding-left:1em; margin-top:0;">`;
     train.horaires.forEach(h => {
       html += `<li>${h.gare} - ${h.heure}</li>`;
@@ -284,10 +295,9 @@ function afficherCartesVersLux(trains) {
     return { card, firstDate };
   });
 
-  // Trier cartes par date du premier départ
+  // Trier les cartes par date de premier arrêt (non ajustée, pour garder logique globale du jour)
   cartes.sort((a, b) => a.firstDate - b.firstDate);
 
-  // Ajouter cartes triées au container
   cartes.forEach(obj => container.appendChild(obj.card));
 
   document.getElementById('selectedTrains').innerHTML = '';
@@ -307,7 +317,6 @@ function mettreAJourSelection() {
   html += '</ul>';
   container.innerHTML = html;
 }
-
 function afficherCartes(trains) {
   const container = document.getElementById("trainContainer");
   container.innerHTML = '';
