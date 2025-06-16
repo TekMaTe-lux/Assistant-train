@@ -1,0 +1,323 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Train Bétail - Jeu Snake amélioré</title>
+<style>
+  body {
+    background-color: #000;
+    color: #0ff;
+    font-family: 'Orbitron', monospace;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    margin: 0; padding: 0;
+    user-select: none;
+  }
+  h1 {
+    margin-top: 20px;
+  }
+  #gameCanvas {
+    background-color: #111;
+    border: 3px solid #0ff;
+    margin-top: 20px;
+    display: block;
+  }
+  #info {
+    margin-top: 15px;
+    font-size: 18px;
+    text-align: center;
+    max-width: 400px;
+  }
+</style>
+</head>
+<body>
+
+<h1>Train Bétail - Évite les suppressions !</h1>
+<canvas id="gameCanvas" width="400" height="400"></canvas>
+<div id="info">
+  Utilise <b>flèches</b> pour tourner.<br>
+  Mange le <span style="color: yellow;">bétail jaune</span> pour grandir.<br>
+  Évite les <span style="color: red;">cases rouges (suppression)</span>.<br>
+  Les <span style="color: orange;">cases oranges</span> ralentissent ou accélèrent le train pendant 2s.<br>
+  Attention aux <span style="color: white;">vaches blanches</span> qui traversent après 60s.<br>
+  Score : <span id="score">0</span>
+</div>
+
+<script>
+(() => {
+  const canvas = document.getElementById("gameCanvas");
+  const ctx = canvas.getContext("2d");
+
+  const gridSize = 20;
+  const cols = canvas.width / gridSize;
+  const rows = canvas.height / gridSize;
+
+  const colorTrainHead = "#0ff";
+  const colorTrainBody = "#088";
+  const colorSuppression = "#f33";
+  const colorAcceleration = "#f90";
+  const colorBetail = "#ff0";
+
+  let train = [{ x: Math.floor(cols/2), y: Math.floor(rows/2) }];
+  let direction = { x: 0, y: -1 };
+  let nextDirection = direction;
+
+  let speed = 300;
+  let baseSpeed = 300;
+  let speedModifier = 0;
+  let speedEffectTimeout = null;
+
+  let betail = null;
+  let suppressions = [];
+  let oranges = [];
+
+  let score = 0;
+  const scoreEl = document.getElementById("score");
+
+  // Gestion des vaches
+  let vaches = [];
+  let vacheInterval = null;
+
+  function generateVaches() {
+    vaches = [];
+    const horizontal = Math.random() < 0.5;
+    const length = 2 + Math.floor(Math.random() * 3);
+    if (horizontal) {
+      const y = Math.floor(Math.random() * rows);
+      let startX = -length;
+      for (let i = 0; i < length; i++) {
+        vaches.push({ x: startX + i, y, dx: 1, dy: 0 });
+      }
+    } else {
+      const x = Math.floor(Math.random() * cols);
+      let startY = -length;
+      for (let i = 0; i < length; i++) {
+        vaches.push({ x, y: startY + i, dx: 0, dy: 1 });
+      }
+    }
+  }
+
+  function moveVaches() {
+    vaches.forEach(v => {
+      v.x += v.dx;
+      v.y += v.dy;
+    });
+    const horsGrille = vaches.every(v => v.x >= cols || v.y >= rows);
+    if (horsGrille) generateVaches();
+  }
+
+  function drawVaches() {
+    ctx.fillStyle = "#fff";
+    vaches.forEach(v => {
+      if (v.x >= 0 && v.x < cols && v.y >= 0 && v.y < rows) {
+        ctx.fillRect(v.x * gridSize + 3, v.y * gridSize + 3, gridSize - 6, gridSize - 6);
+      }
+    });
+  }
+
+  function checkCollisionVaches(head) {
+    return vaches.some(v => v.x === head.x && v.y === head.y);
+  }
+
+  function randomFreePosition() {
+    let pos;
+    do {
+      pos = { x: Math.floor(Math.random() * cols), y: Math.floor(Math.random() * rows) };
+    } while (
+      isOnTrain(pos) ||
+      isOnSuppression(pos) ||
+      isOnOrange(pos) ||
+      (betail && betail.x === pos.x && betail.y === pos.y)
+    );
+    return pos;
+  }
+
+  function isOnTrain(pos) {
+    return train.some(t => t.x === pos.x && t.y === pos.y);
+  }
+
+  function isOnSuppression(pos) {
+    return suppressions.some(p => p.x === pos.x && p.y === pos.y);
+  }
+
+  function isOnOrange(pos) {
+    return oranges.some(p => p.x === pos.x && p.y === pos.y);
+  }
+
+  function placePerturbations() {
+    suppressions = [];
+    for(let i = 0; i < 8; i++) {
+      suppressions.push(randomFreePosition());
+    }
+    oranges = [];
+    for(let i = 0; i < 5; i++) {
+      oranges.push(randomFreePosition());
+    }
+    betail = randomFreePosition();
+  }
+
+  function draw() {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    ctx.strokeStyle = "#222";
+    for(let x = 0; x <= cols; x++) {
+      ctx.beginPath();
+      ctx.moveTo(x * gridSize, 0);
+      ctx.lineTo(x * gridSize, canvas.height);
+      ctx.stroke();
+    }
+    for(let y = 0; y <= rows; y++) {
+      ctx.beginPath();
+      ctx.moveTo(0, y * gridSize);
+      ctx.lineTo(canvas.width, y * gridSize);
+      ctx.stroke();
+    }
+
+    suppressions.forEach(p => {
+      ctx.fillStyle = colorSuppression;
+      ctx.fillRect(p.x * gridSize + 2, p.y * gridSize + 2, gridSize - 4, gridSize - 4);
+    });
+
+    oranges.forEach(p => {
+      ctx.fillStyle = colorAcceleration;
+      ctx.fillRect(p.x * gridSize + 4, p.y * gridSize + 4, gridSize - 8, gridSize - 8);
+    });
+
+    if (betail) {
+      ctx.fillStyle = colorBetail;
+      ctx.beginPath();
+      const cx = betail.x * gridSize + gridSize/2;
+      const cy = betail.y * gridSize + gridSize/2;
+      const radius = gridSize/3;
+      ctx.arc(cx, cy, radius, 0, 2*Math.PI);
+      ctx.fill();
+    }
+
+    train.forEach((pos, i) => {
+      ctx.fillStyle = (i === 0) ? colorTrainHead : colorTrainBody;
+      ctx.fillRect(pos.x * gridSize + 1, pos.y * gridSize + 1, gridSize - 2, gridSize - 2);
+    });
+
+    // Dessin des vaches
+    drawVaches();
+  }
+
+  function increaseSpeedOverTime() {
+    if (baseSpeed > 80) {
+      baseSpeed -= 10;
+    }
+    scheduleNextSpeedIncrease();
+  }
+
+  function scheduleNextSpeedIncrease() {
+    setTimeout(() => {
+      increaseSpeedOverTime();
+    }, 15000);
+  }
+
+  function applySpeedEffect(modifier) {
+    speedModifier = modifier;
+    if(speedEffectTimeout) clearTimeout(speedEffectTimeout);
+    speedEffectTimeout = setTimeout(() => {
+      speedModifier = 0;
+    }, 2000);
+  }
+
+  function gameLoop() {
+    if ((nextDirection.x !== -direction.x || nextDirection.y !== -direction.y)) {
+      direction = nextDirection;
+    }
+
+    const head = { x: train[0].x + direction.x, y: train[0].y + direction.y };
+
+    if (head.x < 0) head.x = cols - 1;
+    else if (head.x >= cols) head.x = 0;
+    if (head.y < 0) head.y = rows - 1;
+    else if (head.y >= rows) head.y = 0;
+
+    if (train.slice(0, -1).some(t => t.x === head.x && t.y === head.y)) {
+      alert("Perdu : collision avec votre propre train !");
+      resetGame();
+      return;
+    }
+
+    if (isOnSuppression(head)) {
+      alert("Perdu : votre train a rencontré une suppression !");
+      resetGame();
+      return;
+    }
+
+    if (checkCollisionVaches(head)) {
+      alert("Perdu : collision avec des vaches !");
+      resetGame();
+      return;
+    }
+
+    train.unshift(head);
+
+    if (betail && head.x === betail.x && head.y === betail.y) {
+      score++;
+      scoreEl.textContent = score;
+      betail = randomFreePosition();
+    } else {
+      train.pop();
+    }
+
+    if (isOnOrange(head)) {
+      if (Math.random() < 0.5) {
+        applySpeedEffect(-100);
+      } else {
+        applySpeedEffect(150);
+      }
+      oranges = oranges.filter(p => !(p.x === head.x && p.y === head.y));
+      oranges.push(randomFreePosition());
+    }
+
+    moveVaches();
+
+    speed = Math.max(80, baseSpeed + speedModifier);
+    draw();
+    setTimeout(gameLoop, speed);
+  }
+
+  function resetGame() {
+    train = [{ x: Math.floor(cols / 2), y: Math.floor(rows / 2) }];
+    direction = { x: 0, y: -1 };
+    nextDirection = direction;
+    speed = baseSpeed = 300;
+    speedModifier = 0;
+    betail = null;
+    suppressions = [];
+    oranges = [];
+    score = 0;
+    scoreEl.textContent = score;
+    placePerturbations();
+    vaches = [];
+    clearTimeout(vacheInterval);
+    vacheInterval = setTimeout(() => {
+      generateVaches();
+      setInterval(moveVaches, 500);
+    }, 60000);
+    draw();
+    scheduleNextSpeedIncrease();
+    setTimeout(gameLoop, speed);
+  }
+
+  window.addEventListener("keydown", e => {
+    switch(e.key) {
+      case "ArrowUp": nextDirection = { x: 0, y: -1 }; break;
+      case "ArrowDown": nextDirection = { x: 0, y: 1 }; break;
+      case "ArrowLeft": nextDirection = { x: -1, y: 0 }; break;
+      case "ArrowRight": nextDirection = { x: 1, y: 0 }; break;
+    }
+  });
+
+  resetGame();
+
+})();
+</script>
+
+</body>
+</html>
