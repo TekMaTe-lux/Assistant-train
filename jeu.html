@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Train Snake - Jeu Bétail & Perturbations</title>
+<title>Train Snake - Bétail & Perturbations</title>
 <style>
   @import url('https://fonts.googleapis.com/css2?family=Orbitron&display=swap');
   body {
@@ -157,11 +157,12 @@
   let grid = [];
   let train = []; // array of cells {r,c}
   let direction = {r: 0, c: 1}; // start moving right
-  let nextDirection = null;
+  let nextTurn = 0; // 0: none, 1:left, 2:right
   let score = 0;
   let speed = 5; // ticks per second
   let gameInterval = null;
   let gameRunning = false;
+  let ticks = 0; // compteur pour ajout bétail auto
 
   // Création grille vide
   function createGrid() {
@@ -206,8 +207,9 @@
     score = 0;
     speed = 5;
     direction = {r: 0, c: 1};
-    nextDirection = null;
+    nextTurn = 0;
     gameRunning = true;
+    ticks = 0;
     messageElem.textContent = '';
     scoreElem.textContent = `Bétail ramassé : ${score}`;
     speedElem.textContent = `Vitesse : ${speed}`;
@@ -222,14 +224,14 @@
       setCell(pos.r, pos.c, i === train.length - 1 ? CELL_TYPES.TRAIN_HEAD : CELL_TYPES.TRAIN_BODY);
     });
 
-    // Placer wagons bétail
-    placeRandom(CELL_TYPES.BETAIL, 10);
+    // Placer wagons bétail initiaux
+    placeRandom(CELL_TYPES.BETAIL, 5);
 
     // Placer suppressions
-    placeRandom(CELL_TYPES.SUPPRESSION, 25);
+    placeRandom(CELL_TYPES.SUPPRESSION, 20);
 
     // Placer retards
-    placeRandom(CELL_TYPES.RETARD, 15);
+    placeRandom(CELL_TYPES.RETARD, 10);
 
     if(gameInterval) clearInterval(gameInterval);
     gameInterval = setInterval(gameTick, 1000 / speed);
@@ -255,113 +257,143 @@
     direction = {r: c, c: -r};
   }
 
+  // Ajoute un wagon (ne pas retirer la queue au prochain tick)
+  function growTrain(){
+    // on laisse la queue en place (en ne supprimant pas la dernière position au déplacement)
+    growing = true;
+  }
+  let growing = false;
+
+  // Ajout d'un bétail aléatoire sur la grille, sans collision
+  function addBetail(){
+    placeRandom(CELL_TYPES.BETAIL, 1);
+  }
+
   // Tick du jeu
   function gameTick(){
     if(!gameRunning) return;
 
-    // Appliquer direction suivante si définie (gestion input plus fluide)
-    if(nextDirection){
-      direction = nextDirection;
-      nextDirection = null;
-    }
+    ticks++;
 
+    // Traiter virage demandé
+    if(nextTurn === 1){
+      turnLeft();
+    } else if(nextTurn === 2){
+      turnRight();
+    }
+    nextTurn = 0;
+
+    // Calcul nouvelle tête
     const head = train[train.length -1];
-    const newHead = {r: head.r + direction.r, c: head.c + direction.c};
+    let newR = head.r + direction.r;
+    let newC = head.c + direction.c;
 
-    // Vérifier collisions bord
-    if(newHead.r < 0 || newHead.r >= ROWS || newHead.c < 0 || newHead.c >= COLS){
-      endGame("Collision avec bord ! Partie terminée.");
-      return;
-    }
-    // Vérifier collision avec train
-    if(train.some(pos => pos.r === newHead.r && pos.c === newHead.c)){
-      endGame("Collision avec le train ! Partie terminée.");
+    // Gestion rebond sur murs (game over)
+    if(newR < 0 || newR >= ROWS || newC < 0 || newC >= COLS){
+      gameOver("Collision avec un mur !");
       return;
     }
 
-    // Vérifier type cellule nouvelle tête
-    const cellType = grid[newHead.r][newHead.c].type;
+    // Collision avec le train lui-même ?
+    if(train.some(pos => pos.r === newR && pos.c === newC)){
+      gameOver("Collision avec le train !");
+      return;
+    }
 
+    // Obtenir type cellule cible
+    const cellType = grid[newR][newC].type;
+
+    // Gestion collisions
     if(cellType === CELL_TYPES.SUPPRESSION){
-      endGame("Train supprimé ! Partie terminée.");
+      gameOver("Train supprimé ! Collision avec suppression.");
       return;
     }
+    if(cellType === CELL_TYPES.RETARD){
+      // Juste un avertissement + ralentir un peu
+      messageElem.textContent = "Attention : Retard détecté, vitesse réduite !";
+      speed = Math.max(2, speed - 1);
+      updateSpeed();
+    }
 
-    let grow = false;
+    // Avancer train : ajouter nouvelle tête
+    train.push({r: newR, c: newC});
+    setCell(newR, newC, CELL_TYPES.TRAIN_HEAD);
+
+    // L'ancienne tête devient corps
+    const oldHead = train[train.length -2];
+    setCell(oldHead.r, oldHead.c, CELL_TYPES.TRAIN_BODY);
 
     if(cellType === CELL_TYPES.BETAIL){
+      // Ramasser le bétail, augmenter score, vitesse + ajout bétail
       score++;
-      grow = true;
-      // Placer un nouveau bétail ailleurs
-      placeRandom(CELL_TYPES.BETAIL, 1);
-
-      // Tous les 3 bétails, augmenter vitesse
-      if(score % 3 === 0){
-        speed++;
-        updateSpeed();
-      }
-    }
-
-    if(cellType === CELL_TYPES.RETARD){
-      // Augmenter vitesse (train accélère)
-      speed++;
+      scoreElem.textContent = `Bétail ramassé : ${score}`;
+      messageElem.textContent = "Bétail ramassé ! Vitesse augmentée.";
+      speed = Math.min(15, speed + 1);
       updateSpeed();
-      // retirer retard de cette case (car train est passé dessus)
-      setCell(newHead.r, newHead.c, CELL_TYPES.EMPTY);
+      growing = true;
+
+      // Retirer le bétail ramassé
+      setCell(newR, newC, CELL_TYPES.TRAIN_HEAD);
+
+      // Ajouter un nouveau bétail aléatoire
+      addBetail();
     }
 
-    // Déplacer train :
-    // Si pas croissance, retirer queue
-    if(!grow){
+    // Si on grandit, on ne retire pas la queue
+    if(growing){
+      growing = false;
+    } else {
+      // Retirer queue train
       const tail = train.shift();
       setCell(tail.r, tail.c, CELL_TYPES.EMPTY);
     }
 
-    // Ajouter nouvelle tête
-    train.push(newHead);
+    // Ajout automatique d'un bétail tous les 15 ticks
+    if(ticks % 15 === 0){
+      addBetail();
+    }
 
-    // Réafficher train
-    train.forEach((pos, i) => {
-      setCell(pos.r, pos.c, i === train.length - 1 ? CELL_TYPES.TRAIN_HEAD : CELL_TYPES.TRAIN_BODY);
-    });
+    // Allonger le train automatiquement tous les 40 ticks pour augmenter la difficulté
+    if(ticks % 40 === 0){
+      growing = true;
+      messageElem.textContent = "Train s'allonge automatiquement !";
+    }
 
-    // Mettre à jour score
-    scoreElem.textContent = `Bétail ramassé : ${score}`;
   }
 
-  // Fin du jeu
-  function endGame(msg){
+  // Fin de partie
+  function gameOver(reason){
     gameRunning = false;
-    messageElem.textContent = msg + ` Score final: ${score}`;
-    startBtn.style.display = 'inline-block';
+    messageElem.textContent = "Game Over : " + reason;
     clearInterval(gameInterval);
   }
 
-  // Gestion clavier : uniquement tourner à gauche ou droite (flèches gauche/droite)
-  window.addEventListener('keydown', e => {
+  // Gestion clavier
+  window.addEventListener('keydown', (e) => {
     if(!gameRunning) return;
-
-    if(e.key === 'ArrowLeft'){
-      // tourner gauche à partir de la direction actuelle
-      const {r,c} = direction;
-      nextDirection = {r: -c, c: r};
-      e.preventDefault();
-    } else if(e.key === 'ArrowRight'){
-      // tourner droite
-      const {r,c} = direction;
-      nextDirection = {r: c, c: -r};
-      e.preventDefault();
+    switch(e.key){
+      case "ArrowUp":
+        // Flèche haut => avancer (ne change pas direction)
+        // Pas de changement de direction, on avance dans la direction courante
+        // Peut aussi servir à reprendre le jeu si pause ?
+        e.preventDefault();
+        // rien à faire, on continue
+        break;
+      case "ArrowLeft":
+        e.preventDefault();
+        nextTurn = 1; // tourner à gauche au prochain tick
+        break;
+      case "ArrowRight":
+        e.preventDefault();
+        nextTurn = 2; // tourner à droite au prochain tick
+        break;
     }
   });
 
-  // Bouton démarrer
   startBtn.addEventListener('click', () => {
-    startBtn.style.display = 'none';
     initGame();
   });
 
-  // Initialisation grille à l'ouverture
-  createGrid();
 </script>
 
 </body>
