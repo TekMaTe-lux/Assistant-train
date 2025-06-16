@@ -2,147 +2,329 @@
 <html lang="fr">
 <head>
   <meta charset="UTF-8">
-  <title>Sélecteur de Trains</title>
+  <title>Choix des trains</title>
   <style>
     body {
-      background-color: #111;
-      color: #eee;
       font-family: Arial, sans-serif;
+      background: #f9f9f9;
     }
-    .controls {
-      margin: 20px;
-      text-align: center;
-    }
-    select {
-      padding: 10px;
-      font-size: 16px;
-      margin: 10px;
-    }
-    .cards {
+    .train-grid {
       display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
-      gap: 15px;
-      margin: 20px;
+      grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+      gap: 10px;
+      margin-top: 20px;
     }
-    .card {
-      background: #222;
-      padding: 15px;
-      border-radius: 10px;
-      box-shadow: 0 0 5px #0ff;
+    .train-card {
+      border: 1px solid #999;
+      border-radius: 8px;
+      padding: 8px;
+      background: #fff;
       text-align: center;
       cursor: pointer;
       transition: transform 0.2s, box-shadow 0.2s;
     }
-    .card:hover {
-      transform: scale(1.05);
-      box-shadow: 0 0 10px #0ff;
+    .train-card:hover {
+      transform: scale(1.03);
+      box-shadow: 0 2px 6px rgba(0,0,0,0.2);
     }
-    .next-day {
-      background: #333 !important;
-      opacity: 0.5;
+    .train-card.selected {
+      background-color: #b5f0b5;
+      border-color: #4CAF50;
     }
+    .train-card.next-day {
+      background-color: #e0e0e0;
+      color: #555;
+    }
+    h3 {
+      font-size: 16px;
+      margin: 5px 0;
+    }
+    p {
+      margin: 2px 0;
+      font-size: 14px;
+    }
+    .nogare { color: red; }
   </style>
 </head>
 <body>
 
-<div class="controls">
-  <select id="gare-select">
-    <option value="Thionville">Thionville</option>
-    <option value="Metz">Metz</option>
-    <option value="Nancy">Nancy</option>
-  </select>
+<h1>Choix des trains</h1>
 
-  <select id="sens-select">
-    <option value="Vers Luxembourg">Vers Luxembourg</option>
-    <option value="Vers Province">Vers Province</option>
-  </select>
-</div>
+<label for="sensSelect">Sens :</label>
+<select id="sensSelect">
+  <option value="departures">Depuis Luxembourg</option>
+  <option value="arrivals">Vers Luxembourg</option>
+</select>
 
-<div class="cards" id="cards-container"></div>
+<label for="gareSelect">Gare :</label>
+<select id="gareSelect"></select>
+
+<button id="chargerBtn">Charger les trains</button>
+
+<div id="trainContainer"></div>
+
+<h2>Trains sélectionnés :</h2>
+<div id="selectedTrains"><p>Aucun train sélectionné.</p></div>
 
 <script>
-// Simulons un jeu de données API
-const trains = [
-  { train_number: "88501", gare: "Thionville", sens: "Vers Luxembourg", stop_date_time: { departure_date_time: "20250616T072800" } },
-  { train_number: "88503", gare: "Thionville", sens: "Vers Luxembourg", stop_date_time: { departure_date_time: "20250616T075800" } },
-  { train_number: "88505", gare: "Thionville", sens: "Vers Luxembourg", stop_date_time: { departure_date_time: "20250616T082700" } },
-  { train_number: "88702", gare: "Thionville", sens: "Vers Luxembourg", stop_date_time: { departure_date_time: "20250616T055700" } },
-  { train_number: "88704", gare: "Thionville", sens: "Vers Luxembourg", stop_date_time: { departure_date_time: "20250616T061800" } },
-  { train_number: "88770", gare: "Thionville", sens: "Vers Luxembourg", stop_date_time: { departure_date_time: "20250617T053500" } },
-  { train_number: "88772", gare: "Thionville", sens: "Vers Luxembourg", stop_date_time: { departure_date_time: "20250617T195800" } },
+const apiKey = '242fac11-6d98-45fb-93df-28174d362447';
 
-  { train_number: "88801", gare: "Nancy", sens: "Vers Province", stop_date_time: { departure_date_time: "20250616T072500" } },
-  { train_number: "88803", gare: "Nancy", sens: "Vers Province", stop_date_time: { departure_date_time: "20250616T082500" } },
-  { train_number: "88805", gare: "Nancy", sens: "Vers Province", stop_date_time: { departure_date_time: "20250617T052500" } },
-
-  { train_number: "88901", gare: "Metz", sens: "Vers Luxembourg", stop_date_time: { departure_date_time: "20250616T093000" } },
-  { train_number: "88903", gare: "Metz", sens: "Vers Luxembourg", stop_date_time: { departure_date_time: "20250617T043000" } },
+const gares = [
+  { id: 'stop_area:SNCF:87141002', label: 'Nancy' },
+  { id: 'stop_area:SNCF:87192039', label: 'Metz' },
+  { id: 'stop_area:SNCF:87191007', label: 'Thionville' }
 ];
 
-function parseSNCFDate(str) {
-  const year = parseInt(str.substring(0, 4));
-  const month = parseInt(str.substring(4, 6)) - 1;
-  const day = parseInt(str.substring(6, 8));
-  const hour = parseInt(str.substring(9, 11));
-  const minute = parseInt(str.substring(11, 13));
-  return new Date(year, month, day, hour, minute);
+const gareLuxId = 'stop_area:SNCF:82001000';
+
+const sensSelect = document.getElementById('sensSelect');
+const gareSelect = document.getElementById('gareSelect');
+const chargerBtn = document.getElementById('chargerBtn');
+
+function remplirOptionsGares() {
+  gareSelect.innerHTML = '';
+  const optionTous = document.createElement('option');
+  optionTous.value = 'tous';
+  optionTous.textContent = 'Tous';
+  gareSelect.appendChild(optionTous);
+
+  gares.forEach(g => {
+    const option = document.createElement('option');
+    option.value = g.id;
+    option.textContent = g.label;
+    gareSelect.appendChild(option);
+  });
 }
 
-function trierParDateHoraire(trains) {
-  const maintenant = new Date();
-  const aujourdHui = maintenant.getDate();
-  const mois = maintenant.getMonth();
-  const annee = maintenant.getFullYear();
+remplirOptionsGares();
 
-  const aVenir = [], dejaPasse = [], demain = [];
+sensSelect.addEventListener('change', () => {
+  remplirOptionsGares();
+  document.getElementById('trainContainer').innerHTML = '';
+  document.getElementById('selectedTrains').innerHTML = '';
+});
+
+function parseSNCFDate(sncfDateStr) {
+  if (!sncfDateStr) return null;
+  const datePart = sncfDateStr.substr(0,8);
+  const timePart = sncfDateStr.substr(9,6);
+  const year = parseInt(datePart.substr(0,4),10);
+  const month = parseInt(datePart.substr(4,2),10)-1;
+  const day = parseInt(datePart.substr(6,2),10);
+  const hour = parseInt(timePart.substr(0,2),10);
+  const minute = parseInt(timePart.substr(2,2),10);
+  const second = parseInt(timePart.substr(4,2),10);
+  return new Date(year, month, day, hour, minute, second);
+}
+
+function formatTime(date) {
+  if (!date) return 'N/A';
+  return date.toLocaleTimeString('fr-FR', {hour:'2-digit', minute:'2-digit'});
+}
+
+function getTodayDatetime() {
+  const now = new Date();
+  const y = now.getFullYear();
+  const m = String(now.getMonth()+1).padStart(2,'0');
+  const d = String(now.getDate()).padStart(2,'0');
+  return `${y}${m}${d}T000000`;
+}
+
+function filterTrains(trains) {
+  const allowedRoutes = ['C40+', 'C50', 'C50+'];
+  return trains.filter(train => train.route && allowedRoutes.includes(train.route.name));
+}
+
+chargerBtn.addEventListener('click', async () => {
+  const sens = sensSelect.value;
+  const gareChoisie = gareSelect.value;
+
+  document.getElementById("trainContainer").innerHTML = "<p>Chargement...</p>";
+  document.getElementById("selectedTrains").innerHTML = '';
+
+  if(sens === 'departures'){
+    await chargerTrainsDepuisLux(gareChoisie);
+  } else {
+    await chargerTrainsVersLux(gareChoisie);
+  }
+});
+
+async function chargerTrainsDepuisLux(gareId) {
+  const datetime = getTodayDatetime();
+  const url = `https://api.sncf.com/v1/coverage/sncf/stop_areas/${gareLuxId}/departures?datetime=${datetime}&duration=86400&count=200`;
+  let trains = await fetchTrains(url);
+  trains = filterTrains(trains);
+
+  if(gareId !== 'tous'){
+    trains = trains.filter(t => {
+      const direction = t.display_informations?.direction || '';
+      return direction.toLowerCase().includes(getGareLabelById(gareId).toLowerCase());
+    });
+  }
+  trains.sort((a,b)=>{
+    const dateA = parseSNCFDate(a.stop_date_time.departure_date_time);
+    const dateB = parseSNCFDate(b.stop_date_time.departure_date_time);
+    return dateA - dateB;
+  });
+  afficherCartes(trains);
+}
+
+async function chargerTrainsVersLux(gareId) {
+  const datetime = getTodayDatetime();
+  let tousLesTrains = [];
+
+  let garesFiltrees = gareId === 'tous' ? gares : gares.filter(g => g.id === gareId);
+
+  for (const gare of garesFiltrees) {
+    const url = `https://api.sncf.com/v1/coverage/sncf/stop_areas/${gare.id}/departures?datetime=${datetime}&duration=86400&count=200`;
+    let trains = await fetchTrains(url);
+    trains = filterTrains(trains);
+    trains.forEach(t => t.gareDepart = gare.label);
+    tousLesTrains = tousLesTrains.concat(trains);
+  }
+
+  tousLesTrains = tousLesTrains.filter(t => {
+    const direction = t.display_informations?.direction || '';
+    return direction.toLowerCase().includes('luxembourg');
+  });
+
+  tousLesTrains.sort((a,b)=>{
+    const dateA = parseSNCFDate(a.stop_date_time.departure_date_time);
+    const dateB = parseSNCFDate(b.stop_date_time.departure_date_time);
+    return dateA - dateB;
+  });
+
+  afficherCartesVersLux(tousLesTrains);
+}
+
+function getGareLabelById(id) {
+  const g = gares.find(g => g.id === id);
+  return g ? g.label : '';
+}
+
+async function fetchTrains(url) {
+  try {
+    const resp = await fetch(url, { headers: { 'Authorization': 'Basic ' + btoa(apiKey + ':') } });
+    if(!resp.ok) throw new Error(`Erreur API: ${resp.status}`);
+    const data = await resp.json();
+    return data.departures || [];
+  } catch(err) {
+    console.error(err);
+    return [];
+  }
+}
+
+function afficherCartesVersLux(trains) {
+  const container = document.getElementById("trainContainer");
+  container.innerHTML = '';
+  container.className = 'train-grid';
+
+  const today = new Date().getDate();
+
+  const grouped = {};
+  trains.forEach(train => {
+    const info = train.display_informations || {};
+    const trainNumber = info.headsign || 'Inconnu';
+    if (!grouped[trainNumber]) {
+      grouped[trainNumber] = { trainNumber, horaires: [] };
+    }
+    const heureDepart = parseSNCFDate(train.stop_date_time.departure_date_time);
+    const timeDepart = formatTime(heureDepart);
+    grouped[trainNumber].horaires.push({ gare: train.gareDepart, heure: timeDepart, date: heureDepart });
+  });
+
+  // Créer un tableau temporaire des cartes avec leur heure de départ la plus proche (ex: la première heure)
+  const cartes = Object.values(grouped).map(train => {
+    // Prendre la première horaire (la plus tôt)
+    train.horaires.sort((a,b) => a.date - b.date);
+    const firstDate = train.horaires[0].date;
+
+    // Créer la carte (sans l'ajouter au DOM pour l'instant)
+    const card = document.createElement('div');
+    card.className = 'train-card';
+    card.dataset.train = train.trainNumber;
+
+    let isNextDay = train.horaires.some(h => h.date.getDate() !== today);
+    if (isNextDay) card.classList.add('next-day');
+
+    let html = `<h3>Train ${train.trainNumber}</h3><ul>`;
+    train.horaires.forEach(h => {
+      html += `<li>${h.gare} - ${h.heure}</li>`;
+    });
+    html += '</ul>';
+
+    card.innerHTML = html;
+    card.addEventListener('click', () => {
+      card.classList.toggle('selected');
+      mettreAJourSelection();
+    });
+
+    return { card, firstDate };
+  });
+
+  // Trier le tableau des cartes selon firstDate
+  cartes.sort((a, b) => a.firstDate - b.firstDate);
+
+  // Ajouter les cartes triées dans le container
+  cartes.forEach(obj => container.appendChild(obj.card));
+
+  document.getElementById('selectedTrains').innerHTML = '';
+}
+
+function afficherCartes(trains) {
+  const container = document.getElementById("trainContainer");
+  container.innerHTML = '';
+  container.className = 'train-grid';
+
+  const today = new Date().getDate();
+
+  if(trains.length === 0){
+    container.innerHTML = `<p class="nogare">Aucun train trouvé pour ces critères.</p>`;
+    return;
+  }
 
   trains.forEach(train => {
-    const dateObj = parseSNCFDate(train.stop_date_time.departure_date_time);
-    train.dateObj = dateObj;
+    const info = train.display_informations || {};
+    const card = document.createElement('div');
+    card.className = 'train-card';
+    card.dataset.train = info.headsign || 'Inconnu';
 
-    if (dateObj.getFullYear() === annee && dateObj.getMonth() === mois && dateObj.getDate() === aujourdHui) {
-      if (dateObj >= maintenant) {
-        aVenir.push(train);
-      } else {
-        dejaPasse.push(train);
-      }
-    } else if (dateObj > maintenant) {
-      demain.push(train);
+    const heureDepart = parseSNCFDate(train.stop_date_time.departure_date_time);
+    const depTime = formatTime(heureDepart);
+    if (heureDepart.getDate() !== today) card.classList.add('next-day');
+
+    let html = `<h3>Train ${info.headsign || '???'}</h3>`;
+    const direction = info.direction || '';
+    if (direction.trim() !== "") {
+      html += `<p><strong>Destination :</strong> ${direction}</p>`;
     }
-  });
+    html += `<p><strong>Départ :</strong> ${depTime}</p>`;
 
-  aVenir.sort((a, b) => a.dateObj - b.dateObj);
-  dejaPasse.sort((a, b) => a.dateObj - b.dateObj);
-  demain.sort((a, b) => a.dateObj - b.dateObj);
-  demain.forEach(t => t.isNextDay = true);
-
-  return [...aVenir, ...dejaPasse, ...demain];
-}
-
-function afficherTrains() {
-  const gare = document.getElementById("gare-select").value;
-  const sens = document.getElementById("sens-select").value;
-
-  const selection = trains.filter(t => t.gare === gare && t.sens === sens);
-  const tri = trierParDateHoraire(selection);
-
-  const container = document.getElementById("cards-container");
-  container.innerHTML = "";
-
-  tri.forEach(train => {
-    const heure = train.dateObj.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
-    const card = document.createElement("div");
-    card.className = "card" + (train.isNextDay ? " next-day" : "");
-    card.innerHTML = `<h3>Train ${train.train_number}</h3><p>${train.gare} - ${heure}</p>`;
+    card.innerHTML = html;
+    card.addEventListener('click', () => {
+      card.classList.toggle('selected');
+      mettreAJourSelection();
+    });
     container.appendChild(card);
   });
+
+  document.getElementById('selectedTrains').innerHTML = '';
 }
 
-document.getElementById("gare-select").addEventListener("change", afficherTrains);
-document.getElementById("sens-select").addEventListener("change", afficherTrains);
-
-// Affichage initial
-afficherTrains();
+function mettreAJourSelection() {
+  const selected = [...document.querySelectorAll('.train-card.selected')];
+  const container = document.getElementById('selectedTrains');
+  if(selected.length === 0){
+    container.innerHTML = '<p>Aucun train sélectionné.</p>';
+    return;
+  }
+  let html = '<ul>';
+  selected.forEach(card => {
+    html += `<li>${card.dataset.train}</li>`;
+  });
+  html += '</ul>';
+  container.innerHTML = html;
+}
 </script>
 
 </body>
