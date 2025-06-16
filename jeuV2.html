@@ -42,7 +42,6 @@
   Évite les <span style="color: red;">cases rouges (suppression)</span>.<br>
   Les <span style="color: orange;">cases oranges</span> ralentissent ou accélèrent le train pendant 2s.<br>
   La vitesse augmente progressivement avec le temps.<br>
-  <span style="color:#a0a;"><b>Évite aussi les traversées de vaches violettes !</b></span><br>
   Score : <span id="score">0</span>
 </div>
 
@@ -60,28 +59,29 @@
   const colorSuppression = "#f33";
   const colorAcceleration = "#f90";
   const colorBetail = "#ff0";
-  const colorVache = "#a0a"; // violet
 
   let train = [{ x: Math.floor(cols/2), y: Math.floor(rows/2) }];
-  let direction = { x: 0, y: -1 };
+  let direction = { x: 0, y: -1 }; // initial vers le haut
   let nextDirection = direction;
 
   let speed = 300;
   let baseSpeed = 300;
-  let speedModifier = 0;
+  let speedModifier = 0; // en ms, ajouté ou retiré temporairement
   let speedEffectTimeout = null;
 
-  let betail = null;
+  let betail = null; // case jaune (bétail)
   let suppressions = [];
   let oranges = [];
 
   let score = 0;
   const scoreEl = document.getElementById("score");
 
-  // Tableau des vaches mobiles traversantes
   let vaches = [];
+  let vachesActive = false;
+  let vacheInterval = null;
 
-  // Fonction utilitaire : position libre (hors train, perturbations, bétail, vaches)
+
+  // Fonction utilitaire pour générer une position libre (pas sur train, ni sur perturbations)
   function randomFreePosition() {
     let pos;
     do {
@@ -90,7 +90,6 @@
       isOnTrain(pos) ||
       isOnSuppression(pos) ||
       isOnOrange(pos) ||
-      isOnVache(pos) ||
       (betail && betail.x === pos.x && betail.y === pos.y)
     );
     return pos;
@@ -99,30 +98,27 @@
   function isOnTrain(pos) {
     return train.some(t => t.x === pos.x && t.y === pos.y);
   }
+
   function isOnSuppression(pos) {
     return suppressions.some(p => p.x === pos.x && p.y === pos.y);
   }
+
   function isOnOrange(pos) {
     return oranges.some(p => p.x === pos.x && p.y === pos.y);
   }
-  function isOnVache(pos) {
-    return vaches.some(v => {
-      for(let i = 0; i < v.length; i++) {
-        let vx = v.x - v.dx * i;
-        let vy = v.y - v.dy * i;
-        if(pos.x === vx && pos.y === vy) return true;
-      }
-      return false;
-    });
-  }
 
   function placePerturbations() {
+    // Suppressions rouges
     suppressions = [];
-    for(let i = 0; i < 8; i++) suppressions.push(randomFreePosition());
-
+    for(let i = 0; i < 8; i++) {
+      suppressions.push(randomFreePosition());
+    }
+    // Cases oranges
     oranges = [];
-    for(let i = 0; i < 5; i++) oranges.push(randomFreePosition());
-
+    for(let i = 0; i < 5; i++) {
+      oranges.push(randomFreePosition());
+    }
+    // Bétail jaune
     betail = randomFreePosition();
   }
 
@@ -150,7 +146,7 @@
       ctx.fillRect(p.x * gridSize + 2, p.y * gridSize + 2, gridSize - 4, gridSize - 4);
     });
 
-    // Cases oranges
+    // Oranges (bonus/malus)
     oranges.forEach(p => {
       ctx.fillStyle = colorAcceleration;
       ctx.fillRect(p.x * gridSize + 4, p.y * gridSize + 4, gridSize - 8, gridSize - 8);
@@ -172,28 +168,23 @@
       ctx.fillStyle = (i === 0) ? colorTrainHead : colorTrainBody;
       ctx.fillRect(pos.x * gridSize + 1, pos.y * gridSize + 1, gridSize - 2, gridSize - 2);
     });
-
-    // Vaches violettes mobiles
-    vaches.forEach(v => {
-      ctx.fillStyle = colorVache;
-      for(let i = 0; i < v.length; i++) {
-        const vx = v.x - v.dx * i;
-        const vy = v.y - v.dy * i;
-        if(vx >= 0 && vx < cols && vy >= 0 && vy < rows) {
-          ctx.fillRect(vx * gridSize + 2, vy * gridSize + 2, gridSize - 4, gridSize - 4);
-        }
-      }
-    });
+    
+    if (vachesActive) {
+      drawVaches();
+    }
   }
 
+  // Augmentation progressive de la vitesse par paliers (plus c'est long, plus c'est rapide)
   function increaseSpeedOverTime() {
-    if (baseSpeed > 80) baseSpeed -= 10;
+    if (baseSpeed > 80) {
+      baseSpeed -= 10; // augmente la vitesse (diminue le délai)
+    }
     scheduleNextSpeedIncrease();
   }
   function scheduleNextSpeedIncrease() {
     setTimeout(() => {
       increaseSpeedOverTime();
-    }, 15000);
+    }, 15000); // toutes les 15 sec, accélère un peu
   }
 
   function applySpeedEffect(modifier) {
@@ -204,147 +195,111 @@
     }, 2000);
   }
 
-  function addVache() {
-    const horizontal = Math.random() < 0.5;
-    let vache = { x: 0, y: 0, dx: 0, dy: 0, length: 3 };
-
-    if(horizontal) {
-      vache.y = Math.floor(Math.random() * rows);
-      if(Math.random() < 0.5) {
-        vache.x = 0;
-        vache.dx = 1;
-      } else {
-        vache.x = cols - 1;
-        vache.dx = -1;
-      }
-      vache.dy = 0;
-    } else {
-      vache.x = Math.floor(Math.random() * cols);
-      if(Math.random() < 0.5) {
-        vache.y = 0;
-        vache.dy = 1;
-      } else {
-        vache.y = rows - 1;
-        vache.dy = -1;
-      }
-      vache.dx = 0;
-    }
-
-    vaches.push(vache);
-  }
-
-  function moveVaches() {
-    for(let i = vaches.length - 1; i >= 0; i--) {
-      let v = vaches[i];
-      v.x += v.dx;
-      v.y += v.dy;
-
-      if(v.x < -v.length || v.x > cols + v.length || v.y < -v.length || v.y > rows + v.length) {
-        vaches.splice(i, 1);
-      }
-    }
-  }
-
-  function resetGame() {
-    train = [{ x: Math.floor(cols/2), y: Math.floor(rows/2) }];
-    direction = { x: 0, y: -1 };
-    nextDirection = direction;
-    speed = baseSpeed = 300;
-    speedModifier = 0;
-    score = 0;
-    scoreEl.textContent = score;
-    placePerturbations();
-    vaches = [];
-  }
-
   function gameLoop() {
+    // Change direction si pas demi-tour
     if ((nextDirection.x !== -direction.x || nextDirection.y !== -direction.y)) {
       direction = nextDirection;
     }
 
     const head = { x: train[0].x + direction.x, y: train[0].y + direction.y };
 
-    // Rebond sur bords
+    // Rebond sur les bords (torique)
     if (head.x < 0) head.x = cols - 1;
     else if (head.x >= cols) head.x = 0;
     if (head.y < 0) head.y = rows - 1;
     else if (head.y >= rows) head.y = 0;
 
-    // Collision avec train
+    // Collision train (sauf queue)
     if (train.slice(0, -1).some(t => t.x === head.x && t.y === head.y)) {
       alert("Perdu : collision avec votre propre train !");
       resetGame();
       return;
     }
 
-    // Collision avec suppression rouge
+    // Collision suppression rouge = perdu
     if (isOnSuppression(head)) {
       alert("Perdu : votre train a rencontré une suppression !");
       resetGame();
       return;
     }
-
-    // Collision avec vaches violettes
-    if (isOnVache(head)) {
-      alert("Perdu : votre train a rencontré une traversée de vaches violettes !");
-      resetGame();
-      return;
-    }
-
+    
+    if (vachesActive && checkCollisionVaches(head)) {
+  alert("Perdu : votre train a percuté un troupeau de vaches !");
+  resetGame();
+  return;
+}
     train.unshift(head);
 
-    // Mange bétail jaune
+    // Collision betail jaune : grandir + score + nouvelle position
     if (betail && head.x === betail.x && head.y === betail.y) {
       score++;
       scoreEl.textContent = score;
       betail = randomFreePosition();
     } else {
-      train.pop();
+      train.pop(); // sinon, on retire la queue (pas de croissance)
     }
 
     // Collision cases oranges
     if (isOnOrange(head)) {
+      // Choix aléatoire : accélère ou ralentit
       if (Math.random() < 0.5) {
-        applySpeedEffect(-100);
+        applySpeedEffect(-100); // accélère (moins de délai)
       } else {
-        applySpeedEffect(150);
+        applySpeedEffect(150); // ralentit (plus de délai)
       }
+      // On retire cette case orange après contact
       oranges = oranges.filter(p => !(p.x === head.x && p.y === head.y));
+      // On remet une nouvelle case orange ailleurs
       oranges.push(randomFreePosition());
     }
 
     speed = Math.max(80, baseSpeed + speedModifier);
 
-    // Avance les vaches
-    moveVaches();
+    if (vachesActive) {
+  moveVaches();
+}
 
-    draw();
-
-    setTimeout(gameLoop, speed);
+  function generateVaches() {
+    vaches = [];
+    const horizontal = Math.random() < 0.5;
+    const length = 2 + Math.floor(Math.random() * 3); // 2 à 4 vaches
+    if (horizontal) {
+      const y = Math.floor(Math.random() * rows);
+      let startX = -length;
+      for (let i = 0; i < length; i++) {
+        vaches.push({ x: startX + i, y, dx: 1, dy: 0 });
+      }
+    } else {
+      const x = Math.floor(Math.random() * cols);
+      let startY = -length;
+      for (let i = 0; i < length; i++) {
+        vaches.push({ x, y: startY + i, dx: 0, dy: 1 });
+      }
+    }
   }
 
-  // Gestion des touches fléchées
-  window.addEventListener("keydown", e => {
-    switch(e.key) {
-      case "ArrowUp": if(direction.y === 0) nextDirection = { x: 0, y: -1 }; break;
-      case "ArrowDown": if(direction.y === 0) nextDirection = { x: 0, y: 1 }; break;
-      case "ArrowLeft": if(direction.x === 0) nextDirection = { x: -1, y: 0 }; break;
-      case "ArrowRight": if(direction.x === 0) nextDirection = { x: 1, y: 0 }; break;
-    }
-  });
+  function moveVaches() {
+    vaches.forEach(v => {
+      v.x += v.dx;
+      v.y += v.dy;
+    });
 
-  // Initialisation
-  resetGame();
-  scheduleNextSpeedIncrease();
+    const horsGrille = vaches.every(v => v.x >= cols || v.y >= rows);
+    if (horsGrille) generateVaches();
+  }
 
-  // Apparition des vaches après 30s, puis toutes les 15s
-  setTimeout(() => {
-    setInterval(() => {
-      addVache();
-    }, 15000);
-  }, 30000);
+  function drawVaches() {
+    ctx.fillStyle = "#fff";
+    vaches.forEach(v => {
+      if (v.x >= 0 && v.x < cols && v.y >= 0 && v.y < rows) {
+        ctx.fillRect(v.x * gridSize + 3, v.y * gridSize + 3, gridSize - 6, gridSize - 6);
+      }
+    });
+  }
 
-})();
+  function checkCollisionVaches(head) {
+    return vaches.some(v => v.x === head.x && v.y === head.y);
+  }
 
     draw();
     setTimeout(gameLoop, speed);
@@ -365,6 +320,12 @@
     draw();
     scheduleNextSpeedIncrease();
     setTimeout(gameLoop, speed);
+    vachesActive = false;
+if (vacheInterval) clearTimeout(vacheInterval);
+vacheInterval = setTimeout(() => {
+  vachesActive = true;
+  generateVaches();
+}, 60000);
   }
 
   window.addEventListener("keydown", e => {
