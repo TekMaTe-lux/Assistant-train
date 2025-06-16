@@ -249,40 +249,60 @@ function afficherCartesVersLux(trains) {
 
   // Créer les cartes
   const cartes = Object.values(grouped).map(train => {
-    // Trier horaires par date croissante (ordre chronologique)
-    train.horaires.sort((a,b) => a.date - b.date);
+  // Tri initial des horaires
+  train.horaires.sort((a,b) => a.date - b.date);
 
-    // Date du premier départ
-    const firstDate = train.horaires[0].date;
+  // --- Début de la normalisation des jours ---
+  const dateCounts = {};
 
-    // Vérifier si c’est un "lendemain" en comparant année, mois, jour
-    let isNextDay = !(
-      firstDate.getDate() === todayDay &&
-      firstDate.getMonth() === todayMonth &&
-      firstDate.getFullYear() === todayYear
-    );
-
-    // Création du div carte
-    const card = document.createElement('div');
-    card.className = 'train-card';
-    if (isNextDay) card.classList.add('next-day');
-    card.dataset.train = train.trainNumber;
-
-    // HTML : numéro train en gros, puis liste des gares avec horaires
-    let html = `<h2 style="font-weight:bold; font-size:1.8em; margin-bottom:0.3em;">${train.trainNumber}</h2><ul style="padding-left:1em; margin-top:0;">`;
-    train.horaires.forEach(h => {
-      html += `<li>${h.gare} - ${h.heure}</li>`;
-    });
-    html += '</ul>';
-
-    card.innerHTML = html;
-    card.addEventListener('click', () => {
-      card.classList.toggle('selected');
-      mettreAJourSelection();
-    });
-
-    return { card, firstDate };
+  train.horaires.forEach(h => {
+    const d = `${h.date.getFullYear()}-${h.date.getMonth()}-${h.date.getDate()}`;
+    dateCounts[d] = (dateCounts[d] || 0) + 1;
   });
+
+  // On détecte la date majoritaire
+  const majorDateStr = Object.keys(dateCounts).reduce((a, b) => dateCounts[a] > dateCounts[b] ? a : b);
+  const [year, month, day] = majorDateStr.split('-').map(Number);
+  const majorDate = new Date(year, month, day);
+
+  // Normalisation des horaires
+  train.horaires = train.horaires.map(h => {
+    const deltaDays = (h.date.getTime() - majorDate.getTime()) / (24*60*60*1000);
+    if (deltaDays >= 0.5) {
+      h.date = new Date(h.date.getTime() - 24*60*60*1000);
+    } else if (deltaDays <= -0.5) {
+      h.date = new Date(h.date.getTime() + 24*60*60*1000);
+    }
+    return h;
+  });
+
+  // Tri final après normalisation
+  train.horaires.sort((a,b) => a.date - b.date);
+
+  const firstDate = train.horaires[0].date;
+  // --- Fin de la normalisation ---
+
+  const card = document.createElement('div');
+  card.className = 'train-card';
+  card.dataset.train = train.trainNumber;
+
+  let isNextDay = train.horaires.some(h => h.date.getDate() !== today);
+  if (isNextDay) card.classList.add('next-day');
+
+  let html = `<h3>${train.trainNumber}</h3><ul>`;
+  train.horaires.forEach(h => {
+    html += `<li>${h.gare} - ${formatTime(h.date)}</li>`;
+  });
+  html += '</ul>';
+
+  card.innerHTML = html;
+  card.addEventListener('click', () => {
+    card.classList.toggle('selected');
+    mettreAJourSelection();
+  });
+
+  return { card, firstDate };
+});
 
   // Trier cartes par date du premier départ
   cartes.sort((a, b) => a.firstDate - b.firstDate);
