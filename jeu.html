@@ -30,6 +30,40 @@
     text-align: center;
     max-width: 400px;
   }
+  #scoreDisplay {
+    margin-top: 10px;
+    font-size: 24px;
+    font-weight: bold;
+    color: yellow;
+  }
+  #gameOverOverlay {
+    position: fixed;
+    top:0; left:0; right:0; bottom:0;
+    background: rgba(0,0,0,0.9);
+    color: #f33;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    font-family: 'Orbitron', monospace;
+    font-size: 32px;
+    z-index: 1000;
+    visibility: hidden;
+  }
+  #gameOverOverlay button {
+    margin-top: 20px;
+    font-size: 20px;
+    padding: 10px 20px;
+    background: #0ff;
+    border: none;
+    color: #000;
+    cursor: pointer;
+    border-radius: 5px;
+    font-weight: bold;
+  }
+  #gameOverOverlay button:hover {
+    background: #0cc;
+  }
 </style>
 </head>
 <body>
@@ -42,13 +76,23 @@
   Évite les <span style="color: red;">cases rouges (suppression)</span>.<br>
   Les <span style="color: orange;">cases oranges</span> ralentissent ou accélèrent le train pendant 2s.<br>
   La vitesse augmente progressivement avec le temps.<br>
-  Score : <span id="score">0</span>
+</div>
+<div id="scoreDisplay">Score : 0</div>
+
+<div id="gameOverOverlay">
+  <div id="gameOverText"></div>
+  <button id="restartBtn">Recommencer</button>
 </div>
 
 <script>
 (() => {
   const canvas = document.getElementById("gameCanvas");
   const ctx = canvas.getContext("2d");
+
+  const scoreDisplay = document.getElementById("scoreDisplay");
+  const gameOverOverlay = document.getElementById("gameOverOverlay");
+  const gameOverText = document.getElementById("gameOverText");
+  const restartBtn = document.getElementById("restartBtn");
 
   const gridSize = 20;
   const cols = canvas.width / gridSize;
@@ -74,9 +118,10 @@
   let oranges = [];
 
   let score = 0;
-  const scoreEl = document.getElementById("score");
 
-  // Fonction utilitaire pour générer une position libre (pas sur train, ni sur perturbations)
+  let gameRunning = true;
+  let speedIncreaseTimeout;
+
   function randomFreePosition() {
     let pos;
     do {
@@ -103,17 +148,14 @@
   }
 
   function placePerturbations() {
-    // Suppressions rouges
     suppressions = [];
     for(let i = 0; i < 8; i++) {
       suppressions.push(randomFreePosition());
     }
-    // Cases oranges
     oranges = [];
     for(let i = 0; i < 5; i++) {
       oranges.push(randomFreePosition());
     }
-    // Bétail jaune
     betail = randomFreePosition();
   }
 
@@ -165,17 +207,13 @@
     });
   }
 
-  // Augmentation progressive de la vitesse par paliers (plus c'est long, plus c'est rapide)
   function increaseSpeedOverTime() {
     if (baseSpeed > 80) {
-      baseSpeed -= 10; // augmente la vitesse (diminue le délai)
+      baseSpeed -= 10; // accélère le jeu
     }
-    scheduleNextSpeedIncrease();
-  }
-  function scheduleNextSpeedIncrease() {
-    setTimeout(() => {
+    speedIncreaseTimeout = setTimeout(() => {
       increaseSpeedOverTime();
-    }, 15000); // toutes les 15 sec, accélère un peu
+    }, 15000);
   }
 
   function applySpeedEffect(modifier) {
@@ -187,55 +225,46 @@
   }
 
   function gameLoop() {
-    // Change direction si pas demi-tour
+    if (!gameRunning) return;
+
     if ((nextDirection.x !== -direction.x || nextDirection.y !== -direction.y)) {
       direction = nextDirection;
     }
 
     const head = { x: train[0].x + direction.x, y: train[0].y + direction.y };
 
-    // Rebond sur les bords (torique)
     if (head.x < 0) head.x = cols - 1;
     else if (head.x >= cols) head.x = 0;
     if (head.y < 0) head.y = rows - 1;
     else if (head.y >= rows) head.y = 0;
 
-    // Collision train (sauf queue)
     if (train.slice(0, -1).some(t => t.x === head.x && t.y === head.y)) {
-      alert("Perdu : collision avec votre propre train !");
-      resetGame();
+      gameOver("Collision avec votre propre train !");
       return;
     }
 
-    // Collision suppression rouge = perdu
     if (isOnSuppression(head)) {
-      alert("Perdu : votre train a rencontré une suppression !");
-      resetGame();
+      gameOver("Votre train a rencontré une suppression !");
       return;
     }
 
     train.unshift(head);
 
-    // Collision betail jaune : grandir + score + nouvelle position
     if (betail && head.x === betail.x && head.y === betail.y) {
       score++;
-      scoreEl.textContent = score;
+      scoreDisplay.textContent = "Score : " + score;
       betail = randomFreePosition();
     } else {
-      train.pop(); // sinon, on retire la queue (pas de croissance)
+      train.pop();
     }
 
-    // Collision cases oranges
     if (isOnOrange(head)) {
-      // Choix aléatoire : accélère ou ralentit
       if (Math.random() < 0.5) {
-        applySpeedEffect(-100); // accélère (moins de délai)
+        applySpeedEffect(-100);
       } else {
-        applySpeedEffect(150); // ralentit (plus de délai)
+        applySpeedEffect(150);
       }
-      // On retire cette case orange après contact
       oranges = oranges.filter(p => !(p.x === head.x && p.y === head.y));
-      // On remet une nouvelle case orange ailleurs
       oranges.push(randomFreePosition());
     }
 
@@ -249,26 +278,30 @@
     train = [{ x: Math.floor(cols / 2), y: Math.floor(rows / 2) }];
     direction = { x: 0, y: -1 };
     nextDirection = direction;
-    speed = baseSpeed = 300;
+    baseSpeed = 300;
     speedModifier = 0;
-    betail = null;
-    suppressions = [];
-    oranges = [];
     score = 0;
-    scoreEl.textContent = score;
+    scoreDisplay.textContent = "Score : " + score;
+    gameRunning = true;
     placePerturbations();
     draw();
-    scheduleNextSpeedIncrease();
-    setTimeout(gameLoop, speed);
+    clearTimeout(speedIncreaseTimeout);
+    increaseSpeedOverTime();
+    gameOverOverlay.style.visibility = "hidden";
+    gameLoop();
+  }
+
+  function gameOver(message) {
+    gameRunning = false;
+    clearTimeout(speedIncreaseTimeout);
+    gameOverText.textContent = message + "\nScore final : " + score;
+    gameOverOverlay.style.visibility = "visible";
   }
 
   window.addEventListener("keydown", e => {
     switch(e.key) {
       case "ArrowUp":
         nextDirection = { x: 0, y: -1 };
-        break;
-      case "ArrowDown":
-        nextDirection = { x: 0, y: 1 };
         break;
       case "ArrowLeft":
         nextDirection = { x: -1, y: 0 };
@@ -279,9 +312,11 @@
     }
   });
 
-  // Démarrage
-  resetGame();
+  restartBtn.addEventListener("click", () => {
+    resetGame();
+  });
 
+  resetGame();
 })();
 </script>
 
