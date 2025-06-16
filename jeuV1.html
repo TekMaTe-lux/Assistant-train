@@ -1,0 +1,303 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <title>Train Bétail Mobile</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <style>
+    html, body {
+      margin: 0;
+      padding: 0;
+      background: black;
+      color: #0ff;
+      font-family: 'Orbitron', monospace;
+      text-align: center;
+      height: 100%;
+      display: flex;
+      flex-direction: column;
+      justify-content: flex-start;
+      align-items: center;
+    }
+    #container {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      width: 100%;
+    }
+    canvas {
+      border: 3px solid #0ff;
+      max-width: 100vmin;
+      max-height: 100vmin;
+      width: 100vmin;
+      height: 100vmin;
+    }
+    #info {
+      font-size: 16px;
+      margin: 10px;
+      max-width: 90%;
+    }
+    #controls {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: center;
+      margin-top: 10px;
+    }
+    .btn {
+      width: 60px;
+      height: 60px;
+      margin: 5px;
+      font-size: 30px;
+      background: #111;
+      color: #0ff;
+      border: 2px solid #0ff;
+      border-radius: 10px;
+      user-select: none;
+    }
+    #gameOverMessage {
+      position: absolute;
+      top: 40%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      color: #0ff;
+      font-size: 36px;
+      text-shadow: 0 0 10px #0ff;
+      background: rgba(0,0,0,0.8);
+      padding: 20px;
+      border: 3px solid #0ff;
+      border-radius: 10px;
+      display: none;
+      z-index: 1000;
+    }
+    #restartBtn {
+      margin-top: 20px;
+      font-size: 20px;
+      padding: 10px 30px;
+      border-radius: 10px;
+      border: 2px solid #0ff;
+      background: black;
+      color: #0ff;
+      cursor: pointer;
+      display: none;
+    }
+  </style>
+</head>
+<body>
+
+<h1>Train Bétail Mobile</h1>
+
+<div id="container">
+  <canvas id="gameCanvas" width="400" height="400"></canvas>
+  <div id="info">
+    Score : <span id="score">0</span> | Record : <span id="highscore">0</span>
+  </div>
+  <div id="controls">
+    <div class="btn" id="up">▲</div>
+    <div>
+      <div class="btn" id="left">◀</div>
+      <div class="btn" id="right">▶</div>
+    </div>
+    <div class="btn" id="down">▼</div>
+  </div>
+</div>
+
+<div id="gameOverMessage"></div>
+<button id="restartBtn">Rejouer</button>
+
+<script>
+(() => {
+  const canvas = document.getElementById("gameCanvas");
+  const ctx = canvas.getContext("2d");
+  let gridSize = 20, cols, rows;
+
+  function resizeCanvas() {
+    let size = Math.min(window.innerWidth, window.innerHeight * 0.8);
+    canvas.width = canvas.height = size;
+    gridSize = size / 20;
+    cols = rows = 20;
+  }
+  window.addEventListener("resize", resizeCanvas);
+  resizeCanvas();
+
+  let train, direction, nextDirection, score, highscore = 0;
+  let baseSpeed = 200, speedModifier = 0, betail, suppressions, oranges, vaches, vacheFrequency, gameStopped;
+
+  const messagesSuppression = [
+    "Supprimé : conducteur perdu !", "Supprimé : grève surprise.",
+    "Supprimé : hérissons envahissants.", "Supprimé : panne de réveil.",
+    "Supprimé : surcharge de blagues.", "Supprimé : café épuisé.",
+    "Supprimé : panne de signalisation lunaire.", "Supprimé : alignement cosmique défavorable."
+  ];
+
+  function initGame() {
+    train = [{x: 10, y: 10}];
+    direction = {x: 1, y: 0};
+    nextDirection = direction;
+    score = 0;
+    document.getElementById("score").textContent = score;
+    suppressions = []; oranges = []; vaches = [];
+    vacheFrequency = 15000;
+    gameStopped = false;
+    speedModifier = 0;
+    placePerturbations();
+    generateBetail();
+    gameLoop();
+    setTimeout(() => { scheduleVaches(); increaseVacheFrequency(); }, 60000);
+  }
+
+  function placePerturbations() {
+    for (let i = 0; i < 10; i++) suppressions.push(randomFreePosition());
+    for (let i = 0; i < 5; i++) oranges.push(randomFreePosition());
+  }
+
+  function randomFreePosition() {
+    let pos;
+    do {
+      pos = {x: Math.floor(Math.random() * cols), y: Math.floor(Math.random() * rows)};
+    } while (isOccupied(pos));
+    return pos;
+  }
+
+  function isOccupied(pos) {
+    return train.some(p => p.x === pos.x && p.y === pos.y)
+      || suppressions.some(p => p.x === pos.x && p.y === pos.y)
+      || oranges.some(p => p.x === pos.x && p.y === pos.y)
+      || (betail && betail.x === pos.x && betail.y === pos.y);
+  }
+
+  function draw() {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    suppressions.forEach(p => { ctx.fillStyle = "red"; ctx.fillRect(p.x * gridSize + 2, p.y * gridSize + 2, gridSize - 4, gridSize - 4); });
+    oranges.forEach(p => { ctx.fillStyle = "orange"; ctx.fillRect(p.x * gridSize + 4, p.y * gridSize + 4, gridSize - 8, gridSize - 8); });
+    if (betail) {
+      ctx.fillStyle = "yellow";
+      ctx.beginPath();
+      ctx.arc(betail.x * gridSize + gridSize/2, betail.y * gridSize + gridSize/2, gridSize/3, 0, 2*Math.PI);
+      ctx.fill();
+    }
+    vaches.forEach(band => {
+      band.forEach(p => {
+        ctx.fillStyle = "white";
+        ctx.beginPath();
+        ctx.arc(p.x * gridSize + gridSize/2, p.y * gridSize + gridSize/2, gridSize/3, 0, 2*Math.PI);
+        ctx.fill();
+      });
+    });
+    train.forEach((pos, i) => {
+      ctx.fillStyle = (i === 0) ? "#0ff" : "#088";
+      ctx.fillRect(pos.x * gridSize + 1, pos.y * gridSize + 1, gridSize - 2, gridSize - 2);
+    });
+  }
+
+  function update() {
+    if (gameStopped) return;
+    direction = nextDirection;
+    let newHead = { x: train[0].x + direction.x, y: train[0].y + direction.y };
+    if (newHead.x < 0) newHead.x = cols - 1;
+    if (newHead.x >= cols) newHead.x = 0;
+    if (newHead.y < 0) newHead.y = rows - 1;
+    if (newHead.y >= rows) newHead.y = 0;
+
+    if (train.some(p => p.x === newHead.x && p.y === newHead.y)) return gameOver("Collision avec soi-même !");
+    if (vaches.some(band => band.some(p => p.x === newHead.x && p.y === newHead.y))) return gameOver("Percuté des vaches !");
+    if (suppressions.some(p => p.x === newHead.x && p.y === newHead.y)) {
+      const msg = messagesSuppression[Math.floor(Math.random() * messagesSuppression.length)];
+      return gameOver(msg, true);
+    }
+
+    train.unshift(newHead);
+
+    if (betail && newHead.x === betail.x && newHead.y === betail.y) {
+      score++;
+      document.getElementById("score").textContent = score;
+      if (score > highscore) {
+        highscore = score;
+        document.getElementById("highscore").textContent = highscore;
+        localStorage.setItem("highscore", highscore);
+      }
+      generateBetail();
+    } else {
+      train.pop();
+    }
+
+    if (oranges.some(p => p.x === newHead.x && p.y === newHead.y)) {
+      speedModifier = (Math.random() < 0.5) ? -150 : 150;
+      setTimeout(() => { speedModifier = 0; }, 2000);
+    }
+
+    moveVaches();
+  }
+
+  function moveVaches() {
+    vaches.forEach(band => band.forEach(v => v.x--));
+    vaches = vaches.filter(band => band.some(v => v.x >= 0));
+  }
+
+  function scheduleVaches() {
+    if (gameStopped) return;
+    const size = Math.floor(Math.random()*4)+1;
+    const yStart = Math.floor(Math.random() * (rows - size));
+    const band = Array.from({length: size}, (_, i) => ({x: cols-1, y: yStart+i}));
+    vaches.push(band);
+    setTimeout(scheduleVaches, vacheFrequency);
+  }
+
+  function increaseVacheFrequency() {
+    if (vacheFrequency > 3000) vacheFrequency -= 1000;
+    setTimeout(increaseVacheFrequency, 60000);
+  }
+
+  function gameOver(message) {
+    gameStopped = true;
+    document.getElementById("gameOverMessage").textContent = message + "\nScore: " + score;
+    document.getElementById("gameOverMessage").style.display = "block";
+    document.getElementById("restartBtn").style.display = "inline-block";
+  }
+
+  function gameLoop() {
+    update();
+    draw();
+    if (!gameStopped) setTimeout(gameLoop, Math.max(50, baseSpeed + speedModifier));
+  }
+
+  function generateBetail() {
+    betail = randomFreePosition();
+  }
+
+  // Contrôles clavier
+  window.addEventListener("keydown", e => {
+    handleDirection(e.key);
+  });
+
+  // Contrôles tactiles
+  document.getElementById("up").addEventListener("click", () => handleDirection("ArrowUp"));
+  document.getElementById("down").addEventListener("click", () => handleDirection("ArrowDown"));
+  document.getElementById("left").addEventListener("click", () => handleDirection("ArrowLeft"));
+  document.getElementById("right").addEventListener("click", () => handleDirection("ArrowRight"));
+
+  function handleDirection(key) {
+    switch(key) {
+      case "ArrowUp": if(direction.y !== 1) nextDirection = {x: 0, y: -1}; break;
+      case "ArrowDown": if(direction.y !== -1) nextDirection = {x: 0, y: 1}; break;
+      case "ArrowLeft": if(direction.x !== 1) nextDirection = {x: -1, y: 0}; break;
+      case "ArrowRight": if(direction.x !== -1) nextDirection = {x: 1, y: 0}; break;
+    }
+  }
+
+  document.getElementById("restartBtn").addEventListener("click", () => {
+    document.getElementById("gameOverMessage").style.display = "none";
+    document.getElementById("restartBtn").style.display = "none";
+    initGame();
+  });
+
+  if (localStorage.getItem("highscore")) {
+    highscore = parseInt(localStorage.getItem("highscore"));
+    document.getElementById("highscore").textContent = highscore;
+  }
+
+  initGame();
+})();
+</script>
+</body>
+</html>
