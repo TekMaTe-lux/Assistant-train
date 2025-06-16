@@ -2,13 +2,18 @@
 <html lang="fr">
 <head>
   <meta charset="UTF-8">
-  <title>Train Bétail V5</title>
+  <title>Train Bétail V6</title>
   <style>
     body {
       background: black;
       color: #0ff;
       font-family: 'Orbitron', monospace;
       text-align: center;
+      margin: 0;
+    }
+    h1 {
+      font-size: 32px;
+      text-shadow: 0 0 5px #0ff, 0 0 10px #0ff, 0 0 20px #0ff;
     }
     canvas {
       border: 3px solid #0ff;
@@ -17,247 +22,246 @@
     #info {
       margin-top: 15px;
       font-size: 18px;
-      max-width: 400px;
-      margin-left: auto;
-      margin-right: auto;
+      max-width: 500px;
+      margin: auto;
+    }
+    #startScreen {
+      position: absolute;
+      top: 0; left: 0;
+      width: 100%; height: 100%;
+      background: rgba(0,0,0,0.9);
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      z-index: 100;
+    }
+    #startBtn {
+      font-size: 24px;
+      padding: 15px 40px;
+      border: 3px solid #0ff;
+      color: #0ff;
+      background: transparent;
+      text-shadow: 0 0 5px #0ff, 0 0 10px #0ff;
+      cursor: pointer;
     }
     #gameOverMessage {
       position: absolute;
-      top: 50%;
-      left: 50%;
+      top: 50%; left: 50%;
       transform: translate(-50%, -50%);
-      color: #0ff;
-      font-family: 'Orbitron', monospace;
-      font-size: 48px;
-      text-shadow: 0 0 5px #0ff, 0 0 10px #0ff, 0 0 20px #0ff, 0 0 40px #0ff;
       background: rgba(0,0,0,0.8);
-      padding: 20px 40px;
       border: 3px solid #0ff;
+      padding: 20px 40px;
       border-radius: 10px;
+      font-size: 40px;
+      text-shadow: 0 0 5px #0ff, 0 0 10px #0ff;
       display: none;
       z-index: 1000;
-    }
-    #restartBtn {
-      margin-top: 20px;
-      font-size: 20px;
-      padding: 10px 30px;
-      border-radius: 10px;
-      border: 2px solid #0ff;
-      background: black;
-      color: #0ff;
-      cursor: pointer;
-      display: none;
     }
   </style>
 </head>
 <body>
 
-<h1>Train Bétail - Évite les suppressions !</h1>
+<div id="startScreen">
+  <h1>Train Bétail V6</h1>
+  <button id="startBtn">Démarrer</button>
+</div>
+
+<div id="gameOverMessage"></div>
+
 <canvas id="gameCanvas" width="400" height="400"></canvas>
+
 <div id="info">
   Utilise les <b>flèches</b> pour tourner.<br>
   Prends le <span style="color: yellow;">bétail jaune</span> pour grandir.<br>
   Évite les <span style="color: red;">suppressions</span>.<br>
-  Les <span style="color: orange;">oranges</span> accélèrent ou ralentissent.<br>
-  Attention aux <span style="color: white;">bandes de vaches</span> !<br>
-  Score : <span id="score">0</span> | Record : <span id="highscore">0</span>
+  Attention aux <span style="color: white;">vaches blanches</span> qui traversent !<br>
+  Score : <span id="score">0</span>
 </div>
-
-<div id="gameOverMessage"></div>
-<button id="restartBtn">Rejouer</button>
 
 <script>
 (() => {
   const canvas = document.getElementById("gameCanvas");
   const ctx = canvas.getContext("2d");
-  const gridSize = 20, cols = canvas.width / gridSize, rows = canvas.height / gridSize;
+  const scoreEl = document.getElementById("score");
 
-  let train, direction, nextDirection, score, highscore = 0;
-  let baseSpeed = 200, speedModifier = 0, betail, suppressions, oranges, vaches, vacheFrequency, gameStopped;
+  const gridSize = 20, cols = 20, rows = 20;
+  let train = [{x:10, y:10}], direction = {x:1, y:0}, nextDirection = {x:1,y:0};
+  let baseSpeed = 200, speedModifier = 0, score = 0;
+  let oranges = [], suppressions = [], betail = null;
+  let vaches = [], vachesActive = false, vacheFrequency = 15000;
+  let gameStopped = false;
+
+  const colorTrainHead = "#0ff", colorTrainBody = "#088", colorBetail = "yellow";
+  const colorSuppression = "red", colorAcceleration = "orange";
 
   const messagesSuppression = [
     "Supprimé : conducteur perdu !",
+    "Supprimé : Incident voyageur (qui promène son chat 🐈)",
     "Supprimé : grève surprise.",
     "Supprimé : hérissons envahissants.",
     "Supprimé : panne de réveil.",
     "Supprimé : surcharge de blagues.",
     "Supprimé : café épuisé.",
     "Supprimé : panne de signalisation lunaire.",
+    "Supprimé : Feu de talus improvisé 🔥",
+    "Supprimé : Conducteur en RTT",
     "Supprimé : alignement cosmique défavorable."
   ];
 
+    document.getElementById("startBtn").onclick = () => {
+    document.getElementById("startScreen").style.display = "none";
+    initGame();
+  };
+
   function initGame() {
-    train = [{x: 10, y: 10}];
-    direction = {x: 1, y: 0};
-    nextDirection = direction;
-    score = 0;
-    document.getElementById("score").textContent = score;
-    suppressions = []; oranges = []; vaches = [];
-    vacheFrequency = 15000;
-    gameStopped = false;
-    speedModifier = 0;
     placePerturbations();
     generateBetail();
     gameLoop();
-    setTimeout(() => { scheduleVaches(); increaseVacheFrequency(); }, 60000);
+    setTimeout(() => { vachesActive = true; scheduleNextVaches(); increaseVacheFrequency(); }, 60000);
   }
 
   function placePerturbations() {
-    for (let i = 0; i < 10; i++) suppressions.push(randomFreePosition());
-    for (let i = 0; i < 5; i++) oranges.push(randomFreePosition());
+    oranges = [], suppressions = [];
+    for(let i=0; i<10; i++) oranges.push(randomFreePosition());
+    for(let i=0; i<5; i++) suppressions.push(randomFreePosition());
   }
 
   function randomFreePosition() {
-    let pos;
-    do {
-      pos = {x: Math.floor(Math.random() * cols), y: Math.floor(Math.random() * rows)};
-    } while (isOccupied(pos));
-    return pos;
+    while(true) {
+      const p = {x: Math.floor(Math.random()*cols), y: Math.floor(Math.random()*rows)};
+      if (!isOccupied(p)) return p;
+    }
   }
 
-  function isOccupied(pos) {
-    return train.some(p => p.x === pos.x && p.y === pos.y)
-      || suppressions.some(p => p.x === pos.x && p.y === pos.y)
-      || oranges.some(p => p.x === pos.x && p.y === pos.y)
-      || (betail && betail.x === pos.x && betail.y === pos.y);
+  function isOccupied(p) {
+    return train.some(t => t.x==p.x && t.y==p.y) ||
+           oranges.some(o => o.x==p.x && o.y==p.y) ||
+           suppressions.some(s => s.x==p.x && s.y==p.y) ||
+           (betail && betail.x==p.x && betail.y==p.y);
+  }
+
+  function scheduleNextVaches() {
+    if (!gameStopped) {
+      generateVaches();
+      setTimeout(scheduleNextVaches, vacheFrequency);
+    }
+  }
+
+  function generateVaches() {
+    const startRow = Math.floor(Math.random()*rows);
+    const length = Math.floor(Math.random()*4)+1; // 1 à 4 cases
+    vaches.push({ row: startRow, col: -length, length });
+  }
+
+  function increaseVacheFrequency() {
+    if(vacheFrequency > 5000) vacheFrequency -= 2000;
+    setTimeout(increaseVacheFrequency, 60000);
   }
 
   function draw() {
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    suppressions.forEach(p => { ctx.fillStyle = "red"; ctx.fillRect(p.x * gridSize + 2, p.y * gridSize + 2, gridSize - 4, gridSize - 4); });
-    oranges.forEach(p => { ctx.fillStyle = "orange"; ctx.fillRect(p.x * gridSize + 4, p.y * gridSize + 4, gridSize - 8, gridSize - 8); });
-    if (betail) {
-      ctx.fillStyle = "yellow";
+    ctx.clearRect(0,0,canvas.width,canvas.height);
+    ctx.strokeStyle = "#222";
+    for(let x=0;x<=cols;x++) { ctx.beginPath(); ctx.moveTo(x*gridSize,0); ctx.lineTo(x*gridSize,400); ctx.stroke(); }
+    for(let y=0;y<=rows;y++) { ctx.beginPath(); ctx.moveTo(0,y*gridSize); ctx.lineTo(400,y*gridSize); ctx.stroke(); }
+
+    suppressions.forEach(p=>{ ctx.fillStyle=colorSuppression; ctx.fillRect(p.x*gridSize+2,p.y*gridSize+2,gridSize-4,gridSize-4); });
+    oranges.forEach(p=>{ ctx.fillStyle=colorAcceleration; ctx.fillRect(p.x*gridSize+4,p.y*gridSize+4,gridSize-8,gridSize-8); });
+
+    if(betail) {
+      ctx.fillStyle = colorBetail;
       ctx.beginPath();
-      ctx.arc(betail.x * gridSize + gridSize/2, betail.y * gridSize + gridSize/2, gridSize/3, 0, 2*Math.PI);
+      ctx.arc(betail.x*gridSize+gridSize/2, betail.y*gridSize+gridSize/2, gridSize/3, 0, 2*Math.PI);
       ctx.fill();
     }
-    vaches.forEach(band => {
-      band.forEach(p => {
-        ctx.fillStyle = "white";
-        ctx.beginPath();
-        ctx.arc(p.x * gridSize + gridSize/2, p.y * gridSize + gridSize/2, gridSize/3, 0, 2*Math.PI);
-        ctx.fill();
-      });
+
+    vaches.forEach(v => {
+      ctx.fillStyle = "white";
+      for (let i = 0; i < v.length; i++) {
+        ctx.fillRect((v.col+i)*gridSize+5, v.row*gridSize+5, gridSize-10, gridSize-10);
+      }
     });
-    train.forEach((pos, i) => {
-      ctx.fillStyle = (i === 0) ? "#0ff" : "#088";
-      ctx.fillRect(pos.x * gridSize + 1, pos.y * gridSize + 1, gridSize - 2, gridSize - 2);
+
+    train.forEach((pos,i)=>{
+      ctx.fillStyle = (i===0) ? colorTrainHead : colorTrainBody;
+      ctx.fillRect(pos.x*gridSize+1,pos.y*gridSize+1,gridSize-2,gridSize-2);
     });
+  }
+
+  function moveVaches() {
+    vaches.forEach(v => v.col++);
+    vaches = vaches.filter(v => v.col - v.length < cols);
   }
 
   function update() {
     if (gameStopped) return;
-    direction = nextDirection;
-    let newHead = { x: train[0].x + direction.x, y: train[0].y + direction.y };
-    if (newHead.x < 0) newHead.x = cols - 1;
-    if (newHead.x >= cols) newHead.x = 0;
-    if (newHead.y < 0) newHead.y = rows - 1;
-    if (newHead.y >= rows) newHead.y = 0;
 
-    if (train.some(p => p.x === newHead.x && p.y === newHead.y)) return gameOver("Collision avec soi-même !");
-    if (vaches.some(band => band.some(p => p.x === newHead.x && p.y === newHead.y))) return gameOver("Percuté des vaches !");
-    if (suppressions.some(p => p.x === newHead.x && p.y === newHead.y)) {
-      const msg = messagesSuppression[Math.floor(Math.random() * messagesSuppression.length)];
-      return gameOver(msg, true);
+    direction = nextDirection;
+    let newHead = {x: train[0].x + direction.x, y: train[0].y + direction.y};
+
+    // Wrap around
+    if(newHead.x<0) newHead.x=cols-1; if(newHead.x>=cols) newHead.x=0;
+    if(newHead.y<0) newHead.y=rows-1; if(newHead.y>=rows) newHead.y=0;
+
+    if(isOnTrain(newHead)) { showGameOver("Collision avec soi-même !"); return; }
+
+    for (let v of vaches) {
+      for (let i=0; i<v.length; i++) {
+        if (newHead.x == v.col+i && newHead.y == v.row) {
+          showGameOver("Collision avec des vaches !");
+          return;
+        }
+      }
     }
 
     train.unshift(newHead);
 
-    if (betail && newHead.x === betail.x && newHead.y === betail.y) {
-      score++;
-      document.getElementById("score").textContent = score;
-      if (score > highscore) {
-        highscore = score;
-        document.getElementById("highscore").textContent = highscore;
-        localStorage.setItem("highscore", highscore);
-      }
-      generateBetail();
-    } else {
-      train.pop();
+    if(betail && newHead.x==betail.x && newHead.y==betail.y) {
+      score++; scoreEl.textContent = score; generateBetail();
+    } else train.pop();
+
+    if(isOnSuppression(newHead)) {
+      handleSuppression(); return;
     }
 
-    if (oranges.some(p => p.x === newHead.x && p.y === newHead.y)) {
-      speedModifier = (Math.random() < 0.5) ? -150 : 150;
-      setTimeout(() => { speedModifier = 0; }, 2000);
+    if(isOnOrange(newHead)) {
+      speedModifier = (Math.random()<0.5) ? -150 : 150;
+      setTimeout(()=>speedModifier=0,2000);
     }
 
-    moveVaches();
+    if(vachesActive) moveVaches();
   }
 
-  function moveVaches() {
-    vaches.forEach(band => band.forEach(v => v.x--));
-    vaches = vaches.filter(band => band.some(v => v.x >= 0));
+  function handleSuppression() {
+    const msg = messagesSuppression[Math.floor(Math.random()*messagesSuppression.length)];
+    showGameOver("Suppression : "+msg);
   }
 
-  function scheduleVaches() {
-    if (gameStopped) return;
-    const size = Math.floor(Math.random()*4)+1;
-    const yStart = Math.floor(Math.random() * (rows - size));
-    const band = Array.from({length: size}, (_, i) => ({x: cols-1, y: yStart+i}));
-    vaches.push(band);
-    setTimeout(scheduleVaches, vacheFrequency);
-  }
-
-  function increaseVacheFrequency() {
-    if (vacheFrequency > 3000) vacheFrequency -= 1000;
-    setTimeout(increaseVacheFrequency, 60000);
-  }
-
-  function gameOver(message, secousse=false) {
+  function showGameOver(msg) {
     gameStopped = true;
-    document.getElementById("gameOverMessage").textContent = message + "\nScore: " + score;
-    document.getElementById("gameOverMessage").style.display = "block";
-    document.getElementById("restartBtn").style.display = "inline-block";
-    if (secousse) shake();
-  }
-
-  function shake() {
-    let intensity = 10, count = 0;
-    const shakeInterval = setInterval(() => {
-      count++;
-      canvas.style.transform = `translate(${(Math.random()-0.5)*intensity}px, ${(Math.random()-0.5)*intensity}px)`;
-      if (count > 10) {
-        clearInterval(shakeInterval);
-        canvas.style.transform = "";
-      }
-    }, 50);
+    const div = document.getElementById("gameOverMessage");
+    div.textContent = msg + "\nScore: " + score;
+    div.style.display = "block";
   }
 
   function gameLoop() {
     update();
     draw();
-    if (!gameStopped) setTimeout(gameLoop, Math.max(50, baseSpeed + speedModifier));
+    setTimeout(gameLoop, Math.max(50, baseSpeed+speedModifier));
   }
 
-  function generateBetail() {
-    betail = randomFreePosition();
-  }
+  function isOnTrain(p) { return train.some(t=>t.x==p.x&&t.y==p.y); }
+  function isOnOrange(p) { return oranges.some(o=>o.x==p.x&&o.y==p.y); }
+  function isOnSuppression(p) { return suppressions.some(s=>s.x==p.x&&s.y==p.y); }
 
-  window.addEventListener("keydown", e => {
-    switch(e.key) {
-      case "ArrowUp": if(direction.y !== 1) nextDirection = {x: 0, y: -1}; break;
-      case "ArrowDown": if(direction.y !== -1) nextDirection = {x: 0, y: 1}; break;
-      case "ArrowLeft": if(direction.x !== 1) nextDirection = {x: -1, y: 0}; break;
-      case "ArrowRight": if(direction.x !== -1) nextDirection = {x: 1, y: 0}; break;
-    }
+  window.addEventListener("keydown", e=>{
+    if(e.key==="ArrowUp" && direction.y!==1) nextDirection={x:0,y:-1};
+    if(e.key==="ArrowDown" && direction.y!==-1) nextDirection={x:0,y:1};
+    if(e.key==="ArrowLeft" && direction.x!==1) nextDirection={x:-1,y:0};
+    if(e.key==="ArrowRight" && direction.x!==-1) nextDirection={x:1,y:0};
   });
 
-  document.getElementById("restartBtn").addEventListener("click", () => {
-    document.getElementById("gameOverMessage").style.display = "none";
-    document.getElementById("restartBtn").style.display = "none";
-    initGame();
-  });
-
-  // Charger le record localStorage
-  if (localStorage.getItem("highscore")) {
-    highscore = parseInt(localStorage.getItem("highscore"));
-    document.getElementById("highscore").textContent = highscore;
-  }
-
-  initGame();
 })();
 </script>
-
 </body>
 </html>
