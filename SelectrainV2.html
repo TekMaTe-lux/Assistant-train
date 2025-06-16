@@ -2,37 +2,65 @@
 <html lang="fr">
 <head>
   <meta charset="UTF-8">
-  <title>Selection des trains</title>
+  <title>Choix des trains</title>
   <style>
-    .train-card { border: 1px solid #ccc; margin: 5px; padding: 10px; cursor: pointer; }
-    .train-card.selected { background-color: #cfc; }
+    body {
+      font-family: Arial, sans-serif;
+      background: #f9f9f9;
+    }
+    .train-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+      gap: 10px;
+      margin-top: 20px;
+    }
+    .train-card {
+      border: 1px solid #999;
+      border-radius: 8px;
+      padding: 8px;
+      background: #fff;
+      text-align: center;
+      cursor: pointer;
+      transition: transform 0.2s, box-shadow 0.2s;
+    }
+    .train-card:hover {
+      transform: scale(1.03);
+      box-shadow: 0 2px 6px rgba(0,0,0,0.2);
+    }
+    .train-card.selected {
+      background-color: #b5f0b5;
+      border-color: #4CAF50;
+    }
+    h3 {
+      font-size: 16px;
+      margin: 5px 0;
+    }
+    p {
+      margin: 2px 0;
+      font-size: 14px;
+    }
     .nogare { color: red; }
   </style>
 </head>
 <body>
 
-<h1>Choisissez les trains</h1>
+<h1>Choix des trains</h1>
 
-<div>
-  <label> Sens :
-    <select id="sensSelect">
-      <option value="departures">Depuis Luxembourg</option>
-      <option value="arrivals">Vers Luxembourg</option>
-    </select>
-  </label>
+<label for="sensSelect">Sens :</label>
+<select id="sensSelect">
+  <option value="departures">Depuis Luxembourg</option>
+  <option value="arrivals">Vers Luxembourg</option>
+</select>
 
-  <label> Gare :
-    <select id="gareSelect"></select>
-  </label>
+<label for="gareSelect">Gare :</label>
+<select id="gareSelect"></select>
 
-  <button id="chargerBtn">Charger les trains</button>
-</div>
+<button id="chargerBtn">Charger les trains</button>
 
 <div id="trainContainer"></div>
 
-<div id="selectedTrains"></div>
-
-<button onclick="validerSelection()">Valider</button>
+<h2>Trains sélectionnés :</h2>
+<div id="selectedTrains"><p>Aucun train sélectionné.</p></div>
 
 <script>
 const apiKey = '242fac11-6d98-45fb-93df-28174d362447';
@@ -45,7 +73,6 @@ const gares = [
 
 const gareLuxId = 'stop_area:SNCF:82001000';
 
-// Gestion du menu dynamique des gares selon le sens
 const sensSelect = document.getElementById('sensSelect');
 const gareSelect = document.getElementById('gareSelect');
 const chargerBtn = document.getElementById('chargerBtn');
@@ -130,21 +157,14 @@ async function chargerTrainsDepuisLux(gareId) {
       return direction.toLowerCase().includes(getGareLabelById(gareId).toLowerCase());
     });
   }
-
-  afficherCartes(trains, 'departures');
+  afficherCartes(trains);
 }
 
 async function chargerTrainsVersLux(gareId) {
   const datetime = getTodayDatetime();
   let tousLesTrains = [];
 
-  let garesFiltrees = [];
-  if(gareId === 'tous'){
-    garesFiltrees = gares;
-  } else {
-    const g = gares.find(g => g.id === gareId);
-    if(g) garesFiltrees = [g];
-  }
+  let garesFiltrees = gareId === 'tous' ? gares : gares.filter(g => g.id === gareId);
 
   for (const gare of garesFiltrees) {
     const url = `https://api.sncf.com/v1/coverage/sncf/stop_areas/${gare.id}/departures?datetime=${datetime}&duration=86400&count=200`;
@@ -169,9 +189,7 @@ function getGareLabelById(id) {
 
 async function fetchTrains(url) {
   try {
-    const resp = await fetch(url, {
-      headers: { 'Authorization': 'Basic ' + btoa(apiKey + ':') }
-    });
+    const resp = await fetch(url, { headers: { 'Authorization': 'Basic ' + btoa(apiKey + ':') } });
     if(!resp.ok) throw new Error(`Erreur API: ${resp.status}`);
     const data = await resp.json();
     return data.departures || [];
@@ -184,25 +202,18 @@ async function fetchTrains(url) {
 function afficherCartesVersLux(trains) {
   const container = document.getElementById("trainContainer");
   container.innerHTML = '';
+  container.className = 'train-grid';
 
   const grouped = {};
   trains.forEach(train => {
     const info = train.display_informations || {};
     const trainNumber = info.headsign || 'Inconnu';
-
     if(!grouped[trainNumber]){
-      grouped[trainNumber] = {
-        trainNumber,
-        horaires: []
-      };
+      grouped[trainNumber] = { trainNumber, horaires: [] };
     }
-
     const heureDepart = parseSNCFDate(train.stop_date_time.departure_date_time);
     const timeDepart = formatTime(heureDepart);
-    grouped[trainNumber].horaires.push({
-      gare: train.gareDepart,
-      heure: timeDepart
-    });
+    grouped[trainNumber].horaires.push({ gare: train.gareDepart, heure: timeDepart });
   });
 
   for(const trainNum in grouped){
@@ -211,10 +222,9 @@ function afficherCartesVersLux(trains) {
     card.className = 'train-card';
     card.dataset.train = trainNum;
 
-    let html = `<h3>Train ${train.trainNumber}</h3>`;
-    html += '<ul>';
+    let html = `<h3>Train ${train.trainNumber}</h3><ul>`;
     train.horaires.forEach(h => {
-      html += `<li>${h.gare} - Départ: ${h.heure}</li>`;
+      html += `<li>${h.gare} - ${h.heure}</li>`;
     });
     html += '</ul>';
 
@@ -229,9 +239,10 @@ function afficherCartesVersLux(trains) {
   document.getElementById('selectedTrains').innerHTML = '';
 }
 
-function afficherCartes(trains, type) {
+function afficherCartes(trains) {
   const container = document.getElementById("trainContainer");
   container.innerHTML = '';
+  container.className = 'train-grid';
 
   if(trains.length === 0){
     container.innerHTML = `<p class="nogare">Aucun train trouvé pour ces critères.</p>`;
@@ -245,14 +256,11 @@ function afficherCartes(trains, type) {
     card.dataset.train = info.headsign || 'Inconnu';
 
     const depTime = formatTime(parseSNCFDate(train.stop_date_time.departure_date_time));
-
     let html = `<h3>Train ${info.headsign || '???'}</h3>`;
-
     const direction = info.direction || '';
     if (direction.trim() !== "") {
       html += `<p><strong>Destination :</strong> ${direction}</p>`;
     }
-
     html += `<p><strong>Départ :</strong> ${depTime}</p>`;
 
     card.innerHTML = html;
@@ -279,16 +287,6 @@ function mettreAJourSelection() {
   });
   html += '</ul>';
   container.innerHTML = html;
-}
-
-function validerSelection() {
-  const selected = [...document.querySelectorAll('.train-card.selected')];
-  if(selected.length === 0){
-    alert('Veuillez sélectionner au moins un train.');
-    return;
-  }
-  const trainsSelectionnes = selected.map(card => card.dataset.train);
-  alert('Trains sélectionnés :\n' + trainsSelectionnes.join('\n'));
 }
 </script>
 
