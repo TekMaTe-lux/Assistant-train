@@ -1,485 +1,237 @@
 <!DOCTYPE html>
 <html lang="fr">
 <head>
-<meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Train Bétail - Jeu Snake amélioré</title>
-<style>
-  body {
-    background-color: #000;
-    color: #0ff;
-    font-family: 'Orbitron', monospace;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    margin: 0; padding: 0;
-    user-select: none;
-  }
-  h1 {
-    margin-top: 20px;
-  }
-  #gameCanvas {
-    background-color: #111;
-    border: 3px solid #0ff;
-    margin-top: 20px;
-    display: block;
-  }
-  #info {
-    margin-top: 15px;
-    font-size: 18px;
-    text-align: center;
-    max-width: 400px;
-  }
-</style>
+  <meta charset="UTF-8">
+  <title>Train Bétail V4.1 CLEAN</title>
+  <style>
+    body {
+      background: black;
+      color: #0ff;
+      font-family: 'Orbitron', monospace;
+      text-align: center;
+    }
+    canvas {
+      border: 3px solid #0ff;
+      margin-top: 20px;
+    }
+    #info {
+      margin-top: 15px;
+      font-size: 18px;
+      max-width: 400px;
+      margin-left: auto;
+      margin-right: auto;
+    }
+    #gameOverMessage {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      color: #0ff;
+      font-family: 'Orbitron', monospace;
+      font-size: 48px;
+      text-shadow: 0 0 5px #0ff, 0 0 10px #0ff, 0 0 20px #0ff, 0 0 40px #0ff;
+      background: rgba(0,0,0,0.8);
+      padding: 20px 40px;
+      border: 3px solid #0ff;
+      border-radius: 10px;
+      display: none;
+      z-index: 1000;
+      pointer-events: none;
+      user-select: none;
+    }
+  </style>
 </head>
 <body>
-
-  <div id="gameOverMessage" style="
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  transform: translate(-50%, -50%);
-  color: #0ff;
-  font-family: 'Orbitron', monospace;
-  font-size: 48px;
-  text-shadow:
-    0 0 5px #0ff,
-    0 0 10px #0ff,
-    0 0 20px #0ff,
-    0 0 40px #0ff;
-  background: rgba(0,0,0,0.8);
-  padding: 20px 40px;
-  border: 3px solid #0ff;
-  border-radius: 10px;
-  display: none;
-  z-index: 1000;
-  pointer-events: none;
-  user-select: none;
-"></div>
 
 <h1>Train Bétail - Évite les suppressions !</h1>
 <canvas id="gameCanvas" width="400" height="400"></canvas>
 <div id="info">
   Utilise les <b>flèches</b> pour tourner.<br>
-  Prends le <span style="color: yellow;">bétail jaune</span> pour augmenter la capacité du train.<br>
-  Évite les <span style="color: red;">cases rouges (suppression)</span>.<br>
-  Les <span style="color: orange;">cases perturbations oranges</span> ralentissent ou accélèrent le train pendant 2s.<br>
-  Attention aux <span style="color: white;">vaches blanches</span> qui traversent la voie !<br> <!-- ajouté -->
-  La vitesse augmente progressivement avec le temps.<br>
+  Prends le <span style="color: yellow;">bétail jaune</span> pour grandir.<br>
+  Évite les <span style="color: red;">cases rouges (suppressions)</span>.<br>
+  Les <span style="color: orange;">oranges</span> accélèrent ou ralentissent.<br>
+  Attention aux <span style="color: white;">vaches blanches</span> !<br>
   Score : <span id="score">0</span>
 </div>
+
+<div id="gameOverMessage"></div>
 
 <script>
 (() => {
   const canvas = document.getElementById("gameCanvas");
   const ctx = canvas.getContext("2d");
+  const gridSize = 20, cols = canvas.width / gridSize, rows = canvas.height / gridSize;
 
-  const gridSize = 20;
-  const cols = canvas.width / gridSize;
-  const rows = canvas.height / gridSize;
-
-  const colorTrainHead = "#0ff";
-  const colorTrainBody = "#088";
-  const colorSuppression = "#f33";
-  const colorAcceleration = "#f90";
-  const colorBetail = "#ff0";
-  const colorVache = "#0a0"; // vert sombre pour vaches
-
-  let train = [{ x: Math.floor(cols/2), y: Math.floor(rows/2) }];
-  let direction = { x: 0, y: -1 }; // initial vers le haut
+  let train = [{x: 10, y: 10}];
+  let direction = {x: 1, y: 0};
   let nextDirection = direction;
-
-  let speed = 300;
-  let baseSpeed = 300;
-  let speedModifier = 0; // en ms, ajouté ou retiré temporairement
-  let speedEffectTimeout = null;
-
-  let betail = null; // case jaune (bétail)
+  let score = 0;
+  let baseSpeed = 200;
+  let speedModifier = 0;
+  let betail = null;
   let suppressions = [];
   let oranges = [];
-
-  let vaches = []; // tableau des vaches traversantes
-  let vachesActive = false; // elles commencent à 60s
-
-  let score = 0;
+  let vaches = [];
+  let vachesActive = false;
+  let vacheFrequency = 15000;
   let gameStopped = false;
-  const scoreEl = document.getElementById("score");
 
-  // Messages rigolos suppression
+  const colorTrainHead = "#0ff", colorTrainBody = "#088";
+  const colorSuppression = "red", colorAcceleration = "orange", colorBetail = "yellow", colorVache = "white";
   const messagesSuppression = [
-  "Train supprimé pour cause de vaches réfractaires sur les voies 🐄",
-  "Problème de personnel : le chef de bord est coincé à la cafétéria ☕",
-  "Suppression suite à une panne d'humour du conducteur 😂",
-  "Train annulé pour cause de grève surprise (évidemment)",
-  "Incident technique mystérieux. L'ingénieur cherche encore... 🔧",
-  "Train supprimé pour cause de 'conditions exceptionnelles' (comme d’hab)",
-  "Locomotive fatiguée. Repos obligatoire 🚂💤",
-  "Feu rouge bloqué sur rouge permanent 🔴",
-  "Erreur informatique : suppression automatique validée ✅",
-  "Train absorbé par un vortex administratif 🌀",
-  "Excès de confiance du planning prévisionnel 📅",
-  "La SNCF vous présente ses excuses (une fois de plus)",
-  "Train supprimé pour cause de feuille sur la voie 🍂",
-  "Incident sur la caténaire (les pigeons ont encore frappé) 🕊️⚡",
-  "Mauvaise humeur collective du jour 🌧️",
-  "Train annulé pour respecter la tradition luxembourgeoise",
-  "Suppression à titre purement préventif (on ne sait jamais...)",
-  "Chauffeur téléporté directement à la pause déjeuner 🥐"
+    "Supprimé pour absence du conducteur.",
+    "Supprimé pour travaux aléatoires.",
+    "Supprimé pour grève surprise.",
+    "Supprimé pour cause d'invasion de hérissons.",
+    "Supprimé pour défaillance du réveil du chef de bord.",
+    "Supprimé pour surcharge de passagers imaginaires.",
+    "Supprimé pour alignement des planètes défavorable.",
+    "Supprimé pour panne de distributeur de café."
   ];
 
-  // Fonction utilitaire pour générer une position libre (pas sur train, ni sur perturbations ni sur vaches)
+  function placePerturbations() {
+    for (let i = 0; i < 10; i++) suppressions.push(randomFreePosition());
+    for (let i = 0; i < 5; i++) oranges.push(randomFreePosition());
+  }
+
   function randomFreePosition() {
     let pos;
     do {
-      pos = { x: Math.floor(Math.random() * cols), y: Math.floor(Math.random() * rows) };
-    } while (
-      isOnTrain(pos) ||
-      isOnSuppression(pos) ||
-      isOnOrange(pos) ||
-      isOnVache(pos) ||
-      (betail && betail.x === pos.x && betail.y === pos.y)
-    );
+      pos = {x: Math.floor(Math.random() * cols), y: Math.floor(Math.random() * rows)};
+    } while (isOccupied(pos));
     return pos;
   }
 
-  function isOnTrain(pos) {
-    return train.some(t => t.x === pos.x && t.y === pos.y);
+  function isOccupied(pos) {
+    return train.some(p => p.x === pos.x && p.y === pos.y)
+      || suppressions.some(p => p.x === pos.x && p.y === pos.y)
+      || oranges.some(p => p.x === pos.x && p.y === pos.y)
+      || (betail && betail.x === pos.x && betail.y === pos.y);
   }
-  function isOnSuppression(pos) {
-    return suppressions.some(p => p.x === pos.x && p.y === pos.y);
-  }
-  function isOnOrange(pos) {
-    return oranges.some(p => p.x === pos.x && p.y === pos.y);
-  }
-  function isOnVache(pos) {
-    return vaches.some(v => v.x === pos.x && v.y === pos.y);
-  }
-
-  function placePerturbations() {
-    suppressions = [];
-    for(let i = 0; i < 8; i++) {
-      suppressions.push(randomFreePosition());
-    }
-    oranges = [];
-    for(let i = 0; i < 5; i++) {
-      oranges.push(randomFreePosition());
-    }
-    betail = randomFreePosition();
-  }
-
-  // --- VACHES ---
-
-  // Générer une ligne de 2 à 4 vaches traversant horizontalement
-  function generateVaches() {
-    const count = 2 + Math.floor(Math.random() * 3); // 2,3 ou 4 vaches
-    const y = Math.floor(Math.random() * rows);
-    let startX, dx;
-    if (Math.random() < 0.5) {
-      // traversent de gauche à droite
-      startX = 0 - count; // commencent hors champ à gauche
-      dx = 1;
-    } else {
-      // traversent de droite à gauche
-      startX = cols + count; // commencent hors champ à droite
-      dx = -1;
-    }
-    vaches = [];
-    for(let i = 0; i < count; i++) {
-      vaches.push({ x: startX + i, y: y, dx: dx });
-    }
-  }
-
-  // Déplacer les vaches chaque frame (une case selon dx)
-  function moveVaches() {
-    for(let i = 0; i < vaches.length; i++) {
-      vaches[i].x += vaches[i].dx;
-    }
-    // Supprimer les vaches complètement hors écran
-    vaches = vaches.filter(v => v.x >= -5 && v.x <= cols + 5);
-  }
-
-  // Dessiner les vaches
-  function drawVaches() {
-  vaches.forEach(v => {
-    ctx.fillStyle = "#fff"; // blanc pour les vaches
-    ctx.fillRect(v.x * gridSize + 1, v.y * gridSize + 1, gridSize - 2, gridSize - 2);
-  });
-}
-
-  // Gestion de la fréquence d'apparition des vaches
-  let vacheInterval = null;
-  let vacheFrequency = 20000; // initialement 20 sec entre apparition (après 60s début)
-  let gameStartTime = Date.now();
-
-  function scheduleNextVaches() {
-    if(!vachesActive) return;
-    generateVaches();
-    // programme la prochaine apparition avec un délai aléatoire autour de vacheFrequency
-    const delay = vacheFrequency / 2 + Math.random() * vacheFrequency;
-    vacheInterval = setTimeout(() => {
-      scheduleNextVaches();
-    }, delay);
-  }
-
-  // Augmentation progressive fréquence vaches (plus fréquentes toutes les minutes)
-  function increaseVacheFrequency() {
-    if(vacheFrequency > 5000) {
-      vacheFrequency -= 2000; // diminue délai entre vagues, donc plus fréquent
-    }
-    setTimeout(increaseVacheFrequency, 60000); // toutes les 60s on augmente la fréquence
-  }
-
-  // --- FIN VACHES ---
 
   function draw() {
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-    // Grille
-    ctx.strokeStyle = "#222";
-    for(let x = 0; x <= cols; x++) {
-      ctx.beginPath();
-      ctx.moveTo(x * gridSize, 0);
-      ctx.lineTo(x * gridSize, canvas.height);
-      ctx.stroke();
-    }
-    for(let y = 0; y <= rows; y++) {
-      ctx.beginPath();
-      ctx.moveTo(0, y * gridSize);
-      ctx.lineTo(canvas.width, y * gridSize);
-      ctx.stroke();
-    }
-
-    // Suppressions rouges
     suppressions.forEach(p => {
       ctx.fillStyle = colorSuppression;
       ctx.fillRect(p.x * gridSize + 2, p.y * gridSize + 2, gridSize - 4, gridSize - 4);
     });
 
-    // Oranges (bonus/malus)
     oranges.forEach(p => {
       ctx.fillStyle = colorAcceleration;
       ctx.fillRect(p.x * gridSize + 4, p.y * gridSize + 4, gridSize - 8, gridSize - 8);
     });
 
-    // Bétail jaune
     if (betail) {
       ctx.fillStyle = colorBetail;
       ctx.beginPath();
-      const cx = betail.x * gridSize + gridSize/2;
-      const cy = betail.y * gridSize + gridSize/2;
-      const radius = gridSize/3;
-      ctx.arc(cx, cy, radius, 0, 2*Math.PI);
+      ctx.arc(betail.x * gridSize + gridSize/2, betail.y * gridSize + gridSize/2, gridSize/3, 0, 2*Math.PI);
       ctx.fill();
     }
 
-    // Vaches
-    drawVaches();
+    vaches.forEach(p => {
+      ctx.fillStyle = colorVache;
+      ctx.beginPath();
+      ctx.arc(p.x * gridSize + gridSize/2, p.y * gridSize + gridSize/2, gridSize/3, 0, 2*Math.PI);
+      ctx.fill();
+    });
 
-    // Train
     train.forEach((pos, i) => {
       ctx.fillStyle = (i === 0) ? colorTrainHead : colorTrainBody;
       ctx.fillRect(pos.x * gridSize + 1, pos.y * gridSize + 1, gridSize - 2, gridSize - 2);
     });
   }
 
-  // Augmentation progressive de la vitesse par paliers (plus c'est long, plus c'est rapide)
-  function increaseSpeedOverTime() {
-    if (baseSpeed > 80) {
-      baseSpeed -= 10; // augmente la vitesse (diminue le délai)
-    }
-    scheduleNextSpeedIncrease();
-  }
-  function scheduleNextSpeedIncrease() {
-    setTimeout(() => {
-      increaseSpeedOverTime();
-    }, 60000);
-  }
-
-  function gameOver(message) {
-  const div = document.getElementById("gameOverMessage");
-  div.textContent = message + "\nScore final: " + score;
-  div.style.display = "block";
-
-  // animation fade in
-  div.style.opacity = 0;
-  let opacity = 0;
-  const fadeIn = setInterval(() => {
-    opacity += 0.05;
-    if (opacity >= 1) {
-      clearInterval(fadeIn);
-      // après 4s, fade out et reload
-      setTimeout(() => {
-        const fadeOut = setInterval(() => {
-          opacity -= 0.05;
-          if (opacity <= 0) {
-            clearInterval(fadeOut);
-            div.style.display = "none";
-            document.location.reload();
-          }
-          div.style.opacity = opacity;
-        }, 50);
-      }, 4000);
-    }
-    div.style.opacity = opacity;
-  }, 50);
-}
-
-  // Quand le train touche une case suppression, on affiche un message rigolo aléatoire
-  function handleSuppression() {
-  const msg = messagesSuppression[Math.floor(Math.random() * messagesSuppression.length)];
-  showGameOver(msg);
-}
-
-  let shakeCount = 0;
-  const maxShakes = 10;
-
-  const shakeInterval = setInterval(() => {
-    const dx = (Math.random() - 0.5) * 10;  // déplacement horizontal aléatoire
-    const dy = (Math.random() - 0.5) * 10;  // déplacement vertical aléatoire
-
-    ctx.save();
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    ctx.translate(dx, dy);
-    draw(); // on redessine avec le léger décalage
-    ctx.restore();
-
-    shakeCount++;
-    if (shakeCount >= maxShakes) {
-      clearInterval(shakeInterval);
-      showGameOver(msg);
-      setTimeout(() => {
-        document.location.reload();
-      }, 4500);
-    }
-  }, 50);
-}
-
-  // Gestion de la vitesse temporaire liée aux cases oranges
-  function applySpeedModifier(modifier) {
-    speedModifier = modifier;
-    if(speedEffectTimeout) clearTimeout(speedEffectTimeout);
-    speedEffectTimeout = setTimeout(() => {
-      speedModifier = 0;
-    }, 2000);
-  }
-
-  // Générer un nouveau bétail jaune
-  function generateBetail() {
-    betail = randomFreePosition();
-  }
-
-  // Gérer clavier
-  window.addEventListener("keydown", e => {
-    switch(e.key) {
-      case "ArrowUp":
-        if(direction.y !== 1) nextDirection = { x: 0, y: -1 };
-        break;
-      case "ArrowDown":
-        if(direction.y !== -1) nextDirection = { x: 0, y: 1 };
-        break;
-      case "ArrowLeft":
-        if(direction.x !== 1) nextDirection = { x: -1, y: 0 };
-        break;
-      case "ArrowRight":
-        if(direction.x !== -1) nextDirection = { x: 1, y: 0 };
-        break;
-    }
-  });
-
   function update() {
     if (gameStopped) return;
+
     direction = nextDirection;
-
-    // nouvelle tête
     let newHead = { x: train[0].x + direction.x, y: train[0].y + direction.y };
-
-    // Effet wrap autour des bords
     if (newHead.x < 0) newHead.x = cols - 1;
     if (newHead.x >= cols) newHead.x = 0;
     if (newHead.y < 0) newHead.y = rows - 1;
     if (newHead.y >= rows) newHead.y = 0;
 
-    // Collision train avec lui-même ?
-    if (isOnTrain(newHead)) {
-      showGameOver("Collision avec soi-même !");
-      return;
-    }
-
-    // Collision avec vaches = game over immédiat
-    if (isOnVache(newHead)) {
-      showGameOver("Le train a percuté des vaches !");
-      return;
+    if (train.some(p => p.x === newHead.x && p.y === newHead.y)) return showGameOver("Collision avec soi-même !");
+    if (vaches.some(p => p.x === newHead.x && p.y === newHead.y)) return showGameOver("Percuté des vaches !");
+    if (suppressions.some(p => p.x === newHead.x && p.y === newHead.y)) {
+      const msg = messagesSuppression[Math.floor(Math.random() * messagesSuppression.length)];
+      return showGameOver(msg);
     }
 
     train.unshift(newHead);
 
-    // Collision avec bétail : grandit
     if (betail && newHead.x === betail.x && newHead.y === betail.y) {
       score++;
-      scoreEl.textContent = score;
+      document.getElementById("score").textContent = score;
       generateBetail();
     } else {
       train.pop();
     }
 
-    // Collision avec suppression (case rouge)
-    if (isOnSuppression(newHead)) {
-      handleSuppression();
-      return;
+    if (oranges.some(p => p.x === newHead.x && p.y === newHead.y)) {
+      speedModifier = (Math.random() < 0.5) ? -150 : 150;
+      setTimeout(() => { speedModifier = 0; }, 2000);
     }
 
-    // Collision avec case orange : accélère ou ralentit
-    if (isOnOrange(newHead)) {
-      // 50% chance accélérer ou ralentir
-      if (Math.random() < 0.5) {
-        applySpeedModifier(-150); // accélère (diminue délai)
-      } else {
-        applySpeedModifier(150); // ralentit (augmente délai)
-      }
-    }
+    moveVaches();
+  }
 
-    // Déplacer vaches si actives
-    if(vachesActive) {
-      moveVaches();
-    }
+  function moveVaches() {
+    vaches.forEach(v => v.x--);
+    vaches = vaches.filter(v => v.x >= 0);
+  }
+
+  function scheduleNextVaches() {
+    if (gameStopped) return;
+    vaches.push({x: cols-1, y: Math.floor(Math.random() * rows)});
+    setTimeout(scheduleNextVaches, vacheFrequency);
+  }
+
+  function increaseVacheFrequency() {
+    if (vacheFrequency > 3000) vacheFrequency -= 1000;
+    setTimeout(increaseVacheFrequency, 60000);
+  }
+
+  function showGameOver(message) {
+    gameStopped = true;
+    const div = document.getElementById("gameOverMessage");
+    div.textContent = message + "\nScore: " + score;
+    div.style.display = "block";
+    let opacity = 0;
+    const fade = setInterval(() => {
+      opacity += 0.05;
+      div.style.opacity = opacity;
+      if (opacity >= 1) clearInterval(fade);
+    }, 50);
   }
 
   function gameLoop() {
     update();
     draw();
-    // Calculer délai avec vitesse modifiée
-    const delay = Math.max(50, baseSpeed + speedModifier);
-    setTimeout(gameLoop, delay);
+    if (!gameStopped) {
+      const delay = Math.max(50, baseSpeed + speedModifier);
+      setTimeout(gameLoop, delay);
+    }
   }
 
-function showGameOver(message) {
-  if (gameStopped) return; // empêche les appels multiples
-  gameStopped = true;
+  function generateBetail() {
+    betail = randomFreePosition();
+  }
 
-  const div = document.getElementById("gameOverMessage");
-  div.textContent = message + "\nScore final: " + score;
-  div.style.display = "block";
-
-  div.style.opacity = 0;
-  let opacity = 0;
-  const fadeIn = setInterval(() => {
-    opacity += 0.05;
-    div.style.opacity = opacity;
-    if (opacity >= 1) {
-      clearInterval(fadeIn);
+  window.addEventListener("keydown", e => {
+    switch(e.key) {
+      case "ArrowUp": if(direction.y !== 1) nextDirection = {x: 0, y: -1}; break;
+      case "ArrowDown": if(direction.y !== -1) nextDirection = {x: 0, y: 1}; break;
+      case "ArrowLeft": if(direction.x !== 1) nextDirection = {x: -1, y: 0}; break;
+      case "ArrowRight": if(direction.x !== -1) nextDirection = {x: 1, y: 0}; break;
     }
-  }, 50);
-}
-  
-  // Démarrage
+  });
 
   placePerturbations();
   generateBetail();
-
-  // Démarre la boucle principale
   gameLoop();
 
-  // Démarre la fréquence des vaches à partir de 60 secondes
   setTimeout(() => {
     vachesActive = true;
     scheduleNextVaches();
@@ -488,6 +240,5 @@ function showGameOver(message) {
 
 })();
 </script>
-
 </body>
 </html>
