@@ -1,0 +1,296 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <title>Selection des trains</title>
+  <style>
+    .train-card { border: 1px solid #ccc; margin: 5px; padding: 10px; cursor: pointer; }
+    .train-card.selected { background-color: #cfc; }
+    .nogare { color: red; }
+  </style>
+</head>
+<body>
+
+<h1>Choisissez les trains</h1>
+
+<div>
+  <label> Sens :
+    <select id="sensSelect">
+      <option value="departures">Depuis Luxembourg</option>
+      <option value="arrivals">Vers Luxembourg</option>
+    </select>
+  </label>
+
+  <label> Gare :
+    <select id="gareSelect"></select>
+  </label>
+
+  <button id="chargerBtn">Charger les trains</button>
+</div>
+
+<div id="trainContainer"></div>
+
+<div id="selectedTrains"></div>
+
+<button onclick="validerSelection()">Valider</button>
+
+<script>
+const apiKey = '242fac11-6d98-45fb-93df-28174d362447';
+
+const gares = [
+  { id: 'stop_area:SNCF:87141002', label: 'Nancy' },
+  { id: 'stop_area:SNCF:87192039', label: 'Metz' },
+  { id: 'stop_area:SNCF:87191007', label: 'Thionville' }
+];
+
+const gareLuxId = 'stop_area:SNCF:82001000';
+
+// Gestion du menu dynamique des gares selon le sens
+const sensSelect = document.getElementById('sensSelect');
+const gareSelect = document.getElementById('gareSelect');
+const chargerBtn = document.getElementById('chargerBtn');
+
+function remplirOptionsGares() {
+  gareSelect.innerHTML = '';
+  const optionTous = document.createElement('option');
+  optionTous.value = 'tous';
+  optionTous.textContent = 'Tous';
+  gareSelect.appendChild(optionTous);
+
+  gares.forEach(g => {
+    const option = document.createElement('option');
+    option.value = g.id;
+    option.textContent = g.label;
+    gareSelect.appendChild(option);
+  });
+}
+
+remplirOptionsGares();
+
+sensSelect.addEventListener('change', () => {
+  remplirOptionsGares();
+  document.getElementById('trainContainer').innerHTML = '';
+  document.getElementById('selectedTrains').innerHTML = '';
+});
+
+function parseSNCFDate(sncfDateStr) {
+  if (!sncfDateStr) return null;
+  const datePart = sncfDateStr.substr(0,8);
+  const timePart = sncfDateStr.substr(9,6);
+  const year = parseInt(datePart.substr(0,4),10);
+  const month = parseInt(datePart.substr(4,2),10)-1;
+  const day = parseInt(datePart.substr(6,2),10);
+  const hour = parseInt(timePart.substr(0,2),10);
+  const minute = parseInt(timePart.substr(2,2),10);
+  const second = parseInt(timePart.substr(4,2),10);
+  return new Date(year, month, day, hour, minute, second);
+}
+
+function formatTime(date) {
+  if (!date) return 'N/A';
+  return date.toLocaleTimeString('fr-FR', {hour:'2-digit', minute:'2-digit'});
+}
+
+function getTodayDatetime() {
+  const now = new Date();
+  const y = now.getFullYear();
+  const m = String(now.getMonth()+1).padStart(2,'0');
+  const d = String(now.getDate()).padStart(2,'0');
+  return `${y}${m}${d}T000000`;
+}
+
+function filterTrains(trains) {
+  const allowedRoutes = ['C40+', 'C50', 'C50+'];
+  return trains.filter(train => train.route && allowedRoutes.includes(train.route.name));
+}
+
+chargerBtn.addEventListener('click', async () => {
+  const sens = sensSelect.value;
+  const gareChoisie = gareSelect.value;
+
+  document.getElementById("trainContainer").innerHTML = "<p>Chargement...</p>";
+  document.getElementById("selectedTrains").innerHTML = '';
+
+  if(sens === 'departures'){
+    await chargerTrainsDepuisLux(gareChoisie);
+  } else {
+    await chargerTrainsVersLux(gareChoisie);
+  }
+});
+
+async function chargerTrainsDepuisLux(gareId) {
+  const datetime = getTodayDatetime();
+  const url = `https://api.sncf.com/v1/coverage/sncf/stop_areas/${gareLuxId}/departures?datetime=${datetime}&duration=86400&count=200`;
+  let trains = await fetchTrains(url);
+  trains = filterTrains(trains);
+
+  if(gareId !== 'tous'){
+    trains = trains.filter(t => {
+      const direction = t.display_informations?.direction || '';
+      return direction.toLowerCase().includes(getGareLabelById(gareId).toLowerCase());
+    });
+  }
+
+  afficherCartes(trains, 'departures');
+}
+
+async function chargerTrainsVersLux(gareId) {
+  const datetime = getTodayDatetime();
+  let tousLesTrains = [];
+
+  let garesFiltrees = [];
+  if(gareId === 'tous'){
+    garesFiltrees = gares;
+  } else {
+    const g = gares.find(g => g.id === gareId);
+    if(g) garesFiltrees = [g];
+  }
+
+  for (const gare of garesFiltrees) {
+    const url = `https://api.sncf.com/v1/coverage/sncf/stop_areas/${gare.id}/departures?datetime=${datetime}&duration=86400&count=200`;
+    let trains = await fetchTrains(url);
+    trains = filterTrains(trains);
+    trains.forEach(t => t.gareDepart = gare.label);
+    tousLesTrains = tousLesTrains.concat(trains);
+  }
+
+  tousLesTrains = tousLesTrains.filter(t => {
+    const direction = t.display_informations?.direction || '';
+    return direction.toLowerCase().includes('luxembourg');
+  });
+
+  afficherCartesVersLux(tousLesTrains);
+}
+
+function getGareLabelById(id) {
+  const g = gares.find(g => g.id === id);
+  return g ? g.label : '';
+}
+
+async function fetchTrains(url) {
+  try {
+    const resp = await fetch(url, {
+      headers: { 'Authorization': 'Basic ' + btoa(apiKey + ':') }
+    });
+    if(!resp.ok) throw new Error(`Erreur API: ${resp.status}`);
+    const data = await resp.json();
+    return data.departures || [];
+  } catch(err) {
+    console.error(err);
+    return [];
+  }
+}
+
+function afficherCartesVersLux(trains) {
+  const container = document.getElementById("trainContainer");
+  container.innerHTML = '';
+
+  const grouped = {};
+  trains.forEach(train => {
+    const info = train.display_informations || {};
+    const trainNumber = info.headsign || 'Inconnu';
+
+    if(!grouped[trainNumber]){
+      grouped[trainNumber] = {
+        trainNumber,
+        horaires: []
+      };
+    }
+
+    const heureDepart = parseSNCFDate(train.stop_date_time.departure_date_time);
+    const timeDepart = formatTime(heureDepart);
+    grouped[trainNumber].horaires.push({
+      gare: train.gareDepart,
+      heure: timeDepart
+    });
+  });
+
+  for(const trainNum in grouped){
+    const train = grouped[trainNum];
+    const card = document.createElement('div');
+    card.className = 'train-card';
+    card.dataset.train = trainNum;
+
+    let html = `<h3>Train ${train.trainNumber}</h3>`;
+    html += '<ul>';
+    train.horaires.forEach(h => {
+      html += `<li>${h.gare} - Départ: ${h.heure}</li>`;
+    });
+    html += '</ul>';
+
+    card.innerHTML = html;
+    card.addEventListener('click', () => {
+      card.classList.toggle('selected');
+      mettreAJourSelection();
+    });
+    container.appendChild(card);
+  }
+
+  document.getElementById('selectedTrains').innerHTML = '';
+}
+
+function afficherCartes(trains, type) {
+  const container = document.getElementById("trainContainer");
+  container.innerHTML = '';
+
+  if(trains.length === 0){
+    container.innerHTML = `<p class="nogare">Aucun train trouvé pour ces critères.</p>`;
+    return;
+  }
+
+  trains.forEach(train => {
+    const info = train.display_informations || {};
+    const card = document.createElement('div');
+    card.className = 'train-card';
+    card.dataset.train = info.headsign || 'Inconnu';
+
+    const depTime = formatTime(parseSNCFDate(train.stop_date_time.departure_date_time));
+
+    let html = `<h3>Train ${info.headsign || '???'}</h3>`;
+
+    const direction = info.direction || '';
+    if (direction.trim() !== "") {
+      html += `<p><strong>Destination :</strong> ${direction}</p>`;
+    }
+
+    html += `<p><strong>Départ :</strong> ${depTime}</p>`;
+
+    card.innerHTML = html;
+    card.addEventListener('click', () => {
+      card.classList.toggle('selected');
+      mettreAJourSelection();
+    });
+    container.appendChild(card);
+  });
+
+  document.getElementById('selectedTrains').innerHTML = '';
+}
+
+function mettreAJourSelection() {
+  const selected = [...document.querySelectorAll('.train-card.selected')];
+  const container = document.getElementById('selectedTrains');
+  if(selected.length === 0){
+    container.innerHTML = '<p>Aucun train sélectionné.</p>';
+    return;
+  }
+  let html = '<ul>';
+  selected.forEach(card => {
+    html += `<li>${card.dataset.train}</li>`;
+  });
+  html += '</ul>';
+  container.innerHTML = html;
+}
+
+function validerSelection() {
+  const selected = [...document.querySelectorAll('.train-card.selected')];
+  if(selected.length === 0){
+    alert('Veuillez sélectionner au moins un train.');
+    return;
+  }
+  const trainsSelectionnes = selected.map(card => card.dataset.train);
+  alert('Trains sélectionnés :\n' + trainsSelectionnes.join('\n'));
+}
+</script>
+
+</body>
+</html>
