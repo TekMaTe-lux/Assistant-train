@@ -2,7 +2,7 @@
 <html lang="fr">
 <head>
   <meta charset="UTF-8">
-  <title>Train Bétail V4.1 CLEAN</title>
+  <title>Train Bétail V5</title>
   <style>
     body {
       background: black;
@@ -36,8 +36,17 @@
       border-radius: 10px;
       display: none;
       z-index: 1000;
-      pointer-events: none;
-      user-select: none;
+    }
+    #restartBtn {
+      margin-top: 20px;
+      font-size: 20px;
+      padding: 10px 30px;
+      border-radius: 10px;
+      border: 2px solid #0ff;
+      background: black;
+      color: #0ff;
+      cursor: pointer;
+      display: none;
     }
   </style>
 </head>
@@ -48,13 +57,14 @@
 <div id="info">
   Utilise les <b>flèches</b> pour tourner.<br>
   Prends le <span style="color: yellow;">bétail jaune</span> pour grandir.<br>
-  Évite les <span style="color: red;">cases rouges (suppressions)</span>.<br>
+  Évite les <span style="color: red;">suppressions</span>.<br>
   Les <span style="color: orange;">oranges</span> accélèrent ou ralentissent.<br>
-  Attention aux <span style="color: white;">vaches blanches</span> !<br>
-  Score : <span id="score">0</span>
+  Attention aux <span style="color: white;">bandes de vaches</span> !<br>
+  Score : <span id="score">0</span> | Record : <span id="highscore">0</span>
 </div>
 
 <div id="gameOverMessage"></div>
+<button id="restartBtn">Rejouer</button>
 
 <script>
 (() => {
@@ -62,32 +72,35 @@
   const ctx = canvas.getContext("2d");
   const gridSize = 20, cols = canvas.width / gridSize, rows = canvas.height / gridSize;
 
-  let train = [{x: 10, y: 10}];
-  let direction = {x: 1, y: 0};
-  let nextDirection = direction;
-  let score = 0;
-  let baseSpeed = 200;
-  let speedModifier = 0;
-  let betail = null;
-  let suppressions = [];
-  let oranges = [];
-  let vaches = [];
-  let vachesActive = false;
-  let vacheFrequency = 15000;
-  let gameStopped = false;
+  let train, direction, nextDirection, score, highscore = 0;
+  let baseSpeed = 200, speedModifier = 0, betail, suppressions, oranges, vaches, vacheFrequency, gameStopped;
 
-  const colorTrainHead = "#0ff", colorTrainBody = "#088";
-  const colorSuppression = "red", colorAcceleration = "orange", colorBetail = "yellow", colorVache = "white";
   const messagesSuppression = [
-    "Supprimé pour absence du conducteur.",
-    "Supprimé pour travaux aléatoires.",
-    "Supprimé pour grève surprise.",
-    "Supprimé pour cause d'invasion de hérissons.",
-    "Supprimé pour défaillance du réveil du chef de bord.",
-    "Supprimé pour surcharge de passagers imaginaires.",
-    "Supprimé pour alignement des planètes défavorable.",
-    "Supprimé pour panne de distributeur de café."
+    "Supprimé : conducteur perdu !",
+    "Supprimé : grève surprise.",
+    "Supprimé : hérissons envahissants.",
+    "Supprimé : panne de réveil.",
+    "Supprimé : surcharge de blagues.",
+    "Supprimé : café épuisé.",
+    "Supprimé : panne de signalisation lunaire.",
+    "Supprimé : alignement cosmique défavorable."
   ];
+
+  function initGame() {
+    train = [{x: 10, y: 10}];
+    direction = {x: 1, y: 0};
+    nextDirection = direction;
+    score = 0;
+    document.getElementById("score").textContent = score;
+    suppressions = []; oranges = []; vaches = [];
+    vacheFrequency = 15000;
+    gameStopped = false;
+    speedModifier = 0;
+    placePerturbations();
+    generateBetail();
+    gameLoop();
+    setTimeout(() => { scheduleVaches(); increaseVacheFrequency(); }, 60000);
+  }
 
   function placePerturbations() {
     for (let i = 0; i < 10; i++) suppressions.push(randomFreePosition());
@@ -111,40 +124,30 @@
 
   function draw() {
     ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-    suppressions.forEach(p => {
-      ctx.fillStyle = colorSuppression;
-      ctx.fillRect(p.x * gridSize + 2, p.y * gridSize + 2, gridSize - 4, gridSize - 4);
-    });
-
-    oranges.forEach(p => {
-      ctx.fillStyle = colorAcceleration;
-      ctx.fillRect(p.x * gridSize + 4, p.y * gridSize + 4, gridSize - 8, gridSize - 8);
-    });
-
+    suppressions.forEach(p => { ctx.fillStyle = "red"; ctx.fillRect(p.x * gridSize + 2, p.y * gridSize + 2, gridSize - 4, gridSize - 4); });
+    oranges.forEach(p => { ctx.fillStyle = "orange"; ctx.fillRect(p.x * gridSize + 4, p.y * gridSize + 4, gridSize - 8, gridSize - 8); });
     if (betail) {
-      ctx.fillStyle = colorBetail;
+      ctx.fillStyle = "yellow";
       ctx.beginPath();
       ctx.arc(betail.x * gridSize + gridSize/2, betail.y * gridSize + gridSize/2, gridSize/3, 0, 2*Math.PI);
       ctx.fill();
     }
-
-    vaches.forEach(p => {
-      ctx.fillStyle = colorVache;
-      ctx.beginPath();
-      ctx.arc(p.x * gridSize + gridSize/2, p.y * gridSize + gridSize/2, gridSize/3, 0, 2*Math.PI);
-      ctx.fill();
+    vaches.forEach(band => {
+      band.forEach(p => {
+        ctx.fillStyle = "white";
+        ctx.beginPath();
+        ctx.arc(p.x * gridSize + gridSize/2, p.y * gridSize + gridSize/2, gridSize/3, 0, 2*Math.PI);
+        ctx.fill();
+      });
     });
-
     train.forEach((pos, i) => {
-      ctx.fillStyle = (i === 0) ? colorTrainHead : colorTrainBody;
+      ctx.fillStyle = (i === 0) ? "#0ff" : "#088";
       ctx.fillRect(pos.x * gridSize + 1, pos.y * gridSize + 1, gridSize - 2, gridSize - 2);
     });
   }
 
   function update() {
     if (gameStopped) return;
-
     direction = nextDirection;
     let newHead = { x: train[0].x + direction.x, y: train[0].y + direction.y };
     if (newHead.x < 0) newHead.x = cols - 1;
@@ -152,11 +155,11 @@
     if (newHead.y < 0) newHead.y = rows - 1;
     if (newHead.y >= rows) newHead.y = 0;
 
-    if (train.some(p => p.x === newHead.x && p.y === newHead.y)) return showGameOver("Collision avec soi-même !");
-    if (vaches.some(p => p.x === newHead.x && p.y === newHead.y)) return showGameOver("Percuté des vaches !");
+    if (train.some(p => p.x === newHead.x && p.y === newHead.y)) return gameOver("Collision avec soi-même !");
+    if (vaches.some(band => band.some(p => p.x === newHead.x && p.y === newHead.y))) return gameOver("Percuté des vaches !");
     if (suppressions.some(p => p.x === newHead.x && p.y === newHead.y)) {
       const msg = messagesSuppression[Math.floor(Math.random() * messagesSuppression.length)];
-      return showGameOver(msg);
+      return gameOver(msg, true);
     }
 
     train.unshift(newHead);
@@ -164,6 +167,11 @@
     if (betail && newHead.x === betail.x && newHead.y === betail.y) {
       score++;
       document.getElementById("score").textContent = score;
+      if (score > highscore) {
+        highscore = score;
+        document.getElementById("highscore").textContent = highscore;
+        localStorage.setItem("highscore", highscore);
+      }
       generateBetail();
     } else {
       train.pop();
@@ -178,14 +186,17 @@
   }
 
   function moveVaches() {
-    vaches.forEach(v => v.x--);
-    vaches = vaches.filter(v => v.x >= 0);
+    vaches.forEach(band => band.forEach(v => v.x--));
+    vaches = vaches.filter(band => band.some(v => v.x >= 0));
   }
 
-  function scheduleNextVaches() {
+  function scheduleVaches() {
     if (gameStopped) return;
-    vaches.push({x: cols-1, y: Math.floor(Math.random() * rows)});
-    setTimeout(scheduleNextVaches, vacheFrequency);
+    const size = Math.floor(Math.random()*4)+1;
+    const yStart = Math.floor(Math.random() * (rows - size));
+    const band = Array.from({length: size}, (_, i) => ({x: cols-1, y: yStart+i}));
+    vaches.push(band);
+    setTimeout(scheduleVaches, vacheFrequency);
   }
 
   function increaseVacheFrequency() {
@@ -193,26 +204,30 @@
     setTimeout(increaseVacheFrequency, 60000);
   }
 
-  function showGameOver(message) {
+  function gameOver(message, secousse=false) {
     gameStopped = true;
-    const div = document.getElementById("gameOverMessage");
-    div.textContent = message + "\nScore: " + score;
-    div.style.display = "block";
-    let opacity = 0;
-    const fade = setInterval(() => {
-      opacity += 0.05;
-      div.style.opacity = opacity;
-      if (opacity >= 1) clearInterval(fade);
+    document.getElementById("gameOverMessage").textContent = message + "\nScore: " + score;
+    document.getElementById("gameOverMessage").style.display = "block";
+    document.getElementById("restartBtn").style.display = "inline-block";
+    if (secousse) shake();
+  }
+
+  function shake() {
+    let intensity = 10, count = 0;
+    const shakeInterval = setInterval(() => {
+      count++;
+      canvas.style.transform = `translate(${(Math.random()-0.5)*intensity}px, ${(Math.random()-0.5)*intensity}px)`;
+      if (count > 10) {
+        clearInterval(shakeInterval);
+        canvas.style.transform = "";
+      }
     }, 50);
   }
 
   function gameLoop() {
     update();
     draw();
-    if (!gameStopped) {
-      const delay = Math.max(50, baseSpeed + speedModifier);
-      setTimeout(gameLoop, delay);
-    }
+    if (!gameStopped) setTimeout(gameLoop, Math.max(50, baseSpeed + speedModifier));
   }
 
   function generateBetail() {
@@ -228,17 +243,21 @@
     }
   });
 
-  placePerturbations();
-  generateBetail();
-  gameLoop();
+  document.getElementById("restartBtn").addEventListener("click", () => {
+    document.getElementById("gameOverMessage").style.display = "none";
+    document.getElementById("restartBtn").style.display = "none";
+    initGame();
+  });
 
-  setTimeout(() => {
-    vachesActive = true;
-    scheduleNextVaches();
-    increaseVacheFrequency();
-  }, 60000);
+  // Charger le record localStorage
+  if (localStorage.getItem("highscore")) {
+    highscore = parseInt(localStorage.getItem("highscore"));
+    document.getElementById("highscore").textContent = highscore;
+  }
 
+  initGame();
 })();
 </script>
+
 </body>
 </html>
