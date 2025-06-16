@@ -41,7 +41,7 @@
   Mange le <span style="color: yellow;">bétail jaune</span> pour grandir.<br>
   Évite les <span style="color: red;">cases rouges (suppression)</span>.<br>
   Les <span style="color: orange;">cases oranges</span> ralentissent ou accélèrent le train pendant 2s.<br>
-  La vitesse augmente progressivement avec le temps.<br>
+  Attention aux <span style="color: white;">vaches blanches</span> qui traversent après 60s.<br>
   Score : <span id="score">0</span>
 </div>
 
@@ -61,27 +61,66 @@
   const colorBetail = "#ff0";
 
   let train = [{ x: Math.floor(cols/2), y: Math.floor(rows/2) }];
-  let direction = { x: 0, y: -1 }; // initial vers le haut
+  let direction = { x: 0, y: -1 };
   let nextDirection = direction;
 
   let speed = 300;
   let baseSpeed = 300;
-  let speedModifier = 0; // en ms, ajouté ou retiré temporairement
+  let speedModifier = 0;
   let speedEffectTimeout = null;
 
-  let betail = null; // case jaune (bétail)
+  let betail = null;
   let suppressions = [];
   let oranges = [];
 
   let score = 0;
   const scoreEl = document.getElementById("score");
 
+  // Gestion des vaches
   let vaches = [];
-  let vachesActive = false;
   let vacheInterval = null;
 
+  function generateVaches() {
+    vaches = [];
+    const horizontal = Math.random() < 0.5;
+    const length = 2 + Math.floor(Math.random() * 3);
+    if (horizontal) {
+      const y = Math.floor(Math.random() * rows);
+      let startX = -length;
+      for (let i = 0; i < length; i++) {
+        vaches.push({ x: startX + i, y, dx: 1, dy: 0 });
+      }
+    } else {
+      const x = Math.floor(Math.random() * cols);
+      let startY = -length;
+      for (let i = 0; i < length; i++) {
+        vaches.push({ x, y: startY + i, dx: 0, dy: 1 });
+      }
+    }
+  }
 
-  // Fonction utilitaire pour générer une position libre (pas sur train, ni sur perturbations)
+  function moveVaches() {
+    vaches.forEach(v => {
+      v.x += v.dx;
+      v.y += v.dy;
+    });
+    const horsGrille = vaches.every(v => v.x >= cols || v.y >= rows);
+    if (horsGrille) generateVaches();
+  }
+
+  function drawVaches() {
+    ctx.fillStyle = "#fff";
+    vaches.forEach(v => {
+      if (v.x >= 0 && v.x < cols && v.y >= 0 && v.y < rows) {
+        ctx.fillRect(v.x * gridSize + 3, v.y * gridSize + 3, gridSize - 6, gridSize - 6);
+      }
+    });
+  }
+
+  function checkCollisionVaches(head) {
+    return vaches.some(v => v.x === head.x && v.y === head.y);
+  }
+
   function randomFreePosition() {
     let pos;
     do {
@@ -108,24 +147,20 @@
   }
 
   function placePerturbations() {
-    // Suppressions rouges
     suppressions = [];
     for(let i = 0; i < 8; i++) {
       suppressions.push(randomFreePosition());
     }
-    // Cases oranges
     oranges = [];
     for(let i = 0; i < 5; i++) {
       oranges.push(randomFreePosition());
     }
-    // Bétail jaune
     betail = randomFreePosition();
   }
 
   function draw() {
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-    // Grille
     ctx.strokeStyle = "#222";
     for(let x = 0; x <= cols; x++) {
       ctx.beginPath();
@@ -140,19 +175,16 @@
       ctx.stroke();
     }
 
-    // Suppressions rouges
     suppressions.forEach(p => {
       ctx.fillStyle = colorSuppression;
       ctx.fillRect(p.x * gridSize + 2, p.y * gridSize + 2, gridSize - 4, gridSize - 4);
     });
 
-    // Oranges (bonus/malus)
     oranges.forEach(p => {
       ctx.fillStyle = colorAcceleration;
       ctx.fillRect(p.x * gridSize + 4, p.y * gridSize + 4, gridSize - 8, gridSize - 8);
     });
 
-    // Bétail jaune
     if (betail) {
       ctx.fillStyle = colorBetail;
       ctx.beginPath();
@@ -163,28 +195,26 @@
       ctx.fill();
     }
 
-    // Train
     train.forEach((pos, i) => {
       ctx.fillStyle = (i === 0) ? colorTrainHead : colorTrainBody;
       ctx.fillRect(pos.x * gridSize + 1, pos.y * gridSize + 1, gridSize - 2, gridSize - 2);
     });
-    
-    if (vachesActive) {
-      drawVaches();
-    }
+
+    // Dessin des vaches
+    drawVaches();
   }
 
-  // Augmentation progressive de la vitesse par paliers (plus c'est long, plus c'est rapide)
   function increaseSpeedOverTime() {
     if (baseSpeed > 80) {
-      baseSpeed -= 10; // augmente la vitesse (diminue le délai)
+      baseSpeed -= 10;
     }
     scheduleNextSpeedIncrease();
   }
+
   function scheduleNextSpeedIncrease() {
     setTimeout(() => {
       increaseSpeedOverTime();
-    }, 15000); // toutes les 15 sec, accélère un peu
+    }, 15000);
   }
 
   function applySpeedEffect(modifier) {
@@ -196,111 +226,58 @@
   }
 
   function gameLoop() {
-    // Change direction si pas demi-tour
     if ((nextDirection.x !== -direction.x || nextDirection.y !== -direction.y)) {
       direction = nextDirection;
     }
 
     const head = { x: train[0].x + direction.x, y: train[0].y + direction.y };
 
-    // Rebond sur les bords (torique)
     if (head.x < 0) head.x = cols - 1;
     else if (head.x >= cols) head.x = 0;
     if (head.y < 0) head.y = rows - 1;
     else if (head.y >= rows) head.y = 0;
 
-    // Collision train (sauf queue)
     if (train.slice(0, -1).some(t => t.x === head.x && t.y === head.y)) {
       alert("Perdu : collision avec votre propre train !");
       resetGame();
       return;
     }
 
-    // Collision suppression rouge = perdu
     if (isOnSuppression(head)) {
       alert("Perdu : votre train a rencontré une suppression !");
       resetGame();
       return;
     }
-    
-    if (vachesActive && checkCollisionVaches(head)) {
-  alert("Perdu : votre train a percuté un troupeau de vaches !");
-  resetGame();
-  return;
-}
+
+    if (checkCollisionVaches(head)) {
+      alert("Perdu : collision avec des vaches !");
+      resetGame();
+      return;
+    }
+
     train.unshift(head);
 
-    // Collision betail jaune : grandir + score + nouvelle position
     if (betail && head.x === betail.x && head.y === betail.y) {
       score++;
       scoreEl.textContent = score;
       betail = randomFreePosition();
     } else {
-      train.pop(); // sinon, on retire la queue (pas de croissance)
+      train.pop();
     }
 
-    // Collision cases oranges
     if (isOnOrange(head)) {
-      // Choix aléatoire : accélère ou ralentit
       if (Math.random() < 0.5) {
-        applySpeedEffect(-100); // accélère (moins de délai)
+        applySpeedEffect(-100);
       } else {
-        applySpeedEffect(150); // ralentit (plus de délai)
+        applySpeedEffect(150);
       }
-      // On retire cette case orange après contact
       oranges = oranges.filter(p => !(p.x === head.x && p.y === head.y));
-      // On remet une nouvelle case orange ailleurs
       oranges.push(randomFreePosition());
     }
 
+    moveVaches();
+
     speed = Math.max(80, baseSpeed + speedModifier);
-
-    if (vachesActive) {
-  moveVaches();
-}
-
-  function generateVaches() {
-    vaches = [];
-    const horizontal = Math.random() < 0.5;
-    const length = 2 + Math.floor(Math.random() * 3); // 2 à 4 vaches
-    if (horizontal) {
-      const y = Math.floor(Math.random() * rows);
-      let startX = -length;
-      for (let i = 0; i < length; i++) {
-        vaches.push({ x: startX + i, y, dx: 1, dy: 0 });
-      }
-    } else {
-      const x = Math.floor(Math.random() * cols);
-      let startY = -length;
-      for (let i = 0; i < length; i++) {
-        vaches.push({ x, y: startY + i, dx: 0, dy: 1 });
-      }
-    }
-  }
-
-  function moveVaches() {
-    vaches.forEach(v => {
-      v.x += v.dx;
-      v.y += v.dy;
-    });
-
-    const horsGrille = vaches.every(v => v.x >= cols || v.y >= rows);
-    if (horsGrille) generateVaches();
-  }
-
-  function drawVaches() {
-    ctx.fillStyle = "#fff";
-    vaches.forEach(v => {
-      if (v.x >= 0 && v.x < cols && v.y >= 0 && v.y < rows) {
-        ctx.fillRect(v.x * gridSize + 3, v.y * gridSize + 3, gridSize - 6, gridSize - 6);
-      }
-    });
-  }
-
-  function checkCollisionVaches(head) {
-    return vaches.some(v => v.x === head.x && v.y === head.y);
-  }
-
     draw();
     setTimeout(gameLoop, speed);
   }
@@ -317,35 +294,26 @@
     score = 0;
     scoreEl.textContent = score;
     placePerturbations();
+    vaches = [];
+    clearTimeout(vacheInterval);
+    vacheInterval = setTimeout(() => {
+      generateVaches();
+      setInterval(moveVaches, 500);
+    }, 60000);
     draw();
     scheduleNextSpeedIncrease();
     setTimeout(gameLoop, speed);
-    vachesActive = false;
-if (vacheInterval) clearTimeout(vacheInterval);
-vacheInterval = setTimeout(() => {
-  vachesActive = true;
-  generateVaches();
-}, 60000);
   }
 
   window.addEventListener("keydown", e => {
     switch(e.key) {
-      case "ArrowUp":
-        nextDirection = { x: 0, y: -1 };
-        break;
-      case "ArrowDown":
-        nextDirection = { x: 0, y: 1 };
-        break;
-      case "ArrowLeft":
-        nextDirection = { x: -1, y: 0 };
-        break;
-      case "ArrowRight":
-        nextDirection = { x: 1, y: 0 };
-        break;
+      case "ArrowUp": nextDirection = { x: 0, y: -1 }; break;
+      case "ArrowDown": nextDirection = { x: 0, y: 1 }; break;
+      case "ArrowLeft": nextDirection = { x: -1, y: 0 }; break;
+      case "ArrowRight": nextDirection = { x: 1, y: 0 }; break;
     }
   });
 
-  // Démarrage
   resetGame();
 
 })();
