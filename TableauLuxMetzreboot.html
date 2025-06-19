@@ -1259,67 +1259,62 @@ $('#loadTrains').click(async function () {
         const results = {};
 
 for (const num of numbers) {
-  // Prépare l'id complet du train
   const id = `vehicle_journey:SNCF:${date}:${num}:1187:Train`;
 
-  // URL de ton proxy Vercel qui fait la requête à l'API SNCF
+  // URL de ton proxy Vercel (pas d'auth côté front)
   const url = `https://assistant-train-cx5u.vercel.app/api/train?id=${encodeURIComponent(id)}`;
 
   try {
-    // Appel au proxy (pas besoin d'auth en front)
-    const res = await fetch(url);
-    const data = await res.json();
+    const res = await $.ajax({ url }); // PAS besoin d'ajouter Authorization ici
 
-    const train = data.vehicle_journeys?.[0];
+    const train = res.vehicle_journeys?.[0];
     if (!train) {
       results[num] = { error: 'Non trouvé' };
       continue;
     }
 
-    const disruptions = data.disruptions || [];
-    const impacted = {};
-    let newStart = null, newEnd = null;
+            const disruptions = res.disruptions || [];
+            const impacted = {};
+            let newStart = null, newEnd = null;
 
-    let disruptionCauses = [];
-    for (const d of disruptions) {
-      if (d.cause && !disruptionCauses.includes(d.cause)) {
-        disruptionCauses.push(d.cause);
-      }
-      for (const o of d.impacted_objects || []) {
-        for (const s of o.impacted_stops || []) {
-          impacted[s.stop_point.id] = s;
+            let disruptionCauses = [];
+            for (const d of disruptions) {
+              if (d.cause && !disruptionCauses.includes(d.cause)) {
+                disruptionCauses.push(d.cause);
+              }
+              for (const o of d.impacted_objects || []) {
+                for (const s of o.impacted_stops || []) {
+                  impacted[s.stop_point.id] = s;
+                }
+              }
+            }
+
+            // Recherche nouvelle gare de départ (premier stop non supprimé)
+            for (let s of train.stop_times) {
+              const id = s.stop_point.id;
+              const imp = impacted[id];
+              if (imp && imp.departure_status !== 'deleted') {
+                newStart = id;
+                break;
+              }
+            }
+
+            // Recherche nouvelle gare de fin (dernier stop non supprimé)
+            for (let i = train.stop_times.length - 1; i >= 0; i--) {
+              const s = train.stop_times[i];
+              const id = s.stop_point.id;
+              const imp = impacted[id];
+              if (imp && imp.arrival_status !== 'deleted') {
+                newEnd = id;
+                break;
+              }
+            }
+
+            results[num] = { train, impacted, newStart, newEnd, disruptions, disruptionCauses };
+          } catch {
+            results[num] = { error: 'Erreur API' };
+          }
         }
-      }
-    }
-
-    // Recherche nouvelle gare de départ (premier stop non supprimé)
-    for (let s of train.stop_times) {
-      const id = s.stop_point.id;
-      const imp = impacted[id];
-      if (imp && imp.departure_status !== 'deleted') {
-        newStart = id;
-        break;
-      }
-    }
-
-    // Recherche nouvelle gare de fin (dernier stop non supprimé)
-    for (let i = train.stop_times.length - 1; i >= 0; i--) {
-      const s = train.stop_times[i];
-      const id = s.stop_point.id;
-      const imp = impacted[id];
-      if (imp && imp.arrival_status !== 'deleted') {
-        newEnd = id;
-        break;
-      }
-    }
-
-    results[num] = { train, impacted, newStart, newEnd, disruptions, disruptionCauses };
-
-  } catch (err) {
-    console.error(err);
-    results[num] = { error: 'Erreur API' };
-  }
-}
   
         let html = '<table><thead><tr><th>Gare</th>';
 numbers.forEach(num => {
