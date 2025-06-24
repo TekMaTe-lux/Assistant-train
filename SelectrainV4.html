@@ -201,7 +201,6 @@
 </body>
 
 <script>
-
 const gares = [
   { id: 'stop_area:SNCF:87141002', label: 'Nancy' },
   { id: 'stop_area:SNCF:87192039', label: 'Metz' },
@@ -214,7 +213,7 @@ const sensSelect = document.getElementById('sensSelect');
 const gareSelect = document.getElementById('gareSelect');
 const chargerBtn = document.getElementById('chargerBtn');
 
-  function cleanDestination(dest) {
+function cleanDestination(dest) {
   return dest.replace(/\s*\(.*?\)\s*/g, '').trim();
 }
 
@@ -288,33 +287,35 @@ chargerBtn.addEventListener('click', async () => {
 
 async function chargerTrainsDepuisLux(gareId) {
   const datetime = getTodayDatetime();
-  const url = `https://api.sncf.com/v1/coverage/sncf/stop_areas/${gareLuxId}/departures?datetime=${datetime}&duration=86400&count=200`;
-  let trains = await fetchTrains(url);
-  trains = filterTrains(trains);
+  const id = `stop_areas/${gareLuxId}/departures?datetime=${datetime}&duration=86400&count=200`;
+  const trains = await fetchTrains(id);
+  let filtres = filterTrains(trains);
 
   if(gareId !== 'tous'){
-    trains = trains.filter(t => {
+    filtres = filtres.filter(t => {
       const direction = t.display_informations?.direction || '';
       return direction.toLowerCase().includes(getGareLabelById(gareId).toLowerCase());
     });
   }
-  trains.sort((a,b)=>{
+
+  filtres.sort((a,b)=>{
     const dateA = parseSNCFDate(a.stop_date_time.departure_date_time);
     const dateB = parseSNCFDate(b.stop_date_time.departure_date_time);
     return dateA - dateB;
   });
-  afficherCartes(trains);
+
+  afficherCartes(filtres);
 }
 
 async function chargerTrainsVersLux(gareId) {
   const datetime = getTodayDatetime();
   let tousLesTrains = [];
 
-  let garesFiltrees = gareId === 'tous' ? gares : gares.filter(g => g.id === gareId);
+  const garesFiltrees = gareId === 'tous' ? gares : gares.filter(g => g.id === gareId);
 
   for (const gare of garesFiltrees) {
-    const url = `https://api.sncf.com/v1/coverage/sncf/stop_areas/${gare.id}/departures?datetime=${datetime}&duration=86400&count=200`;
-    let trains = await fetchTrains(url);
+    const id = `stop_areas/${gare.id}/departures?datetime=${datetime}&duration=86400&count=200`;
+    let trains = await fetchTrains(id);
     trains = filterTrains(trains);
     trains.forEach(t => t.gareDepart = gare.label);
     tousLesTrains = tousLesTrains.concat(trains);
@@ -338,34 +339,15 @@ function getGareLabelById(id) {
   const g = gares.find(g => g.id === id);
   return g ? g.label : '';
 }
-async function fetchTrains(url) {
+
+async function fetchTrains(id) {
   try {
-    const parts = url.split('/coverage/sncf/');
-    if (parts.length < 2) {
-      console.error("URL API mal formée :", url);
-      return [];
-    }
-
-    const id = parts[1];
     const proxyUrl = `https://assistant-train-cx5u.vercel.app/api/train?id=${encodeURIComponent(id)}`;
-
     const resp = await fetch(proxyUrl);
-    if (!resp.ok) {
-      console.error("Erreur HTTP proxy:", resp.status);
-      return [];
-    }
-
+    if (!resp.ok) throw new Error(`Erreur HTTP ${resp.status}`);
     const data = await resp.json();
-
-    // Tester si c'est bien une réponse contenant des départs
-    if (data.departures && Array.isArray(data.departures)) {
-      return data.departures;
-    }
-
-    // Sinon, afficher le contenu pour debug
-    console.warn("Réponse inattendue du proxy : ", data);
-    return [];
-  } catch (err) {
+    return data.departures || [];
+  } catch(err) {
     console.error("Erreur fetchTrains:", err);
     return [];
   }
