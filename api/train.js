@@ -15,7 +15,8 @@ export default async function handler(req, res) {
   if (req.query.id) {
     apiUrl = `https://api.sncf.com/v1/coverage/sncf/${req.query.id}`;
   } else if (req.query.url) {
-    apiUrl = `https://api.sncf.com/v1/coverage/sncf/${req.query.url}`;
+    const decoded = decodeURIComponent(req.query.url);
+    apiUrl = `https://api.sncf.com/v1/coverage/sncf/${decoded}`;
   } else {
     return res.status(400).json({ error: 'Paramètre "id" ou "url" requis' });
   }
