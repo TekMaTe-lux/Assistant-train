@@ -218,8 +218,11 @@ input[type="time"]:hover {
 <label for="dateInput">Date :</label>
 <input type="date" id="dateInput">
 
-<label for="heureInput">Heure :</label>
-<input type="time" id="heureInput" step="60">
+<label for="heureDebutInput">Heure début :</label>
+<input type="time" id="heureDebutInput" step="60">
+
+<label for="heureFinInput">Heure fin :</label>
+<input type="time" id="heureFinInput" step="60">
 
 <button id="chargerBtn">Charger les bétaillères</button>
 
@@ -338,10 +341,30 @@ chargerBtn.addEventListener('click', async () => {
     await chargerTrainsVersLux(gareChoisie);
   }
 });
-
+  
+function getDateTimeFromInputs(dateStr, timeStr) {
+  if (!dateStr || !timeStr) return null;
+  const [year, month, day] = dateStr.split('-');
+  const [hour, minute] = timeStr.split(':');
+  return new Date(year, month - 1, day, hour, minute);
+}
+  function formatDatetimeAPI(dateStr, timeStr) {
+  if (!dateStr || !timeStr) return getTodayDatetime();
+  const [year, month, day] = dateStr.split('-');
+  const [hour, minute] = timeStr.split(':');
+  const HH = hour.padStart(2, '0');
+  const mm = minute.padStart(2, '0');
+  return `${year}${month}${day}T${HH}${mm}00`;
+}
 async function chargerTrainsDepuisLux(gareId) {
-  const datetime = getSelectedDatetime(); // Utilise la date+heure sélectionnée !
-  console.log("Date/heure utilisée pour départs depuis Luxembourg:", datetime);
+  const dateStr = document.getElementById('dateInput').value;
+  const heureDebutStr = document.getElementById('heureDebutInput').value;
+  const heureFinStr = document.getElementById('heureFinInput').value;
+
+  // datetime au format API (YYYYMMDDThhmmss) à partir de la date + heure début
+  const datetimeAPI = formatDatetimeAPI(dateStr, heureDebutStr);
+
+  console.log("Date/heure début API:", datetimeAPI);
   const url = `https://api.sncf.com/v1/coverage/sncf/stop_areas/${gareLuxId}/departures?datetime=${datetime}&duration=86400&count=200`;
   let trains = await fetchTrains(url);
   trains = filterTrains(trains);
@@ -352,11 +375,23 @@ async function chargerTrainsDepuisLux(gareId) {
       return direction.toLowerCase().includes(getGareLabelById(gareId).toLowerCase());
     });
   }
+
+  // Conversion des entrées date+heures en objets Date pour comparaison
+  const dtDebut = getDateTimeFromInputs(dateStr, heureDebutStr);
+  const dtFin = getDateTimeFromInputs(dateStr, heureFinStr);
+
+  // Filtrer les trains dont la date départ est dans l'intervalle
+  trains = trains.filter(t => {
+    const depDate = parseSNCFDate(t.stop_date_time.departure_date_time);
+    return depDate >= dtDebut && depDate <= dtFin;
+  });
+
   trains.sort((a,b)=>{
     const dateA = parseSNCFDate(a.stop_date_time.departure_date_time);
     const dateB = parseSNCFDate(b.stop_date_time.departure_date_time);
     return dateA - dateB;
   });
+
   afficherCartes(trains);
 }
   
@@ -390,24 +425,38 @@ async function fetchTrains(url) {
 }
   
 async function chargerTrainsVersLux(gareId) {
-  const datetime = getSelectedDatetime(); // aussi ici !
-  console.log("Date/heure utilisée pour départs depuis France vers Luxembourg:", datetime);
+  const dateStr = document.getElementById('dateInput').value;
+  const heureDebutStr = document.getElementById('heureDebutInput').value;
+  const heureFinStr = document.getElementById('heureFinInput').value;
+
+  const datetimeAPI = formatDatetimeAPI(dateStr, heureDebutStr);
+  console.log("Date/heure début API:", datetimeAPI);
 
   let tousLesTrains = [];
-
   let garesFiltrees = gareId === 'tous' ? gares : gares.filter(g => g.id === gareId);
 
   for (const gare of garesFiltrees) {
-    const url = `https://api.sncf.com/v1/coverage/sncf/stop_areas/${gare.id}/departures?datetime=${datetime}&duration=86400&count=200`;
+    const url = `https://api.sncf.com/v1/coverage/sncf/stop_areas/${gare.id}/departures?datetime=${datetimeAPI}&duration=86400&count=200`;
     let trains = await fetchTrains(url);
     trains = filterTrains(trains);
     trains.forEach(t => t.gareDepart = gare.label);
     tousLesTrains = tousLesTrains.concat(trains);
   }
 
+  // Filtrer les trains arrivant à Luxembourg uniquement
   tousLesTrains = tousLesTrains.filter(t => {
     const direction = t.display_informations?.direction || '';
     return direction.toLowerCase().includes('luxembourg');
+  });
+
+  // Conversion des entrées date+heures en objets Date
+  const dtDebut = getDateTimeFromInputs(dateStr, heureDebutStr);
+  const dtFin = getDateTimeFromInputs(dateStr, heureFinStr);
+
+  // Filtrer localement selon intervalle
+  tousLesTrains = tousLesTrains.filter(t => {
+    const depDate = parseSNCFDate(t.stop_date_time.departure_date_time);
+    return depDate >= dtDebut && depDate <= dtFin;
   });
 
   tousLesTrains.sort((a,b)=>{
