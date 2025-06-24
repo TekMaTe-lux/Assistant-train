@@ -12,18 +12,11 @@ export default async function handler(req, res) {
 
   let apiUrl = null;
 
-  // Cas 1 : utilisation avec ?id=vehicle_journeys/... (labetaillere.html)
   if (req.query.id) {
     apiUrl = `https://api.sncf.com/v1/coverage/sncf/${req.query.id}`;
-  }
-
-  // Cas 2 : utilisation avec ?url=stop_areas/... (SelectrainV4.html)
-  else if (req.query.url) {
+  } else if (req.query.url) {
     apiUrl = `https://api.sncf.com/v1/coverage/sncf/${req.query.url}`;
-  }
-
-  // Aucun paramètre valide
-  else {
+  } else {
     return res.status(400).json({ error: 'Paramètre "id" ou "url" requis' });
   }
 
