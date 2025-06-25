@@ -1695,27 +1695,19 @@ function getDisplayedTrainNumbers() {
 
 function chargerEtAfficherAlertes() {
   const container = document.getElementById('alertes');
-  // 📅 Récupère la date sélectionnée dans le champ date
-const selectedDateInput = document.getElementById('dateInput'); // ← adapte l’ID si besoin
-let selectedDate = new Date(); // valeur par défaut : aujourd’hui
-
-if (selectedDateInput && selectedDateInput.value) {
-  selectedDate = new Date(selectedDateInput.value);
-}
-
-// Force la date sélectionnée à midi pour neutraliser le fuseau horaire
-selectedDate.setHours(12, 0, 0, 0);
-  
   if (!container) return;
+
+  // 📅 Récupère la date sélectionnée dans le champ date
+  const selectedDateInput = document.getElementById('dateInput'); // ← adapte l’ID si besoin
+  let selectedDate = new Date(); // valeur par défaut : aujourd’hui
+  if (selectedDateInput && selectedDateInput.value) {
+    selectedDate = new Date(selectedDateInput.value);
+  }
+  // Neutralise l'heure à midi pour éviter les soucis de fuseau horaire
+  selectedDate.setHours(12, 0, 0, 0);
+
   container.innerHTML = '<p>Chargement des alertes...</p>';
-
-  // Vide et cache au départ
-container.innerHTML = '';
-container.style.display = 'none';
-
-  // Affiche message de chargement et affiche le container
-container.innerHTML = '<p>Chargement des alertes...</p>';
-container.style.display = 'flex';  // ou 'block' selon ton style
+  container.style.display = 'flex';
 
   fetch(urlAlertes)
     .then(response => response.json())
@@ -1723,70 +1715,60 @@ container.style.display = 'flex';  // ou 'block' selon ton style
       container.innerHTML = '';
 
       const titreGeneral = document.createElement('h2');
-titreGeneral.textContent = "Informations";
-titreGeneral.className = 'alertes-header';
-container.appendChild(titreGeneral);
+      titreGeneral.textContent = "Informations";
+      titreGeneral.className = 'alertes-header';
+      container.appendChild(titreGeneral);
 
-let alertesFiltres = alertes.filter(alerte => {
-  const titre = alerte.header_text || '';
-  const descriptionHTML = alerte.description_text || '';
-  const description = descriptionHTML.replace(/<[^>]*>?/gm, '');
-  return contientMotCle(titre, motsCles) || contientMotCle(description, motsCles);
-});
+      let alertesFiltres = alertes.filter(alerte => {
+        const titre = alerte.header_text || '';
+        const descriptionHTML = alerte.description_text || '';
+        const description = descriptionHTML.replace(/<[^>]*>?/gm, '');
+        return contientMotCle(titre, motsCles) || contientMotCle(description, motsCles);
+      });
 
-const trainsAffiches = getDisplayedTrainNumbers();
+      const trainsAffiches = getDisplayedTrainNumbers();
 
-alertesFiltres = alertesFiltres.filter(alerte => {
-  if (!alerte.informed_entities || alerte.informed_entities.length === 0) return false;
-  return alerte.informed_entities.some(ent => {
-    if (!ent.trip_id) return false;
-    const numTrain = extraireNumeroTrainDepuisTripId(ent.trip_id);
-    return numTrain && trainsAffiches.includes(numTrain);
-  });
-});
+      alertesFiltres = alertesFiltres.filter(alerte => {
+        if (!alerte.informed_entities || alerte.informed_entities.length === 0) return false;
+        return alerte.informed_entities.some(ent => {
+          if (!ent.trip_id) return false;
+          const numTrain = extraireNumeroTrainDepuisTripId(ent.trip_id);
+          return numTrain && trainsAffiches.includes(numTrain);
+        });
+      });
 
-// --- Gestion de la date sélectionnée ---
-const selectedDateInput = document.getElementById('dateInput'); // adapte l’ID si besoin
-let selectedDate = new Date(); // valeur par défaut : aujourd’hui
-if (selectedDateInput && selectedDateInput.value) {
-  selectedDate = new Date(selectedDateInput.value);
-}
-// Neutraliser l'heure à midi pour éviter les soucis de fuseau horaire/décalage
-selectedDate.setHours(12, 0, 0, 0);
+      // --- FILTRE PAR PERIODE ---
+      alertesFiltres = alertesFiltres.filter(alerte => {
+        const debut = alerte.active_period_start ? new Date(alerte.active_period_start * 1000) : null;
+        const fin = alerte.active_period_end ? new Date(alerte.active_period_end * 1000) : null;
+        if (!debut || !fin) return false;
 
-// Filtre les alertes selon leur période de validité
-alertesFiltres = alertesFiltres.filter(alerte => {
-  const debut = alerte.active_period_start ? new Date(alerte.active_period_start * 1000) : null;
-  const fin = alerte.active_period_end ? new Date(alerte.active_period_end * 1000) : null;
-  if (!debut || !fin) return false;
+        // Neutralisation des heures (pour couvrir toute la journée)
+        debut.setHours(0, 0, 0, 0);
+        fin.setHours(23, 59, 59, 999);
 
-  // On neutralise les heures du début et fin
-  debut.setHours(0, 0, 0, 0);
-  fin.setHours(23, 59, 59, 999);
+        return selectedDate >= debut && selectedDate <= fin;
+      });
 
-  return selectedDate >= debut && selectedDate <= fin;
-});
+      alertesFiltres.sort((a, b) => {
+        const prioA = getStyleParCauseCode(a.cause || 0).prio;
+        const prioB = getStyleParCauseCode(b.cause || 0).prio;
+        return prioA - prioB;
+      });
 
-alertesFiltres.sort((a, b) => {
-  const prioA = getStyleParCauseCode(a.cause || 0).prio;
-  const prioB = getStyleParCauseCode(b.cause || 0).prio;
-  return prioA - prioB;
-});
+      if (alertesFiltres.length === 0) {
+        container.innerHTML += '<p>Aucune alerte dans vos bétaillères.</p>';
+        return;
+      }
 
-if (alertesFiltres.length === 0) {
-  container.innerHTML += '<p>Aucune alerte dans vos bétaillères.</p>';
-  return;
-}
-
-// suite de ton code d'affichage des alertes
-alertesFiltres.forEach(alerte => {
-  const titreBase = alerte.header_text || '';
-  let numeroTrain = null;
-  if (alerte.informed_entities) {
-    for (const ent of alerte.informed_entities) {
-      if (ent.trip_id) {
-        numeroTrain = extraireNumeroTrainDepuisTripId(ent.trip_id);
-        if (numeroTrain) break;
+      alertesFiltres.forEach(alerte => {
+        const titreBase = alerte.header_text || '';
+        let numeroTrain = null;
+        if (alerte.informed_entities) {
+          for (const ent of alerte.informed_entities) {
+            if (ent.trip_id) {
+              numeroTrain = extraireNumeroTrainDepuisTripId(ent.trip_id);
+              if (numeroTrain) break;
             }
           }
         }
@@ -1799,15 +1781,14 @@ alertesFiltres.forEach(alerte => {
         const causeCode = alerte.cause || 0;
         const style = getStyleParCauseCode(causeCode);
 
-        // Si REDUCED_SERVICE, colorer le header du train dans le tableau
-      if (causeCode === 2 && numeroTrain) {
-        const header = document.querySelector(`th[data-train-number="${numeroTrain}"]`);
-      if (header) {
-         header.classList.add('us-train');
-         header.title = "Service réduit : réduction du nombre de places (UM ➜ US)";
+        if (causeCode === 2 && numeroTrain) {
+          const header = document.querySelector(`th[data-train-number="${numeroTrain}"]`);
+          if (header) {
+            header.classList.add('us-train');
+            header.title = "Service réduit : réduction du nombre de places (UM ➜ US)";
           }
-        }  
-         // Choix de la classe couleur selon la priorité
+        }
+
         let classeCouleur = 'alerte-box';
         if (style.prio === 1) classeCouleur += ' red';
         else if (style.prio === 2 || style.prio === 3) classeCouleur += ' orange';
@@ -1815,7 +1796,6 @@ alertesFiltres.forEach(alerte => {
         const div = document.createElement('div');
         div.className = classeCouleur;
 
-        // Titre cliquable avec icône
         const titreDiv = document.createElement('div');
         titreDiv.style.display = "flex";
         titreDiv.style.alignItems = "center";
@@ -1828,7 +1808,6 @@ alertesFiltres.forEach(alerte => {
         titreDiv.appendChild(iconeSpan);
         titreDiv.appendChild(document.createTextNode(titre));
 
-        // Contenu caché au départ
         const detailDiv = document.createElement('div');
         detailDiv.className = 'alerte-content';
         detailDiv.innerHTML = `
