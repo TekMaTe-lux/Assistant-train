@@ -1452,7 +1452,7 @@ document.getElementById('trainPreset').addEventListener('change', function() {
       // Gestion du clic sur "Afficher"
 $('#loadTrains').click(async function () {
   
-  await loadCompoData();
+  await loadCompoData();  // <-- ICI : tu charges ton fichier JSON dès qu’on clique
 
   // Lecture de l'état de l'interrupteur pour déterminer le sens
   const sensInverse = $('#directionToggle').is(':checked');
@@ -1481,29 +1481,19 @@ $('#loadTrains').click(async function () {
   console.log("Liste des arrêts utilisés :", fixedStops);
   console.log("Numéros de trains :", numbers);
   console.log("Date :", date);
-     
-  // Variables pour collecte des gares dynamiques
-  let garesDynamiquesSet = new Set();
-  let garesOrdre = [];
-  
+   
         const results = {};
 
      for (const num of numbers) {
-    const url = `https://assistant-train-cx5u.vercel.app/api/train?id=vehicle_journeys/vehicle_journey:SNCF:${date}:${num}:1187:Train`;
-    try {
-      const res = await $.ajax({ url });
-      const train = res.vehicle_journeys?.[0];
-      if (!train) {
-        results[num] = { error: 'Non trouvé' };
-        continue;
-      }
-      
-      // --- Récupérer les gares du train ---
-      const garesTrain = train.stop_times.map(st => st.stop_point.name);
-      if (garesOrdre.length === 0) {
-        garesOrdre = garesTrain;  // ordre du premier train
-      }
-      garesTrain.forEach(gare => garesDynamiquesSet.add(gare));
+  const url = `https://assistant-train-cx5u.vercel.app/api/train?id=vehicle_journeys/vehicle_journey:SNCF:${date}:${num}:1187:Train`;
+  try {
+  const res = await $.ajax({ url });  // PAS de quotes autour de url ici !
+  console.log('API response:', res);
+    const train = res.vehicle_journeys?.[0];
+    if (!train) {
+      results[num] = { error: 'Non trouvé' };
+      continue;
+    }
 
             const disruptions = res.disruptions || [];
             const impacted = {};
@@ -1548,7 +1538,30 @@ $('#loadTrains').click(async function () {
             results[num] = { error: 'Erreur API' };
           }
         }
+  
+    // Étendre la liste des arrêts fixes avec les gares réelles du premier train
+if (numbers.length && results[numbers[0]]?.train) {
+  const trainStops = results[numbers[0]].train.stop_times.map(s => s.stop_point.name);
+  
+  // Éviter les doublons : créer un Set à partir de la liste fixe
+  const fixedSet = new Set(sensInverse ? fixedStopsSens2 : fixedStopsSens1);
 
+  // Créer une nouvelle liste qui insère dynamiquement les gares dans l’ordre réel
+  const mergedStops = [];
+  for (const stop of trainStops) {
+    if (!fixedSet.has(stop)) {
+      fixedSet.add(stop); // éviter redondance
+    }
+    mergedStops.push(stop);
+  }
+
+  // Remplacer la liste fixe utilisée ensuite
+  if (sensInverse) {
+    fixedStopsSens2 = mergedStops;
+  } else {
+    fixedStopsSens1 = mergedStops;
+  }
+}
         let html = '<table><thead><tr><th>Gare</th>';
 numbers.forEach(num => {
   const composition = compoData[num];
@@ -1556,16 +1569,6 @@ numbers.forEach(num => {
   html += `<th class="train-header${classe}" data-train-number="${num}">${num}</th>`;
 });
 html += '</tr><tr><th></th>';
-  
-    // en utilisant getGareLinkHTML(gare) pour le nom avec lien.
-  fixedStops.forEach(gare => {
-    html += `<tr><td>${getGareLinkHTML(gare)}</td>`;
-    numbers.forEach(num => {
-      const trainData = results[num];
-      if (!trainData || trainData.error) {
-        html += '<td>—</td>';
-        return;
-      }
 
         numbers.forEach(num => {
           const result = results[num];
@@ -2153,3 +2156,4 @@ document.getElementById("btnJeu").addEventListener("click", function() {
 </script>
 </body>
 </html>
+
