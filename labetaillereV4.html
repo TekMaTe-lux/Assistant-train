@@ -1444,68 +1444,84 @@ async function loadCompoData() {
 
     // 1. Récupération des données API pour chaque train
     for (const num of numbers) {
-      const url = `https://assistant-train-cx5u.vercel.app/api/train?id=vehicle_journeys/vehicle_journey:SNCF:${date}:${num}:1187:Train`;
-      try {
-        const res = await $.ajax({ url });
-        const train = res.vehicle_journeys?.[0];
-        if (!train) {
-          results[num] = { error: 'Non trouvé' };
-          continue;
+  const url = `https://assistant-train-cx5u.vercel.app/api/train?id=vehicle_journeys/vehicle_journey:SNCF:${date}:${num}:1187:Train`;
+  try {
+    const res = await $.ajax({ url });
+    const train = res.vehicle_journeys?.[0];
+    if (!train) {
+      results[num] = { error: 'Non trouvé' };
+      continue;
+    }
+
+    const disruptions = res.disruptions || [];
+    const impacted = {};
+    let newStart = null, newEnd = null;
+
+    let disruptionCauses = [];
+    for (const d of disruptions) {
+      if (d.cause && !disruptionCauses.includes(d.cause)) {
+        disruptionCauses.push(d.cause);
+      }
+      for (const o of d.impacted_objects || []) {
+        for (const s of o.impacted_stops || []) {
+          impacted[s.stop_point.id] = s;
         }
-
-        const disruptions = res.disruptions || [];
-        const impacted = {};
-        let newStart = null, newEnd = null;
-
-        let disruptionCauses = [];
-        for (const d of disruptions) {
-          if (d.cause && !disruptionCauses.includes(d.cause)) {
-            disruptionCauses.push(d.cause);
-          }
-          for (const o of d.impacted_objects || []) {
-            for (const s of o.impacted_stops || []) {
-              impacted[s.stop_point.id] = s;
-            }
-          }
-        }
-
-        for (let s of train.stop_times) {
-          const id = s.stop_point.id;
-          const imp = impacted[id];
-          if (imp && imp.departure_status !== 'deleted') {
-            newStart = id;
-            break;
-          }
-        }
-
-        for (let i = train.stop_times.length - 1; i >= 0; i--) {
-          const s = train.stop_times[i];
-          const id = s.stop_point.id;
-          const imp = impacted[id];
-          if (imp && imp.arrival_status !== 'deleted') {
-            newEnd = id;
-            break;
-          }
-        }
-
-        results[num] = { train, impacted, newStart, newEnd, disruptions, disruptionCauses };
-      } catch (e) {
-        console.error("Erreur lors de la requête API:", e);
-        results[num] = { error: 'Erreur API' };
       }
     }
 
-    // 2. Construire la liste fusionnée des gares (mergedStops) de tous les trains sélectionnés
-    const stopsInTrains = new Set();
+    for (let s of train.stop_times) {
+      const id = s.stop_point.id;
+      const imp = impacted[id];
+      if (imp && imp.departure_status !== 'deleted') {
+        newStart = id;
+        break;
+      }
+    }
+
+    for (let i = train.stop_times.length - 1; i >= 0; i--) {
+      const s = train.stop_times[i];
+      const id = s.stop_point.id;
+      const imp = impacted[id];
+      if (imp && imp.arrival_status !== 'deleted') {
+        newEnd = id;
+        break;
+      }
+    }
+
+    results[num] = { train, impacted, newStart, newEnd, disruptions, disruptionCauses };
+  } catch (e) {
+    console.error("Erreur lors de la requête API:", e);
+    results[num] = { error: 'Erreur API' };
+  }
+}
+
+// === Fusion et tri des gares ===
+
+// On crée un objet pour garder l’index minimal (ordre réel) de chaque gare sur tous les trains
+const stopIndices = {};
 numbers.forEach(num => {
   const train = results[num]?.train;
   if (!train) return;
-  train.stop_times.forEach(s => stopsInTrains.add(s.stop_point.name));
+  train.stop_times.forEach((stop, idx) => {
+    const name = stop.stop_point.name;
+    if (!(name in stopIndices) || idx < stopIndices[name]) {
+      stopIndices[name] = idx;
+    }
+  });
 });
 
-const mergedStops = fixedStops.filter(stopName => stopsInTrains.has(stopName));
+// Création de la liste des gares unique
+let mergedStops = Object.keys(stopIndices);
 
-    console.log('mergedStops:', mergedStops);
+// Tri par ordre d’apparition (indice minimal) dans les trains
+mergedStops.sort((a, b) => stopIndices[a] - stopIndices[b]);
+
+// Inverser si sens inverse
+if ($('#directionToggle').is(':checked')) {
+  mergedStops.reverse();
+}
+
+console.log('mergedStops:', mergedStops);
 
     // 3. Construction tableau HTML
     let html = '<table><thead><tr><th>Gare</th>';
