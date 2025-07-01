@@ -1,0 +1,274 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no" />
+<title>Endless Train Run - BERNancyMetzLux</title>
+<style>
+  /* Reset & base */
+  * {
+    margin:0; padding:0; box-sizing:border-box;
+  }
+  body {
+    background: #02040f;
+    color: #0ff;
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    overflow: hidden;
+    user-select:none;
+  }
+  #game {
+    position: relative;
+    width: 100vw;
+    height: 100vh;
+    overflow: hidden;
+    background: linear-gradient(180deg, #001024 0%, #000811 100%);
+  }
+  /* Rails */
+  .rail {
+    position: absolute;
+    width: 100%;
+    height: 20px;
+    background: repeating-linear-gradient(
+      90deg,
+      #0ff,
+      #0ff 10px,
+      transparent 10px,
+      transparent 20px
+    );
+    top: 70%;
+    left: 0;
+    animation: rail-move 0.8s linear infinite;
+  }
+  .rail:nth-child(2) {
+    top: 75%;
+    animation-delay: 0.4s;
+  }
+  @keyframes rail-move {
+    0% {background-position: 0 0;}
+    100% {background-position: 20px 0;}
+  }
+  /* Train */
+  #train {
+    position: absolute;
+    bottom: 15%;
+    width: 80px;
+    height: 40px;
+    background: #0ff;
+    border-radius: 10px 10px 0 0;
+    box-shadow: 0 0 15px #0ff;
+    transition: left 0.2s ease;
+  }
+  #train::before {
+    content: "";
+    position: absolute;
+    top: -10px; left: 10px;
+    width: 60px; height: 10px;
+    background: #0ff;
+    border-radius: 5px;
+    box-shadow: 0 0 8px #0ff;
+  }
+  /* Lanes */
+  #game {
+    --lane-left: calc(50% - 120px);
+    --lane-center: calc(50% - 40px);
+    --lane-right: calc(50% + 40px);
+  }
+  /* Obstacles */
+  .obstacle {
+    position: absolute;
+    width: 40px;
+    height: 40px;
+    background: #f00;
+    border-radius: 8px;
+    box-shadow: 0 0 10px #f00;
+    bottom: 20%;
+    animation: obstacle-move linear forwards;
+  }
+  /* Score */
+  #score {
+    position: absolute;
+    top: 15px;
+    left: 50%;
+    transform: translateX(-50%);
+    font-size: 24px;
+    font-weight: bold;
+    text-shadow: 0 0 8px #0ff;
+    user-select:none;
+  }
+  /* Touch Controls */
+  #touch-controls {
+    position: absolute;
+    bottom: 10px;
+    width: 100%;
+    display: flex;
+    justify-content: center;
+    gap: 30px;
+  }
+  .btn-touch {
+    width: 80px;
+    height: 80px;
+    background: #0ff33aa;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 40px;
+    color: #004040;
+    user-select:none;
+    box-shadow: 0 0 20px #0ff;
+    touch-action: manipulation;
+    cursor: pointer;
+    transition: background 0.3s;
+  }
+  .btn-touch:active {
+    background: #0ff;
+    color: #002020;
+  }
+</style>
+</head>
+<body>
+  <div id="game" aria-label="Jeu Endless Train Run">
+    <div class="rail"></div>
+    <div class="rail"></div>
+    <div id="train" role="img" aria-label="Train BER"></div>
+    <div id="score" aria-live="polite">Score : 0 m</div>
+
+    <div id="touch-controls" aria-label="Contrôles tactiles">
+      <button class="btn-touch" id="btn-left" aria-label="Déplacer train à gauche">◀</button>
+      <button class="btn-touch" id="btn-right" aria-label="Déplacer train à droite">▶</button>
+    </div>
+  </div>
+
+<script>
+(() => {
+  const lanes = ['left', 'center', 'right'];
+  // Map lane to CSS left position
+  const lanePositions = {
+    left: 'calc(50% - 120px)',
+    center: 'calc(50% - 40px)',
+    right: 'calc(50% + 40px)'
+  };
+  let currentLaneIndex = 1; // start center
+  const train = document.getElementById('train');
+  const game = document.getElementById('game');
+  const scoreElem = document.getElementById('score');
+  const btnLeft = document.getElementById('btn-left');
+  const btnRight = document.getElementById('btn-right');
+
+  let score = 0;
+  let speed = 3; // pixels per frame for obstacle
+  let obstacles = [];
+  let gameOver = false;
+
+  function updateTrainPosition() {
+    train.style.left = lanePositions[lanes[currentLaneIndex]];
+  }
+
+  function spawnObstacle() {
+    if (gameOver) return;
+    const obstacle = document.createElement('div');
+    obstacle.classList.add('obstacle');
+    // Choisir une voie aléatoire
+    const laneIndex = Math.floor(Math.random() * 3);
+    obstacle.style.left = lanePositions[lanes[laneIndex]];
+    obstacle.style.bottom = '120%'; // départ en dehors de l’écran en bas
+    game.appendChild(obstacle);
+    obstacles.push({el: obstacle, lane: laneIndex, posY: 120});
+  }
+
+  function moveObstacles() {
+    obstacles.forEach((obs, index) => {
+      obs.posY -= speed;
+      if (obs.posY < -10) {
+        // hors écran, retirer obstacle
+        obs.el.remove();
+        obstacles.splice(index, 1);
+        // augmenter score quand obstacle passé
+        if (!gameOver) score++;
+      } else {
+        obs.el.style.bottom = obs.posY + '%';
+        // Détection collision simple avec train
+        if (obs.lane === currentLaneIndex && obs.posY < 25 && obs.posY > 5) {
+          // Collision détectée -> Game Over
+          endGame();
+        }
+      }
+    });
+  }
+
+  function endGame() {
+    gameOver = true;
+    scoreElem.textContent = `GAME OVER ! Distance : ${score} m\nClique pour rejouer`;
+    train.style.background = '#f00';
+    train.style.boxShadow = '0 0 20px #f00';
+    // Nettoyer obstacles
+    obstacles.forEach(o => o.el.remove());
+    obstacles = [];
+  }
+
+  function restartGame() {
+    score = 0;
+    gameOver = false;
+    train.style.background = '#0ff';
+    train.style.boxShadow = '0 0 15px #0ff';
+    scoreElem.textContent = 'Score : 0 m';
+    currentLaneIndex = 1;
+    updateTrainPosition();
+  }
+
+  function gameLoop() {
+    if (!gameOver) {
+      moveObstacles();
+      scoreElem.textContent = `Score : ${score} m`;
+    }
+    requestAnimationFrame(gameLoop);
+  }
+
+  // Commandes clavier
+  window.addEventListener('keydown', (e) => {
+    if (gameOver) {
+      if (e.key === 'Enter' || e.key === ' ') restartGame();
+      return;
+    }
+    if (e.key === 'ArrowLeft') {
+      if (currentLaneIndex > 0) currentLaneIndex--;
+      updateTrainPosition();
+    } else if (e.key === 'ArrowRight') {
+      if (currentLaneIndex < lanes.length -1) currentLaneIndex++;
+      updateTrainPosition();
+    }
+  });
+
+  // Commandes tactiles
+  btnLeft.addEventListener('touchstart', (e) => {
+    e.preventDefault();
+    if (!gameOver && currentLaneIndex > 0) {
+      currentLaneIndex--;
+      updateTrainPosition();
+    }
+  });
+  btnRight.addEventListener('touchstart', (e) => {
+    e.preventDefault();
+    if (!gameOver && currentLaneIndex < lanes.length -1) {
+      currentLaneIndex++;
+      updateTrainPosition();
+    }
+  });
+
+  // Clic pour rejouer
+  scoreElem.addEventListener('click', () => {
+    if (gameOver) restartGame();
+  });
+
+  // Lancement du jeu
+  updateTrainPosition();
+  gameLoop();
+  // Spawn obstacle toutes les 1,2 sec
+  setInterval(() => {
+    if (!gameOver) spawnObstacle();
+  }, 1200);
+})();
+</script>
+
+</body>
+</html>
