@@ -1441,9 +1441,8 @@ async function loadCompoData() {
     $('#trainInfo').html('<p>Chargement de vos bétaillères…</p>');
 
     const results = {};
-    let mergedStops = [];  // Déclare mergedStops AVANT utilisation
 
-    // Récupération des données API pour chaque train
+    // 1. Récupération des données API pour chaque train
     for (const num of numbers) {
       const url = `https://assistant-train-cx5u.vercel.app/api/train?id=vehicle_journeys/vehicle_journey:SNCF:${date}:${num}:1187:Train`;
       try {
@@ -1489,14 +1488,35 @@ async function loadCompoData() {
           }
         }
 
-        results[num] = { train, impacted, newStart, newEnd, disruptions, disruptionCauses, mergedStops };
+        results[num] = { train, impacted, newStart, newEnd, disruptions, disruptionCauses };
       } catch (e) {
         console.error("Erreur lors de la requête API:", e);
         results[num] = { error: 'Erreur API' };
       }
     }
 
-    // Construction tableau HTML
+    // 2. Construire la liste fusionnée des gares (mergedStops) de tous les trains sélectionnés
+    const allStopsArrays = numbers.map(num => {
+      const train = results[num]?.train;
+      if (!train) return [];
+      return train.stop_times.map(s => s.stop_point.name);
+    });
+
+    const stopsSet = new Set();
+    const mergedStops = [];
+
+    allStopsArrays.forEach(stopsList => {
+      stopsList.forEach(stop => {
+        if (!stopsSet.has(stop)) {
+          stopsSet.add(stop);
+          mergedStops.push(stop);
+        }
+      });
+    });
+
+    console.log('mergedStops:', mergedStops);
+
+    // 3. Construction tableau HTML
     let html = '<table><thead><tr><th>Gare</th>';
     numbers.forEach(num => {
       const composition = compoData[num];
@@ -1505,53 +1525,52 @@ async function loadCompoData() {
     });
     html += '</tr><tr><th></th>';
 
-        numbers.forEach(num => {
-          const result = results[num];
-          let icon = '', title = '';
-          if (!result || result.error) {
-            icon = '❌';
-            title = result?.error || 'Erreur';
-          } else {
-            const disruptions = result.disruptions || [];
-            const impacted = result.impacted;
-            const hasDelay = Object.values(impacted).some(s =>
-              (s.amended_departure_time || s.amended_arrival_time) &&
-              (s.base_departure_time || s.base_arrival_time) &&
-              dl(s.base_departure_time || s.base_arrival_time, s.amended_departure_time || s.amended_arrival_time) > 0
-            );
-            const newStartId = result.newStart;
-            const originalStartId = result.train.stop_times[0].stop_point.id;
-            const isPartial = newStartId && newStartId !== originalStartId;
-            // Attention ici : on vérifie la présence d'un effet NO_SERVICE ou CANCELLATION
-            const isFull = disruptions.some(d => ['NO_SERVICE','CANCELLATION'].includes(d.severity?.effect));
-            const newEndId = result.newEnd;
-            const originalEndId = result.train.stop_times[result.train.stop_times.length - 1].stop_point.id;
-            const isPartialEnd = newEndId && newEndId !== originalEndId;
+    numbers.forEach(num => {
+      const result = results[num];
+      let icon = '', title = '';
+      if (!result || result.error) {
+        icon = '❌';
+        title = result?.error || 'Erreur';
+      } else {
+        const disruptions = result.disruptions || [];
+        const impacted = result.impacted;
+        const hasDelay = Object.values(impacted).some(s =>
+          (s.amended_departure_time || s.amended_arrival_time) &&
+          (s.base_departure_time || s.base_arrival_time) &&
+          dl(s.base_departure_time || s.base_arrival_time, s.amended_departure_time || s.amended_arrival_time) > 0
+        );
+        const newStartId = result.newStart;
+        const originalStartId = result.train.stop_times[0].stop_point.id;
+        const isPartial = newStartId && newStartId !== originalStartId;
+        const isFull = disruptions.some(d => ['NO_SERVICE','CANCELLATION'].includes(d.severity?.effect));
+        const newEndId = result.newEnd;
+        const originalEndId = result.train.stop_times[result.train.stop_times.length - 1].stop_point.id;
+        const isPartialEnd = newEndId && newEndId !== originalEndId;
 
-            if (isFull) {
-              icon = '❌';
-              title = 'Train supprimé';
-              if (result.disruptionCauses.length) title += ' : ' + result.disruptionCauses.join(', ');
-              icon = `<span class="blink-red">${icon}</span>`;
-            } else if (isPartial || isPartialEnd) {
-              icon = '⚠️';
-              title = 'Suppression partielle';
-              if (result.disruptionCauses.length) title += ' : ' + result.disruptionCauses.join(', ');
-            } else if (hasDelay) {
-             icon = '⏰';
-             title = 'Retard';
-             if (result.disruptionCauses.length) title += ' : ' + result.disruptionCauses.join(', ');
-            } else {
-             icon = '';
-             title = 'Sans perturbation';
-            }
-          }
-          html += `<th><span class="icon" title="${title}">${icon}</span></th>`;
-        });
+        if (isFull) {
+          icon = '❌';
+          title = 'Train supprimé';
+          if (result.disruptionCauses.length) title += ' : ' + result.disruptionCauses.join(', ');
+          icon = `<span class="blink-red">${icon}</span>`;
+        } else if (isPartial || isPartialEnd) {
+          icon = '⚠️';
+          title = 'Suppression partielle';
+          if (result.disruptionCauses.length) title += ' : ' + result.disruptionCauses.join(', ');
+        } else if (hasDelay) {
+          icon = '⏰';
+          title = 'Retard';
+          if (result.disruptionCauses.length) title += ' : ' + result.disruptionCauses.join(', ');
+        } else {
+          icon = '';
+          title = 'Sans perturbation';
+        }
+      }
+      html += `<th><span class="icon" title="${title}">${icon}</span></th>`;
+    });
 
-        html += '</tr></thead><tbody>';
+    html += '</tr></thead><tbody>';
 
-// Affichage des gares avec horaires pour chaque train
+    // 4. Affichage des gares avec horaires pour chaque train
     for (const stopName of mergedStops) {
       html += `<tr><td>${stopName}</td>`;
 
@@ -1567,74 +1586,76 @@ async function loadCompoData() {
           html += `<td>-</td>`;
           return;
         }
-            const id = stop.stop_point.id;
-            const imp = result.impacted[id] || {};
+        const id = stop.stop_point.id;
+        const imp = result.impacted[id] || {};
 
-            const amended = imp.amended_departure_time || imp.amended_arrival_time;
-            const departureDeleted = imp.departure_status === 'deleted';
-            const arrivalDeleted = imp.arrival_status === 'deleted';
-            const isStopDeleted = departureDeleted && arrivalDeleted;
-            const base = imp.base_departure_time || imp.base_arrival_time || stop.departure_time || stop.arrival_time;
-            const index = result.train.stop_times.findIndex(s => s.stop_point.id === id);
-            const newStartIndex = result.train.stop_times.findIndex(s => s.stop_point.id === result.newStart);
-            const newEndIndex = result.train.stop_times.findIndex(s => s.stop_point.id === result.newEnd);
-            const originalEndId = result.train.stop_times[result.train.stop_times.length - 1].stop_point.id;
+        const amended = imp.amended_departure_time || imp.amended_arrival_time;
+        const departureDeleted = imp.departure_status === 'deleted';
+        const arrivalDeleted = imp.arrival_status === 'deleted';
+        const isStopDeleted = departureDeleted && arrivalDeleted;
+        const base = imp.base_departure_time || imp.base_arrival_time || stop.departure_time || stop.arrival_time;
+        const index = result.train.stop_times.findIndex(s => s.stop_point.id === id);
+        const newStartIndex = result.train.stop_times.findIndex(s => s.stop_point.id === result.newStart);
+        const newEndIndex = result.train.stop_times.findIndex(s => s.stop_point.id === result.newEnd);
+        const originalEndId = result.train.stop_times[result.train.stop_times.length - 1].stop_point.id;
 
-            let content = ft(base);
-            const isFirstStop = stopName === result.train.stop_times[0]?.stop_point?.name;
-            const isLastStop = stopName === result.train.stop_times[result.train.stop_times.length - 1]?.stop_point?.name;
+        let content = ft(base);
+        const isFirstStop = stopName === result.train.stop_times[0]?.stop_point?.name;
+        const isLastStop = stopName === result.train.stop_times[result.train.stop_times.length - 1]?.stop_point?.name;
 
-            // Cas spécial : gare ancien terminus barré rouge, sans horaire retardé
-if (id === originalEndId && result.newEnd && result.newEnd !== originalEndId) {
-  content = `<span class="delay-strike blink-red">${ft(base)}</span>`;
-}
-// Sinon affichage normal avec retard si nécessaire
-else if (amended && dl(base, amended) > 0) {
-  content = `<span class="delay-strike">${ft(base)}</span><br><span class="delayed">${ft(amended)}</span>`;
-} else {
-  if (isFirstStop || isLastStop) {
-    content = `<strong>${content}</strong>`;
-  }
-}
-const isFull = result.disruptions.some(d => ['NO_SERVICE','CANCELLATION'].includes(d.severity?.effect));
+        // Cas spécial : gare ancien terminus barré rouge, sans horaire retardé
+        if (id === originalEndId && result.newEnd && result.newEnd !== originalEndId) {
+          content = `<span class="delay-strike blink-red">${ft(base)}</span>`;
+        }
+        // Sinon affichage normal avec retard si nécessaire
+        else if (amended && dl(base, amended) > 0) {
+          content = `<span class="delay-strike">${ft(base)}</span><br><span class="delayed">${ft(amended)}</span>`;
+        } else {
+          if (isFirstStop || isLastStop) {
+            content = `<strong>${content}</strong>`;
+          }
+        }
+        const isFull = result.disruptions.some(d => ['NO_SERVICE','CANCELLATION'].includes(d.severity?.effect));
 
-  if (isFull) {
-  content = `<span class="deleted">${content}</span>`;
-} else if (id === result.newStart && index !== 0) {
-  content = `<span class="new-start">${content}</span>`;
-} else if (id === result.newEnd && id !== originalEndId) {
-  if (amended && dl(base, amended) > 0) {
-    // base barré rouge clignotant + affichage de l'horaire modifié normal
-    content = `<span class="delay-strike blink-red">${ft(base)}</span><br><span class="delayed">${ft(amended)}</span>`;
-  } else {
-    // Pas de retard : juste base en rouge clignotant barré
-    content = `<span class="delay-strike blink-red">${ft(base)}</span>`;
-  }
-} else if (
-  isStopDeleted ||
-  (newStartIndex >= 0 && index < newStartIndex) ||
-  (newEndIndex >= 0 && index > newEndIndex)
-) {
-  content = `<span class="deleted">${content}</span>`;
-}
-
-  html += `<td>${content}</td>`;
-});
-          html += '</tr>';
+        if (isFull) {
+          content = `<span class="deleted">${content}</span>`;
+        } else if (id === result.newStart && index !== 0) {
+          content = `<span class="new-start">${content}</span>`;
+        } else if (id === result.newEnd && id !== originalEndId) {
+          if (amended && dl(base, amended) > 0) {
+            content = `<span class="delay-strike blink-red">${ft(base)}</span><br><span class="delayed">${ft(amended)}</span>`;
+          } else {
+            content = `<span class="delay-strike blink-red">${ft(base)}</span>`;
+          }
+        } else if (
+          isStopDeleted ||
+          (newStartIndex >= 0 && index < newStartIndex) ||
+          (newEndIndex >= 0 && index > newEndIndex)
+        ) {
+          content = `<span class="deleted">${content}</span>`;
         }
 
-        html += '</tbody></table>';
+        html += `<td>${content}</td>`;
+      });
+      html += '</tr>';
+    }
 
-  await chargerEtAfficherAlertes();
+    html += '</tbody></table>';
 
-      function extractTrainNumber(name) {
-  if (!name) return '';
-  const match = name.match(/\b\d{5,6}\b/);
-  return match ? match[0] : '';
-}
+    // 5. Insertion du tableau dans le DOM *après* la construction complète
+    $('#trainInfo').html(html);
 
-let groupedDisruptions = {};
+    // 6. Ensuite tu peux appeler ta fonction d’affichage des alertes ou retards
+    await chargerEtAfficherAlertes();
 
+    // Ici ta gestion d’affichage des perturbations (reste identique)
+    function extractTrainNumber(name) {
+      if (!name) return '';
+      const match = name.match(/\b\d{5,6}\b/);
+      return match ? match[0] : '';
+    }
+
+    let groupedDisruptions = {};
 numbers.forEach(num => {
   const result = results[num];
   if (result && result.disruptions && result.disruptions.length > 0) {
