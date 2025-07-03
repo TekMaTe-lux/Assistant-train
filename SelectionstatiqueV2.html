@@ -276,17 +276,26 @@
 }
 
     // --- Variables de sélection de trains ---
-    const selectionTrains = new Set();
+const selectionTrains = new Set();
+const tripToNumMap = {}; // Pour l'affichage dans la sélection
 
 function afficherResultats(trainsTrouves) {
   trainsTrouves.forEach(train => {
-    // Éviter doublons visuels
-    if (document.getElementById("train-" + train.num)) return;
+    // Éviter doublons visuels par trip_id
+    if (document.getElementById("train-" + train.trip_id)) return;
+
+    // Enregistrer la correspondance trip_id ↔ num
+    tripToNumMap[train.trip_id] = train.num;
+
+    const depCode = gareDepartEl.value;
+    const arrCode = gareArriveeEl.value;
 
     const div = document.createElement("div");
     div.className = "carte-train";
-    div.id = "train-" + train.num;
-    if (selectionTrains.has(train.num)) div.classList.add("selected");
+    div.id = "train-" + train.trip_id;
+
+    if (selectionTrains.has(train.trip_id)) div.classList.add("selected");
+
     div.innerHTML = `
       <div class="train-num">Train n°${train.num}</div>
       <div class="horaires">
@@ -294,21 +303,24 @@ function afficherResultats(trainsTrouves) {
         <span>Arrivée:</span> ${train.horaires[arrCode]}
       </div>
     `;
+
     div.addEventListener("click", () => {
-      if (selectionTrains.has(train.num)) {
-        selectionTrains.delete(train.num);
+      if (selectionTrains.has(train.trip_id)) {
+        selectionTrains.delete(train.trip_id);
         div.classList.remove("selected");
       } else {
-        selectionTrains.add(train.num);
+        selectionTrains.add(train.trip_id);
         div.classList.add("selected");
       }
       afficherSelection();
     });
+
     resultatsEl.appendChild(div);
 
-    // On ajoute aussi dans la sélection automatiquement
-    selectionTrains.add(train.num);
+    // On ajoute aussi dans la sélection automatiquement (optionnel)
+    selectionTrains.add(train.trip_id);
   });
+
   afficherSelection();
 }
 
@@ -318,27 +330,57 @@ function afficherSelection() {
     trainsSelectionnesEl.innerHTML = "<li>Aucun train sélectionné</li>";
     return;
   }
-  selectionTrains.forEach(num => {
+
+  selectionTrains.forEach(tripId => {
     const li = document.createElement("li");
-    li.textContent = num;
+    const num = tripToNumMap[tripId] || tripId;
+    li.textContent = `Train n°${num}`;
     trainsSelectionnesEl.appendChild(li);
   });
 }
 
-// Et dans la fonction de recherche :
+// Fonction de recherche principale
 function rechercherTrains() {
-  // ... filtrage des trains ...
-  // Ajoute les résultats à l'affichage (sans vider) :
+  const gareDepart = gareDepartEl.value;
+  const gareArrivee = gareArriveeEl.value;
+  const [min, max] = slider.noUiSlider.get().map(v => parseInt(v));
+  const dateChoisie = dateTrainEl.value;
+
+  const resultats = trains.filter(train => {
+    const idxDepart = train.stops.indexOf(gareDepart);
+    const idxArrivee = train.stops.indexOf(gareArrivee);
+    if (idxDepart === -1 || idxArrivee === -1) return false;
+    if (idxDepart >= idxArrivee) return false;
+    if (!estServiceActif(train.service_id, dateChoisie)) return false;
+
+    const hDepart = train.horaires[gareDepart];
+    if (!hDepart) return false;
+    const [hH, hM] = hDepart.split(":").map(Number);
+    const minutes = hH * 60 + hM;
+    if (minutes < min || minutes > max) return false;
+
+    return true;
+  });
+
+  // Trier par heure de départ
+  resultats.sort((a, b) => {
+    const hA = a.horaires[gareDepartEl.value];
+    const hB = b.horaires[gareDepartEl.value];
+
+    if (!hA) return 1;
+    if (!hB) return -1;
+
+    const toMinutes = h => {
+      const [hh, mm] = h.split(":");
+      return parseInt(hh) * 60 + parseInt(mm);
+    };
+
+    return toMinutes(hA) - toMinutes(hB);
+  });
+
+  // Ajouter les résultats sans effacer les précédents
   afficherResultats(resultats);
 }
-
-    // --- Affichage résultats ---
-    function afficherResultats(trains) {
-  resultatsEl.innerHTML = "";
-  if (trains.length === 0) {
-    resultatsEl.innerHTML = "<p>Aucun train trouvé pour cette recherche.</p>";
-    return;
-  }
 
   // Trier par heure de départ dans la gare sélectionnée
   trains.sort((a, b) => {
