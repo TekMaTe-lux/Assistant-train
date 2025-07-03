@@ -276,20 +276,63 @@
 }
 
     // --- Variables de sélection de trains ---
-const selectionTrains = new Set();
-const tripToNumMap = {}; // Pour l'affichage dans la sélection
+    const selectionTrains = new Set();
 
-function afficherResultats(trainsTrouves) {
-  trainsTrouves.forEach(train => {
-    // Éviter doublons visuels par trip_id
+    function rechercherTrains() {
+  const gareDepart = gareDepartEl.value;
+  const gareArrivee = gareArriveeEl.value;
+  const [minRaw, maxRaw] = slider.noUiSlider.get();
+  const min = Math.round(minRaw);
+  const max = Math.round(maxRaw);
+  const dateChoisie = dateTrainEl.value;
+
+  const nouveauxTrains = [];
+
+  trains.forEach(train => {
+    const idxDepart = train.stops.indexOf(gareDepart);
+    const idxArrivee = train.stops.indexOf(gareArrivee);
+    if (idxDepart === -1 || idxArrivee === -1) return;
+    if (idxDepart >= idxArrivee) return;
+    if (!estServiceActif(train.service_id, dateChoisie)) return;
+
+    const hDepart = train.horaires[gareDepart];
+    if (!hDepart) return;
+    const [hH, hM] = hDepart.split(":").map(Number);
+    const minutes = hH * 60 + hM;
+    if (minutes < min || minutes > max) return;
+
+    // Évite les doublons si déjà affiché
     if (document.getElementById("train-" + train.trip_id)) return;
 
-    // Enregistrer la correspondance trip_id ↔ num
-    tripToNumMap[train.trip_id] = train.num;
+    nouveauxTrains.push(train);
+  });
 
-    const depCode = gareDepartEl.value;
-    const arrCode = gareArriveeEl.value;
+  afficherResultats(nouveauxTrains);
+}
 
+    function afficherResultats(trains) {
+  if (trains.length === 0 && resultatsEl.children.length === 0) {
+    resultatsEl.innerHTML = "<p>Aucun train trouvé pour cette recherche.</p>";
+    return;
+  }
+
+  // Trie les nouveaux trains uniquement
+  trains.sort((a, b) => {
+    const hA = a.horaires[gareDepartEl.value];
+    const hB = b.horaires[gareDepartEl.value];
+
+    if (!hA) return 1;
+    if (!hB) return -1;
+
+    const toMinutes = h => {
+      const [hh, mm] = h.split(":");
+      return parseInt(hh) * 60 + parseInt(mm);
+    };
+
+    return toMinutes(hA) - toMinutes(hB);
+  });
+
+  trains.forEach(train => {
     const div = document.createElement("div");
     div.className = "carte-train";
     div.id = "train-" + train.trip_id;
@@ -299,8 +342,8 @@ function afficherResultats(trainsTrouves) {
     div.innerHTML = `
       <div class="train-num">Train n°${train.num}</div>
       <div class="horaires">
-        <span>Départ:</span> ${train.horaires[depCode]}<br/>
-        <span>Arrivée:</span> ${train.horaires[arrCode]}
+        <span>Départ:</span> ${train.horaires[gareDepartEl.value]}<br/>
+        <span>Arrivée:</span> ${train.horaires[gareArriveeEl.value]}
       </div>
     `;
 
@@ -316,126 +359,26 @@ function afficherResultats(trainsTrouves) {
     });
 
     resultatsEl.appendChild(div);
-
-    // On ajoute aussi dans la sélection automatiquement (optionnel)
     selectionTrains.add(train.trip_id);
   });
 
   afficherSelection();
 }
 
-function afficherSelection() {
+    // --- Afficher sélection ---
+    function afficherSelection() {
   trainsSelectionnesEl.innerHTML = "";
   if (selectionTrains.size === 0) {
     trainsSelectionnesEl.innerHTML = "<li>Aucun train sélectionné</li>";
     return;
   }
-
-  selectionTrains.forEach(tripId => {
+  selectionTrains.forEach(id => {
+    const train = trains.find(t => t.trip_id === id);
     const li = document.createElement("li");
-    const num = tripToNumMap[tripId] || tripId;
-    li.textContent = `Train n°${num}`;
+    li.textContent = train ? `Train n°${train.num}` : id;
     trainsSelectionnesEl.appendChild(li);
   });
 }
-
-// Fonction de recherche principale
-function rechercherTrains() {
-  const gareDepart = gareDepartEl.value;
-  const gareArrivee = gareArriveeEl.value;
-  const [min, max] = slider.noUiSlider.get().map(v => parseInt(v));
-  const dateChoisie = dateTrainEl.value;
-
-  const resultats = trains.filter(train => {
-    const idxDepart = train.stops.indexOf(gareDepart);
-    const idxArrivee = train.stops.indexOf(gareArrivee);
-    if (idxDepart === -1 || idxArrivee === -1) return false;
-    if (idxDepart >= idxArrivee) return false;
-    if (!estServiceActif(train.service_id, dateChoisie)) return false;
-
-    const hDepart = train.horaires[gareDepart];
-    if (!hDepart) return false;
-    const [hH, hM] = hDepart.split(":").map(Number);
-    const minutes = hH * 60 + hM;
-    if (minutes < min || minutes > max) return false;
-
-    return true;
-  });
-
-  // Trier par heure de départ
-  resultats.sort((a, b) => {
-    const hA = a.horaires[gareDepartEl.value];
-    const hB = b.horaires[gareDepartEl.value];
-
-    if (!hA) return 1;
-    if (!hB) return -1;
-
-    const toMinutes = h => {
-      const [hh, mm] = h.split(":");
-      return parseInt(hh) * 60 + parseInt(mm);
-    };
-
-    return toMinutes(hA) - toMinutes(hB);
-  });
-
-  // Ajouter les résultats sans effacer les précédents
-  afficherResultats(resultats);
-}
-
-  // Trier par heure de départ dans la gare sélectionnée
-  trains.sort((a, b) => {
-    const hA = a.horaires[gareDepartEl.value];
-    const hB = b.horaires[gareDepartEl.value];
-
-    if (!hA) return 1;
-    if (!hB) return -1;
-
-    const toMinutes = h => {
-      const [hh, mm] = h.split(":");
-      return parseInt(hh) * 60 + parseInt(mm);
-    }
-
-    return toMinutes(hA) - toMinutes(hB);
-  });
-
-  trains.forEach(train => {
-    const div = document.createElement("div");
-    div.className = "carte-train";
-    if (selectionTrains.has(train.num)) div.classList.add("selected");
-    div.innerHTML = `
-      <div class="train-num">Train n°${train.num}</div>
-      <div class="horaires">
-        <span>Départ:</span> ${train.horaires[gareDepartEl.value]}<br/>
-        <span>Arrivée:</span> ${train.horaires[gareArriveeEl.value]}
-      </div>
-    `;
-    div.addEventListener("click", () => {
-      if (selectionTrains.has(train.num)) {
-        selectionTrains.delete(train.num);
-        div.classList.remove("selected");
-      } else {
-        selectionTrains.add(train.num);
-        div.classList.add("selected");
-      }
-      afficherSelection();
-    });
-    resultatsEl.appendChild(div);
-  });
-}
-
-    // --- Afficher sélection ---
-    function afficherSelection() {
-      trainsSelectionnesEl.innerHTML = "";
-      if (selectionTrains.size === 0) {
-        trainsSelectionnesEl.innerHTML = "<li>Aucun train sélectionné</li>";
-        return;
-      }
-      selectionTrains.forEach(num => {
-        const li = document.createElement("li");
-        li.textContent = num;
-        trainsSelectionnesEl.appendChild(li);
-      });
-    }
 
     // --- Gestion des selects ---
     function verifierBouton() {
