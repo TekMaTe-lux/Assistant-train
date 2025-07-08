@@ -1,25 +1,40 @@
 import requests
+import json
 import time
 from google.transit import gtfs_realtime_pb2
 
-URL = "http://openov.lu/gtfs-rt/tripUpdates.pb"
+url = "http://openov.lu/gtfs-rt/tripUpdates.pb"
+response = requests.get(url)
 
-# Charger le fichier .pb
-response = requests.get(URL)
 feed = gtfs_realtime_pb2.FeedMessage()
 feed.ParseFromString(response.content)
 
-# Lire le timestamp global
-timestamp = feed.header.timestamp
-print("📅 Données générées le :", time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(timestamp)))
+data = {
+    "last_updated": time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(feed.header.timestamp)),
+    "updates": []
+}
 
-# Afficher quelques infos utiles
-for entity in feed.entity[:5]:  # afficher les 5 premiers
-    trip_update = entity.trip_update
-    trip_id = trip_update.trip.trip_id
-    print(f"\n🟢 Trip ID : {trip_id}")
-    for stop_time_update in trip_update.stop_time_update:
-        stop_id = stop_time_update.stop_id
-        if stop_time_update.arrival.delay:
-            delay = stop_time_update.arrival.delay
-            print(f"  ⏰ Retard à {stop_id} : {delay} sec")
+for entity in feed.entity:
+    trip_id = entity.trip_update.trip.trip_id
+    route_id = entity.trip_update.trip.route_id
+    stops = []
+
+    for stu in entity.trip_update.stop_time_update:
+        stop_id = stu.stop_id
+        delay = stu.arrival.delay if stu.HasField("arrival") and stu.arrival.HasField("delay") else 0
+        stops.append({
+            "stop_id": stop_id,
+            "delay_sec": delay
+        })
+
+    data["updates"].append({
+        "trip_id": trip_id,
+        "route_id": route_id,
+        "stops": stops
+    })
+
+# Sauvegarde en JSON
+with open("tripUpdates.json", "w", encoding="utf-8") as f:
+    json.dump(data, f, indent=2, ensure_ascii=False)
+
+print("✅ Fichier tripUpdates.json créé avec succès.")
