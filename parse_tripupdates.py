@@ -26,6 +26,10 @@ def convert_feed_to_json(feed):
         e = {"id": entity.id}
         if entity.HasField('trip_update'):
             tu = entity.trip_update
+
+            # Détection retard global ou sur un arrêt
+            has_delay = False
+
             trip = {
                 "trip_id": tu.trip.trip_id if tu.trip.HasField('trip_id') else None,
                 "route_id": tu.trip.route_id if tu.trip.HasField('route_id') else None,
@@ -34,8 +38,12 @@ def convert_feed_to_json(feed):
                 "schedule_relationship": gtfs_realtime_pb2.TripDescriptor.ScheduleRelationship.Name(tu.trip.schedule_relationship) if tu.trip.HasField('schedule_relationship') else None,
                 "delay": tu.delay if tu.HasField('delay') else None,
                 "timestamp": tu.timestamp if tu.HasField('timestamp') else None,
-                "stop_time_updates": []
+                "stop_time_updates": [],
+                "has_delay": False
             }
+
+            if trip["delay"] is not None and trip["delay"] != 0:
+                has_delay = True
 
             for stu in tu.stop_time_update:
                 stop_update = {
@@ -47,19 +55,28 @@ def convert_feed_to_json(feed):
                 }
                 if stu.HasField('arrival'):
                     arrival = stu.arrival
+                    arrival_delay = arrival.delay if arrival.HasField('delay') else None
                     stop_update["arrival"] = {
-                        "delay": arrival.delay if arrival.HasField('delay') else None,
+                        "delay": arrival_delay,
                         "time": time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(arrival.time)) if arrival.HasField('time') else None,
                         "uncertainty": arrival.uncertainty if arrival.HasField('uncertainty') else None
                     }
+                    if arrival_delay is not None and arrival_delay != 0:
+                        has_delay = True
                 if stu.HasField('departure'):
                     departure = stu.departure
+                    departure_delay = departure.delay if departure.HasField('delay') else None
                     stop_update["departure"] = {
-                        "delay": departure.delay if departure.HasField('delay') else None,
+                        "delay": departure_delay,
                         "time": time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(departure.time)) if departure.HasField('time') else None,
                         "uncertainty": departure.uncertainty if departure.HasField('uncertainty') else None
                     }
+                    if departure_delay is not None and departure_delay != 0:
+                        has_delay = True
+
                 trip["stop_time_updates"].append(stop_update)
+
+            trip["has_delay"] = has_delay
             e["trip_update"] = trip
 
         if entity.HasField('vehicle'):
@@ -137,4 +154,4 @@ if __name__ == "__main__":
     with open("tripUpdates_full.json", "w", encoding="utf-8") as f:
         json.dump(data_json, f, ensure_ascii=False, indent=2)
 
-    print("Fichier tripUpdates_full.json généré avec toutes les données.")
+    print("Fichier tripUpdates_full.json généré avec toutes les données (incluant retards).")
