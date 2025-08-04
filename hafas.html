@@ -1,97 +1,76 @@
 <!DOCTYPE html>
 <html lang="fr">
 <head>
-<meta charset="UTF-8" />
-<title>Trains Luxembourg → Bettembourg</title>
-<style>
-  table { border-collapse: collapse; width: 100%; }
-  th, td { border: 1px solid #ccc; padding: 6px; text-align: center; }
-  th { background: #D10074; color: white; }
-  tbody tr:hover { background-color: #f0f0f0; }
-  .cancelled { color: red; text-decoration: line-through; }
-</style>
+  <meta charset="UTF-8">
+  <title>Trains Luxembourg → Bettembourg</title>
+  <style>
+    body { background: #111; color: #fff; font-family: Arial, sans-serif; padding: 20px; }
+    .train { border: 1px solid #444; padding: 10px; margin-bottom: 10px; border-radius: 5px; background: #222; }
+    .train h2 { margin: 0; font-size: 1.2em; color: #6df; }
+    .error { color: red; }
+  </style>
 </head>
 <body>
+  <h1>Trains de Luxembourg vers Bettembourg</h1>
+  <div id="resultat">Chargement...</div>
 
-<h2>Trains entre Luxembourg et Bettembourg - 4 août 2025</h2>
+  <script>
+    const accessId = "58ef9a71-6837-4405-bd5d-23beaf92864c";
+    const luxId = "A=1@O=Luxembourg, Gare Centrale@X=6134239@Y=49599969@u=0@U=82@L=200405060@";
+    const url = `https://cdt.hafas.de/opendata/apiserver/departureBoard?accessId=${accessId}&id=${encodeURIComponent(luxId)}&format=json`;
 
-<table id="trainsTable">
-  <thead>
-    <tr>
-      <th>Train</th>
-      <th>Type</th>
-      <th>Heure départ</th>
-      <th>Heure arrivée</th>
-      <th>Statut</th>
-      <th>Destination</th>
-    </tr>
-  </thead>
-  <tbody>
-    <tr><td colspan="6">Chargement...</td></tr>
-  </tbody>
-</table>
+    const destinationRecherchee = "Bettembourg";
 
-<script>
-  // IDs exacts des gares Luxembourg et Bettembourg
-  const originId = 'A=1@O=Luxembourg, Gare Centrale@X=6134239@Y=49599969@u=0@U=82@L=200405060@';
-  const destId = 'A=1@O=Bettembourg@X=6135890@Y=4959182@u=0@U=82@L=200405070@';
-  const date = '20250804';
+    async function fetchTrains() {
+      try {
+        const response = await fetch(url);
+        const data = await response.json();
 
-  async function fetchTrips() {
-    // URL vers ton proxy local (exemple localhost:3000)
-    const proxyUrl = `http://localhost:3000/api/trips?originId=${encodeURIComponent(originId)}&destId=${encodeURIComponent(destId)}&date=${date}`;
+        const container = document.getElementById("resultat");
+        container.innerHTML = "";
 
-    try {
-      const res = await fetch(proxyUrl);
-      if (!res.ok) throw new Error(`Erreur HTTP: ${res.status}`);
-      const data = await res.json();
-      displayTrips(data);
-    } catch (err) {
-      console.error('Erreur fetch:', err);
-      document.querySelector('#trainsTable tbody').innerHTML = `<tr><td colspan="6">Erreur: ${err.message}</td></tr>`;
+        if (!data.Departure || data.Departure.length === 0) {
+          container.innerHTML = "Aucun départ trouvé.";
+          return;
+        }
+
+        for (const train of data.Departure) {
+          const ref = encodeURIComponent(train.journeyDetailRef.ref);
+          const detailUrl = `https://cdt.hafas.de/opendata/apiserver/journeyDetail?accessId=${accessId}&ref=${ref}`;
+
+          try {
+            const detailRes = await fetch(detailUrl);
+            const detailData = await detailRes.json();
+            const stops = detailData.stop || [];
+
+            const stopNames = stops.map(s => s.name);
+
+            if (stopNames.includes(destinationRecherchee)) {
+              const div = document.createElement("div");
+              div.className = "train";
+
+              const departureTime = new Date(train.date + "T" + train.time).toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" });
+
+              div.innerHTML = `
+                <h2>${train.name} — Départ à ${departureTime}</h2>
+                <p>Vers : ${train.direction}</p>
+                <p>Arrêts : ${stopNames.join(" → ")}</p>
+              `;
+
+              container.appendChild(div);
+            }
+
+          } catch (error) {
+            console.error("Erreur detail train :", error);
+          }
+        }
+      } catch (error) {
+        document.getElementById("resultat").innerHTML = `<p class="error">Erreur fetch : ${error}</p>`;
+        console.error("Erreur fetch :", error);
+      }
     }
-  }
 
-  function displayTrips(data) {
-    const tbody = document.querySelector('#trainsTable tbody');
-    tbody.innerHTML = ''; // Clear loading
-
-    if (!data.trip || data.trip.length === 0) {
-      tbody.innerHTML = '<tr><td colspan="6">Aucun train trouvé.</td></tr>';
-      return;
-    }
-
-    data.trip.forEach(trip => {
-      const prod = trip.leg[0].product || {};
-      const trainName = prod.name || 'N/A';
-      const trainType = prod.catOutL || prod.catOut || 'N/A';
-
-      const startStop = trip.leg[0].stop[0];
-      const endStop = trip.leg[0].stop[trip.leg[0].stop.length - 1];
-      const depTime = startStop.time || '';
-      const arrTime = endStop.time || '';
-
-      const cancelled = trip.leg[0].stop.some(s => s.cancelled);
-      const statut = cancelled ? 'Annulé' : 'OK';
-
-      const direction = trip.leg[0].direction || '';
-
-      const tr = document.createElement('tr');
-      if (cancelled) tr.classList.add('cancelled');
-      tr.innerHTML = `
-        <td>${trainName}</td>
-        <td>${trainType}</td>
-        <td>${depTime}</td>
-        <td>${arrTime}</td>
-        <td>${statut}</td>
-        <td>${direction}</td>
-      `;
-      tbody.appendChild(tr);
-    });
-  }
-
-  fetchTrips();
-</script>
-
+    fetchTrains();
+  </script>
 </body>
 </html>
