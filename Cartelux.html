@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <title>Carte des arrêts Luxembourg</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+    <style>
+        #map { height: 90vh; width: 100%; }
+        body { font-family: Arial, sans-serif; margin: 0; padding: 0; }
+        .controls { padding: 10px; background: #f0f0f0; }
+        label { margin-right: 10px; }
+    </style>
+</head>
+<body>
+
+<div class="controls">
+    <label>Type d'arrêt :
+        <select id="typeSelect">
+            <option value="all">Tous</option>
+            <option value="bus">Bus</option>
+            <option value="tram">Tram</option>
+            <option value="train">Train</option>
+        </select>
+    </label>
+
+    <label>Ville :
+        <input type="text" id="villeInput" placeholder="Ex: Luxembourg">
+    </label>
+
+    <label>Rayon (km) :
+        <input type="number" id="rayonInput" value="2" min="0.1" step="0.1">
+    </label>
+
+    <button onclick="filterStops()">Filtrer</button>
+</div>
+
+<div id="map"></div>
+
+<script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+<script>
+// Initialisation de la carte
+var map = L.map('map').setView([49.611, 6.13], 12);
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19 }).addTo(map);
+
+var markers = [];
+var stopsData = [];
+
+// Charger le fichier stops[1].txt depuis GitHub Raw
+Papa.parse("https://raw.githubusercontent.com/TekMaTe-lux/Assistant-train/main/CFL/stops%5B1%5D.txt", {
+    download: true,
+    header: true,
+    complete: function(results) {
+        stopsData = results.data;
+
+        stopsData.forEach(stop => {
+            if(stop.stop_lat && stop.stop_lon) {
+                let marker = L.circleMarker([parseFloat(stop.stop_lat), parseFloat(stop.stop_lon)], {
+                    radius: 6,
+                    color: getColor(stop)
+                }).bindPopup(`<b>${stop.stop_name}</b><br>Type: ${getType(stop)}`);
+                marker.stopData = stop;
+                marker.addTo(map);
+                markers.push(marker);
+            }
+        });
+    }
+});
+
+// Déterminer le type d'arrêt à partir du nom
+function getType(stop) {
+    let name = stop.stop_name.toLowerCase();
+    if(name.includes("gare")) return "train";
+    if(name.includes("tram")) return "tram";
+    return "bus";
+}
+
+// Couleur selon le type
+function getColor(stop) {
+    let type = getType(stop);
+    if(type === "train") return "red";
+    if(type === "tram") return "green";
+    return "blue";
+}
+
+// Fonction pour filtrer
+function filterStops() {
+    let type = document.getElementById("typeSelect").value;
+    let ville = document.getElementById("villeInput").value.toLowerCase();
+    let rayon = parseFloat(document.getElementById("rayonInput").value);
+
+    let villeLat = null;
+    let villeLon = null;
+    if(ville) {
+        let villeStop = stopsData.find(s => s.stop_name.toLowerCase().includes(ville));
+        if(villeStop) {
+            villeLat = parseFloat(villeStop.stop_lat);
+            villeLon = parseFloat(villeStop.stop_lon);
+        } else {
+            alert("Ville non trouvée dans les arrêts !");
+            return;
+        }
+    }
+
+    markers.forEach(m => {
+        let mType = getType(m.stopData);
+        let show = true;
+
+        if(type !== "all" && mType !== type) show = false;
+
+        if(villeLat !== null && villeLon !== null) {
+            let d = map.distance([villeLat, villeLon], [parseFloat(m.stopData.stop_lat), parseFloat(m.stopData.stop_lon)]) / 1000;
+            if(d > rayon) show = false;
+        }
+
+        if(show) m.addTo(map);
+        else map.removeLayer(m);
+    });
+}
+</script>
+
+</body>
+</html>
