@@ -1,107 +1,98 @@
 <!DOCTYPE html>
 <html lang="fr">
 <head>
-<meta charset="UTF-8">
-<title>Retards Bettembourg</title>
-<style>
-/* Panneau latéral */
-#retards-panel {
-  position: fixed;
-  top: 0;
-  right: -300px; /* masqué par défaut */
-  width: 300px;
-  height: 100%;
-  background: #111;
-  color: white;
-  overflow-y: auto;
-  transition: right 0.3s ease-in-out;
-  box-shadow: -3px 0 8px rgba(0,0,0,0.6);
-  padding: 1rem;
-  font-family: Arial, sans-serif;
-}
-
-#retards-panel h2 {
-  font-size: 18px;
-  margin-bottom: 10px;
-  border-bottom: 1px solid #444;
-  padding-bottom: 5px;
-}
-
-.retar d {
-  padding: 6px;
-  border-bottom: 1px solid #333;
-}
-
-.retard-aucun { color: #0f0; }
-.retard-moyen { color: orange; }
-.retard-long { color: red; }
-
-#toggle-btn {
-  position: fixed;
-  top: 20px;
-  right: 20px;
-  z-index: 1001;
-  background: #444;
-  color: white;
-  padding: 8px 12px;
-  border: none;
-  cursor: pointer;
-  border-radius: 6px;
-}
-</style>
+  <meta charset="UTF-8">
+  <title>Retards Bettembourg Gare</title>
+  <style>
+    body { font-family: Arial, sans-serif; }
+    #sidebar {
+      position: fixed;
+      top: 0;
+      right: 0;
+      width: 280px;
+      height: 100%;
+      background: #111;
+      color: #0f0;
+      padding: 1rem;
+      overflow-y: auto;
+      box-shadow: -4px 0 8px rgba(0,0,0,0.8);
+      font-size: 14px;
+      z-index: 1000;
+    }
+    #sidebar h2 {
+      margin-top: 0;
+      border-bottom: 1px solid #0f0;
+      padding-bottom: 0.5rem;
+      font-size: 1.2rem;
+    }
+    .train {
+      margin-bottom: 1rem;
+      padding-bottom: 0.5rem;
+      border-bottom: 1px solid #0f0;
+    }
+    .on-time { color: #0f0; }
+    .delayed { color: #ff3300; font-weight: bold; }
+  </style>
 </head>
 <body>
 
-<button id="toggle-btn">⚡ Retards</button>
-
-<div id="retards-panel">
-  <h2>Retards Bettembourg</h2>
-  <div id="retards-list">Chargement...</div>
+<div id="sidebar">
+  <h2>Retards – Bettembourg Gare</h2>
+  <div id="list">Chargement…</div>
 </div>
 
 <script>
-// bouton ouvrir/fermer
-const panel = document.getElementById("retards-panel");
-const btn = document.getElementById("toggle-btn");
+  const API_KEY = "58ef9a71-6837-4405-bd5d-23beaf92864c";
+  const STATION_ID = "220102018";
 
-btn.addEventListener("click", () => {
-  if (panel.style.right === "0px") {
-    panel.style.right = "-300px";
-  } else {
-    panel.style.right = "0px";
-  }
-});
+  async function fetchAndShow() {
+    const now = new Date();
+    const date = now.toISOString().split("T")[0];
+    const time = now.toTimeString().slice(0,8);
 
-// Exemple d'appel API
-async function chargerRetards() {
-  const url = "https://cdt.hafas.de/opendata/apiserver/departureBoard?accessId=58ef9a71-6837-4405-bd5d-23beaf92864c&id=200405036&duration=120&maxJourneys=20&format=json";
-  const resp = await fetch(url);
-  const data = await resp.json();
+    const url = `https://cdt.hafas.de/opendata/apiserver/departureBoard?accessId=${API_KEY}&id=${STATION_ID}&date=${date}&time=${time}&duration=120&maxJourneys=50&format=json`;
+    const res = await fetch(url);
+    const data = await res.json();
 
-  let html = "";
-  if (data.Departure) {
+    const container = document.getElementById("list");
+    container.innerHTML = "";
+
+    if (!data.Departure || data.Departure.length === 0) {
+      container.textContent = "Aucun départ.";
+      return;
+    }
+
     data.Departure.forEach(dep => {
-      const heure = dep.time.substr(11,5);
-      const retard = dep.rtTime ? 
-        ((new Date(dep.rtTime) - new Date(dep.time)) / 60000) : 0;
-      let classe = "retard-aucun";
-      if (retard > 5) classe = "retard-moyen";
-      if (retard > 15) classe = "retard-long";
+      const prod = dep.ProductAtStop?.name || "";
+      if (!prod.startsWith("ICE") && !prod.startsWith("RE") && !prod.startsWith("RB") && !prod.startsWith("TER") && !prod.startsWith("IC")) {
+        // ignore buses, etc.
+        return;
+      }
 
-      html += `<div class="retard ${classe}">
-        <strong>${heure}</strong> → ${dep.direction}<br>
-        Retard: ${retard > 0 ? retard + " min" : "à l'heure"}
-      </div>`;
+      const scheduled = dep.time;
+      const real = dep.rtTime || scheduled;
+      const diff = ((new Date(`${dep.date}T${real}`) - new Date(`${dep.date}T${scheduled}`)) / 60000) || 0;
+
+      const elem = document.createElement("div");
+      elem.className = "train";
+      elem.innerHTML = `
+        <div><b>${prod}</b> → ${dep.direction}</div>
+        <div>Prévu : ${scheduled}</div>
+        <div>Statut : <span class="${diff > 0 ? 'delayed' : 'on-time'}">
+          ${diff > 0 ? `Retardé (+${diff} min)` : "À l'heure"}
+        </span></div>
+      `;
+      container.appendChild(elem);
     });
-  } else {
-    html = "<p>Aucune donnée</p>";
+
+    if (!container.innerHTML.trim()) {
+      container.textContent = "Aucun train en retard détecté.";
+    }
   }
 
-  document.getElementById("retards-list").innerHTML = html;
-}
-
-chargerRetards();
-setInterval(chargerRetards, 60000); // maj toutes les minutes
+  fetchAndShow();
+  setInterval(fetchAndShow, 60000); // actualisation toutes les minutes
 </script>
+
 </body>
 </html>
