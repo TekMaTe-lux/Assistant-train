@@ -1,53 +1,76 @@
 <!DOCTYPE html>
 <html lang="fr">
 <head>
-  <meta charset="UTF-8">
-  <title>Gares CFL autour de Luxembourg</title>
+<meta charset="UTF-8">
+<title>Arrêts CFL proches</title>
+<style>
+  body { font-family: Arial, sans-serif; margin: 20px; background: #1e1e1e; color: #eee; }
+  input, select, button { margin: 5px 0; padding: 5px; }
+  .stop { padding: 5px; border-bottom: 1px solid #444; }
+  .distance { color: #0f0; }
+</style>
 </head>
 <body>
-  <h1>Liste des gares CFL autour de Luxembourg</h1>
-  <div id="gareList">Chargement...</div>
+<h1>Arrêts CFL proches</h1>
 
-  <script>
-    const accessId = '58ef9a71-6837-4405-bd5d-23beaf92864c';
-    const centerLat = 49.6117; // Latitude de Luxembourg
-    const centerLon = 6.13;   // Longitude de Luxembourg
-    const radius = 50000;      // Rayon de 50 km
-    const maxNo = 500;        // Nombre maximum de résultats
+<label>Latitude : <input type="number" step="0.0001" id="lat" value="49.6117"></label><br>
+<label>Longitude : <input type="number" step="0.0001" id="lon" value="6.13"></label><br>
 
-    const url = `https://cdt.hafas.de/opendata/apiserver/location.nearbystops?accessId=${accessId}&originCoordLat=${centerLat}&originCoordLong=${centerLon}&r=${radius}&maxNo=${maxNo}&format=json`;
+<label>Filtrer par type : 
+  <select id="transportType">
+    <option value="all">Tous</option>
+    <option value="train">Gares / Trains</option>
+    <option value="bus">Bus</option>
+    <option value="tram">Tram</option>
+  </select>
+</label><br>
 
-    fetch(url)
-      .then(res => res.json())
-      .then(data => {
-        let stops = [];
-        if (data.StopLocationList && Array.isArray(data.StopLocationList.StopLocation)) {
-          stops = data.StopLocationList.StopLocation;
-        } else if (Array.isArray(data.StopLocation)) {
-          stops = data.StopLocation;
-        }
+<button id="searchBtn">Rechercher les arrêts proches</button>
 
-        // Filtrer les gares CFL (produit train)
-        const cflGares = stops.filter(stop => stop.products && (stop.products & 1) > 0);
+<h2>Résultats :</h2>
+<div id="results"></div>
 
-        const listDiv = document.getElementById('gareList');
-        if (cflGares.length === 0) {
-          listDiv.innerHTML = 'Aucune gare CFL trouvée.';
-          return;
-        }
+<script>
+const accessId = "58ef9a71-6837-4405-bd5d-23beaf92864c";
 
-        const ul = document.createElement('ul');
-        cflGares.forEach(g => {
-          const li = document.createElement('li');
-          li.textContent = `${g.name} (ID: ${g.extId}, products: ${g.products})`;
-          ul.appendChild(li);
-        });
-        listDiv.innerHTML = '';
-        listDiv.appendChild(ul);
-      })
-      .catch(err => {
-        document.getElementById('gareList').textContent = 'Erreur lors du chargement : ' + err;
-      });
-  </script>
+document.getElementById("searchBtn").addEventListener("click", async () => {
+  const lat = parseFloat(document.getElementById("lat").value);
+  const lon = parseFloat(document.getElementById("lon").value);
+  const type = document.getElementById("transportType").value;
+
+  const url = `https://cdt.hafas.de/opendata/apiserver/location.nearbystops?accessId=${accessId}&originCoordLat=${lat}&originCoordLong=${lon}&r=10000&maxNo=100&format=json`;
+
+  const res = await fetch(url);
+  const data = await res.json();
+  const stops = data.StopLocation || [];
+
+  const filtered = stops.filter(stop => {
+    if(type === "all") return true;
+    return stop.productAtStop.some(p => {
+      const cat = p.catOut.toLowerCase();
+      if(type === "train") return ["ic","re","rb","s"].includes(cat);
+      if(type === "tram") return cat === "tram";
+      if(type === "bus") return cat === "bus";
+      return false;
+    });
+  });
+
+  const resultsDiv = document.getElementById("results");
+  resultsDiv.innerHTML = "";
+  if(filtered.length === 0) {
+    resultsDiv.innerHTML = "<p>Aucun arrêt trouvé.</p>";
+    return;
+  }
+
+  filtered.sort((a,b) => a.dist - b.dist);
+
+  filtered.forEach(stop => {
+    const div = document.createElement("div");
+    div.className = "stop";
+    div.innerHTML = `<strong>${stop.name}</strong> <span class="distance">(${stop.dist} m)</span>`;
+    resultsDiv.appendChild(div);
+  });
+});
+</script>
 </body>
 </html>
