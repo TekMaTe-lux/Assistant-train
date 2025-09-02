@@ -1,185 +1,107 @@
 <!DOCTYPE html>
 <html lang="fr">
 <head>
-    <meta charset="UTF-8">
-    <title>Carte des arrêts et lignes Luxembourg</title>
-    <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
-    <style>
-        #map { height: 90vh; width: 100%; }
-        body { font-family: Arial, sans-serif; margin: 0; padding: 0; }
-        .controls { padding: 10px; background: #f0f0f0; }
-        label { margin-right: 10px; }
-    </style>
+<meta charset="UTF-8">
+<title>Retards Bettembourg</title>
+<style>
+/* Panneau latéral */
+#retards-panel {
+  position: fixed;
+  top: 0;
+  right: -300px; /* masqué par défaut */
+  width: 300px;
+  height: 100%;
+  background: #111;
+  color: white;
+  overflow-y: auto;
+  transition: right 0.3s ease-in-out;
+  box-shadow: -3px 0 8px rgba(0,0,0,0.6);
+  padding: 1rem;
+  font-family: Arial, sans-serif;
+}
+
+#retards-panel h2 {
+  font-size: 18px;
+  margin-bottom: 10px;
+  border-bottom: 1px solid #444;
+  padding-bottom: 5px;
+}
+
+.retar d {
+  padding: 6px;
+  border-bottom: 1px solid #333;
+}
+
+.retard-aucun { color: #0f0; }
+.retard-moyen { color: orange; }
+.retard-long { color: red; }
+
+#toggle-btn {
+  position: fixed;
+  top: 20px;
+  right: 20px;
+  z-index: 1001;
+  background: #444;
+  color: white;
+  padding: 8px 12px;
+  border: none;
+  cursor: pointer;
+  border-radius: 6px;
+}
+</style>
 </head>
 <body>
 
-<div class="controls">
-    <label>Type d'arrêt :
-        <select id="typeSelect">
-            <option value="all">Tous</option>
-            <option value="bus">Bus</option>
-            <option value="tram">Tram</option>
-            <option value="train">Train</option>
-        </select>
-    </label>
+<button id="toggle-btn">⚡ Retards</button>
 
-    <label>Ville :
-        <input type="text" id="villeInput" placeholder="Ex: Luxembourg">
-    </label>
-
-    <label>Rayon (km) :
-        <input type="number" id="rayonInput" value="2" min="0.1" step="0.1">
-    </label>
-
-    <button onclick="filterStops()">Filtrer</button>
+<div id="retards-panel">
+  <h2>Retards Bettembourg</h2>
+  <div id="retards-list">Chargement...</div>
 </div>
 
-<div id="map"></div>
-
-<script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
 <script>
-// Initialisation de la carte
-var map = L.map('map').setView([49.611, 6.13], 12);
-L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19 }).addTo(map);
+// bouton ouvrir/fermer
+const panel = document.getElementById("retards-panel");
+const btn = document.getElementById("toggle-btn");
 
-var markers = [];
-var stopsData = [];
-var routesData = [];
-var tripsData = [];
-var stopTimesData = [];
+btn.addEventListener("click", () => {
+  if (panel.style.right === "0px") {
+    panel.style.right = "-300px";
+  } else {
+    panel.style.right = "0px";
+  }
+});
 
-// Charger les fichiers GTFS
-function loadGTFS() {
-    Papa.parse("https://raw.githubusercontent.com/TekMaTe-lux/Assistant-train/main/CFL/stops%5B1%5D.txt", {
-        download: true,
-        header: true,
-        complete: function(results) {
-            stopsData = results.data;
-            loadRoutes();
-        }
+// Exemple d'appel API
+async function chargerRetards() {
+  const url = "https://cdt.hafas.de/opendata/apiserver/departureBoard?accessId=58ef9a71-6837-4405-bd5d-23beaf92864c&id=200405036&duration=120&maxJourneys=20&format=json";
+  const resp = await fetch(url);
+  const data = await resp.json();
+
+  let html = "";
+  if (data.Departure) {
+    data.Departure.forEach(dep => {
+      const heure = dep.time.substr(11,5);
+      const retard = dep.rtTime ? 
+        ((new Date(dep.rtTime) - new Date(dep.time)) / 60000) : 0;
+      let classe = "retard-aucun";
+      if (retard > 5) classe = "retard-moyen";
+      if (retard > 15) classe = "retard-long";
+
+      html += `<div class="retard ${classe}">
+        <strong>${heure}</strong> → ${dep.direction}<br>
+        Retard: ${retard > 0 ? retard + " min" : "à l'heure"}
+      </div>`;
     });
+  } else {
+    html = "<p>Aucune donnée</p>";
+  }
+
+  document.getElementById("retards-list").innerHTML = html;
 }
 
-function loadRoutes() {
-    Papa.parse("https://raw.githubusercontent.com/TekMaTe-lux/Assistant-train/main/CFL/routes%5B1%5D.txt", {
-        download: true,
-        header: true,
-        complete: function(results) {
-            routesData = results.data;
-            loadTrips();
-        }
-    });
-}
-
-function loadTrips() {
-    Papa.parse("https://raw.githubusercontent.com/TekMaTe-lux/Assistant-train/main/CFL/trips%5B1%5D.txt", {
-        download: true,
-        header: true,
-        complete: function(results) {
-            tripsData = results.data;
-            loadStopTimes();
-        }
-    });
-}
-
-function loadStopTimes() {
-    Papa.parse("https://raw.githubusercontent.com/TekMaTe-lux/Assistant-train/main/CFL/stop_times%5B1%5D.txt", {
-        download: true,
-        header: true,
-        complete: function(results) {
-            stopTimesData = results.data;
-            initializeMap();
-        }
-    });
-}
-
-// Initialisation de la carte avec les données
-function initializeMap() {
-    // Créer les marqueurs pour les arrêts
-    stopsData.forEach(stop => {
-        if (stop.stop_lat && stop.stop_lon) {
-            let marker = L.circleMarker([parseFloat(stop.stop_lat), parseFloat(stop.stop_lon)], {
-                radius: 6,
-                color: getColor(stop)
-            }).bindPopup(`<b>${stop.stop_name}</b><br>Type: ${getType(stop)}`);
-            marker.stopData = stop;
-            markers.push(marker);
-        }
-    });
-
-    // Ajouter les lignes et parcours
-    routesData.forEach(route => {
-        let routeTrips = tripsData.filter(trip => trip.route_id === route.route_id);
-        routeTrips.forEach(trip => {
-            let tripStopTimes = stopTimesData.filter(stopTime => stopTime.trip_id === trip.trip_id);
-            let latlngs = tripStopTimes.map(stopTime => {
-                let stop = stopsData.find(s => s.stop_id === stopTime.stop_id);
-                return [parseFloat(stop.stop_lat), parseFloat(stop.stop_lon)];
-            });
-            L.polyline(latlngs, { color: getColor(route) }).addTo(map);
-        });
-    });
-
-    // Ajouter les marqueurs à la carte
-    markers.forEach(marker => marker.addTo(map));
-}
-
-// Déterminer le type d'arrêt
-function getType(stop) {
-    let name = stop.stop_name.toLowerCase();
-    if (name.includes("tram")) return "tram";
-    if (name.includes("gare") && !name.includes("rocade") && !name.includes("al avenue")) return "train";
-    return "bus";
-}
-
-// Déterminer la couleur selon le type
-function getColor(data) {
-    if (data.route_type === "0") return "red"; // Tram
-    if (data.route_type === "1") return "blue"; // Bus
-    if (data.route_type === "2") return "green"; // Train
-    return "gray";
-}
-
-// Fonction de filtrage
-function filterStops() {
-    let type = document.getElementById("typeSelect").value;
-    let ville = document.getElementById("villeInput").value.toLowerCase();
-    let rayon = parseFloat(document.getElementById("rayonInput").value);
-
-    let villeLat = null;
-    let villeLon = null;
-    if (ville) {
-        let villeStop = stopsData.find(s => s.stop_name.toLowerCase().includes(ville));
-        if (villeStop) {
-            villeLat = parseFloat(villeStop.stop_lat);
-            villeLon = parseFloat(villeStop.stop_lon);
-        } else {
-            alert("Ville non trouvée dans les arrêts !");
-            return;
-        }
-    }
-
-    markers.forEach(m => {
-        let mType = getType(m.stopData);
-        let show = true;
-
-        if (type !== "all" && mType !== type) show = false;
-
-        if (villeLat !== null && villeLon !== null) {
-            map.setView([villeLat, villeLon], 13);
-            let d = map.distance([villeLat, villeLon], [parseFloat(m.stopData.stop_lat), parseFloat(m.stopData.stop_lon)]) / 1000;
-            if (d > rayon) show = false;
-        }
-
-        if (show) m.addTo(map);
-        else map.removeLayer(m);
-    });
-}
-
-// Charger les données GTFS au démarrage
-loadGTFS();
+chargerRetards();
+setInterval(chargerRetards, 60000); // maj toutes les minutes
 </script>
-
 </body>
 </html>
