@@ -2,106 +2,87 @@
 <html lang="fr">
 <head>
   <meta charset="UTF-8">
-  <title>Départs Bettembourg</title>
+  <title>Départs CFL</title>
   <style>
-    body { font-family: Arial, sans-serif; background: #111; color: #eee; padding: 20px; }
-    h1 { color: #4cafef; }
-    .controls { margin-bottom: 20px; }
+    body { font-family: Arial, sans-serif; margin: 20px; }
     label { margin-right: 10px; }
-    button { margin: 5px; padding: 6px 12px; cursor: pointer; }
-    .train { background: #222; margin: 8px 0; padding: 10px; border-radius: 6px; }
-    .train strong { color: #4cafef; }
+    select, input { margin: 5px 0; }
+    .results { margin-top: 20px; }
   </style>
 </head>
 <body>
-  <h1>Départs depuis Bettembourg</h1>
+  <h2>Départs en temps réel - CFL</h2>
 
-  <div class="controls">
-    <button onclick="fetchNow()">Maintenant</button>
-    <button onclick="fetchTwoHours()">Prochaines 2 heures</button>
-    <br><br>
-    <label>Date : <input type="date" id="dateInput"></label>
-    <label>Heure : <input type="time" id="timeInput"></label>
-    <label>Durée (minutes) : <input type="number" id="durationInput" value="120"></label>
-    <button onclick="fetchCustom()">Chercher</button>
-  </div>
+  <!-- Sélecteur de gare -->
+  <label for="station">Choisir une gare :</label>
+  <select id="station" onchange="loadDepartures()">
+    <option value="">-- Sélectionner --</option>
+    <option value="200405004">Luxembourg Gare Centrale</option>
+    <option value="200406003">Esch-sur-Alzette</option>
+    <option value="200402006">Differdange</option>
+    <option value="200403004">Ettelbruck</option>
+    <option value="200407001">Rodange</option>
+  </select>
+  <br><br>
 
-  <div id="results">Chargement...</div>
+  <!-- Intervalle -->
+  <label for="interval">Intervalle :</label>
+  <select id="interval" onchange="loadDepartures()">
+    <option value="30">30 min</option>
+    <option value="60">1 heure</option>
+    <option value="120">2 heures</option>
+  </select>
+  <br><br>
+
+  <!-- Choix d'une date/heure -->
+  <label for="datetime">Date et heure (optionnel) :</label>
+  <input type="datetime-local" id="datetime" onchange="loadDepartures()">
+  <br><br>
+
+  <div class="results" id="results">Sélectionnez une gare pour afficher les départs...</div>
 
   <script>
-    const API_URL = "https://cdt.hafas.de/opendata/apiserver/departureBoard";
-    const ACCESS_ID = "58ef9a71-6837-4405-bd5d-23beaf92864c";
-    const STOP_ID = "220102018"; // Bettembourg
+    const API_KEY = "58ef9a71-6837-4405-bd3b-43cce8731fba";
 
-    async function fetchDepartures(date, time, duration = 120) {
-      const url = `${API_URL}?accessId=${ACCESS_ID}&id=${STOP_ID}&date=${date}&time=${time}&duration=${duration}&maxJourneys=50&format=json`;
-      try {
-        const res = await fetch(url);
-        const data = await res.json();
-        displayResults(data);
-      } catch (e) {
-        document.getElementById("results").innerHTML = "Erreur de chargement : " + e;
-      }
-    }
+    async function loadDepartures() {
+      const stationId = document.getElementById("station").value;
+      const interval = document.getElementById("interval").value;
+      const datetime = document.getElementById("datetime").value;
 
-    function displayResults(data) {
-      const container = document.getElementById("results");
-      container.innerHTML = "";
-
-      if (!data.Departure || data.Departure.length === 0) {
-        container.innerHTML = "<p>Aucun départ trouvé.</p>";
+      if (!stationId) {
+        document.getElementById("results").innerHTML = "Veuillez choisir une gare.";
         return;
       }
 
-      data.Departure.forEach(dep => {
-        let statut = "À l'heure";
-        if (dep.rtTime && dep.rtTime !== dep.time) {
-          statut = `Retardé à ${dep.rtTime}`;
+      let url = `https://cdt.hafas.de/opendata/apiserver/departureBoard?accessId=${API_KEY}&id=${stationId}&duration=${interval}`;
+
+      if (datetime) {
+        const d = new Date(datetime);
+        const dateStr = d.toISOString().split("T")[0].replace(/-/g,"");
+        const timeStr = d.toTimeString().slice(0,5).replace(":","");
+        url += `&date=${dateStr}&time=${timeStr}`;
+      }
+
+      try {
+        const response = await fetch(url);
+        const data = await response.json();
+
+        if (!data.Departure || data.Departure.length === 0) {
+          document.getElementById("results").innerHTML = "Aucun départ trouvé.";
+          return;
         }
 
-        const div = document.createElement("div");
-        div.className = "train";
-        div.innerHTML = `
-          <strong>${dep.name || "Train"}</strong> vers <strong>${dep.direction}</strong><br>
-          Départ prévu : ${dep.time} (${dep.date})<br>
-          Voie : ${dep.track || "?"}<br>
-          Catégorie : ${dep.category || "?"}<br>
-          Statut : ${statut}
-        `;
-        container.appendChild(div);
-      });
-    }
+        let html = "<h3>Prochains départs :</h3><ul>";
+        data.Departure.forEach(dep => {
+          html += `<li><b>${dep.name}</b> vers ${dep.direction} - ${dep.time}</li>`;
+        });
+        html += "</ul>";
 
-    function fetchNow() {
-      const now = new Date();
-      const date = now.toISOString().slice(0,10);
-      const time = now.toTimeString().slice(0,8);
-      fetchDepartures(date, time, 60); // par défaut 1h
-    }
-
-    function fetchTwoHours() {
-      const now = new Date();
-      const date = now.toISOString().slice(0,10);
-      const time = now.toTimeString().slice(0,8);
-      fetchDepartures(date, time, 120);
-    }
-
-    function fetchCustom() {
-      const date = document.getElementById("dateInput").value;
-      const timeRaw = document.getElementById("timeInput").value;
-      const duration = document.getElementById("durationInput").value || 120;
-
-      if (!date || !timeRaw) {
-        alert("Choisis une date et une heure !");
-        return;
+        document.getElementById("results").innerHTML = html;
+      } catch (e) {
+        document.getElementById("results").innerHTML = "Erreur de chargement des données.";
       }
-
-      const time = timeRaw.length === 5 ? timeRaw + ":00" : timeRaw;
-      fetchDepartures(date, time, duration);
     }
-
-    // Charger par défaut maintenant
-    fetchNow();
   </script>
 </body>
 </html>
