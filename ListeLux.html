@@ -3,9 +3,11 @@
 <head>
 <meta charset="UTF-8">
 <title>Arrêts CFL proches</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css"/>
 <style>
   body { font-family: Arial, sans-serif; margin: 20px; background: #1e1e1e; color: #eee; }
   input, select, button { margin: 5px 0; padding: 5px; }
+  #map { height: 400px; margin-top: 10px; border: 2px solid #444; }
   .stop { padding: 5px; border-bottom: 1px solid #444; }
   .distance { color: #0f0; }
   .type { color: #0af; margin-left: 10px; font-weight: bold; }
@@ -14,8 +16,16 @@
 <body>
 <h1>Arrêts CFL proches</h1>
 
-<label>Latitude : <input type="number" step="0.0001" id="lat" value="49.5251"></label><br>
-<label>Longitude : <input type="number" step="0.0001" id="lon" value="6.11"></label><br>
+<label>Ville : 
+  <select id="city">
+    <option value="49.6117,6.13">Luxembourg, Gare Centrale</option>
+    <option value="49.516513,6.10168">Bettembourg</option>
+    <option value="49.5094,6.1094">Noertzange</option>
+    <option value="49.4950,6.0740">Dudelange</option>
+    <option value="49.6025,6.1330">Berchem</option>
+  </select>
+</label><br>
+
 <label>Rayon (m) : <input type="number" id="radius" value="10000"></label><br>
 
 <label>Filtrer par type : 
@@ -32,20 +42,29 @@
 <h2>Résultats :</h2>
 <div id="results"></div>
 
+<div id="map"></div>
+
+<script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
 <script>
 const accessId = "58ef9a71-6837-4405-bd5d-23beaf92864c";
+
+// Initialisation de la carte
+let map = L.map('map').setView([49.6117, 6.13], 13);
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+  attribution: '© OpenStreetMap contributors'
+}).addTo(map);
 
 async function fetchStops(lat, lon, radius) {
   const apiUrl = `https://cdt.hafas.de/opendata/apiserver/location.nearbystops?accessId=${accessId}&originCoordLat=${lat}&originCoordLong=${lon}&r=${radius}&maxNo=100&format=json`;
   const corsUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(apiUrl)}`;
-
   const response = await fetch(corsUrl);
   return response.json();
 }
 
 document.getElementById("searchBtn").addEventListener("click", async () => {
-  const lat = parseFloat(document.getElementById("lat").value);
-  const lon = parseFloat(document.getElementById("lon").value);
+  const cityVal = document.getElementById("city").value.split(",");
+  const lat = parseFloat(cityVal[0]);
+  const lon = parseFloat(cityVal[1]);
   const radius = parseInt(document.getElementById("radius").value);
   const type = document.getElementById("transportType").value;
 
@@ -56,7 +75,6 @@ document.getElementById("searchBtn").addEventListener("click", async () => {
     const data = await fetchStops(lat, lon, radius);
     const stops = data.stopLocationOrCoordLocation || [];
 
-    // Filtrer uniquement les objets StopLocation
     const stopLocations = stops.filter(item => item.StopLocation).map(item => item.StopLocation);
 
     const filtered = stopLocations.filter(stop => {
@@ -69,8 +87,16 @@ document.getElementById("searchBtn").addEventListener("click", async () => {
     });
 
     resultsDiv.innerHTML = "";
+    map.eachLayer(layer => {
+      if (layer instanceof L.Marker) map.removeLayer(layer);
+    });
+
+    // Ajouter un marker pour la ville sélectionnée
+    L.marker([lat, lon], {title: "Point central"}).addTo(map).bindPopup("Point central").openPopup();
+    map.setView([lat, lon], 13);
+
     if (filtered.length === 0) {
-      resultsDiv.innerHTML = "<p>Aucun arrêt trouvé.</p>";
+      resultsDiv.innerHTML = "<p>Aucun arrêt trouvé pour ces paramètres.</p>";
       return;
     }
 
@@ -81,10 +107,16 @@ document.getElementById("searchBtn").addEventListener("click", async () => {
       if (stop.products === 32) stopType = "Bus";
       if (stop.products === 256) stopType = "Tram";
 
+      // Affichage dans la liste
       const div = document.createElement("div");
       div.className = "stop";
       div.innerHTML = `<strong>${stop.name}</strong> <span class="distance">(${stop.dist} m)</span> <span class="type">${stopType}</span>`;
       resultsDiv.appendChild(div);
+
+      // Marker sur la carte
+      L.marker([stop.lat, stop.lon], {title: stop.name})
+        .addTo(map)
+        .bindPopup(`<strong>${stop.name}</strong><br>${stopType}<br>${stop.dist} m`);
     });
 
   } catch (err) {
