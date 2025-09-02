@@ -1,324 +1,89 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="fr">
 <head>
-<meta charset="utf-8" />
-<meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>Gares CFL autour de Luxembourg - extraction (corrigé)</title>
-<style>
-  body { font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial; margin: 18px; color: #222; }
-  h1 { color: #D10074; }
-  .controls { margin-bottom: 12px; display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
-  label { font-size: 0.9rem; }
-  input[type="number"], input[type="text"] { padding:6px; border-radius:6px; border:1px solid #ccc; }
-  button { background:#D10074; color:white; border:none; padding:8px 12px; border-radius:8px; cursor:pointer; }
-  button.secondary { background:#666; }
-  table { border-collapse: collapse; width:100%; margin-top:12px; }
-  th, td { border:1px solid #e6e6e6; padding:8px 10px; text-align:left; font-size:0.95rem; }
-  th { background:#f8f8f8; color:#111; }
-  tr:hover { background:#fafafa; }
-  .small { font-size:0.85rem; color:#666; }
-  .msg { margin-top:8px; padding:8px; border-radius:6px; background:#fff6f9; color:#a00; display:none; }
-  #departures { margin-top:18px; }
-  .station-action { color:#0066cc; text-decoration:underline; cursor:pointer; background:none; border:none; font:inherit; padding:0; }
-  pre { background:#f4f4f4; padding:8px; border-radius:6px; overflow:auto; }
-</style>
+  <meta charset="UTF-8">
+  <title>Gares CFL autour de Luxembourg</title>
 </head>
 <body>
-  <h1>Gares CFL autour de Luxembourg (filtrées) — corrigé</h1>
+  <h2>Gares CFL autour de Luxembourg (filtrées)</h2>
+  <pre id="result">Chargement...</pre>
 
-  <div class="controls">
-    <label>Centre (lat,long) :
-      <input id="lat" type="text" value="49.599969" style="width:110px" />
-      <input id="lon" type="text" value="6.134239" style="width:110px" />
-    </label>
+  <script>
+    const apiKey = "58ef9a71-6837-4405-bd5d-23beaf92864c";
 
-    <label>Rayon (m) :
-      <input id="radius" type="number" value="15000" min="1000" step="1000" style="width:100px" />
-    </label>
+    // Coordonnées Luxembourg gare
+    const centerLat = 49.599839;
+    const centerLon = 6.133497;
 
-    <label>maxNo :
-      <input id="maxNo" type="number" value="500" min="10" max="5000" style="width:80px" />
-    </label>
+    const radius = 5000; // 5 km autour
+    const maxNo = 50;
 
-    <button id="btnFetch">Chercher les gares CFL</button>
-    <button id="btnClear" class="secondary">Vider</button>
+    const url = `https://api.opentransportdata.swiss/trias?key=${apiKey}`;
 
-    <div style="margin-left:auto" class="small">
-      <strong>Clé:</strong> <span id="accessIdDisplay">58ef9a71-6837-4405-bd5d-23beaf92864c</span>
-    </div>
-  </div>
+    async function fetchStops() {
+      const query = `
+        <Trias version="1.2" xmlns="http://www.vdv.de/trias">
+          <ServiceRequest>
+            <RequestPayload>
+              <LocationInformationRequest>
+                <LocationRef>
+                  <GeoPosition>
+                    <Longitude>${centerLon}</Longitude>
+                    <Latitude>${centerLat}</Latitude>
+                  </GeoPosition>
+                  <Radius>${radius}</Radius>
+                </LocationRef>
+                <Restrictions>
+                  <Type>stop</Type>
+                  <NumberOfResults>${maxNo}</NumberOfResults>
+                </Restrictions>
+              </LocationInformationRequest>
+            </RequestPayload>
+          </ServiceRequest>
+        </Trias>`;
 
-  <div id="status" class="small">Prêt.</div>
-  <div id="msg" class="msg"></div>
+      const response = await fetch(url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/xml",
+        },
+        body: query
+      });
 
-  <table id="stationsTable" aria-live="polite">
-    <thead>
-      <tr>
-        <th>Nom</th>
-        <th>extId</th>
-        <th>lat / lon</th>
-        <th>products</th>
-        <th>Actions</th>
-      </tr>
-    </thead>
-    <tbody>
-      <tr><td colspan="5" class="small">Clique sur "Chercher les gares CFL" pour démarrer.</td></tr>
-    </tbody>
-  </table>
+      const text = await response.text();
+      console.log("Réponse API brute:", text);
 
-  <div id="departures"></div>
+      // Parser XML
+      const parser = new DOMParser();
+      const xml = parser.parseFromString(text, "application/xml");
 
-<script>
-(() => {
-  // TA CLE API
-  const ACCESS_ID = '58ef9a71-6837-4405-bd5d-23beaf92864c';
+      const stops = Array.from(xml.getElementsByTagName("StopPoint"));
 
-  // Endpoints
-  const NEARBY_URL = 'https://cdt.hafas.de/opendata/apiserver/location.nearbystops';
-  const DEPARTURE_URL = 'https://cdt.hafas.de/opendata/apiserver/departureBoard';
+      // Garder uniquement les gares (railStation, railwayStop)
+      const cflStops = stops.filter(stop => {
+        const name = stop.getElementsByTagName("StopPointName")[0]?.textContent || "";
+        const id = stop.getElementsByTagName("StopPointRef")[0]?.textContent || "";
+        return (
+          /CFL/i.test(name) || // contient CFL
+          /rail/i.test(id)     // identifiant ferroviaire
+        );
+      }).map(stop => {
+        return {
+          id: stop.getElementsByTagName("StopPointRef")[0]?.textContent,
+          name: stop.getElementsByTagName("StopPointName")[0]?.textContent,
+          lat: stop.getElementsByTagName("Latitude")[0]?.textContent,
+          lon: stop.getElementsByTagName("Longitude")[0]?.textContent
+        };
+      });
 
-  // DOM
-  const btnFetch = document.getElementById('btnFetch');
-  const btnClear = document.getElementById('btnClear');
-  const status = document.getElementById('status');
-  const msg = document.getElementById('msg');
-  const stationsTableBody = document.querySelector('#stationsTable tbody');
-  const departuresDiv = document.getElementById('departures');
-
-  function showMsg(text, visible=true) {
-    msg.textContent = text;
-    msg.style.display = visible ? 'block' : 'none';
-  }
-
-  function setStatus(t) {
-    status.textContent = t;
-  }
-
-  // Heuristiques pour décider "gare ferroviaire CFL"
-  function looksLikeTrainStation(stop) {
-    if (!stop) return false;
-    const name = (stop.name || '').toLowerCase();
-
-    // exclude tram and routière
-    if (/tram|routi[eè]re/.test(name)) return false;
-
-    // If productAtStop includes CFL operator and some train category -> positive
-    const pas = stop.productAtStop || [];
-    const hasCFLTrainProduct = Array.isArray(pas) && pas.some(p => {
-      const op = p.operatorInfo || {};
-      const opIsCFL = (op.name === 'Chemins de Fer Luxembourgeois' || op.nameS === 'CFL' || op.nameL === 'Chemins de Fer Luxembourgeois');
-      const cat = (p.catOut || '').toUpperCase();
-      const trainCats = ['RE','IC','RB','IR','CFL','S','CIC','CRB'];
-      const looksTrain = trainCats.includes(cat) || /^prod_/i.test(p.icon?.res || '');
-      return opIsCFL && looksTrain;
-    });
-
-    // fallback: extId pattern for stations in this dataset often start with '200'
-    const extId = stop.extId || '';
-    const extLooksStation = /^200/.test(extId);
-
-    // names containing 'gare' highly likely stations
-    const nameHasGare = /\bgare\b/.test(name);
-
-    return hasCFLTrainProduct || extLooksStation || nameHasGare;
-  }
-
-  // query location.nearbystops
-  async function fetchNearby(lat, lon, r = 15000, maxNo = 500) {
-    const url = `${NEARBY_URL}?accessId=${encodeURIComponent(ACCESS_ID)}&originCoordLat=${encodeURIComponent(lat)}&originCoordLong=${encodeURIComponent(lon)}&r=${encodeURIComponent(r)}&maxNo=${encodeURIComponent(maxNo)}&format=json&lang=fr&type=S`;
-    setStatus('Requête : ' + url);
-    const res = await fetch(url);
-    if (!res.ok) throw new Error('HTTP ' + res.status + ' ' + res.statusText);
-    const json = await res.json();
-    const list = json?.LocationList?.StopLocation;
-    if (!list) return [];
-    return Array.isArray(list) ? list : [list];
-  }
-
-  // dedupe by extId or id
-  function dedupeStops(stops) {
-    const map = new Map();
-    for (const s of stops) {
-      const key = s.extId || s.id || (s.name + '|' + s.lat + '|' + s.lon);
-      const existing = map.get(key);
-      if (!existing) { map.set(key, s); continue; }
-      // keep the one with more productAtStop detail
-      const len = (Array.isArray(s.productAtStop) ? s.productAtStop.length : 0);
-      const lenE = (Array.isArray(existing.productAtStop) ? existing.productAtStop.length : 0);
-      if (len > lenE) map.set(key, s);
-    }
-    return Array.from(map.values());
-  }
-
-  function renderStations(stations) {
-    stationsTableBody.innerHTML = '';
-    if (!stations.length) {
-      stationsTableBody.innerHTML = '<tr><td colspan="5">Aucune gare trouvée.</td></tr>';
-      return;
-    }
-    for (const s of stations) {
-      const tr = document.createElement('tr');
-      const nameTd = document.createElement('td');
-      nameTd.innerHTML = `<strong>${escapeHtml(s.name)}</strong><div class="small">${escapeHtml(s.id || '')}</div>`;
-      const extTd = document.createElement('td'); extTd.textContent = s.extId || '';
-      const coordTd = document.createElement('td'); coordTd.textContent = `${s.lat ?? ''} / ${s.lon ?? ''}`;
-      const prodTd = document.createElement('td'); prodTd.textContent = s.products ?? '';
-      const actionTd = document.createElement('td');
-
-      const btn = document.createElement('button');
-      btn.className = 'station-action';
-      btn.textContent = 'Voir départs';
-      btn.title = 'Afficher les départs pour cette gare';
-      btn.onclick = () => loadDeparturesFor(s);
-      actionTd.appendChild(btn);
-
-      tr.appendChild(nameTd);
-      tr.appendChild(extTd);
-      tr.appendChild(coordTd);
-      tr.appendChild(prodTd);
-      tr.appendChild(actionTd);
-      stationsTableBody.appendChild(tr);
-    }
-  }
-
-  // simple escape
-  function escapeHtml(s) {
-    if (s == null) return '';
-    return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-  }
-
-  // fetch departureBoard for an id (id OR extId)
-  async function fetchDepartureBoard(id) {
-    const url = `${DEPARTURE_URL}?accessId=${encodeURIComponent(ACCESS_ID)}&id=${encodeURIComponent(id)}&format=json&passlist=0&duration=120`;
-    setStatus('Chargement des départs pour ' + id);
-    const res = await fetch(url);
-    if (!res.ok) throw new Error('HTTP ' + res.status + ' ' + res.statusText);
-    return res.json();
-  }
-
-  // load and display departures for a stop
-  async function loadDeparturesFor(stop) {
-    departuresDiv.innerHTML = `<h3>Départs — ${escapeHtml(stop.name)}</h3><p class="small">Chargement…</p>`;
-    try {
-      // prefer stop.id (internal full id) for departureBoard
-      const idToUse = stop.id || stop.extId || stop.name;
-      const data = await fetchDepartureBoard(idToUse);
-      renderDepartures(stop, data);
-    } catch (err) {
-      departuresDiv.innerHTML = `<h3>Départs — ${escapeHtml(stop.name)}</h3><div class="msg">Erreur lors du chargement: ${escapeHtml(err.message)}</div>`;
-      console.error(err);
-    }
-  }
-
-  function renderDepartures(stop, data) {
-    // Try several shapes that the API might use
-    let departures = [];
-    try {
-      if (Array.isArray(data?.LocationList?.StopLocation)) {
-        // sometimes full LocationList returned, find the matching stop and its departures
-        // fallback later
-      }
-      // Known shapes:
-      // data.DepartureBoard.Departure (array) OR data.DepartureBoard.Departure (object)
-      const candidate =
-        data?.DepartureBoard?.Departure ||
-        data?.departureBoard?.departure ||
-        data?.departure ||
-        data?.Departure ||
-        data?.DepartureBoard ||
-        null;
-
-      if (candidate) {
-        departures = Array.isArray(candidate) ? candidate : [candidate];
-      }
-    } catch (e) {
-      departures = [];
+      document.getElementById("result").textContent =
+        `Centre (lat,long) : ${centerLat}, ${centerLon}\n` +
+        `Rayon (m) : ${radius}\nmaxNo : ${maxNo}\n\n` +
+        `Trouvé ${cflStops.length} gares CFL :\n\n` +
+        JSON.stringify(cflStops, null, 2);
     }
 
-    const html = [];
-    html.push(`<h3>Départs — ${escapeHtml(stop.name)}</h3>`);
-    if (!departures.length) {
-      html.push('<p class="small">Aucun départ trouvé (ou format de réponse inattendu).</p>');
-      html.push('<pre>' + escapeHtml(JSON.stringify(data, null, 2)) + '</pre>');
-      departuresDiv.innerHTML = html.join('');
-      return;
-    }
-
-    html.push('<table><thead><tr><th>Train</th><th>Type</th><th>Heure départ</th><th>Heure réelle</th><th>Quai</th><th>Dest.</th><th>Statut</th></tr></thead><tbody>');
-    for (const d of departures) {
-      // support for several naming conventions
-      const prod = d.product || d.Product || (d.productAtStop && d.productAtStop[0]) || {};
-      const prodName = (prod.name || d.name || d.line || '') ;
-      const trainType = (prod.catOutL || prod.catOut || (prod.catCode ? prod.catCode : '')) ;
-      const depTime = d.time || d.depTime || d.rtDepTime || '';
-      const rt = d.rtTime || d.rtDepTime || '';
-      const platform = (d.rtPlatform?.text || d.rtDepPlatform?.text || d.rtTrack || d.platform || d.rtDepTrack || '');
-      const direction = d.direction || d.stop || d.name || '';
-
-      const cancelled = d.cancelled || d.partCancelled || false;
-      const statut = cancelled ? 'Annulé' : (d.reachable === false ? 'Non reachable' : 'OK');
-
-      html.push(`<tr>
-        <td>${escapeHtml(prodName)}</td>
-        <td>${escapeHtml(trainType)}</td>
-        <td>${escapeHtml(depTime)}</td>
-        <td>${escapeHtml(rt)}</td>
-        <td>${escapeHtml(platform)}</td>
-        <td>${escapeHtml(direction)}</td>
-        <td>${escapeHtml(statut)}</td>
-      </tr>`);
-    }
-    html.push('</tbody></table>');
-    departuresDiv.innerHTML = html.join('');
-  }
-
-  // main fetch action
-  btnFetch.addEventListener('click', async () => {
-    showMsg('', false);
-    setStatus('Recherche en cours…');
-    departuresDiv.innerHTML = '';
-    try {
-      const lat = parseFloat(document.getElementById('lat').value.trim());
-      const lon = parseFloat(document.getElementById('lon').value.trim());
-      const radius = parseInt(document.getElementById('radius').value, 10) || 15000;
-      const maxNo = parseInt(document.getElementById('maxNo').value, 10) || 500;
-
-      if (isNaN(lat) || isNaN(lon)) { showMsg('Latitude / longitude invalides'); return; }
-
-      setStatus('Appel de location.nearbystops…');
-      const stops = await fetchNearby(lat, lon, radius, maxNo);
-      setStatus(`Récupérés ${stops.length} stops (non filtrés). Filtrage…`);
-
-      // dedupe
-      const dedup = dedupeStops(stops);
-
-      // filter for train stations
-      const trains = dedup.filter(s => looksLikeTrainStation(s));
-
-      setStatus(`Trouvé ${trains.length} gares (après filtrage).`);
-      renderStations(trains);
-      if (!trains.length) {
-        showMsg('Aucune gare ferroviaire CFL détectée. Essaie d\'augmenter le rayon ou maxNo.', true);
-      } else {
-        showMsg(`${trains.length} gares CFL listées. Clique sur "Voir départs" pour une gare.`, true);
-      }
-    } catch (err) {
-      console.error(err);
-      showMsg('Erreur : ' + err.message, true);
-      setStatus('Erreur');
-    }
-  });
-
-  btnClear.addEventListener('click', () => {
-    stationsTableBody.innerHTML = '<tr><td colspan="5" class="small">Vide.</td></tr>';
-    departuresDiv.innerHTML = '';
-    setStatus('Prêt.');
-    showMsg('', false);
-  });
-
-  // expose small helper for debugging
-  window.__fetchNearby = fetchNearby;
-})();
-</script>
+    fetchStops();
+  </script>
 </body>
 </html>
