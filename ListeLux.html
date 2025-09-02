@@ -1,89 +1,49 @@
 <!DOCTYPE html>
 <html lang="fr">
 <head>
-  <meta charset="UTF-8">
-  <title>Gares CFL autour de Luxembourg</title>
+<meta charset="UTF-8">
+<title>Gares CFL Luxembourg</title>
 </head>
 <body>
-  <h2>Gares CFL autour de Luxembourg (filtrées)</h2>
-  <pre id="result">Chargement...</pre>
+<h1>Liste des gares CFL au Luxembourg</h1>
+<div id="gareList">Chargement...</div>
 
-  <script>
-    const apiKey = "58ef9a71-6837-4405-bd5d-23beaf92864c";
+<script>
+const accessId = "58ef9a71-6837-4405-bd5d-23beaf92864c";
 
-    // Coordonnées Luxembourg gare
-    const centerLat = 49.599839;
-    const centerLon = 6.133497;
+// Centre du Luxembourg et grand rayon pour couvrir tout le pays
+const centerLat = 49.6117;
+const centerLon = 6.13;
+const radius = 50000; // en mètres
+const maxNo = 500;
 
-    const radius = 5000; // 5 km autour
-    const maxNo = 50;
+const url = `https://cdt.hafas.de/opendata/apiserver/location.nearbystops?accessId=${accessId}&originCoordLat=${centerLat}&originCoordLong=${centerLon}&r=${radius}&maxNo=${maxNo}&format=json`;
 
-    const url = `https://api.opentransportdata.swiss/trias?key=${apiKey}`;
-
-    async function fetchStops() {
-      const query = `
-        <Trias version="1.2" xmlns="http://www.vdv.de/trias">
-          <ServiceRequest>
-            <RequestPayload>
-              <LocationInformationRequest>
-                <LocationRef>
-                  <GeoPosition>
-                    <Longitude>${centerLon}</Longitude>
-                    <Latitude>${centerLat}</Latitude>
-                  </GeoPosition>
-                  <Radius>${radius}</Radius>
-                </LocationRef>
-                <Restrictions>
-                  <Type>stop</Type>
-                  <NumberOfResults>${maxNo}</NumberOfResults>
-                </Restrictions>
-              </LocationInformationRequest>
-            </RequestPayload>
-          </ServiceRequest>
-        </Trias>`;
-
-      const response = await fetch(url, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/xml",
-        },
-        body: query
-      });
-
-      const text = await response.text();
-      console.log("Réponse API brute:", text);
-
-      // Parser XML
-      const parser = new DOMParser();
-      const xml = parser.parseFromString(text, "application/xml");
-
-      const stops = Array.from(xml.getElementsByTagName("StopPoint"));
-
-      // Garder uniquement les gares (railStation, railwayStop)
-      const cflStops = stops.filter(stop => {
-        const name = stop.getElementsByTagName("StopPointName")[0]?.textContent || "";
-        const id = stop.getElementsByTagName("StopPointRef")[0]?.textContent || "";
-        return (
-          /CFL/i.test(name) || // contient CFL
-          /rail/i.test(id)     // identifiant ferroviaire
-        );
-      }).map(stop => {
-        return {
-          id: stop.getElementsByTagName("StopPointRef")[0]?.textContent,
-          name: stop.getElementsByTagName("StopPointName")[0]?.textContent,
-          lat: stop.getElementsByTagName("Latitude")[0]?.textContent,
-          lon: stop.getElementsByTagName("Longitude")[0]?.textContent
-        };
-      });
-
-      document.getElementById("result").textContent =
-        `Centre (lat,long) : ${centerLat}, ${centerLon}\n` +
-        `Rayon (m) : ${radius}\nmaxNo : ${maxNo}\n\n` +
-        `Trouvé ${cflStops.length} gares CFL :\n\n` +
-        JSON.stringify(cflStops, null, 2);
+fetch(url)
+  .then(res => res.json())
+  .then(data => {
+    const stops = data.StopLocationList.StopLocation;
+    // Filtrer uniquement les gares (produit train)
+    const cflGares = stops.filter(stop => stop.products && (stop.products & 1) > 0);
+    
+    const listDiv = document.getElementById('gareList');
+    if(cflGares.length === 0) {
+      listDiv.innerHTML = "Aucune gare CFL trouvée.";
+      return;
     }
-
-    fetchStops();
-  </script>
+    
+    const ul = document.createElement('ul');
+    cflGares.forEach(g => {
+      const li = document.createElement('li');
+      li.textContent = `${g.name} (extId: ${g.extId})`;
+      ul.appendChild(li);
+    });
+    listDiv.innerHTML = "";
+    listDiv.appendChild(ul);
+  })
+  .catch(err => {
+    document.getElementById('gareList').textContent = "Erreur lors du chargement : " + err;
+  });
+</script>
 </body>
 </html>
