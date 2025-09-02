@@ -2,7 +2,7 @@
 <html lang="fr">
 <head>
   <meta charset="UTF-8">
-  <title>Départs Bus CFL</title>
+  <title>Départs Bus L60, L61, L62, L90</title>
   <style>
     body { font-family: Arial, sans-serif; margin: 20px; }
     label { margin-right: 10px; }
@@ -11,18 +11,20 @@
     li { margin-bottom: 12px; padding: 8px; border-bottom: 1px solid #ddd; }
     .retard { color: red; font-weight: bold; }
     .a-heure { color: green; font-weight: bold; }
-    .datetime-container { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; }
+    .datetime-container { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
   </style>
 </head>
 <body>
-  <h2>Départs Bus CFL en temps réel</h2>
+  <h2>Départs Bus L60, L61, L62, L90</h2>
 
-  <!-- Sélecteur de lignes de bus -->
-  <label for="lines">Sélectionner les lignes :</label>
-  <label><input type="checkbox" id="L60" checked>L60</label>
-  <label><input type="checkbox" id="L61" checked>L61</label>
-  <label><input type="checkbox" id="L62" checked>L62</label>
-  <label><input type="checkbox" id="L90" checked>L90</label>
+  <!-- Sélecteur de ligne -->
+  <label for="lines">Choisir les lignes :</label>
+  <select id="lines" multiple size="4">
+    <option value="L60" selected>L60</option>
+    <option value="L61" selected>L61</option>
+    <option value="L62" selected>L62</option>
+    <option value="L90" selected>L90</option>
+  </select>
   <br><br>
 
   <!-- Intervalle -->
@@ -35,21 +37,20 @@
   </select>
   <br><br>
 
-  <!-- Choix d'une date/heure avec boutons -->
+  <!-- Choix d'une date/heure avec bouton -->
   <div class="datetime-container">
     <label for="datetime">Date et heure :</label>
-    <input type="datetime-local" id="datetime">
-    <button onclick="loadDeparturesCustom()">Afficher</button>
-    <button onclick="loadDeparturesNow()">Revenir aux prochains départs</button>
+    <input type="datetime-local" id="datetime" onchange="loadDeparturesCustom()">
+    <button onclick="loadDeparturesNow()">Prochains départs</button>
   </div>
+  <br>
 
-  <div class="results" id="results">Sélectionnez une gare pour afficher les départs...</div>
+  <div class="results" id="results">Sélectionnez une ligne pour afficher les départs...</div>
 
   <script>
     const API_KEY = "58ef9a71-6837-4405-bd5d-23beaf92864c";
-    const STATION_ID = "200405036"; // Gare routière de Luxembourg
+    const STATION_ID = "200405036"; // Gare Centrale de Luxembourg
 
-    // Initialise la valeur par défaut de datetime-local
     function setDefaultDatetime() {
       const dtInput = document.getElementById('datetime');
       const now = new Date();
@@ -59,16 +60,11 @@
 
     setDefaultDatetime();
 
-    async function loadDepartures(stationId, dateStr, timeStr) {
-      const interval = document.getElementById("interval").value;
-      const lines = [];
-      if (document.getElementById("L60").checked) lines.push("L60");
-      if (document.getElementById("L61").checked) lines.push("L61");
-      if (document.getElementById("L62").checked) lines.push("L62");
-      if (document.getElementById("L90").checked) lines.push("L90");
+    async function loadDepartures(stationId, dateStr, timeStr, interval) {
+      const selectedLines = Array.from(document.getElementById("lines").selectedOptions).map(option => option.value);
 
-      if (!stationId || lines.length === 0) {
-        document.getElementById("results").innerHTML = "Veuillez choisir au moins une ligne.";
+      if (!stationId) {
+        document.getElementById("results").innerHTML = "Veuillez choisir une gare.";
         return;
       }
 
@@ -83,15 +79,13 @@
           return;
         }
 
-        let html = "<h3>Départs :</h3><ul>";
+        let html = "<h3>Départs sélectionnés :</h3><ul>";
         data.Departure.forEach(dep => {
-          if (!lines.includes(dep.name)) return;
+          const busLine = dep.ProductAtStop.displayNumber;
+          if (!selectedLines.includes(busLine)) return;
 
           let statut = `<span class="a-heure">À l'heure</span>`;
-          let depTime = dep.time;
-
           if (dep.rtTime && dep.rtTime !== dep.time) {
-            depTime = dep.rtTime;
             const scheduled = new Date(`${dep.date}T${dep.time}`);
             const real = new Date(`${dep.rtDate || dep.date}T${dep.rtTime}`);
             const diffMin = Math.round((real - scheduled) / 60000);
@@ -99,7 +93,7 @@
           }
 
           html += `<li>
-            <b>${dep.name}</b> vers ${dep.direction}<br>
+            <b>${busLine}</b> vers ${dep.direction}<br>
             Départ prévu : ${dep.time} (${dep.date})<br>
             Voie : ${dep.rtTrack ? dep.rtTrack : "?"}<br>
             Catégorie : ${dep.ProductAtStop?.catOut || "?"}<br>
@@ -115,12 +109,13 @@
       }
     }
 
-    // Prochains départs à partir de maintenant
+    // Départs à partir de maintenant
     function loadDeparturesNow() {
       const now = new Date();
       const dateStr = now.toISOString().split("T")[0];
       const timeStr = now.toTimeString().slice(0,8);
-      loadDepartures(STATION_ID, dateStr, timeStr);
+      const interval = document.getElementById("interval").value;
+      loadDepartures(STATION_ID, dateStr, timeStr, interval);
       setDefaultDatetime();
     }
 
@@ -132,18 +127,16 @@
       const d = new Date(datetime);
       const dateStr = d.toISOString().split("T")[0];
       const timeStr = d.toTimeString().slice(0,8);
-      loadDepartures(STATION_ID, dateStr, timeStr);
+      const interval = document.getElementById("interval").value;
+      loadDepartures(STATION_ID, dateStr, timeStr, interval);
     }
 
-    // Recharge les départs si l'intervalle change
+    // Recharge les départs en fonction de l'intervalle actuel
     function reloadDepartures() {
       const datetimeVal = document.getElementById("datetime").value;
       if (datetimeVal) loadDeparturesCustom();
       else loadDeparturesNow();
     }
-
-    // Initialisation
-    document.getElementById("station").addEventListener("change", loadDeparturesNow);
   </script>
 </body>
 </html>
