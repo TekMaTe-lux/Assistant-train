@@ -8,15 +8,17 @@
     label { margin-right: 10px; }
     select, input { margin: 5px 0; }
     .results { margin-top: 20px; }
+    li { margin-bottom: 8px; }
   </style>
 </head>
 <body>
-  <h2>Départs en temps réel - CFL</h2>
+  <h2>Départs CFL en temps réel</h2>
 
   <!-- Sélecteur de gare -->
   <label for="station">Choisir une gare :</label>
   <select id="station" onchange="loadDepartures()">
     <option value="">-- Sélectionner --</option>
+    <option value="220102018">Bettembourg</option>
     <option value="200405004">Luxembourg Gare Centrale</option>
     <option value="200406003">Esch-sur-Alzette</option>
     <option value="200402006">Differdange</option>
@@ -30,7 +32,7 @@
   <select id="interval" onchange="loadDepartures()">
     <option value="30">30 min</option>
     <option value="60">1 heure</option>
-    <option value="120">2 heures</option>
+    <option value="120" selected>2 heures</option>
   </select>
   <br><br>
 
@@ -42,7 +44,7 @@
   <div class="results" id="results">Sélectionnez une gare pour afficher les départs...</div>
 
   <script>
-    const API_KEY = "58ef9a71-6837-4405-bd3b-43cce8731fba";
+    const API_KEY = "58ef9a71-6837-4405-bd5d-23beaf92864c";
 
     async function loadDepartures() {
       const stationId = document.getElementById("station").value;
@@ -54,14 +56,19 @@
         return;
       }
 
-      let url = `https://cdt.hafas.de/opendata/apiserver/departureBoard?accessId=${API_KEY}&id=${stationId}&duration=${interval}`;
+      // Date et heure
+      let now = new Date();
+      let dateStr = now.toISOString().split("T")[0];       // YYYY-MM-DD
+      let timeStr = now.toTimeString().slice(0,8);         // HH:MM:SS
 
       if (datetime) {
         const d = new Date(datetime);
-        const dateStr = d.toISOString().split("T")[0].replace(/-/g,"");
-        const timeStr = d.toTimeString().slice(0,5).replace(":","");
-        url += `&date=${dateStr}&time=${timeStr}`;
+        dateStr = d.toISOString().split("T")[0];
+        timeStr = d.toTimeString().slice(0,8);
       }
+
+      // URL API avec le format correct
+      const url = `https://cdt.hafas.de/opendata/apiserver/departureBoard?accessId=${API_KEY}&id=${stationId}&date=${dateStr}&time=${timeStr}&duration=${interval}&maxJourneys=200&format=json`;
 
       try {
         const response = await fetch(url);
@@ -72,14 +79,22 @@
           return;
         }
 
+        // Construction de l'affichage
         let html = "<h3>Prochains départs :</h3><ul>";
         data.Departure.forEach(dep => {
-          html += `<li><b>${dep.name}</b> vers ${dep.direction} - ${dep.time}</li>`;
+          html += `<li>
+            <b>${dep.name}</b> vers ${dep.direction}<br>
+            Départ prévu : ${dep.time} (${dep.date})<br>
+            Voie : ${dep.rtTrack ? dep.rtTrack : "?"}<br>
+            Catégorie : ${dep.ProductAtStop?.line || "?"}<br>
+            Statut : ${dep.prognosisType === "PROGNOSED" ? "À l'heure" : "Retardé"}<br>
+          </li>`;
         });
         html += "</ul>";
 
         document.getElementById("results").innerHTML = html;
       } catch (e) {
+        console.error(e);
         document.getElementById("results").innerHTML = "Erreur de chargement des données.";
       }
     }
