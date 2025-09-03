@@ -2265,88 +2265,93 @@ document.getElementById("btnJeu").addEventListener("click", function() {
 });
 </script>
     <script>
+document.addEventListener('DOMContentLoaded', () => {
   const panel = document.getElementById("retards-panel");
-const btn = document.getElementById("toggle-btn");
-const stationSelect = document.getElementById("stationSelect");
+  const btn = document.getElementById("toggle-btn");
+  const stationSelect = document.getElementById("stationSelect");
+  const titleEl = document.querySelector("#retards-panel h2");
+  const listEl = document.getElementById("retards-list");
 
-btn.addEventListener("click", () => {
-  panel.style.right = panel.style.right === "0px" ? "-300px" : "0px";
-});
+  // Ouverture/fermeture du panneau
+  btn.addEventListener("click", () => {
+    panel.style.right = panel.style.right === "0px" ? "-300px" : "0px";
+  });
 
-async function chargerDepartures() {
-  const stationId = stationSelect.value; 
-  const gareNom = stationSelect.selectedOptions[0].text; 
-  const interval = 120; // minutes à afficher
-  const now = new Date();
-  const dateStr = now.toISOString().split("T")[0];
-  const timeStr = now.toTimeString().slice(0,8);
+  async function chargerDepartures() {
+    const stationId = stationSelect.value;                   // <- prend la gare choisie
+    const gareNom = stationSelect.selectedOptions[0].text;   // <- nom pour le titre
+    titleEl.textContent = `Trafic à ${gareNom}`;
 
-  const url = `https://cdt.hafas.de/opendata/apiserver/departureBoard?accessId=58ef9a71-6837-4405-bd5d-23beaf92864c&id=${stationId}&date=${dateStr}&time=${timeStr}&duration=${interval}&maxJourneys=20&format=json`;
+    const interval = 120;
+    const now = new Date();
+    const dateStr = now.toISOString().split("T")[0];
+    const timeStr = now.toTimeString().slice(0,8);
 
-  try {
-    const resp = await fetch(url);
-    const data = await resp.json();
+    const url = `https://cdt.hafas.de/opendata/apiserver/departureBoard?accessId=58ef9a71-6837-4405-bd5d-23beaf92864c&id=${stationId}&date=${dateStr}&time=${timeStr}&duration=${interval}&maxJourneys=20&format=json`;
 
-    let html = "";
-    if (data.Departure) {
-      data.Departure.forEach(dep => {
-        // Nettoyage du nom de destination
-        const direction = dep.direction.replace(/,?\s*Gare$/i, '');
+    try {
+      const resp = await fetch(url);
+      const data = await resp.json();
 
-        let depTime = dep.time;
-        let statutText = "À l'heure";
-        let classeStatut = "statut-heure";
+      let html = "";
+      if (data.Departure && data.Departure.length) {
+        data.Departure.forEach(dep => {
+          // Nettoyage "..., Gare"
+          const direction = (dep.direction || "").replace(/,?\s*Gare$/i, '');
 
-        if (dep.rtTime && dep.rtTime !== dep.time) {
-          depTime = dep.rtTime;
-          const scheduled = new Date(`${dep.date}T${dep.time}`);
-          const real = new Date(`${dep.rtDate || dep.date}T${dep.rtTime}`);
-          const diffMin = Math.round((real - scheduled)/60000);
+          // Statut & couleurs
+          let statutText = "À l'heure";
+          let classeStatut = "statut-heure";
 
-          if (diffMin <= 0) {
-            statutText = `À l'heure`;
-            classeStatut = "statut-heure";
-          } else if (diffMin <= 10) {
-            statutText = `Retardé à ${dep.rtTime} (+${diffMin} min)`;
-            classeStatut = "statut-retard";
-          } else {
-            statutText = `Retardé à ${dep.rtTime} (+${diffMin} min)`;
-            classeStatut = "statut-retard-long";
+          if (dep.rtTime && dep.rtTime !== dep.time) {
+            const scheduled = new Date(`${dep.date}T${dep.time}`);
+            const real = new Date(`${dep.rtDate || dep.date}T${dep.rtTime}`);
+            const diffMin = Math.round((real - scheduled) / 60000);
+
+            if (diffMin <= 0) {
+              statutText = "À l'heure";
+              classeStatut = "statut-heure";
+            } else if (diffMin <= 10) {
+              statutText = `Retardé à ${dep.rtTime} (+${diffMin} min)`;
+              classeStatut = "statut-retard";
+            } else {
+              statutText = `Retardé à ${dep.rtTime} (+${diffMin} min)`;
+              classeStatut = "statut-retard-long";
+            }
           }
-        }
 
-        // Suppression (deleted)
-        if (dep.cancelled || dep.status === "deleted") {
-          statutText = "Supprimé";
-          classeStatut = "statut-supprime";
-        }
+          // Suppression
+          if (dep.cancelled || dep.status === "deleted") {
+            statutText = "Supprimé";
+            classeStatut = "statut-supprime";
+          }
 
-        html += `<div style="margin-bottom:12px;">
-          <strong>${dep.name}</strong> vers ${direction}<br>
-          Départ prévu : ${dep.time} (${dep.date})<br>
-          Voie : ${dep.rtTrack ? dep.rtTrack : "?"}<br>
-          Statut : <span class="${classeStatut}">${statutText}</span>
-        </div>`;
-      });
-    } else {
-      html = "<p>Aucun départ trouvé.</p>";
+          // Voie : rtTrack prioritaire, sinon track, sinon "?"
+          const voie = dep.rtTrack || dep.track || "?";
+
+          html += `<div style="margin-bottom:12px;">
+            <strong>${dep.name}</strong> vers ${direction}<br>
+            Départ prévu : ${dep.time} (${dep.date})<br>
+            Voie : ${voie}<br>
+            Statut : <span class="${classeStatut}">${statutText}</span>
+          </div>`;
+        });
+      } else {
+        html = "<p>Aucun départ trouvé.</p>";
+      }
+
+      listEl.innerHTML = html;
+    } catch (e) {
+      console.error(e);
+      listEl.innerHTML = "<p>Erreur de chargement</p>";
     }
-
-    // Mise à jour du titre + contenu
-    document.querySelector("#retards-panel h2").innerText = `Trafic à ${gareNom}`;
-    document.getElementById("retards-list").innerHTML = html;
-  } catch(e) {
-    document.getElementById("retards-list").innerHTML = "<p>Erreur de chargement</p>";
-    console.error(e);
   }
-}
 
-// Chargement initial + auto-refresh
-chargerDepartures();
-setInterval(chargerDepartures, 60000);
-
-// Rechargement quand on change de gare
-stationSelect.addEventListener("change", chargerDepartures);
+  // init + rafraîchissement + changement de gare
+  chargerDepartures();
+  setInterval(chargerDepartures, 60000);
+  stationSelect.addEventListener("change", chargerDepartures);
+});
     </script>
 </body>
 </html>
