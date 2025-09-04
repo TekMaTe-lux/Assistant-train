@@ -1,0 +1,372 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <title>Jeu de la Bétaillère</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <style>
+    html, body {
+      margin: 0;
+      padding: 0;
+      background: black;
+      color: #0ff;
+      font-family: 'Orbitron', monospace;
+      text-align: center;
+      height: 100%;
+      display: flex;
+      flex-direction: column;
+      justify-content: flex-start;
+      align-items: center;
+    }
+
+    #container {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      width: 100%;
+    }
+
+    canvas {
+      border: 3px solid #0ff;
+      max-width: 100vmin;
+      max-height: 100vmin;
+      width: 100vmin;
+      height: 100vmin;
+    }
+
+    #info {
+      font-size: 16px;
+      margin: 10px;
+      max-width: 90%;
+    }
+
+    /* Écran de démarrage */
+    #startOverlay {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background: rgba(0,0,0,0.85);
+      z-index: 10000;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+    }
+
+    #startMessage {
+      background: #111;
+      padding: 20px 40px;
+      border-radius: 10px;
+      text-align: center;
+      box-shadow: 0 0 15px #0ff;
+    }
+
+    #startMessage button {
+      background: #0ff;
+      color: black;
+      border: none;
+      padding: 10px 20px;
+      margin-top: 15px;
+      border-radius: 8px;
+      font-size: 18px;
+      cursor: pointer;
+      box-shadow: 0 0 10px #0ff;
+    }
+
+    /* Game Over */
+    #overlay {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      z-index: 9999;
+      background-color: rgba(0,0,0,0.7);
+    }
+
+    #gameOverMessage {
+      background: rgba(20,20,20,0.95);
+      color: #eee;
+      text-align: center;
+      padding: 20px 25px;
+      border-radius: 12px;
+      max-width: 90vw;
+      width: 320px;
+      box-shadow: 0 0 15px rgba(0,255,0,0.6);
+      font-size: 1.2rem;
+    }
+
+    #gameOverMessage button {
+      font-size: 1.1rem;
+      padding: 10px 18px;
+      margin: 8px 10px 0 10px;
+      border-radius: 8px;
+      border: none;
+      background-color: #0f0;
+      color: #000;
+      cursor: pointer;
+    }
+
+    #touchControls {
+      position: fixed;
+      bottom: 20px;
+      left: 50%;
+      transform: translateX(-50%);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 10px;
+      z-index: 1000;
+    }
+
+    .up-row {
+      display: flex;
+      justify-content: center;
+    }
+
+    .middle-row {
+      display: flex;
+      justify-content: center;
+      gap: 10px;
+    }
+
+    #touchControls button {
+      width: 60px;
+      height: 60px;
+      font-size: 24px;
+      border-radius: 10px;
+      border: none;
+      background-color: #333;
+      color: #fff;
+      box-shadow: 0 4px 8px rgba(0,0,0,0.5);
+      touch-action: manipulation;
+    }
+  </style>
+</head>
+<body>
+  <h1>Jeu de la Bétaillère</h1>
+
+  <!-- Écran de démarrage -->
+  <div id="startOverlay">
+    <div id="startMessage">
+      <p>🚆 Prêt à démarrer ?</p>
+      <button id="startBtn">Jouer</button>
+    </div>
+  </div>
+
+  <div id="container">
+    <canvas id="gameCanvas" width="400" height="400"></canvas>
+    <div id="info">
+      Score : <span id="score">0</span> |
+      Record : <span id="highscore">0</span> |
+      Temps : <span id="timer">00:00</span>
+    </div>
+
+    <!-- Contrôles tactiles -->
+    <div id="touchControls">
+      <div class="up-row">
+        <button id="up">▲</button>
+      </div>
+      <div class="middle-row">
+        <button id="left">◀</button>
+        <button id="down">▼</button>
+        <button id="right">▶</button>
+      </div>
+    </div>
+
+    <!-- Écran Game Over -->
+    <div id="overlay">
+      <div id="gameOverMessage" style="display:none;">
+        <div id="gameOverText"></div>
+        <button id="restartBtn">Rejouer</button>
+        <button id="returnBtn">Retour</button>
+      </div>
+    </div>
+
+    <!-- Musique -->
+    <audio id="gameMusic" loop>
+      <source src="https://raw.githubusercontent.com/TekMaTe-lux/Assistant-train/main/Tek'Ma'Te%20-%20Power%20of%20the%20SNCF%20jingle.mp3" type="audio/mpeg">
+      Votre navigateur ne supporte pas l’audio.
+    </audio>
+  </div>
+
+  <script>
+    (() => {
+      const canvas = document.getElementById("gameCanvas");
+      const ctx = canvas.getContext("2d");
+
+      let gridSize = 20, cols, rows;
+      let train, direction, nextDirection, score, highscore = 0;
+      let baseSpeed = 200, speedModifier = 0, betail, suppressions, oranges, vaches;
+      let gameStopped, countdownInterval, startTime;
+
+      function resizeCanvas() {
+        let size = Math.min(window.innerWidth, window.innerHeight * 0.8);
+        canvas.width = canvas.height = size;
+        gridSize = size / 20;
+        cols = rows = 20;
+      }
+      window.addEventListener("resize", resizeCanvas);
+      resizeCanvas();
+
+      function initGame() {
+        train = [{x: 10, y: 10}];
+        direction = {x: 1, y: 0};
+        nextDirection = direction;
+        score = 0;
+        document.getElementById("score").textContent = score;
+        suppressions = [];
+        oranges = [];
+        vaches = [];
+        gameStopped = false;
+        speedModifier = 0;
+
+        document.getElementById("gameOverMessage").style.display = "none";
+        placePerturbations();
+        generateBetail();
+        gameLoop();
+
+        // Timer
+        startTime = Date.now();
+        document.getElementById("timer").textContent = "00:00";
+        countdownInterval = setInterval(() => {
+          let elapsed = Math.floor((Date.now() - startTime) / 1000);
+          let minutes = Math.floor(elapsed / 60).toString().padStart(2, '0');
+          let seconds = (elapsed % 60).toString().padStart(2, '0');
+          document.getElementById("timer").textContent = `${minutes}:${seconds}`;
+        }, 1000);
+      }
+
+      function placePerturbations() {
+        for (let i = 0; i < 10; i++) suppressions.push(randomFreePosition());
+        for (let i = 0; i < 5; i++) oranges.push(randomFreePosition());
+      }
+
+      function randomFreePosition() {
+        let pos;
+        do {
+          pos = {x: Math.floor(Math.random() * cols), y: Math.floor(Math.random() * rows)};
+        } while (isOccupied(pos));
+        return pos;
+      }
+
+      function isOccupied(pos) {
+        return train.some(p => p.x === pos.x && p.y === pos.y) ||
+               suppressions.some(p => p.x === pos.x && p.y === pos.y) ||
+               oranges.some(p => p.x === pos.x && p.y === pos.y) ||
+               (betail && betail.x === pos.x && betail.y === pos.y);
+      }
+
+      function draw() {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        ctx.fillStyle = "red";
+        suppressions.forEach(p => ctx.fillRect(p.x * gridSize, p.y * gridSize, gridSize, gridSize));
+        ctx.fillStyle = "orange";
+        oranges.forEach(p => ctx.fillRect(p.x * gridSize, p.y * gridSize, gridSize, gridSize));
+        if (betail) {
+          ctx.fillStyle = "yellow";
+          ctx.beginPath();
+          ctx.arc(betail.x * gridSize + gridSize/2, betail.y * gridSize + gridSize/2, gridSize/3, 0, 2 * Math.PI);
+          ctx.fill();
+        }
+        train.forEach((pos, i) => {
+          ctx.fillStyle = (i === 0) ? "#0ff" : "#088";
+          ctx.fillRect(pos.x * gridSize, pos.y * gridSize, gridSize, gridSize);
+        });
+      }
+
+      function update() {
+        if (gameStopped) return;
+        direction = nextDirection;
+        let newHead = { x: train[0].x + direction.x, y: train[0].y + direction.y };
+        if (newHead.x < 0) newHead.x = cols - 1;
+        if (newHead.x >= cols) newHead.x = 0;
+        if (newHead.y < 0) newHead.y = rows - 1;
+        if (newHead.y >= rows) newHead.y = 0;
+
+        if (train.some(p => p.x === newHead.x && p.y === newHead.y)) return gameOver("Auto collision !");
+        if (suppressions.some(p => p.x === newHead.x && p.y === newHead.y)) return gameOver("Train supprimé !");
+        
+        train.unshift(newHead);
+        if (betail && newHead.x === betail.x && newHead.y === betail.y) {
+          score++;
+          document.getElementById("score").textContent = score;
+          if (score > highscore) {
+            highscore = score;
+            document.getElementById("highscore").textContent = highscore;
+            localStorage.setItem("highscore", highscore);
+          }
+          generateBetail();
+        } else {
+          train.pop();
+        }
+      }
+
+      function gameOver(message) {
+        gameStopped = true;
+        clearInterval(countdownInterval);
+        const elapsedTime = Math.floor((Date.now() - startTime) / 1000);
+        const minutes = Math.floor(elapsedTime / 60).toString().padStart(2, '0');
+        const seconds = (elapsedTime % 60).toString().padStart(2, '0');
+        document.getElementById("gameOverText").innerHTML =
+          `<p>${message}</p><p>Score: ${score}</p><p>Temps : ${minutes}:${seconds}</p>`;
+        document.getElementById("overlay").style.display = "flex";
+        document.getElementById("gameOverMessage").style.display = "block";
+      }
+
+      function gameLoop() {
+        update();
+        draw();
+        if (!gameStopped) setTimeout(gameLoop, Math.max(50, baseSpeed + speedModifier));
+      }
+
+      function generateBetail() {
+        betail = randomFreePosition();
+      }
+
+      // Contrôles clavier
+      window.addEventListener("keydown", e => {
+        switch(e.key) {
+          case "ArrowUp": if(direction.y !== 1) nextDirection = {x: 0, y: -1}; break;
+          case "ArrowDown": if(direction.y !== -1) nextDirection = {x: 0, y: 1}; break;
+          case "ArrowLeft": if(direction.x !== 1) nextDirection = {x: -1, y: 0}; break;
+          case "ArrowRight": if(direction.x !== -1) nextDirection = {x: 1, y: 0}; break;
+        }
+      });
+
+      // Contrôles tactiles
+      document.getElementById("up").addEventListener("click", () => nextDirection = {x: 0, y: -1});
+      document.getElementById("down").addEventListener("click", () => nextDirection = {x: 0, y: 1});
+      document.getElementById("left").addEventListener("click", () => nextDirection = {x: -1, y: 0});
+      document.getElementById("right").addEventListener("click", () => nextDirection = {x: 1, y: 0});
+
+      // Boutons fin de partie
+      document.getElementById('restartBtn').addEventListener('click', () => {
+        document.getElementById('overlay').style.display = 'none';
+        initGame();
+      });
+      document.getElementById('returnBtn').addEventListener('click', () => {
+        window.location.href = 'TableauLuxMetz.html';
+      });
+
+      if (localStorage.getItem("highscore")) {
+        highscore = parseInt(localStorage.getItem("highscore"));
+        document.getElementById("highscore").textContent = highscore;
+      }
+
+      // 👉 Bouton Jouer
+      document.getElementById("startBtn").addEventListener("click", () => {
+        document.getElementById("startOverlay").style.display = "none";
+        document.getElementById("gameMusic").play();
+        initGame();
+      });
+    })();
+  </script>
+</body>
+</html>
