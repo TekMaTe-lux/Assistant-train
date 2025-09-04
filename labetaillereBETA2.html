@@ -2357,10 +2357,54 @@ document.getElementById("btnJeu").addEventListener("click", function() {
 document.addEventListener('DOMContentLoaded', () => {
   const panel = document.getElementById("side-panel");
   const btn = document.getElementById("toggle-btn");
+  const stationSelect = document.getElementById("stationSelect");
+  const titleEl = document.querySelector("#trains h2");
+  const listEl = document.getElementById("retards-list");
+  const searchInput = document.getElementById("searchInput"); // Champ de recherche
 
-  btn.addEventListener("click", () => panel.classList.toggle("open"));
+  // Chargement des arrêts depuis le fichier CSV
+  async function chargerArrets() {
+    const url = 'https://raw.githubusercontent.com/TekMaTe-lux/Assistant-train/main/CFL/stops%5B1%5D.txt';
+    const response = await fetch(url);
+    const data = await response.text();
+    const rows = data.split('\n').slice(1); // Ignorer la première ligne (entêtes)
+    const arrets = rows.map(row => {
+      const [stop_id, stop_name, stop_lat, stop_lon] = row.split(',');
+      return { stop_id, stop_name, stop_lat, stop_lon };
+    });
+    return arrets;
+  }
 
-  // Onglets
+  // Filtrer les arrêts en fonction de la recherche
+  function filtrerArrets(arrets, query) {
+    return arrets.filter(arret => arret.stop_name.toLowerCase().includes(query.toLowerCase()));
+  }
+
+  // Afficher les arrêts filtrés
+  function afficherArrets(arrets) {
+    const html = arrets.map(arret => `
+      <div>
+        <strong>${arret.stop_name}</strong><br>
+        Latitude : ${arret.stop_lat}, Longitude : ${arret.stop_lon}
+      </div>
+    `).join('');
+    listEl.innerHTML = html;
+  }
+
+  // Événement de recherche
+  searchInput.addEventListener('input', async () => {
+    const query = searchInput.value;
+    const arrets = await chargerArrets();
+    const arretsFiltres = filtrerArrets(arrets, query);
+    afficherArrets(arretsFiltres);
+  });
+
+  // Ouverture/fermeture du panneau
+  btn.addEventListener("click", () => {
+    panel.classList.toggle("open");
+  });
+
+  // Navigation entre les onglets
   document.querySelectorAll(".tab").forEach(tab => {
     tab.addEventListener("click", () => {
       document.querySelectorAll(".tab").forEach(t => t.classList.remove("active"));
@@ -2370,44 +2414,55 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   });
 
-  // ----------------------
-  // PARTIE TRAINS
-  // ----------------------
-  const stationSelect = document.getElementById("stationSelect");
-  const titleEl = document.querySelector("#trains h2");
-  const listEl = document.getElementById("retards-list");
-
+  // Partie TRAINS (ton script)
   async function chargerDepartures() {
     const stationId = stationSelect.value;
     const gareNom = stationSelect.selectedOptions[0].text;
     titleEl.textContent = `Trafic à ${gareNom}`;
+
     const interval = 120;
     const now = new Date();
     const dateStr = now.toISOString().split("T")[0];
     const timeStr = now.toTimeString().slice(0,8);
+
     const url = `https://cdt.hafas.de/opendata/apiserver/departureBoard?accessId=58ef9a71-6837-4405-bd5d-23beaf92864c&id=${stationId}&date=${dateStr}&time=${timeStr}&duration=${interval}&maxJourneys=20&format=json`;
 
     try {
       const resp = await fetch(url);
       const data = await resp.json();
+
       let html = "";
       if (data.Departure && data.Departure.length) {
         data.Departure.forEach(dep => {
           const direction = (dep.direction || "").replace(/,?\s*Gare$/i, '');
+
           let statutText = "À l'heure";
           let classeStatut = "statut-heure";
+
           if (dep.rtTime && dep.rtTime !== dep.time) {
             const scheduled = new Date(`${dep.date}T${dep.time}`);
             const real = new Date(`${dep.rtDate || dep.date}T${dep.rtTime}`);
-            const diffMin = Math.round((real - scheduled)/60000);
-            if (diffMin > 0 && diffMin <= 10) {
-              statutText = `Retardé à ${dep.rtTime} (+${diffMin} min)`; classeStatut = "statut-retard";
-            } else if (diffMin > 10) {
-              statutText = `Retardé à ${dep.rtTime} (+${diffMin} min)`; classeStatut = "statut-retard-long";
+            const diffMin = Math.round((real - scheduled) / 60000);
+
+            if (diffMin <= 0) {
+              statutText = "À l'heure";
+              classeStatut = "statut-heure";
+            } else if (diffMin <= 10) {
+              statutText = `Retardé à ${dep.rtTime} (+${diffMin} min)`;
+              classeStatut = "statut-retard";
+            } else {
+              statutText = `Retardé à ${dep.rtTime} (+${diffMin} min)`;
+              classeStatut = "statut-retard-long";
             }
           }
-          if (dep.cancelled || dep.status==="deleted") { statutText="Supprimé"; classeStatut="statut-supprime"; }
+
+          if (dep.cancelled || dep.status === "deleted") {
+            statutText = "Supprimé";
+            classeStatut = "statut-supprime";
+          }
+
           const voie = dep.rtTrack || dep.track || "?";
+
           html += `<div style="margin-bottom:12px;">
             <strong>${dep.name}</strong> vers ${direction}<br>
             Départ prévu : ${dep.time}<br>
@@ -2415,55 +2470,20 @@ document.addEventListener('DOMContentLoaded', () => {
             Statut : <span class="${classeStatut}">${statutText}</span>
           </div>`;
         });
-      } else html = "<p>Aucun départ trouvé.</p>";
+      } else {
+        html = "<p>Aucun départ trouvé.</p>";
+      }
+
       listEl.innerHTML = html;
-    } catch(e){ console.error(e); listEl.innerHTML="<p>Erreur de chargement</p>"; }
+    } catch (e) {
+      console.error(e);
+      listEl.innerHTML = "<p>Erreur de chargement</p>";
+    }
   }
+
   chargerDepartures();
-  setInterval(chargerDepartures,60000);
+  setInterval(chargerDepartures, 60000);
   stationSelect.addEventListener("change", chargerDepartures);
-
-  // ----------------------
-  // PARTIE BUS/TRAM
-  // ----------------------
-  const stopsUrl = "https://raw.githubusercontent.com/TekMaTe-lux/Assistant-train/main/CFL/stops%5B1%5D.txt";
-  let stopsData = [];
-
-  fetch(stopsUrl)
-    .then(r => r.text())
-    .then(txt => {
-      const lines = txt.split("\n").slice(1);
-      stopsData = lines.map(l => {
-        const cols = l.split('","').map(c => c.replace(/(^"|"$)/g,''));
-        return {id: cols[0], name: cols[2]};
-      }).filter(s => s.name);
-    });
-
-  const stopSearch = document.getElementById("stopSearch");
-  const stopsList = document.getElementById("stops-list");
-
-  stopSearch.addEventListener("input", () => {
-    const query = stopSearch.value.toLowerCase();
-    const results = stopsData.filter(s => s.name.toLowerCase().includes(query)).slice(0,10);
-    if(results.length===0) { stopsList.innerHTML="Aucun arrêt trouvé"; return; }
-    stopsList.innerHTML = results.map(s=>`<div style="margin-bottom:8px;cursor:pointer;color:#0ff;" data-id="${s.id}">${s.name}</div>`).join('');
-    stopsList.querySelectorAll("div").forEach(div=>{
-      div.addEventListener("click", ()=> {
-        const stopId = div.dataset.id;
-        stopsList.innerHTML=`Chargement des prochains départs pour ${div.textContent}...`;
-        // Ici tu peux appeler l'API CFL pour récupérer les prochains départs de bus/tram
-        // Exemple: fetch(`https://api/.../departureBoard?stop=${stopId}`)
-      });
-    });
-  });
-
-  // ----------------------
-  // TWITTER
-  // ----------------------
-  const twitterScript = document.createElement('script');
-  twitterScript.setAttribute('src','https://platform.twitter.com/widgets.js');
-  twitterScript.setAttribute('async','true');
-  document.body.appendChild(twitterScript);
 });
 </script>
 <script>
