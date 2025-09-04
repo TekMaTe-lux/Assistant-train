@@ -1438,33 +1438,34 @@ table::before {
 
 <!-- Panneau latéral -->
 <div id="side-panel">
-  <!-- barre d’onglets -->
-  <div class="tabs">
-    <div class="tab active" data-tab="trains">Trains</div>
-    <div class="tab" data-tab="bus">Bus/Tram</div>
-    <div class="tab" data-tab="twitter">Twitter</div>
+  <!-- Onglets -->
+  <div id="tabs">
+    <button class="tab active" data-tab="trains">Trains</button>
+    <button class="tab" data-tab="bustram">Bus/Tram</button>
+    <button class="tab" data-tab="twitter">Twitter</button>
   </div>
 
-  <!-- contenu Trains -->
+  <!-- Contenu des onglets -->
   <div id="trains" class="tab-content active">
     <h2>Trafic à Bettembourg</h2>
-    <label for="stationSelect" style="color:white;">Choisir une gare :</label>
     <select id="stationSelect">
-    <option value="220102018">Bettembourg</option>
-    <option value="200405060">Luxembourg</option>
-    <option value="200417051">Pfaffenthal-Kirchberg</option>
-    <option value="200304014">Howald</option>
+      <option value="220102018">Bettembourg</option>
+      <option value="200405060">Luxembourg</option>
     </select>
     <div id="retards-list">Chargement...</div>
   </div>
 
-  <!-- contenu Bus/Tram -->
-  <div id="bus" class="tab-content">
-    <h2>Départs Bus/Tram</h2>
-    <input type="text" id="stopSearch" placeholder="Rechercher un arrêt...">
-    <div id="suggestions"></div>
-    <div id="bus-list"></div>
+  <div id="bustram" class="tab-content">
+    <h2>Bus/Tram</h2>
+    <input type="text" id="stopSearch" placeholder="Chercher un arrêt..." style="width:90%; padding:5px;">
+    <div id="stops-list" style="margin-top:10px;">Entrez un arrêt pour afficher les prochains départs</div>
   </div>
+
+  <div id="twitter" class="tab-content">
+    <h2>Twitter @BERNancyMetzLux</h2>
+    <a class="twitter-timeline" href="https://twitter.com/BERNancyMetzLux?ref_src=twsrc%5Etfw">Tweets by BERNancyMetzLux</a> 
+  </div>
+</div>
 
   <!-- contenu Twitter -->
   <div id="twitter" class="tab-content">
@@ -2356,16 +2357,10 @@ document.getElementById("btnJeu").addEventListener("click", function() {
 document.addEventListener('DOMContentLoaded', () => {
   const panel = document.getElementById("side-panel");
   const btn = document.getElementById("toggle-btn");
-  const stationSelect = document.getElementById("stationSelect");
-  const titleEl = document.querySelector("#trains h2");
-  const listEl = document.getElementById("retards-list");
 
-  // ouverture / fermeture panneau
-  btn.addEventListener("click", () => {
-    panel.classList.toggle("open");
-  });
+  btn.addEventListener("click", () => panel.classList.toggle("open"));
 
-  // navigation onglets
+  // Onglets
   document.querySelectorAll(".tab").forEach(tab => {
     tab.addEventListener("click", () => {
       document.querySelectorAll(".tab").forEach(t => t.classList.remove("active"));
@@ -2375,57 +2370,44 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   });
 
-  // ------------------
-  // Partie TRAINS (ton script)
-  // ------------------
+  // ----------------------
+  // PARTIE TRAINS
+  // ----------------------
+  const stationSelect = document.getElementById("stationSelect");
+  const titleEl = document.querySelector("#trains h2");
+  const listEl = document.getElementById("retards-list");
+
   async function chargerDepartures() {
     const stationId = stationSelect.value;
     const gareNom = stationSelect.selectedOptions[0].text;
     titleEl.textContent = `Trafic à ${gareNom}`;
-
     const interval = 120;
     const now = new Date();
     const dateStr = now.toISOString().split("T")[0];
     const timeStr = now.toTimeString().slice(0,8);
-
     const url = `https://cdt.hafas.de/opendata/apiserver/departureBoard?accessId=58ef9a71-6837-4405-bd5d-23beaf92864c&id=${stationId}&date=${dateStr}&time=${timeStr}&duration=${interval}&maxJourneys=20&format=json`;
 
     try {
       const resp = await fetch(url);
       const data = await resp.json();
-
       let html = "";
       if (data.Departure && data.Departure.length) {
         data.Departure.forEach(dep => {
           const direction = (dep.direction || "").replace(/,?\s*Gare$/i, '');
-
           let statutText = "À l'heure";
           let classeStatut = "statut-heure";
-
           if (dep.rtTime && dep.rtTime !== dep.time) {
             const scheduled = new Date(`${dep.date}T${dep.time}`);
             const real = new Date(`${dep.rtDate || dep.date}T${dep.rtTime}`);
-            const diffMin = Math.round((real - scheduled) / 60000);
-
-            if (diffMin <= 0) {
-              statutText = "À l'heure";
-              classeStatut = "statut-heure";
-            } else if (diffMin <= 10) {
-              statutText = `Retardé à ${dep.rtTime} (+${diffMin} min)`;
-              classeStatut = "statut-retard";
-            } else {
-              statutText = `Retardé à ${dep.rtTime} (+${diffMin} min)`;
-              classeStatut = "statut-retard-long";
+            const diffMin = Math.round((real - scheduled)/60000);
+            if (diffMin > 0 && diffMin <= 10) {
+              statutText = `Retardé à ${dep.rtTime} (+${diffMin} min)`; classeStatut = "statut-retard";
+            } else if (diffMin > 10) {
+              statutText = `Retardé à ${dep.rtTime} (+${diffMin} min)`; classeStatut = "statut-retard-long";
             }
           }
-
-          if (dep.cancelled || dep.status === "deleted") {
-            statutText = "Supprimé";
-            classeStatut = "statut-supprime";
-          }
-
+          if (dep.cancelled || dep.status==="deleted") { statutText="Supprimé"; classeStatut="statut-supprime"; }
           const voie = dep.rtTrack || dep.track || "?";
-
           html += `<div style="margin-bottom:12px;">
             <strong>${dep.name}</strong> vers ${direction}<br>
             Départ prévu : ${dep.time}<br>
@@ -2433,20 +2415,55 @@ document.addEventListener('DOMContentLoaded', () => {
             Statut : <span class="${classeStatut}">${statutText}</span>
           </div>`;
         });
-      } else {
-        html = "<p>Aucun départ trouvé.</p>";
-      }
-
+      } else html = "<p>Aucun départ trouvé.</p>";
       listEl.innerHTML = html;
-    } catch (e) {
-      console.error(e);
-      listEl.innerHTML = "<p>Erreur de chargement</p>";
-    }
+    } catch(e){ console.error(e); listEl.innerHTML="<p>Erreur de chargement</p>"; }
   }
-
   chargerDepartures();
-  setInterval(chargerDepartures, 60000);
+  setInterval(chargerDepartures,60000);
   stationSelect.addEventListener("change", chargerDepartures);
+
+  // ----------------------
+  // PARTIE BUS/TRAM
+  // ----------------------
+  const stopsUrl = "https://raw.githubusercontent.com/TekMaTe-lux/Assistant-train/main/CFL/stops%5B1%5D.txt";
+  let stopsData = [];
+
+  fetch(stopsUrl)
+    .then(r => r.text())
+    .then(txt => {
+      const lines = txt.split("\n").slice(1);
+      stopsData = lines.map(l => {
+        const cols = l.split('","').map(c => c.replace(/(^"|"$)/g,''));
+        return {id: cols[0], name: cols[2]};
+      }).filter(s => s.name);
+    });
+
+  const stopSearch = document.getElementById("stopSearch");
+  const stopsList = document.getElementById("stops-list");
+
+  stopSearch.addEventListener("input", () => {
+    const query = stopSearch.value.toLowerCase();
+    const results = stopsData.filter(s => s.name.toLowerCase().includes(query)).slice(0,10);
+    if(results.length===0) { stopsList.innerHTML="Aucun arrêt trouvé"; return; }
+    stopsList.innerHTML = results.map(s=>`<div style="margin-bottom:8px;cursor:pointer;color:#0ff;" data-id="${s.id}">${s.name}</div>`).join('');
+    stopsList.querySelectorAll("div").forEach(div=>{
+      div.addEventListener("click", ()=> {
+        const stopId = div.dataset.id;
+        stopsList.innerHTML=`Chargement des prochains départs pour ${div.textContent}...`;
+        // Ici tu peux appeler l'API CFL pour récupérer les prochains départs de bus/tram
+        // Exemple: fetch(`https://api/.../departureBoard?stop=${stopId}`)
+      });
+    });
+  });
+
+  // ----------------------
+  // TWITTER
+  // ----------------------
+  const twitterScript = document.createElement('script');
+  twitterScript.setAttribute('src','https://platform.twitter.com/widgets.js');
+  twitterScript.setAttribute('async','true');
+  document.body.appendChild(twitterScript);
 });
 </script>
 <script>
