@@ -1484,7 +1484,8 @@ table::before {
 
 <!-- BLOC 2 : Infos trains -->
 <div id="trainInfo"></div>
-
+<div id="lastUpdated" class="last-updated" aria-live="polite"></div>
+  
 <div id="refreshContainer" style="display:none; text-align:center; margin:18px 0;">
   <button id="refreshButton" class="refresh-btn">Actualiser les données</button>
 </div>
@@ -2024,8 +2025,10 @@ console.log('mergedStops:', mergedStops);
     html += '</tbody></table>';
 
     // 5. Insertion du tableau dans le DOM *après* la construction complète
-    $('#trainInfo').html(html);
-
+    $('#trainInfo').html(
+  html + '<div id="lastUpdated" class="last-updated" aria-live="polite"></div>'
+);
+  
     // 6. Ensuite tu peux appeler ta fonction d’affichage des alertes ou retards
     await chargerEtAfficherAlertes();
 
@@ -2124,8 +2127,6 @@ document.querySelectorAll('th[data-train-number]').forEach(header => {
   header.removeAttribute('title');
 });
   
-        $('#trainInfo').html(html);
-
   // Ajout des liens vers garesetconnexions.sncf dans la première colonne (noms de gares)
 document.querySelectorAll('#trainInfo table tr td:first-child').forEach(td => {
   const nomGare = td.textContent.trim();
@@ -2143,41 +2144,45 @@ document.querySelectorAll('#trainInfo th[data-train-number]').forEach(th => {
   const url = `https://www.sncf-voyageurs.com/fr/voyagez-avec-nous/horaires-et-itineraires/recherche-de-train/detail-train/?numeroCirculation=${numero}&dateCirculation=${dateCirculation}`;
   th.innerHTML = `<a href="${url}" target="_blank" class="train-link">${numero}</a>`;
 });
-  
-        $('#refreshContainer').show();
+    
+ // Afficher le bouton "Actualiser"
+$('#refreshContainer').show();
 
-$('#refreshButton').off('click').on('click', function () {
-  $('#loadTrains').click();
-});
-
-if (!window.refreshStarted) {
-  setInterval(() => $('#loadTrains').click(), 300000);
-  window.refreshStarted = true;
-}
-
+// Afficher/cacher le résumé des perturbations
 if (disruptionsHtml.trim() !== '') {
   $('#disruptionsSummary').css('display', 'flex');
 } else {
   $('#disruptionsSummary').hide();
 }
 
+// Appliquer les retards GTFS-RT (une seule fois)
 if (retardsGTFS) {
   applyRetardsFromGTFS(retardsGTFS);
 } else {
   console.log("Les retards GTFS ne sont pas encore chargés");
 }
 
-       if (disruptionsHtml.trim() !== '') {
-  $('#disruptionsSummary').css('display', 'flex');
-} else {
-  $('#disruptionsSummary').hide();
+// Horodatage sous le tableau
+setLastUpdated();
+
+// ===== FIN du handler "#loadTrains" =====
+});
+// Bouton "Actualiser les données"
+$('#refreshButton').off('click').on('click', function () {
+  const el = document.getElementById('lastUpdated');
+  if (el) el.textContent = 'Actualisation en cours…';
+  $('#loadTrains').click(); // reconstruit -> setLastUpdated() sera rappelé à la fin
+});
+
+// Auto-refresh toutes les 5 minutes
+if (!window.refreshStarted) {
+  window.refreshStarted = true;
+  setInterval(function () {
+    const el = document.getElementById('lastUpdated');
+    if (el) el.textContent = 'Actualisation automatique en cours…';
+    $('#loadTrains').click();
+  }, 300000);
 }
-        if (retardsGTFS) {
-  applyRetardsFromGTFS(retardsGTFS);
-} else {
-  console.log("Les retards GTFS ne sont pas encore chargés");
-} 
-      });
     });
 
 // Charger le fichier JSON des retards GTFS-RT
@@ -2196,7 +2201,28 @@ window.onload = function() {
     })
     .catch(err => console.error("Erreur lors du chargement des retards GTFS-RT :", err));
 };
+function setLastUpdated() {
+  const el = document.getElementById('lastUpdated');
+  if (!el) return;
 
+  // heure locale Luxembourg
+  const nowTxt = new Date().toLocaleString('fr-FR', {
+    timeZone: 'Europe/Luxembourg',
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit',
+    hour12: false
+  }).replace(',', ' à');
+
+  // date de validité = valeur du champ #trainDate (YYYY-MM-DD -> JJ/MM/AAAA)
+  const d = document.getElementById('trainDate')?.value || '';
+  let validTxt = '—';
+  if (d && /^\d{4}-\d{2}-\d{2}$/.test(d)) {
+    const [y, m, day] = d.split('-');
+    validTxt = `${day}/${m}/${y}`;
+  }
+
+  el.innerHTML = `Généré le ${nowTxt} — Données valables le <strong>${validTxt}</strong>`;
+}
 function applyRetardsFromGTFS(retardsGTFS) {
   const table = document.querySelector("table");
   if (!table) {
