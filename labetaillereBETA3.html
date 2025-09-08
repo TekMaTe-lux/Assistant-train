@@ -1778,9 +1778,246 @@ table::before {
 </div>
   
  </body> 
-  
-    <script>
-       
+
+  <script>
+/* =========================
+   Sélecteur inline – Propositions depuis GTFS
+   ========================= */
+let GTFS_READY = false;
+let GTFS = { trips:[], stops:[], stop_times:[], calendar:[] };
+let TRAINS = [];        // { num, service_id, trip_id, stops:[codes], horaires:{code:HH:MM} }
+let STOPS_MAP = {};     // stop_id -> stop_name
+let CALENDAR_BY_SERVICE = new Map(); // service_id -> Set(dates yyyymmdd)
+const GA_RES = [
+  { code: "82001000", nom: "Luxembourg" },
+  { code: "82002501", nom: "Howald" },
+  { code: "82006030", nom: "Bettembourg" },
+  { code: "87191163", nom: "Hettange-Grande" },
+  { code: "87191007", nom: "Thionville" },
+  { code: "87191130", nom: "Uckange" },
+  { code: "87191114", nom: "Hagondange" },
+  { code: "87191098", nom: "Walygator parc" },
+  { code: "87191106", nom: "Maizières-lès-Metz" },
+  { code: "87192088", nom: "Woippy" },
+  { code: "87192070", nom: "Metz Nord" },
+  { code: "87192039", nom: "Metz" },
+  { code: "87192401", nom: "Ars-sur-Moselle" },
+  { code: "87192427", nom: "Novéant-sur-Moselle" },
+  { code: "87192468", nom: "Pagny-sur-Moselle" },
+  { code: "87192476", nom: "Vandières" },
+  { code: "87141820", nom: "Pont-à-Mousson" },
+  { code: "87141812", nom: "Dieulouard" },
+  { code: "87141804", nom: "Belleville" },
+  { code: "87141796", nom: "Marbache" },
+  { code: "87141788", nom: "Pompey" },
+  { code: "87141077", nom: "Frouard" },
+  { code: "87141002", nom: "Nancy" }
+];
+
+// utilitaires CSV (simple)
+async function fetchCSV(url) {
+  const r = await fetch(url);
+  const t = await r.text();
+  const lines = t.trim().split('\n');
+  const head = lines.shift().split(',');
+  return lines.map(line => {
+    const vals = line.split(',');
+    const o = {};
+    head.forEach((k,i)=>o[k]=vals[i]??'');
+    return o;
+  });
+}
+
+// extrait code numérique terminal d’un stop_id
+function codeStop(stop_id) {
+  const m = stop_id.match(/(\d+)$/);
+  return m ? m[1] : null;
+}
+
+// construit calendrier par service (dates d’exception de type 1)
+function buildCalendarMap(calendarRows) {
+  const m = new Map();
+  for (const row of calendarRows) {
+    if (row.exception_type !== "1") continue;
+    const set = m.get(row.service_id) || new Set();
+    set.add(row.date); // yyyymmdd
+    m.set(row.service_id, set);
+  }
+  return m;
+}
+
+// construit TRAINS
+function buildTrains(trips, stop_times, stops) {
+  STOPS_MAP = {}; stops.forEach(s => STOPS_MAP[s.stop_id] = s.stop_name);
+  const byTrip = {};
+  for (const st of stop_times) {
+    (byTrip[st.trip_id] ||= []).push(st);
+  }
+  Object.values(byTrip).forEach(arr => arr.sort((a,b)=>+a.stop_sequence - +b.stop_sequence));
+
+  const out = [];
+  for (const trip of trips) {
+    const seq = byTrip[trip.trip_id];
+    if (!seq) continue;
+    const stopsCodes = seq.map(s => codeStop(s.stop_id)).filter(Boolean);
+    const horaires = {};
+    for (const s of seq) {
+      const c = codeStop(s.stop_id);
+      if (!c) continue;
+      // heure de départ ou arrivée (GTFS peut contenir les deux; on prend departure_time si dispo)
+      const hhmm = (s.departure_time || s.arrival_time || '').slice(0,5);
+      if (hhmm) horaires[c] = hhmm;
+    }
+    out.push({
+      num: trip.trip_headsign || trip.trip_id, // ton jeu GTFS: headsign = n° train (comme avant)
+      service_id: trip.service_id,
+      trip_id: trip.trip_id,
+      direction_id: trip.direction_id,
+      stops: stopsCodes,
+      horaires
+    });
+  }
+  return out;
+}
+
+// minutes depuis 00:00
+const toMinutes = (hhmm) => {
+  const [h,m] = hhmm.split(':').map(Number);
+  return h*60 + m;
+};
+
+// remplit les propositions (chips)
+function renderProposals(list) {
+  const wrap = document.getElementById('resultatsTrains');
+  wrap.innerHTML = '';
+  if (!list.length) {
+    wrap.innerHTML = '<div style="opacity:.8">Aucune bétaillère dans cette plage.</div>';
+    return;
+  }
+  // tri par heure de départ à la gare de départ
+  const depCode = getSelectedDepartCode();
+  list.sort((a,b)=>toMinutes(a.horaires[depCode]) - toMinutes(b.horaires[depCode]));
+
+  for (const tr of list) {
+    const chip = document.createElement('div');
+    chip.className = 'cp-chip';
+    chip.textContent = `#${tr.num} • ${tr.horaires[depCode]}`;
+    if (selection.has(tr.num)) chip.classList.add('selected');
+    chip.addEventListener('click', ()=>{
+      if (selection.has(tr.num)) {
+        selection.delete(tr.num);
+        chip.classList.remove('selected');
+      } else {
+        selection.add(tr.num);
+        chip.classList.add('selected');
+      }
+      // (optionnel) refléter dans ta zone sélection existante si tu veux
+    });
+    wrap.appendChild(chip);
+  }
+}
+
+function getSelectedDepartCode() {
+  const nom = document.getElementById('cpDepart').value;
+  const g = GA_RES.find(x=>x.nom===nom);
+  return g ? g.code : null;
+}
+function getSelectedArriveeCode() {
+  const nom = document.getElementById('cpArrivee').value;
+  const g = GA_RES.find(x=>x.nom===nom);
+  return g ? g.code : null;
+}
+
+// filtre selon départ/arrivée, date (calendar_dates) et plage horaire
+function computeProposals() {
+  if (!GTFS_READY) return;
+  const dep = getSelectedDepartCode();
+  const arr = getSelectedArriveeCode();
+  const dateStr = document.getElementById('trainDate').value; // yyyy-mm-dd
+  const hDeb = document.getElementById('heureDebut').value || '00:00';
+  const hFin = document.getElementById('heureFin').value || '23:59';
+
+  if (!dep || !arr || !dateStr) {
+    document.getElementById('resultatsTrains').innerHTML = '<div style="opacity:.8">Choisissez départ, arrivée et date.</div>';
+    return;
+  }
+
+  const yyyymmdd = dateStr.replace(/-/g,'');
+  const min = toMinutes(hDeb);
+  const max = toMinutes(hFin);
+
+  const seen = new Set();
+  const out = [];
+  for (const t of TRAINS) {
+    const idxD = t.stops.indexOf(dep);
+    const idxA = t.stops.indexOf(arr);
+    if (idxD === -1 || idxA === -1) continue;
+    if (idxD >= idxA) continue;
+
+    // service actif ce jour (exception_type=1)
+    const dates = CALENDAR_BY_SERVICE.get(t.service_id);
+    if (!dates || !dates.has(yyyymmdd)) continue;
+
+    const h = t.horaires[dep];
+    if (!h) continue;
+    const mm = toMinutes(h);
+    if (mm < min || mm > max) continue;
+
+    if (!seen.has(t.num)) {
+      seen.add(t.num);
+      out.push(t);
+    }
+  }
+
+  renderProposals(out);
+}
+
+// charge GTFS une fois
+async function initSelectorInline() {
+  try {
+    const [trips, stops, stop_times, calendar] = await Promise.all([
+      fetchCSV("https://tekmate-lux.github.io/Assistant-train/data/trips.txt"),
+      fetchCSV("https://tekmate-lux.github.io/Assistant-train/data/stops.txt"),
+      fetchCSV("https://tekmate-lux.github.io/Assistant-train/data/stop_times.txt"),
+      fetchCSV("https://tekmate-lux.github.io/Assistant-train/data/calendar_dates.txt"),
+    ]);
+    GTFS = { trips, stops, stop_times, calendar };
+    CALENDAR_BY_SERVICE = buildCalendarMap(calendar);
+    TRAINS = buildTrains(trips, stop_times, stops);
+    GTFS_READY = true;
+    // première passe
+    computeProposals();
+  } catch (e) {
+    console.error("Erreur GTFS:", e);
+    document.getElementById('resultatsTrains').innerHTML = '<div>Erreur chargement données.</div>';
+  }
+}
+
+// écoute les changements utilisateur
+['cpDepart','cpArrivee','trainDate','heureDebut','heureFin'].forEach(id=>{
+  const el = document.getElementById(id);
+  if (el) el.addEventListener('change', computeProposals);
+});
+
+// presets boutons déjà fournis → on recalcule après
+window.setPreset = (type => {
+  return function(type){
+    if (type === 'matin') {
+      document.getElementById('heureDebut').value = "06:00";
+      document.getElementById('heureFin').value = "11:00";
+    } else {
+      document.getElementById('heureDebut').value = "16:00";
+      document.getElementById('heureFin').value = "20:00";
+    }
+    computeProposals();
+  }
+})();
+
+// lancer au chargement
+document.addEventListener('DOMContentLoaded', initSelectorInline);
+</script>
+
+    <script>  
   const container = document.getElementById('disruptionsSummary');
   if (!container.querySelector('.disruption-box')) {
     container.style.display = 'none';
@@ -3056,67 +3293,6 @@ betaInput.addEventListener("keyup", (e) => {
   });
 })();
 </script>
-  <!-- … ton code de la console intégrée … -->
-<button id="loadTrainsIntegrated">Valider</button>
 
-<script>
-// tout le JS pour gérer la console (départ/arrivée, slider, chips …)
-</script>
-<script>
-    const selection = new Set();
-
-    function setPreset(type) {
-      if (type === 'matin') {
-        document.getElementById('heureDebut').value = "06:00";
-        document.getElementById('heureFin').value = "11:00";
-      } else {
-        document.getElementById('heureDebut').value = "16:00";
-        document.getElementById('heureFin').value = "20:00";
-      }
-    }
-
-    // Exemple d’ajout dynamique de "chips"
-    function addTrainChip(num) {
-      const li = document.createElement('li');
-      li.textContent = num;
-      li.className = 'chip';
-      li.addEventListener('click', () => {
-        selection.delete(num);
-        li.remove();
-      });
-      document.getElementById('trainsSelectionnes').appendChild(li);
-      selection.add(num);
-    }
-
-    // Listener principal qui connecte console → ton handler existant
-    document.getElementById('loadTrainsIntegrated').addEventListener('click', () => {
-      if (selection.size === 0) {
-        alert("Sélectionne au moins une bétaillère.");
-        return;
-      }
-
-      // 1) Remplir #trainNumbers
-      const nums = Array.from(selection).sort((a,b)=>a.localeCompare(b));
-      document.getElementById('trainNumbers').value = nums.join(',');
-
-      // 2) Déduire le sens
-      const dep = document.getElementById('cpDepart').value;
-      const arr = document.getElementById('cpArrivee').value;
-      const garesParLigne = [
-        "Luxembourg","Howald","Bettembourg","Hettange-Grande","Thionville","Uckange","Hagondange",
-        "Walygator parc","Maizières-lès-Metz","Woippy","Metz Nord","Metz","Ars-sur-Moselle",
-        "Novéant-sur-Moselle","Pagny-sur-Moselle","Vandières","Pont-à-Mousson","Dieulouard",
-        "Belleville","Marbache","Pompey","Frouard","Nancy"
-      ];
-      const iD = garesParLigne.indexOf(dep);
-      const iA = garesParLigne.indexOf(arr);
-      const sensInverse = (iD > iA);
-      const toggle = document.getElementById('directionToggle');
-      if (toggle) toggle.checked = sensInverse;
-
-      // 3) Lancer ton vrai handler
-      $('#loadTrains').click();
-    });
-  </script>
 </body>
 </html>
