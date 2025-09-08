@@ -1468,7 +1468,41 @@ table::before {
   font-style: italic;  
   text-align: right;    
 }
-    
+   /* Modale */
+.table-modal{
+  display:none; position:fixed; inset:0; z-index:2000;
+  background:rgba(0,0,0,.85);
+  justify-content:center; align-items:center;
+}
+.table-modal-content{
+  background:#0b0f1a; color:#0ff;
+  width:96vw; height:92vh; border:2px solid #0ff;
+  box-shadow:0 0 20px #00f0ff88; border-radius:10px;
+  overflow:auto; padding:8px; position:relative;
+}
+.table-modal-actions{
+  position:sticky; top:0; display:flex; justify-content:flex-end; gap:8px;
+  background:linear-gradient(180deg, #0b0f1a 0%, #0b0f1a 70%, transparent 100%);
+  padding:6px 0 4px; z-index:1;
+}
+.modal-btn{
+  background:#0ff; color:#000; font-weight:700; border:none;
+  padding:6px 10px; border-radius:6px; cursor:pointer;
+}
+.modal-btn.close{ background:#f66; }
+
+/* Conteneur “fit” : on applique une échelle pour voir 100% du tableau */
+#tableModalInner{
+  transform-origin: top left;   /* important pour le fit */
+}
+
+/* (Optionnel) sur mobile tu peux afficher un petit hint en bas de la modale */
+@media (max-width: 768px){
+  .table-modal-content::after{
+    content:"Pincer pour zoomer • Défilement autorisé";
+    display:block; text-align:center; font-size:.75rem; color:#bfc5cc; margin-top:8px;
+  }
+} 
 </style>
 </head>
 <body>
@@ -1697,6 +1731,21 @@ table::before {
   </div>
 </div>
 
+    <!-- Modale plein écran pour isoler le tableau -->
+<div id="tableModal" class="table-modal" aria-hidden="true">
+  <div class="table-modal-content">
+    <div class="table-modal-actions">
+      <button id="closeTableModal" class="modal-btn close" aria-label="Fermer">✕</button>
+    </div>
+    <!-- le tableau cloné sera injecté ici -->
+    <div id="tableModalInner">
+      <!-- clone du tableau -->
+    </div>
+  </div>
+</div>
+  
+ </body> 
+  
     <script>
        
   const container = document.getElementById('disruptionsSummary');
@@ -2857,6 +2906,104 @@ betaValidate.addEventListener("click", () => {
 betaInput.addEventListener("keyup", (e) => {
     if(e.key === "Enter") betaValidate.click();
 });
+</script>
+  <script>
+(function(){
+  const modal      = document.getElementById('tableModal');
+  const modalInner = document.getElementById('tableModalInner');
+  const closeBtn   = document.getElementById('closeTableModal');
+
+  function openTableModalFit(){
+    const srcTable = document.querySelector('#trainInfo table');
+    if(!srcTable) return;
+
+    // clone propre (liens fonctionnels)
+    const clone = srcTable.cloneNode(true);
+    modalInner.innerHTML = '';
+    modalInner.appendChild(clone);
+
+    // on affiche d'abord pour mesurer
+    modal.style.display = 'flex';
+
+    // mesures du tableau cloné (non réduit)
+    const tblRect = clone.getBoundingClientRect();
+
+    // surface disponible à l'intérieur de la modale
+    const content = document.querySelector('.table-modal-content');
+    const availW  = content.clientWidth  - 16; // marge interne approx
+    const availH  = content.clientHeight - 48; // moins la barre d'actions
+
+    // facteur d'échelle pour que TOUT le tableau tienne
+    const sx = availW / tblRect.width;
+    const sy = availH / tblRect.height;
+    const scale = Math.min(1, sx, sy); // jamais >1 (pas d’agrandissement)
+
+    // applique l'échelle
+    modalInner.style.transform = `scale(${scale})`;
+
+    // pour éviter des barres vides, on “réserve” l’espace d’origine
+    modalInner.style.width  = tblRect.width + 'px';
+    modalInner.style.height = tblRect.height + 'px';
+
+    // stocke l’état (pour double-tap toggle)
+    modalInner.dataset.scaleFit = scale.toString();
+    modalInner.dataset.mode = 'fit';
+  }
+
+  function openTableModal100(){
+    modalInner.style.transform = 'scale(1)';
+    modalInner.dataset.mode = 'full';
+  }
+
+  function closeTableModal(){
+    modal.style.display = 'none';
+  }
+
+  // Ouvre la modale quand on clique/tape sur le tableau (mobile ET desktop)
+  document.addEventListener('click', function(e){
+    const table = e.target.closest('#trainInfo table');
+    if (table){
+      openTableModalFit();
+    }
+  });
+
+  // Fermer via bouton / clic fond / ESC
+  closeBtn.addEventListener('click', closeTableModal);
+  modal.addEventListener('click', (e)=>{ if(e.target === modal) closeTableModal(); });
+  document.addEventListener('keydown', (e)=>{ if(e.key==='Escape') closeTableModal(); });
+
+  // Double-tap / double-click dans la modale -> Fit ↔ 100%
+  let lastTap = 0;
+  modalInner.addEventListener('click', function(e){
+    const now = Date.now();
+    if (now - lastTap < 300){
+      // toggle
+      if (modalInner.dataset.mode === 'fit'){
+        openTableModal100();
+      } else {
+        openTableModalFit();
+      }
+      e.preventDefault();
+      e.stopPropagation();
+    }
+    lastTap = now;
+  });
+
+  // Si on tourne le téléphone, on recalcule le “fit”
+  window.addEventListener('orientationchange', ()=>{
+    if (modal.style.display === 'flex'){
+      // petit délai pour laisser le layout se recalculer
+      setTimeout(openTableModalFit, 250);
+    }
+  });
+
+  // Si la fenêtre change (clavier mobile, split view…), on recalcule
+  window.addEventListener('resize', ()=>{
+    if (modal.style.display === 'flex' && modalInner.dataset.mode === 'fit'){
+      openTableModalFit();
+    }
+  });
+})();
 </script>
 </body>
 </html>
