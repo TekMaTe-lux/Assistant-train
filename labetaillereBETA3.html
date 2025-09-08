@@ -1815,702 +1815,247 @@ function getGareURL(nomGare) {
   return `https://www.garesetconnexions.sncf/fr/gares-services/${cleanName}/horaires`;
 }
      
-  // Fonction format heure
-  const ft = t => t ? t.slice(0, 2) + ':' + t.slice(2, 4) : '-';
-  // Calcul différence minutes (a - b)
-  const dl = (b, a) => (parseInt(a.slice(0, 2)) * 60 + parseInt(a.slice(2, 4))) - (parseInt(b.slice(0, 2)) * 60 + parseInt(b.slice(2, 4)));
+// Fonction format heure
+const ft = t => t ? t.slice(0, 2) + ':' + t.slice(2, 4) : '-';
+// Calcul différence minutes (a - b)
+const dl = (b, a) => (parseInt(a.slice(0, 2)) * 60 + parseInt(a.slice(2, 4))) - (parseInt(b.slice(0, 2)) * 60 + parseInt(b.slice(2, 4)));
 
-  // Au clic sur bouton Afficher
-  $('#loadTrains').click(async function () {
-    await loadCompoData();  // Chargement du JSON composition (à adapter si besoin)
+// Au clic sur bouton Afficher
+$('#loadTrains').click(async function () {
+  await loadCompoData();  // Chargement du JSON composition (à adapter si besoin)
 
-    const sensInverse = $('#directionToggle').is(':checked');
-    const fixedStops = sensInverse ? fixedStopsSens2 : fixedStopsSens1;
+  const sensInverse = $('#directionToggle').is(':checked');
+  const fixedStops = sensInverse ? fixedStopsSens2 : fixedStopsSens1;
 
-    const date = $('#trainDate').val();
-    const numbers = $('#trainNumbers').val().split(',').map(s => s.trim()).filter(Boolean);
+  const date = $('#trainDate').val();
+  const numbers = $('#trainNumbers').val().split(',').map(s => s.trim()).filter(Boolean);
 
-    if (!numbers.length || !date) {
-      $('#trainInfo').html('<p class="deleted">Veuillez indiquer au moins un numéro de train et une date.</p>');
-      return;
-    }
+  if (!numbers.length || !date) {
+    $('#trainInfo').html('<p class="deleted">Veuillez indiquer au moins un numéro de train et une date.</p>');
+    return;
+  }
 
-    $('#trainInfo').html('<p>Chargement de vos bétaillères…</p>');
+  $('#trainInfo').html('<p>Chargement de vos bétaillères…</p>');
 
-    const results = {};
+  const results = {};
 
-    // 1. Récupération des données API pour chaque train
-    for (const num of numbers) {
-  const url = `https://assistant-train-cx5u.vercel.app/api/train?id=vehicle_journeys/vehicle_journey:SNCF:${date}:${num}:1187:Train`;
-  try {
-    const res = await $.ajax({ url });
-    const train = res.vehicle_journeys?.[0];
-    if (!train) {
-      results[num] = { error: 'Non trouvé' };
-      continue;
-    }
-
-    const disruptions = res.disruptions || [];
-    const impacted = {};
-    let newStart = null, newEnd = null;
-
-    let disruptionCauses = [];
-    for (const d of disruptions) {
-      if (d.cause && !disruptionCauses.includes(d.cause)) {
-        disruptionCauses.push(d.cause);
+  // 1. Récupération des données API pour chaque train
+  for (const num of numbers) {
+    const url = `https://assistant-train-cx5u.vercel.app/api/train?id=vehicle_journeys/vehicle_journey:SNCF:${date}:${num}:1187:Train`;
+    try {
+      const res = await $.ajax({ url });
+      const train = res.vehicle_journeys?.[0];
+      if (!train) {
+        results[num] = { error: 'Non trouvé' };
+        continue;
       }
-      for (const o of d.impacted_objects || []) {
-        for (const s of o.impacted_stops || []) {
-          impacted[s.stop_point.id] = s;
+
+      const disruptions = res.disruptions || [];
+      const impacted = {};
+      let newStart = null, newEnd = null;
+
+      let disruptionCauses = [];
+      for (const d of disruptions) {
+        if (d.cause && !disruptionCauses.includes(d.cause)) {
+          disruptionCauses.push(d.cause);
+        }
+        for (const o of d.impacted_objects || []) {
+          for (const s of o.impacted_stops || []) {
+            impacted[s.stop_point.id] = s;
+          }
         }
       }
-    }
 
-    for (let s of train.stop_times) {
-      const id = s.stop_point.id;
-      const imp = impacted[id];
-      if (imp && imp.departure_status !== 'deleted') {
-        newStart = id;
-        break;
+      for (let s of train.stop_times) {
+        const id = s.stop_point.id;
+        const imp = impacted[id];
+        if (imp && imp.departure_status !== 'deleted') {
+          newStart = id;
+          break;
+        }
       }
-    }
 
-    for (let i = train.stop_times.length - 1; i >= 0; i--) {
-      const s = train.stop_times[i];
-      const id = s.stop_point.id;
-      const imp = impacted[id];
-      if (imp && imp.arrival_status !== 'deleted') {
-        newEnd = id;
-        break;
+      for (let i = train.stop_times.length - 1; i >= 0; i--) {
+        const s = train.stop_times[i];
+        const id = s.stop_point.id;
+        const imp = impacted[id];
+        if (imp && imp.arrival_status !== 'deleted') {
+          newEnd = id;
+          break;
+        }
       }
-    }
 
-    results[num] = { train, impacted, newStart, newEnd, disruptions, disruptionCauses };
-  } catch (e) {
-    console.error("Erreur lors de la requête API:", e);
-    results[num] = { error: 'Erreur API' };
+      results[num] = { train, impacted, newStart, newEnd, disruptions, disruptionCauses };
+    } catch (e) {
+      console.error("Erreur lors de la requête API:", e);
+      results[num] = { error: 'Erreur API' };
+    }
   }
-}
 
-// On récupère TOUTES les gares présentes dans les trains sélectionnés
-const stopsInTrains = new Set();
-numbers.forEach(num => {
-  const train = results[num]?.train;
-  if (!train) return;
-  train.stop_times.forEach(s => stopsInTrains.add(s.stop_point.name));
-});
+  // On récupère TOUTES les gares présentes dans les trains sélectionnés
+  const stopsInTrains = new Set();
+  numbers.forEach(num => {
+    const train = results[num]?.train;
+    if (!train) return;
+    train.stop_times.forEach(s => stopsInTrains.add(s.stop_point.name));
+  });
 
-// On filtre la liste fixe selon le sens, pour ne garder que les gares présentes dans au moins un train
-const mergedStops = fixedStops.filter(stopName => stopsInTrains.has(stopName));
+  // On filtre la liste fixe selon le sens, pour ne garder que les gares présentes dans au moins un train
+  const mergedStops = fixedStops.filter(stopName => stopsInTrains.has(stopName));
 
-console.log('mergedStops:', mergedStops);
+  console.log('mergedStops:', mergedStops);
 
-    // 3. Construction tableau HTML
-    let html = '<table><thead><tr><th>Gare</th>';
-    numbers.forEach(num => {
-      const composition = compoData[num];
-      const classe = composition === 'US' ? ' us-train' : '';
-      html += `<th class="train-header${classe}" data-train-number="${num}">${num}</th>`;
-    });
-    html += '</tr><tr><th></th>';
+  // 3. Construction tableau HTML
+  let html = '<table><thead><tr><th>Gare</th>';
+  numbers.forEach(num => {
+    const composition = compoData[num];
+    const classe = composition === 'US' ? ' us-train' : '';
+    html += `<th class="train-header${classe}" data-train-number="${num}">${num}</th>`;
+  });
+  html += '</tr><tr><th></th>';
+
+  numbers.forEach(num => {
+    const result = results[num];
+    let icon = '', title = '';
+    if (!result || result.error) {
+      icon = '❌';
+      title = result?.error || 'Erreur';
+    } else {
+      const disruptions = result.disruptions || [];
+      const impacted = result.impacted;
+      const hasDelay = Object.values(impacted).some(s =>
+        (s.amended_departure_time || s.amended_arrival_time) &&
+        (s.base_departure_time || s.base_arrival_time) &&
+        dl(s.base_departure_time || s.base_arrival_time, s.amended_departure_time || s.amended_arrival_time) > 0
+      );
+      const newStartId = result.newStart;
+      const originalStartId = result.train.stop_times[0].stop_point.id;
+      const isPartial = newStartId && newStartId !== originalStartId;
+      const isFull = disruptions.some(d => ['NO_SERVICE','CANCELLATION'].includes(d.severity?.effect));
+      const newEndId = result.newEnd;
+      const originalEndId = result.train.stop_times[result.train.stop_times.length - 1].stop_point.id;
+      const isPartialEnd = newEndId && newEndId !== originalEndId;
+
+      if (isFull) {
+        icon = '❌';
+        title = 'Train supprimé';
+        if (result.disruptionCauses.length) title += ' : ' + result.disruptionCauses.join(', ');
+        icon = `<span class="blink-red">${icon}</span>`;
+      } else if (isPartial || isPartialEnd) {
+        icon = '⚠️';
+        title = 'Suppression partielle';
+        if (result.disruptionCauses.length) title += ' : ' + result.disruptionCauses.join(', ');
+      } else if (hasDelay) {
+        icon = '⏰';
+        title = 'Retard';
+        if (result.disruptionCauses.length) title += ' : ' + result.disruptionCauses.join(', ');
+      } else {
+        icon = '';
+        title = 'Sans perturbation';
+      }
+    }
+    html += `<th><span class="icon" title="${title}">${icon}</span></th>`;
+  });
+
+  html += '</tr></thead><tbody>';
+
+  // 4. Affichage des gares avec horaires pour chaque train
+  for (const stopName of mergedStops) {
+    html += `<tr><td>${stopName}</td>`;
 
     numbers.forEach(num => {
       const result = results[num];
-      let icon = '', title = '';
       if (!result || result.error) {
-        icon = '❌';
-        title = result?.error || 'Erreur';
-      } else {
-        const disruptions = result.disruptions || [];
-        const impacted = result.impacted;
-        const hasDelay = Object.values(impacted).some(s =>
-          (s.amended_departure_time || s.amended_arrival_time) &&
-          (s.base_departure_time || s.base_arrival_time) &&
-          dl(s.base_departure_time || s.base_arrival_time, s.amended_departure_time || s.amended_arrival_time) > 0
-        );
-        const newStartId = result.newStart;
-        const originalStartId = result.train.stop_times[0].stop_point.id;
-        const isPartial = newStartId && newStartId !== originalStartId;
-        const isFull = disruptions.some(d => ['NO_SERVICE','CANCELLATION'].includes(d.severity?.effect));
-        const newEndId = result.newEnd;
-        const originalEndId = result.train.stop_times[result.train.stop_times.length - 1].stop_point.id;
-        const isPartialEnd = newEndId && newEndId !== originalEndId;
+        html += `<td class="deleted">${result?.error || 'Erreur'}</td>`;
+        return;
+      }
 
-        if (isFull) {
-          icon = '❌';
-          title = 'Train supprimé';
-          if (result.disruptionCauses.length) title += ' : ' + result.disruptionCauses.join(', ');
-          icon = `<span class="blink-red">${icon}</span>`;
-        } else if (isPartial || isPartialEnd) {
-          icon = '⚠️';
-          title = 'Suppression partielle';
-          if (result.disruptionCauses.length) title += ' : ' + result.disruptionCauses.join(', ');
-        } else if (hasDelay) {
-          icon = '⏰';
-          title = 'Retard';
-          if (result.disruptionCauses.length) title += ' : ' + result.disruptionCauses.join(', ');
-        } else {
-          icon = '';
-          title = 'Sans perturbation';
+      const stop = result.train.stop_times.find(s => s.stop_point.name === stopName);
+      if (!stop) {
+        html += `<td>-</td>`;
+        return;
+      }
+      const id = stop.stop_point.id;
+      const imp = result.impacted[id] || {};
+
+      const amended = imp.amended_departure_time || imp.amended_arrival_time;
+      const departureDeleted = imp.departure_status === 'deleted';
+      const arrivalDeleted = imp.arrival_status === 'deleted';
+      const isStopDeleted = departureDeleted && arrivalDeleted;
+      const base = imp.base_departure_time || imp.base_arrival_time || stop.departure_time || stop.arrival_time;
+      const index = result.train.stop_times.findIndex(s => s.stop_point.id === id);
+      const newStartIndex = result.train.stop_times.findIndex(s => s.stop_point.id === result.newStart);
+      const newEndIndex = result.train.stop_times.findIndex(s => s.stop_point.id === result.newEnd);
+      const originalEndId = result.train.stop_times[result.train.stop_times.length - 1].stop_point.id;
+
+      let content = ft(base);
+      const isFirstStop = stopName === result.train.stop_times[0]?.stop_point?.name;
+      const isLastStop = stopName === result.train.stop_times[result.train.stop_times.length - 1]?.stop_point?.name;
+
+      // Cas spécial : gare ancien terminus barré rouge, sans horaire retardé
+      if (id === originalEndId && result.newEnd && result.newEnd !== originalEndId) {
+        content = `<span class="delay-strike blink-red">${ft(base)}</span>`;
+      }
+      // Sinon affichage normal avec retard si nécessaire
+      else if (amended && dl(base, amended) > 0) {
+        content = `<span class="delay-strike">${ft(base)}</span><br><span class="delayed">${ft(amended)}</span>`;
+      } else {
+        if (isFirstStop || isLastStop) {
+          content = `<strong>${content}</strong>`;
         }
       }
-      html += `<th><span class="icon" title="${title}">${icon}</span></th>`;
-    });
+      const isFull = result.disruptions.some(d => ['NO_SERVICE','CANCELLATION'].includes(d.severity?.effect));
 
-    html += '</tr></thead><tbody>';
-
-    // 4. Affichage des gares avec horaires pour chaque train
-    for (const stopName of mergedStops) {
-      html += `<tr><td>${stopName}</td>`;
-
-      numbers.forEach(num => {
-        const result = results[num];
-        if (!result || result.error) {
-          html += `<td class="deleted">${result?.error || 'Erreur'}</td>`;
-          return;
-        }
-
-        const stop = result.train.stop_times.find(s => s.stop_point.name === stopName);
-        if (!stop) {
-          html += `<td>-</td>`;
-          return;
-        }
-        const id = stop.stop_point.id;
-        const imp = result.impacted[id] || {};
-
-        const amended = imp.amended_departure_time || imp.amended_arrival_time;
-        const departureDeleted = imp.departure_status === 'deleted';
-        const arrivalDeleted = imp.arrival_status === 'deleted';
-        const isStopDeleted = departureDeleted && arrivalDeleted;
-        const base = imp.base_departure_time || imp.base_arrival_time || stop.departure_time || stop.arrival_time;
-        const index = result.train.stop_times.findIndex(s => s.stop_point.id === id);
-        const newStartIndex = result.train.stop_times.findIndex(s => s.stop_point.id === result.newStart);
-        const newEndIndex = result.train.stop_times.findIndex(s => s.stop_point.id === result.newEnd);
-        const originalEndId = result.train.stop_times[result.train.stop_times.length - 1].stop_point.id;
-
-        let content = ft(base);
-        const isFirstStop = stopName === result.train.stop_times[0]?.stop_point?.name;
-        const isLastStop = stopName === result.train.stop_times[result.train.stop_times.length - 1]?.stop_point?.name;
-
-        // Cas spécial : gare ancien terminus barré rouge, sans horaire retardé
-        if (id === originalEndId && result.newEnd && result.newEnd !== originalEndId) {
+      if (isFull) {
+        content = `<span class="deleted">${content}</span>`;
+      } else if (id === result.newStart && index !== 0) {
+        content = `<span class="new-start">${content}</span>`;
+      } else if (id === result.newEnd && id !== originalEndId) {
+        if (amended && dl(base, amended) > 0) {
+          content = `<span class="delay-strike blink-red">${ft(base)}</span><br><span class="delayed">${ft(amended)}</span>`;
+        } else {
           content = `<span class="delay-strike blink-red">${ft(base)}</span>`;
         }
-        // Sinon affichage normal avec retard si nécessaire
-        else if (amended && dl(base, amended) > 0) {
-          content = `<span class="delay-strike">${ft(base)}</span><br><span class="delayed">${ft(amended)}</span>`;
-        } else {
-          if (isFirstStop || isLastStop) {
-            content = `<strong>${content}</strong>`;
-          }
-        }
-        const isFull = result.disruptions.some(d => ['NO_SERVICE','CANCELLATION'].includes(d.severity?.effect));
-
-        if (isFull) {
-          content = `<span class="deleted">${content}</span>`;
-        } else if (id === result.newStart && index !== 0) {
-          content = `<span class="new-start">${content}</span>`;
-        } else if (id === result.newEnd && id !== originalEndId) {
-          if (amended && dl(base, amended) > 0) {
-            content = `<span class="delay-strike blink-red">${ft(base)}</span><br><span class="delayed">${ft(amended)}</span>`;
-          } else {
-            content = `<span class="delay-strike blink-red">${ft(base)}</span>`;
-          }
-        } else if (
-          isStopDeleted ||
-          (newStartIndex >= 0 && index < newStartIndex) ||
-          (newEndIndex >= 0 && index > newEndIndex)
-        ) {
-          content = `<span class="deleted">${content}</span>`;
-        }
-
-        html += `<td>${content}</td>`;
-      });
-      html += '</tr>';
-    }
-
-    html += '</tbody></table>';
-
-    // 5. Insertion du tableau dans le DOM *après* la construction complète
-    $('#trainInfo').html(html);
-
-    // 6. Ensuite tu peux appeler ta fonction d’affichage des alertes ou retards
-    await chargerEtAfficherAlertes();
-
-    // Ici ta gestion d’affichage des perturbations (reste identique)
-    function extractTrainNumber(name) {
-      if (!name) return '';
-      const match = name.match(/\b\d{5,6}\b/);
-      return match ? match[0] : '';
-    }
-
-    let groupedDisruptions = {};
-numbers.forEach(num => {
-  const result = results[num];
-  if (result && result.disruptions && result.disruptions.length > 0) {
-    result.disruptions.forEach(disruption => {
-      const effect = disruption.severity?.effect || 'Inconnu';
-      const causeMessage = disruption.messages?.[0]?.text || 'Pas de cause renseignée';
-      const key = effect + '||' + causeMessage;
-
-      if (!groupedDisruptions[key]) {
-        groupedDisruptions[key] = {
-          effect,
-          cause: causeMessage,
-          trains: new Set(),
-          box: 'orange',
-          icon: '⚠️',
-          txt: effect,
-        };
-
-        if (effect === 'NO_SERVICE') {
-          groupedDisruptions[key].box = 'red';
-          groupedDisruptions[key].icon = '❌';
-          groupedDisruptions[key].txt = 'Bétaillère supprimée';
-          groupedDisruptions[key].blink = true;
-        } else if (effect === 'REDUCED_SERVICE') {
-          groupedDisruptions[key].box = 'red';
-          groupedDisruptions[key].icon = '⚠️';
-          groupedDisruptions[key].txt = 'Suppression partielle';
-        } else if (effect === 'SIGNIFICANT_DELAYS') {
-          groupedDisruptions[key].box = 'orange';
-          groupedDisruptions[key].icon = '⏰';
-          groupedDisruptions[key].txt = 'Retard';
-        }
+      } else if (
+        isStopDeleted ||
+        (newStartIndex >= 0 && index < newStartIndex) ||
+        (newEndIndex >= 0 && index > newEndIndex)
+      ) {
+        content = `<span class="deleted">${content}</span>`;
       }
 
-      // Ajoute le train principal (num)
-      groupedDisruptions[key].trains.add(num);
-
-      // Ajoute les trains impactés (extrait juste le numéro)
-      if (disruption.impacted_objects) {
-        disruption.impacted_objects.forEach(obj => {
-          if (obj.pt_object && obj.pt_object.name) {
-            const trainNum = extractTrainNumber(obj.pt_object.name);
-            if (trainNum) groupedDisruptions[key].trains.add(trainNum);
-          }
-        });
-      }
+      html += `<td>${content}</td>`;
     });
+    html += '</tr>';
   }
-});
 
-let disruptionsHtml = '';
+  html += '</tbody></table>';
 
-Object.values(groupedDisruptions).forEach(disr => {
-  let trainsList = Array.from(disr.trains).sort((a,b) => a.localeCompare(b));
-  let trainsHtml = trainsList.length
-    ? '<ul>' + trainsList.map(t => `<li>${t}</li>`).join('') + '</ul>'
-    : '<p>Aucun train impacté listé</p>';
+  // 5. Insertion du tableau dans le DOM *après* la construction complète
+  $('#trainInfo').html(html);
 
-  // Choix de la couleur selon la box (orange ou rouge)
-  let color = disr.box === 'red' ? '#ff4c4c' : '#ff8a00';
+  // 6. Ensuite on peut appeler alertes + (ré)appliquer les retards GTFS-RT s'ils sont déjà chargés
+  await chargerEtAfficherAlertes();
 
-  disruptionsHtml += `
-  <div class="disruption-box ${disr.box}">
-    <div style="display: flex; align-items: center; gap: 8px; color: ${color}; font-weight: 700; font-size: 1.2rem;">
-      <div class="disruption-icon ${disr.blink ? 'icon-blink' : ''}">${disr.icon}</div>
-      <div>${disr.txt}</div>
-    </div>
-    <div style="color: ${color}; margin-top: 6px; font-style: italic;">
-      ${disr.cause}
-    </div>
-    <div style="color: ${color}; margin-top: 8px;">
-      ${trainsHtml}
-    </div>
-  </div>
-  `;
-});
-
-        $('#disruptionsContent').html(`<div class="disruption-grid">${disruptionsHtml}</div>`);
-  if (disruptionsHtml.trim() === '') {
-  $('#disruptionsContent').html('<p>Aucune perturbation dans vos bétaillères 🦄.</p>');
-}
-  
-document.querySelectorAll('th[data-train-number]').forEach(header => {
-  header.classList.remove('us-train');
-  header.removeAttribute('title');
-});
-  
-        $('#trainInfo').html(html);
-
-  // Ajout des liens vers garesetconnexions.sncf dans la première colonne (noms de gares)
-document.querySelectorAll('#trainInfo table tr td:first-child').forEach(td => {
-  const nomGare = td.textContent.trim();
-  const url = getGareURL(nomGare);
-  if (url && url !== nomGare) {
-    td.innerHTML = `<a href="${url}" target="_blank" class="gare-link">${nomGare}</a>`;
-  }
-});
-  // Récupération de la date de circulation (format YYYY-MM-DD)
-const dateCirculation = $('#trainDate').val();
-
-// Transformer les numéros de train affichés dans les <th> en liens vers sncf-voyageurs
-document.querySelectorAll('#trainInfo th[data-train-number]').forEach(th => {
-  const numero = th.dataset.trainNumber;
-  const url = `https://www.sncf-voyageurs.com/fr/voyagez-avec-nous/horaires-et-itineraires/recherche-de-train/detail-train/?numeroCirculation=${numero}&dateCirculation=${dateCirculation}`;
-  th.innerHTML = `<a href="${url}" target="_blank" class="train-link">${numero}</a>`;
-});
-  
-        $('#refreshContainer').show();
-
-   if (retardsGTFS) {
+  // (ré)appliquer les retards GTFS-RT sur le tableau nouvellement injecté
+  if (retardsGTFS) {
     applyRetardsFromGTFS(retardsGTFS);
   } else {
     console.log("Les retards GTFS ne sont pas encore chargés");
   }
+
+  // ✅ Horodatage – à la toute fin du handler #loadTrains
   setLastUpdated();
-}); 
+}); // ← FIN du handler: $('#loadTrains').click(async function () { ... })
 
-$('#refreshButton').off('click').on('click', async function () {
-  const btn = this;
-  btn.disabled = true;
-  btn.setAttribute('aria-busy','true');
-
-  try {
-    // 1) on récupère d'abord les NOUVEAUX retards GTFS-RT...
-    await fetchRetardsGtfs(false); // on n'applique pas tout de suite
-
-    // 2) ...puis on reconstruit le tableau (ton flux existant)
-    // La fin de la construction appelle déjà applyRetardsFromGTFS(retardsGTFS)
-    // -> donc le tableau utilisera la version fraîche des retards
-    $('#loadTrains').click();
-  } finally {
-    btn.disabled = false;
-    btn.removeAttribute('aria-busy');
-  }
-});
-
-if (!window.refreshStarted) {
-  setInterval(async () => {
-    await fetchRetardsGtfs(false); // recharge le GTFS-RT
-    $('#loadTrains').click();      // reconstruit (et applique automatiquement)
-  }, 300000); // 5 minutes
-  window.refreshStarted = true;
-}
-
-if (disruptionsHtml.trim() !== '') {
-  $('#disruptionsSummary').css('display', 'flex');
-} else {
-  $('#disruptionsSummary').hide();
-}
-
-       if (disruptionsHtml.trim() !== '') {
-  $('#disruptionsSummary').css('display', 'flex');
-} else {
-  $('#disruptionsSummary').hide();
-}
-        if (retardsGTFS) {
-  applyRetardsFromGTFS(retardsGTFS);
-} else {
-  console.log("Les retards GTFS ne sont pas encore chargés");
-} 
-      });
-    });
-
-// Charger le fichier JSON des retards GTFS-RT
-window.onload = function() {
-  const url = "https://raw.githubusercontent.com/TekMaTe-lux/Assistant-train/main/Assistant-train/retards_nancymetzlux.json";
-
-  // Ajoute un paramètre unique pour casser le cache
-  const cacheBuster = `?t=${new Date().getTime()}`;
-
-  fetch(url + cacheBuster)
-    .then(r => r.json())
-    .then(data => {
-      retardsGTFS = data;
-      console.log("✅ Retards GTFS chargés avec mise à jour !");
-      applyRetardsFromGTFS(retardsGTFS);  // applique les retards dès que chargés
-    })
-    .catch(err => console.error("Erreur lors du chargement des retards GTFS-RT :", err));
-};
-
-function applyRetardsFromGTFS(retardsGTFS) {
-  const table = document.querySelector("table");
-  if (!table) {
-    console.log("⛔ Le tableau n'est pas encore généré !");
-    return;
-  }
-
-  const allRows = Array.from(table.querySelectorAll("tr"));
-  const headerCount = allRows.findIndex(row => row.querySelector("td") !== null);
-
-  for (let i = headerCount; i < allRows.length; i++) {
-    const row = allRows[i];
-    const gare = row.cells[0]?.textContent.trim();
-    if (!gare) continue;
-
-    Array.from(row.cells).forEach((cell, colIndex) => {
-      if (colIndex === 0) return;
-
-      const trainHeader = document.querySelectorAll("table tr th")[colIndex];
-      const trainNumber = trainHeader?.dataset.trainNumber?.trim();
-
-      if (trainNumber && retardsGTFS[trainNumber]) {
-        const retardMinutes = retardsGTFS[trainNumber][gare];
-
-        // NE PAS afficher le retard si la case contient déjà une suppression
-        const hasSuppression = cell.querySelector('.deleted, .delay-strike, .strike, .cancelled'); 
-        // adapte les classes selon ce que tu utilises pour indiquer suppression dans la cellule
-
-        if (retardMinutes && retardMinutes > 0 && !hasSuppression) {
-          if (!cell.querySelector(".gtfs-retard")) {
-            const div = document.createElement("div");
-            div.className = "gtfs-retard";
-            div.textContent = `+${retardMinutes} min`;
-            cell.appendChild(div);
-          }
-        }
-      }
-    });
-  }
-}
-   // === GTFS-RT: (re)chargement des retards et application au tableau ===
-async function fetchRetardsGtfs(applyAfter = true) {
-  try {
-    const url = "https://raw.githubusercontent.com/TekMaTe-lux/Assistant-train/main/Assistant-train/retards_nancymetzlux.json";
-    const res = await fetch(url + `?t=${Date.now()}`, { cache: 'no-store' });
-    retardsGTFS = await res.json();
-    console.log("✅ Retards GTFS (re)chargés");
-    if (applyAfter) applyRetardsFromGTFS(retardsGTFS);
-  } catch (err) {
-    console.error("Erreur lors du (re)chargement des retards GTFS-RT :", err);
-  }
-}
-   
-   const urlAlertes = 'https://raw.githubusercontent.com/tekmate-lux/Assistant-train/main/Assistant-train/alertes_sncftoutes.json';
-
-const motsCles = ['Luxembourg', 'Metz', 'Thionville'];
-
-const causesMap = {
-  1: {prio: 1, couleur: '#dc3545', icone: '❌', label: 'Suppression (NO_SERVICE)'},
-  2: {prio: 2, couleur: '#ffc107', icone: '⚠️', label: 'Service réduit (REDUCED_SERVICE)'},
-  3: {prio: 3, couleur: '#ffc107', icone: '⚠️', label: 'Service modifié (MODIFIED_SERVICE)'},
-  6: {prio: 4, couleur: '#fd7e14', icone: '⏰', label: 'Retards importants (SIGNIFICANT_DELAYS)'},
-  5: {prio: 5, couleur: '#17a2b8', icone: '🔄', label: 'Détournement (DETOUR)'},
-  8: {prio: 6, couleur: '#a7a728', icone: '🚌', label: 'Service additionnel (ADDITIONAL_SERVICE)'},
-  9: {prio: 7, couleur: '#a7a728', icone: '🔧', label: 'Travaux (OTHER_EFFECT)'},
-  10:{prio: 8, couleur: '#a7a728', icone: '🔧', label: 'Travaux (OTHER_EFFECT)'}
-};
-
-function setLastUpdated(labelPrefix = 'Mis à jour le') {
-  const el = document.getElementById('lastUpdated');
-  if (!el) return;
-  const now = new Date();
-  const txt = now.toLocaleString('fr-FR', {
-    timeZone: 'Europe/Luxembourg',
-    year: 'numeric', month: '2-digit', day: '2-digit',
-    hour: '2-digit', minute: '2-digit', second: '2-digit',
-    hour12: false
-  }).replace(',', ' à');
-  el.textContent = `${labelPrefix} ${txt}`;
-}
-      
-      function getStyleParCauseCode(code) {
-  return causesMap[code] || {prio: 999, couleur: '#6c757d', icone: 'ℹ️', label: 'Cause inconnue'};
-}
-
-function contientMotCle(texte, mots) {
-  if (!texte) return false;
-  const texteMin = texte.toLowerCase();
-  return mots.some(mot => texteMin.includes(mot.toLowerCase()));
-}
-
-function formatDate(d) {
-  if (!d) return 'N/A';
-  const pad = n => n.toString().padStart(2, '0');
-  return `${pad(d.getDate())}/${pad(d.getMonth() + 1)}/${d.getFullYear()} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
-}
-
-function extraireNumeroTrainDepuisTripId(tripId) {
-  const match = tripId.match(/\d{5}/);
-  return match ? match[0] : null;
-}
-
-function nettoyerNumeroTrain(numero) {
-  const match = numero.match(/\d{5}/);
-  return match ? match[0] : null;
-}
-
-function getDisplayedTrainNumbers() {
-  const headers = document.querySelectorAll("table tr th[data-train-number]");
-  return Array.from(headers)
-    .map(th => nettoyerNumeroTrain(th.dataset.trainNumber.trim()))
-    .filter(n => n !== null);
-}
-
-function chargerEtAfficherAlertes() {
-  const container = document.getElementById('alertes');
-  if (!container) return;
-
-  const selectedDateInput = document.getElementById('trainDate');
-  let selectedDate = new Date();
-  if (selectedDateInput && selectedDateInput.value) {
-  const parts = selectedDateInput.value.split('-'); // yyyy-mm-dd
-  selectedDate = new Date(parts[0], parts[1] - 1, parts[2], 12, 0, 0, 0);
-} else {
-  selectedDate = new Date();
-  selectedDate.setHours(12, 0, 0, 0);
-}
-
-  container.innerHTML = '<p>Chargement des alertes...</p>';
-  container.style.display = 'flex';
-
-  fetch(urlAlertes + "?t=" + new Date().getTime())
-  .then(response => response.json())
-  .then(alertes => {
-      container.innerHTML = '';
-
-      const titreGeneral = document.createElement('h2');
-      titreGeneral.textContent = "Informations";
-      titreGeneral.className = 'alertes-header';
-      container.appendChild(titreGeneral);
-
-      let alertesFiltres = alertes.filter(alerte => {
-        const titre = alerte.header_text || '';
-        const descriptionHTML = alerte.description_text || '';
-        const description = descriptionHTML.replace(/<[^>]*>?/gm, '');
-        return contientMotCle(titre, motsCles) || contientMotCle(description, motsCles);
-      });
-
-      const trainsAffiches = getDisplayedTrainNumbers();
-
-      alertesFiltres = alertesFiltres.filter(alerte => {
-        if (!alerte.informed_entities || alerte.informed_entities.length === 0) return false;
-        return alerte.informed_entities.some(ent => {
-          if (!ent.trip_id) return false;
-          const numTrain = extraireNumeroTrainDepuisTripId(ent.trip_id);
-          return numTrain && trainsAffiches.includes(numTrain);
-        });
-      });
-
-      alertesFiltres = alertesFiltres.filter(alerte => {
-  if (!alerte.active_period_start || !alerte.active_period_end) {
-    console.warn('Alerte sans période valide:', alerte);
-    return false;
-  }
-
-  // Convertis timestamps (secondes) en objets Date JS
-  const debut = new Date(alerte.active_period_start * 1000);
-  const fin = new Date(alerte.active_period_end * 1000);
-
-  // Normalise les heures : début à minuit, fin à 23:59:59.999
-  debut.setHours(0, 0, 0, 0);
-  fin.setHours(23, 59, 59, 999);
-
-  // Pour debug : afficher dates et selectedDate
-  console.log('Alerte période:', debut.toISOString(), '->', fin.toISOString());
-  console.log('Date sélectionnée:', selectedDate.toISOString());
-
-  // Retourne true si la date sélectionnée est dans la plage [debut, fin]
-  return selectedDate >= debut && selectedDate <= fin;
-});
-
-      alertesFiltres.sort((a, b) => {
-        const prioA = getStyleParCauseCode(a.cause || 0).prio;
-        const prioB = getStyleParCauseCode(b.cause || 0).prio;
-        return prioA - prioB;
-      });
-
-      if (alertesFiltres.length === 0) {
-        container.innerHTML += '<p>Aucune alerte dans vos bétaillères.</p>';
-        return;
-      }
-
-      alertesFiltres.forEach(alerte => {
-        const titreBase = alerte.header_text || '';
-        let numeroTrain = null;
-        if (alerte.informed_entities) {
-          for (const ent of alerte.informed_entities) {
-            if (ent.trip_id) {
-              numeroTrain = extraireNumeroTrainDepuisTripId(ent.trip_id);
-              if (numeroTrain) break;
-            }
-          }
-        }
-
-        const titre = numeroTrain ? `Train ${numeroTrain} - ${titreBase}` : titreBase;
-        const descriptionHTML = alerte.description_text || '';
-        const description = descriptionHTML.replace(/<[^>]*>?/gm, '');
-        const debutTS = alerte.active_period_start ? new Date(alerte.active_period_start * 1000) : null;
-        const finTS = alerte.active_period_end ? new Date(alerte.active_period_end * 1000) : null;
-        const causeCode = alerte.cause || 0;
-        const style = getStyleParCauseCode(causeCode);
-
-        if (causeCode === 2 && numeroTrain) {
-          const header = document.querySelector(`th[data-train-number="${numeroTrain}"]`);
-          if (header) {
-            header.classList.add('us-train');
-            header.title = "Service réduit : réduction du nombre de places (UM ➜ US)";
-          }
-        }
-
-        let classeCouleur = 'alerte-box';
-        if (style.prio === 1) classeCouleur += ' red';
-        else if (style.prio === 2 || style.prio === 3) classeCouleur += ' orange';
-
-        const div = document.createElement('div');
-        div.className = classeCouleur;
-
-        const titreDiv = document.createElement('div');
-        titreDiv.style.display = "flex";
-        titreDiv.style.alignItems = "center";
-        titreDiv.style.fontWeight = "600";
-
-        const iconeSpan = document.createElement('span');
-        iconeSpan.textContent = style.icone;
-        iconeSpan.className = 'alerte-icon';
-
-        titreDiv.appendChild(iconeSpan);
-        titreDiv.appendChild(document.createTextNode(titre));
-
-        const detailDiv = document.createElement('div');
-        detailDiv.className = 'alerte-content';
-        detailDiv.innerHTML = `
-          <p>${description}</p>
-          <p><em>Date début : ${formatDate(debutTS)} - Date fin : ${formatDate(finTS)}</em></p>
-          <p><strong>Cause :</strong> ${style.label} (code ${causeCode})</p>
-        `;
-
-        titreDiv.addEventListener('click', () => {
-          div.classList.toggle('expanded');
-        });
-
-        div.appendChild(titreDiv);
-        div.appendChild(detailDiv);
-        container.appendChild(div);
-      });
-    })
-    .catch(err => {
-      console.error('Erreur lors du chargement des alertes:', err);
-      container.innerHTML = '<p>Erreur lors du chargement des alertes.</p>';
-    });
-}
-
-function waitForTableAndLoadAlerts() {
-  const observer = new MutationObserver((mutations, obs) => {
-    const table = document.querySelector('table');
-    if (table) {
-      obs.disconnect();
-      chargerEtAfficherAlertes();
-    }
-  });
-
-  // Démarre l'observateur immédiatement
-  observer.observe(document.body, {childList: true, subtree: true});
-
-  // On vérifie aussi tout de suite si la table est déjà là (ex. F5)
-  const table = document.querySelector('table');
-  if (table) {
-    observer.disconnect();
-    chargerEtAfficherAlertes();
-  }
-}
-
+// =========================
 // Appel initial au chargement
+// =========================
 window.addEventListener('load', () => {
+  // Charger GTFS-RT dès le départ (et appliquer si une table existe déjà)
   fetchRetardsGtfs(true);
 
+  // Préparer le rechargement des alertes quand on reclique "Afficher"
   const boutonAfficher = document.getElementById('loadTrains');
   if (boutonAfficher) {
     boutonAfficher.addEventListener('click', () => {
