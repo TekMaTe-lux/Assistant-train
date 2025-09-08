@@ -1697,8 +1697,8 @@ async function loadCompoData() {
   try {
     const response = await fetch('https://raw.githubusercontent.com/TekMaTe-lux/Assistant-train/main/Compotrains.json');
     const json = await response.json();
-    // Fusionner les deux sous-objets en un seul pour simplifier la recherche
     compoData = {...json.NancyMetzLux, ...json.LuxMetzNancy};
+    console.log("✅ Compositions chargées !");
   } catch (error) {
     console.error("Erreur lors du chargement des compositions :", error);
   }
@@ -2146,12 +2146,30 @@ document.querySelectorAll('#trainInfo th[data-train-number]').forEach(th => {
   
         $('#refreshContainer').show();
 
-$('#refreshButton').off('click').on('click', function () {
-  $('#loadTrains').click();
+$('#refreshButton').off('click').on('click', async function () {
+  const btn = this;
+  btn.disabled = true;
+  btn.setAttribute('aria-busy','true');
+
+  try {
+    // 1) on récupère d'abord les NOUVEAUX retards GTFS-RT...
+    await fetchRetardsGtfs(false); // on n'applique pas tout de suite
+
+    // 2) ...puis on reconstruit le tableau (ton flux existant)
+    // La fin de la construction appelle déjà applyRetardsFromGTFS(retardsGTFS)
+    // -> donc le tableau utilisera la version fraîche des retards
+    $('#loadTrains').click();
+  } finally {
+    btn.disabled = false;
+    btn.removeAttribute('aria-busy');
+  }
 });
 
 if (!window.refreshStarted) {
-  setInterval(() => $('#loadTrains').click(), 300000);
+  setInterval(async () => {
+    await fetchRetardsGtfs(false); // recharge le GTFS-RT
+    $('#loadTrains').click();      // reconstruit (et applique automatiquement)
+  }, 300000); // 5 minutes
   window.refreshStarted = true;
 }
 
@@ -2159,12 +2177,6 @@ if (disruptionsHtml.trim() !== '') {
   $('#disruptionsSummary').css('display', 'flex');
 } else {
   $('#disruptionsSummary').hide();
-}
-
-if (retardsGTFS) {
-  applyRetardsFromGTFS(retardsGTFS);
-} else {
-  console.log("Les retards GTFS ne sont pas encore chargés");
 }
 
        if (disruptionsHtml.trim() !== '') {
@@ -2237,6 +2249,19 @@ function applyRetardsFromGTFS(retardsGTFS) {
     });
   }
 }
+   // === GTFS-RT: (re)chargement des retards et application au tableau ===
+async function fetchRetardsGtfs(applyAfter = true) {
+  try {
+    const url = "https://raw.githubusercontent.com/TekMaTe-lux/Assistant-train/main/Assistant-train/retards_nancymetzlux.json";
+    const res = await fetch(url + `?t=${Date.now()}`, { cache: 'no-store' });
+    retardsGTFS = await res.json();
+    console.log("✅ Retards GTFS (re)chargés");
+    if (applyAfter) applyRetardsFromGTFS(retardsGTFS);
+  } catch (err) {
+    console.error("Erreur lors du (re)chargement des retards GTFS-RT :", err);
+  }
+}
+   
    const urlAlertes = 'https://raw.githubusercontent.com/tekmate-lux/Assistant-train/main/Assistant-train/alertes_sncftoutes.json';
 
 const motsCles = ['Luxembourg', 'Metz', 'Thionville'];
@@ -2455,7 +2480,7 @@ function waitForTableAndLoadAlerts() {
 
 // Appel initial au chargement
 window.addEventListener('load', () => {
-  waitForTableAndLoadAlerts();
+  fetchRetardsGtfs(true);
 
   const boutonAfficher = document.getElementById('loadTrains');
   if (boutonAfficher) {
