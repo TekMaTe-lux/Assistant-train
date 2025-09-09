@@ -1800,367 +1800,392 @@ table::before {
 
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/nouislider@15.7.1/dist/nouislider.min.css">
 <script src="https://cdn.jsdelivr.net/npm/nouislider@15.7.1/dist/nouislider.min.js"></script>
- <script>
-/* ===== Sélecteur inline basé sur SelectionstatiqueV5 ===== */
+<script>
+/* =========================================================
+   SÉLECTEUR INLINE → REMPLIT #trainNumbers + #trainDate
+   et déclenche #loadTrains (pas de popup)
+   ========================================================= */
 
-// --- Variables globales ---
-let trains = [];         // Liste de trains (construite via GTFS)
-let calendarDates = [];  // calendar_dates (exceptions)
-const selectionTrains = new Set();
+(function() {
+  // --- Éléments de l’UI inline ---
+  const gareDepartEl = document.getElementById("gareDepart");
+  const gareArriveeEl = document.getElementById("gareArrivee");
+  const dateTrainEl  = document.getElementById("dateTrain");
+  const btnRech      = document.getElementById("btnRechercher");
+  const btnValider   = document.getElementById("btnValiderSelection");
+  const resultsEl    = document.getElementById("resultatsTrains");
+  const selListEl    = document.getElementById("trainsSelectionnes");
+  const heureText    = document.getElementById("heure-selection");
+  const slider       = document.getElementById("slider");
 
-// Liste des gares (codes = suffixes des stop_id)
-const garesParLigne = [
-  { code: "82001000", nom: "Luxembourg", principal: true },
-  { code: "82002501", nom: "Howald", principal: false },
-  { code: "82006030", nom: "Bettembourg", principal: true },
-  { code: "87191163", nom: "Hettange-Grande", principal: false },
-  { code: "87191007", nom: "Thionville", principal: true },
-  { code: "87191130", nom: "Uckange", principal: false },
-  { code: "87191114", nom: "Hagondange", principal: false },
-  { code: "87191098", nom: "Walygator parc", principal: false },
-  { code: "87191106", nom: "Maizières-lès-Metz", principal: false },
-  { code: "87192088", nom: "Woippy", principal: false },
-  { code: "87192070", nom: "Metz Nord", principal: false },
-  { code: "87192039", nom: "Metz", principal: true },
-  { code: "87192401", nom: "Ars-sur-Moselle", principal: false },
-  { code: "87192427", nom: "Novéant-sur-Moselle", principal: false },
-  { code: "87192468", nom: "Pagny-sur-Moselle", principal: false },
-  { code: "87192476", nom: "Vandières", principal: false },
-  { code: "87141820", nom: "Pont-à-Mousson", principal: false },
-  { code: "87141812", nom: "Dieulouard", principal: false },
-  { code: "87141804", nom: "Belleville", principal: false },
-  { code: "87141796", nom: "Marbache", principal: false },
-  { code: "87141788", nom: "Pompey", principal: false },
-  { code: "87141077", nom: "Frouard", principal: false },
-  { code: "87141002", nom: "Nancy", principal: true }
-];
-
-// Raccourcis DOM
-const gareDepartEl = document.getElementById("gareDepart");
-const gareArriveeEl = document.getElementById("gareArrivee");
-const dateTrainEl = document.getElementById("dateTrain");
-const btnRechercher = document.getElementById("btnRechercher");
-const heureText = document.getElementById("heure-selection");
-const slider = document.getElementById("slider");
-const resultatsEl = document.getElementById("resultatsTrains");
-const trainsSelectionnesEl = document.getElementById("trainsSelectionnes");
-
-// --- Parsing CSV GTFS (simple) ---
-async function chargerCsvGTFS(url) {
-  const response = await fetch(url);
-  if (!response.ok) throw new Error(`Erreur chargement ${url} : ${response.statusText}`);
-  const texte = await response.text();
-  return parseCsvGTFS(texte);
-}
-function parseCsvGTFS(csvText) {
-  const lignes = csvText.trim().split("\n");
-  const entetes = lignes.shift().split(",");
-  return lignes.map(ligne => {
-    const valeurs = ligne.split(",");
-    const obj = {};
-    entetes.forEach((key, i) => obj[key] = valeurs[i] || "");
-    return obj;
-  });
-}
-
-// --- Sélects gares ---
-function trierGaresPourSelect(gares) {
-  const principales = gares.filter(g => g.principal).sort((a,b) => a.nom.localeCompare(b.nom));
-  const autres = gares.filter(g => !g.principal).sort((a,b) => a.nom.localeCompare(b.nom));
-  return [...principales, ...autres];
-}
-function remplirSelectGares(selectEl, options = [], exclureCode = "") {
-  const ancienneValeur = selectEl.value;
-  selectEl.innerHTML = `<option value="">-- Choisir --</option>`;
-  options.forEach(({ code, nom, principal }) => {
-    if (code === exclureCode) return;
-    const opt = document.createElement("option");
-    opt.value = code;
-    opt.textContent = nom;
-    if (principal) opt.classList.add("principal");
-    selectEl.appendChild(opt);
-  });
-  if (ancienneValeur && ancienneValeur !== exclureCode) {
-    selectEl.value = ancienneValeur;
-  } else {
-    selectEl.value = "";
+  // --- Champs attendus par ton handler existant ---
+  //    (on s’assure qu’ils existent)
+  let inputTrainNumbers = document.getElementById('trainNumbers');
+  if (!inputTrainNumbers) {
+    inputTrainNumbers = document.createElement('input');
+    inputTrainNumbers.type = 'hidden';
+    inputTrainNumbers.id   = 'trainNumbers';
+    document.body.appendChild(inputTrainNumbers);
   }
-}
+  let inputTrainDate = document.getElementById('trainDate');
+  if (!inputTrainDate) {
+    inputTrainDate = document.createElement('input');
+    inputTrainDate.type = 'hidden';
+    inputTrainDate.id   = 'trainDate';
+    document.body.appendChild(inputTrainDate);
+  }
 
-// --- Utilitaires ---
-function extraireCodeStop(stopIdComplet) {
-  const match = stopIdComplet.match(/(\d+)$/);
-  return match ? match[1] : null;
-}
-function formatTime(mins) {
-  const h = String(Math.floor(mins / 60)).padStart(2, "0");
-  const m = String(mins % 60).padStart(2, "0");
-  return `${h}:${m}`;
-}
-function formatHoraire(horaire) {
-  if (!horaire) return "";
-  const parts = horaire.split(":");
-  if (parts.length < 2) return horaire;
-  return `${parts[0].padStart(2, "0")}:${parts[1].padStart(2, "0")}`;
-}
+  // --- Données GTFS (Sélecteur à la carte) ---
+  let trains = [];          // construits depuis GTFS
+  let calendarDates = [];   // exceptions actives
+  const selectionTrains = new Set();
 
-// --- Construire les trains depuis GTFS ---
-function construireTrains(trips, stopTimes, stops) {
-  // stopTimes groupés par trip
-  const stopTimesParTrip = {};
-  stopTimes.forEach(st => {
-    (stopTimesParTrip[st.trip_id] ||= []).push(st);
-  });
-  Object.values(stopTimesParTrip).forEach(arr => arr.sort((a,b)=>parseInt(a.stop_sequence)-parseInt(b.stop_sequence)));
+  // Gares (codes simplifiés, même liste que ta page Sélecteur)
+  const garesParLigne = [
+    { code: "82001000", nom: "Luxembourg", principal: true },
+    { code: "82002501", nom: "Howald", principal: false },
+    { code: "82006030", nom: "Bettembourg", principal: true },
+    { code: "87191163", nom: "Hettange-Grande", principal: false },
+    { code: "87191007", nom: "Thionville", principal: true },
+    { code: "87191130", nom: "Uckange", principal: false },
+    { code: "87191114", nom: "Hagondange", principal: false },
+    { code: "87191098", nom: "Walygator parc", principal: false },
+    { code: "87191106", nom: "Maizières-lès-Metz", principal: false },
+    { code: "87192088", nom: "Woippy", principal: false },
+    { code: "87192070", nom: "Metz Nord", principal: false },
+    { code: "87192039", nom: "Metz", principal: true },
+    { code: "87192401", nom: "Ars-sur-Moselle", principal: false },
+    { code: "87192427", nom: "Novéant-sur-Moselle", principal: false },
+    { code: "87192468", nom: "Pagny-sur-Moselle", principal: false },
+    { code: "87192476", nom: "Vandières", principal: false },
+    { code: "87141820", nom: "Pont-à-Mousson", principal: false },
+    { code: "87141812", nom: "Dieulouard", principal: false },
+    { code: "87141804", nom: "Belleville", principal: false },
+    { code: "87141796", nom: "Marbache", principal: false },
+    { code: "87141788", nom: "Pompey", principal: false },
+    { code: "87141077", nom: "Frouard", principal: false },
+    { code: "87141002", nom: "Nancy", principal: true }
+  ];
 
-  return trips.map(trip => {
-    const seq = stopTimesParTrip[trip.trip_id];
-    if (!seq) return null;
-    const stopsCodes = seq.map(s => extraireCodeStop(s.stop_id)).filter(Boolean);
-    const horaires = {};
-    seq.forEach(s => {
-      const code = extraireCodeStop(s.stop_id);
-      // on prend departure_time si dispo sinon arrival_time
-      const hhmm = (s.departure_time || s.arrival_time || '').slice(0,5);
-      if (code && hhmm) horaires[code] = hhmm;
+  // -------- utilitaires GTFS (copiés de ta page Sélecteur) --------
+  function extraireCodeStop(stopIdComplet) {
+    const match = stopIdComplet.match(/(\d+)$/);
+    return match ? match[1] : null;
+  }
+  async function chargerCsvGTFS(url) {
+    const r = await fetch(url);
+    if (!r.ok) throw new Error(`Erreur chargement ${url} : ${r.statusText}`);
+    const txt = await r.text();
+    return parseCsvGTFS(txt);
+  }
+  function parseCsvGTFS(csvText) {
+    const lignes = csvText.trim().split("\n");
+    const entetes = lignes.shift().split(",");
+    return lignes.map(ligne => {
+      const vals = ligne.split(",");
+      const o = {};
+      entetes.forEach((k, i) => o[k] = vals[i] || "");
+      return o;
     });
-    return {
-      num: trip.trip_headsign || trip.trip_id,
-      service_id: trip.service_id,
-      trip_id: trip.trip_id,
-      direction_id: trip.direction_id,
-      stops: stopsCodes,
-      horaires
-    };
-  }).filter(Boolean);
-}
-
-// --- Service actif selon calendar_dates ---
-function estServiceActif(service_id, dateStr) {
-  const d = dateStr.replace(/-/g, "");
-  const exceptions = calendarDates.filter(e => e.service_id === service_id && e.date === d && e.exception_type === "1");
-  return exceptions.length > 0;
-}
-
-// --- Affichage des résultats (chips) ---
-function afficherResultats(liste) {
-  resultatsEl.innerHTML = "";
-  if (!liste.length) {
-    resultatsEl.innerHTML = '<div style="opacity:.8">Aucune bétaillère pour ces critères.</div>';
-    return;
   }
-  // tri par heure de départ à la gare de départ
-  const dep = gareDepartEl.value;
-  const toMin = h => {
-    const [hh,mm] = h.split(":").map(Number);
-    return hh*60 + mm;
-  };
-  liste.sort((a,b)=>toMin(a.horaires[dep]) - toMin(b.horaires[dep]));
-
-  liste.forEach(train => {
-    const chip = document.createElement("button");
-    chip.type = "button";
-    chip.className = "cp-chip";
-    chip.textContent = `#${train.num} • ${formatHoraire(train.horaires[dep])}`;
-    if (selectionTrains.has(train.num)) chip.classList.add("selected");
-    chip.addEventListener("click", () => {
-      if (selectionTrains.has(train.num)) {
-        selectionTrains.delete(train.num);
-        chip.classList.remove("selected");
-      } else {
-        selectionTrains.add(train.num);
-        chip.classList.add("selected");
-      }
-      afficherSelection();
+  function trierGaresPourSelect(gares) {
+    const p = gares.filter(g => g.principal).sort((a,b)=>a.nom.localeCompare(b.nom));
+    const a = gares.filter(g => !g.principal).sort((a,b)=>a.nom.localeCompare(b.nom));
+    return [...p, ...a];
+  }
+  function remplirSelectGares(selectEl, options = [], exclureCode = "") {
+    const valOld = selectEl.value;
+    selectEl.innerHTML = `<option value="">-- Choisir --</option>`;
+    options.forEach(({ code, nom, principal }) => {
+      if (code === exclureCode) return;
+      const opt = document.createElement("option");
+      opt.value = code;
+      opt.textContent = nom;
+      if (principal) opt.classList.add("principal");
+      selectEl.appendChild(opt);
     });
-    resultatsEl.appendChild(chip);
-  });
-}
-
-// --- Zone “Votre sélection” ---
-function afficherSelection() {
-  trainsSelectionnesEl.innerHTML = "";
-  if (selectionTrains.size === 0) {
-    trainsSelectionnesEl.innerHTML = "<li>Aucun train sélectionné</li>";
-    return;
+    selectEl.value = (valOld && valOld !== exclureCode) ? valOld : "";
   }
-  const dep = gareDepartEl.value;
-  // tableau {num, heure} pour trier par heure
-  const arr = Array.from(selectionTrains).map(num => {
-    const t = trains.find(x => x.num === num);
-    const h = t ? (t.horaires[dep] || "00:00") : "00:00";
-    return { num, heure: h };
-  }).sort((a,b)=>{
-    const [ah,am] = a.heure.split(":").map(Number);
-    const [bh,bm] = b.heure.split(":").map(Number);
-    return (ah*60+am) - (bh*60+bm);
-  });
-
-  arr.forEach(({num}) => {
-    const li = document.createElement("li");
-    li.textContent = `#${num}`;
-    li.title = "Cliquer pour retirer";
-    li.addEventListener("click", () => {
-      selectionTrains.delete(num);
-      // enlever l’état visuel côté chips
-      document.querySelectorAll('#resultatsTrains .cp-chip').forEach(ch => {
-        if (ch.textContent.startsWith(`#${num} `)) ch.classList.remove('selected');
-      });
-      afficherSelection();
+  function construireTrains(trips, stopTimes, stops) {
+    const stopTimesParTrip = {};
+    stopTimes.forEach(st => {
+      (stopTimesParTrip[st.trip_id] ||= []).push(st);
     });
-    trainsSelectionnesEl.appendChild(li);
-  });
-}
-
-// --- Recherche selon critères (départ/arrivée/date/plage) ---
-function rechercherTrains() {
-  const gareDepart = gareDepartEl.value;
-  const gareArrivee = gareArriveeEl.value;
-  if (!gareDepart || !gareArrivee || !dateTrainEl.value) {
-    resultatsEl.innerHTML = '<div style="opacity:.8">Choisissez départ, arrivée et date.</div>';
-    return;
-  }
-
-  const [minRaw, maxRaw] = slider.noUiSlider.get().map(v=>Math.round(v));
-  const min = minRaw, max = maxRaw;
-  const dateChoisie = dateTrainEl.value;
-
-  const seen = new Set();
-  const res = [];
-
-  trains.forEach(train => {
-    const idxD = train.stops.indexOf(gareDepart);
-    const idxA = train.stops.indexOf(gareArrivee);
-    if (idxD === -1 || idxA === -1) return;
-    if (idxD >= idxA) return;
-    if (!estServiceActif(train.service_id, dateChoisie)) return;
-
-    const hDepart = train.horaires[gareDepart];
-    if (!hDepart) return;
-    const [hH, hM] = hDepart.split(":").map(Number);
-    const minutes = hH * 60 + hM;
-    if (minutes < min || minutes > max) return;
-
-    if (!seen.has(train.num)) {
-      seen.add(train.num);
-      res.push(train);
+    for (const tripId in stopTimesParTrip) {
+      stopTimesParTrip[tripId].sort((a,b)=>parseInt(a.stop_sequence)-parseInt(b.stop_sequence));
     }
-  });
+    return trips.map(trip => {
+      const arr = stopTimesParTrip[trip.trip_id];
+      if (!arr) return null;
+      const stopsCodes = arr.map(s => extraireCodeStop(s.stop_id)).filter(Boolean);
+      const horaires = {};
+      arr.forEach(s => {
+        const code = extraireCodeStop(s.stop_id);
+        if (code) horaires[code] = s.departure_time;
+      });
+      return {
+        num: trip.trip_headsign || trip.trip_id,
+        service_id: trip.service_id,
+        trip_id: trip.trip_id,
+        direction_id: trip.direction_id,
+        stops: stopsCodes,
+        horaires
+      };
+    }).filter(Boolean);
+  }
+  function estServiceActif(service_id, dateStr) {
+    const dateCompare = (dateStr || '').replace(/-/g, "");
+    const exceptions = calendarDates.filter(e => e.service_id === service_id && e.date === dateCompare && e.exception_type === "1");
+    return exceptions.length > 0;
+  }
+  function formatHoraire(h) {
+    if (!h) return "";
+    const p = h.split(":");
+    if (p.length < 2) return h;
+    return `${p[0].padStart(2,"0")}:${p[1].padStart(2,"0")}`;
+  }
 
-  afficherResultats(res);
-}
+  // -------- Slider noUiSlider --------
+  function formatTime(mins) {
+    const h = String(Math.floor(mins/60)).padStart(2,"0");
+    const m = String(mins%60).padStart(2,"0");
+    return `${h}:${m}`;
+  }
+  function initSlider() {
+    const now = new Date();
+    const currentMinutes = now.getHours()*60 + now.getMinutes();
+    const endMinutes = Math.min(currentMinutes + 120, 1439);
 
-// --- Slider (plage 2h par défaut) ---
-function initSlider() {
-  const now = new Date();
-  const currentMinutes = now.getHours() * 60 + now.getMinutes();
-  const endMinutes = Math.min(currentMinutes + 120, 1439); // 2h
+    if (slider.noUiSlider) slider.noUiSlider.destroy();
+    noUiSlider.create(slider, {
+      start: [currentMinutes, endMinutes],
+      connect: true,
+      step: 5,
+      range: { min: 0, max: 1439 },
+      format: { to: v => Math.round(v), from: v => Number(v) }
+    });
+    slider.noUiSlider.on("update", vals => {
+      const [min, max] = vals.map(v => parseInt(v));
+      heureText.textContent = `${formatTime(min)} → ${formatTime(max)}`;
+    });
 
-  if (slider.noUiSlider) slider.noUiSlider.destroy();
-  noUiSlider.create(slider, {
-    start: [currentMinutes, endMinutes],
-    connect: true,
-    step: 5,
-    range: { min: 0, max: 1439 },
-    format: { to: v => Math.round(v), from: v => Number(v) }
-  });
+    // Presets
+    const btnMatin = document.getElementById('presetMatin');
+    const btnSoir  = document.getElementById('presetSoir');
+    if (btnMatin) btnMatin.onclick = () => slider.noUiSlider.set([6*60, 11*60]);   // 06:00–11:00
+    if (btnSoir)  btnSoir.onclick  = () => slider.noUiSlider.set([16*60, 20*60]);  // 16:00–20:00
+  }
 
-  slider.noUiSlider.on("update", values => {
-    const [min, max] = values.map(v => parseInt(v));
-    heureText.textContent = `${formatTime(min)} → ${formatTime(max)}`;
-  });
-}
+  // -------- Récup GTFS --------
+  async function chargerToutesDonneesGTFS() {
+    try {
+      const [trips, stops, stopTimes, calendar] = await Promise.all([
+        chargerCsvGTFS("https://tekmate-lux.github.io/Assistant-train/data/trips.txt"),
+        chargerCsvGTFS("https://tekmate-lux.github.io/Assistant-train/data/stops.txt"),
+        chargerCsvGTFS("https://tekmate-lux.github.io/Assistant-train/data/stop_times.txt"),
+        chargerCsvGTFS("https://tekmate-lux.github.io/Assistant-train/data/calendar_dates.txt"),
+      ]);
+      calendarDates = calendar;
+      trains = construireTrains(trips, stopTimes, stops);
+      // console.log("GTFS ok, trains=", trains.length);
+    } catch (e) {
+      console.error("Erreur chargement GTFS :", e);
+    }
+  }
 
-// --- Initialisation sélecteurs + date ---
-(function initForm() {
-  const garesTriees = trierGaresPourSelect(garesParLigne);
-  remplirSelectGares(gareDepartEl, garesTriees);
-  gareArriveeEl.innerHTML = `<option value="">-- Choisir --</option>`;
-  gareArriveeEl.disabled = true;
+  // -------- Rechercher & affichage propositions --------
+  function rechercherTrains() {
+    const gareDepart  = gareDepartEl.value;
+    const gareArrivee = gareArriveeEl.value;
+    const [minRaw, maxRaw] = slider.noUiSlider.get();
+    const min = Math.round(minRaw), max = Math.round(maxRaw);
+    const dateChoisie = dateTrainEl.value;
 
-  const today = new Date();
-  const yyyy = today.getFullYear();
-  const mm = String(today.getMonth()+1).padStart(2,"0");
-  const dd = String(today.getDate()).padStart(2,"0");
-  dateTrainEl.value = `${yyyy}-${mm}-${dd}`;
+    const seen = new Set();
+    const res  = [];
 
-  initSlider();
-})();
+    trains.forEach(t => {
+      const iDep = t.stops.indexOf(gareDepart);
+      const iArr = t.stops.indexOf(gareArrivee);
+      if (iDep === -1 || iArr === -1) return;
+      if (iDep >= iArr) return;
+      if (!estServiceActif(t.service_id, dateChoisie)) return;
 
-// --- Écoutes UI ---
-function verifierBouton() {
-  btnRechercher.disabled = !(gareDepartEl.value && gareArriveeEl.value && dateTrainEl.value);
-}
-gareDepartEl.addEventListener("change", () => {
-  const departCode = gareDepartEl.value;
-  const garesTriees = trierGaresPourSelect(garesParLigne);
-  if (!departCode) {
+      const hDepart = t.horaires[gareDepart];
+      if (!hDepart) return;
+      const [hh, mm] = hDepart.split(":").map(Number);
+      const mins = hh*60 + mm;
+      if (mins < min || mins > max) return;
+
+      if (!seen.has(t.num)) {
+        seen.add(t.num);
+        res.push(t);
+      }
+    });
+
+    afficherResultats(res);
+  }
+
+  function afficherResultats(list) {
+    resultsEl.innerHTML = "";
+    if (!list || !list.length) {
+      resultsEl.innerHTML = "<p>Aucun train trouvé pour cette recherche.</p>";
+      return;
+    }
+    // Tri par heure de départ
+    list.sort((a,b) => {
+      const hA = a.horaires[gareDepartEl.value] || "99:99";
+      const hB = b.horaires[gareDepartEl.value] || "99:99";
+      const toMin = h => {
+        const [H,M] = h.split(":").map(Number);
+        return H*60 + M;
+      };
+      return toMin(hA) - toMin(hB);
+    });
+
+    list.forEach(t => {
+      const card = document.createElement('div');
+      card.className = 'carte-train';
+      if (selectionTrains.has(t.num)) card.classList.add('selected');
+      card.innerHTML = `
+        <div class="train-num">Train n°${t.num}</div>
+        <div class="horaires">
+          <span>Départ:</span> ${formatHoraire(t.horaires[gareDepartEl.value])}<br/>
+          <span>Arrivée:</span> ${formatHoraire(t.horaires[gareArriveeEl.value])}
+        </div>
+      `;
+      card.addEventListener('click', () => {
+        if (selectionTrains.has(t.num)) {
+          selectionTrains.delete(t.num);
+          card.classList.remove('selected');
+        } else {
+          selectionTrains.add(t.num);
+          card.classList.add('selected');
+        }
+        afficherSelection();
+      });
+      resultsEl.appendChild(card);
+    });
+  }
+
+  function afficherSelection() {
+    selListEl.innerHTML = "";
+    if (!selectionTrains.size) {
+      selListEl.innerHTML = "<li>Aucun train sélectionné</li>";
+      return;
+    }
+    // Trie par heure de départ
+    const arr = Array.from(selectionTrains).map(num => {
+      const t = trains.find(x => x.num === num);
+      const h = t ? (t.horaires[gareDepartEl.value] || "00:00") : "00:00";
+      return { num, h };
+    }).sort((a,b) => {
+      const [hA,mA]=a.h.split(":").map(Number);
+      const [hB,mB]=b.h.split(":").map(Number);
+      return (hA*60+mA)-(hB*60+mB);
+    });
+
+    arr.forEach(({num}) => {
+      const li = document.createElement('li');
+      li.className = 'carte-train selected';
+      li.textContent = `Train n°${num}`;
+      li.style.cursor = 'pointer';
+      li.title = 'Cliquer pour retirer';
+      li.onclick = () => {
+        selectionTrains.delete(num);
+        // retire la surbrillance dans les cartes
+        resultsEl.querySelectorAll('.carte-train').forEach(c => {
+          if (c.querySelector('.train-num')?.textContent === `Train n°${num}`) {
+            c.classList.remove('selected');
+          }
+        });
+        afficherSelection();
+      };
+      selListEl.appendChild(li);
+    });
+  }
+
+  // -------- Validation = alimente les champs attendus et lance le tableau --------
+  function deduireSensEtCocherToggle() {
+    // Si ton handler utilise encore #directionToggle, on le positionne automatiquement
+    const franceSet = new Set(["87191163","87191007","87191130","87191114","87191098","87191106","87192088","87192070","87192039","87192401","87192427","87192468","87192476","87141820","87141812","87141804","87141796","87141788","87141077","87141002"]);
+    const luxSet    = new Set(["82001000","82002501","82006030"]);
+    const dep = gareDepartEl.value, arr = gareArriveeEl.value;
+    const toggle = document.getElementById('directionToggle');
+    if (!toggle) return; // si tu l’as supprimé, pas grave
+    // checked = "France → Luxembourg" dans ton UI
+    toggle.checked = (franceSet.has(dep) && luxSet.has(arr));
+    // sinon (Lux -> France) => unchecked
+  }
+
+  function validerSelectionEtAfficher() {
+    const nums = Array.from(selectionTrains);
+    if (!nums.length) {
+      alert('Veuillez sélectionner au moins un train.');
+      return;
+    }
+    if (!dateTrainEl.value) {
+      alert('Veuillez choisir une date.');
+      return;
+    }
+
+    // Alimente les champs attendus par ton ancien handler :
+    inputTrainNumbers.value = nums.join(',');
+    inputTrainDate.value    = dateTrainEl.value;
+
+    // Déduis le sens si ton code l’utilise encore
+    deduireSensEtCocherToggle();
+
+    // Clique "Afficher"
+    const btn = document.getElementById('loadTrains');
+    if (btn) btn.click();
+  }
+
+  // -------- Initialisation UI --------
+  (function init() {
+    // Gares
+    const garesTriees = trierGaresPourSelect(garesParLigne);
+    remplirSelectGares(gareDepartEl, garesTriees);
+    remplirSelectGares(gareArriveeEl, garesTriees);
     gareArriveeEl.disabled = true;
-    gareArriveeEl.innerHTML = `<option value="">-- Choisir --</option>`;
-  } else {
-    gareArriveeEl.disabled = false;
-    remplirSelectGares(gareArriveeEl, garesTriees, departCode);
-  }
-  verifierBouton();
-});
-gareArriveeEl.addEventListener("change", verifierBouton);
-dateTrainEl.addEventListener("change", verifierBouton);
 
-btnRechercher.addEventListener("click", rechercherTrains);
-document.getElementById('presetMatin').addEventListener('click', () => {
-  const start = 6*60, end = 11*60;
-  slider.noUiSlider.set([start, end]);
-  rechercherTrains();
-});
-document.getElementById('presetSoir').addEventListener('click', () => {
-  const start = 16*60, end = 20*60;
-  slider.noUiSlider.set([start, end]);
-  rechercherTrains();
-});
+    gareDepartEl.addEventListener('change', () => {
+      const dep = gareDepartEl.value;
+      gareArriveeEl.disabled = !dep;
+      remplirSelectGares(gareArriveeEl, garesTriees, dep);
+      btnRech.disabled = !(gareDepartEl.value && gareArriveeEl.value && dateTrainEl.value);
+    });
+    gareArriveeEl.addEventListener('change', () => {
+      btnRech.disabled = !(gareDepartEl.value && gareArriveeEl.value && dateTrainEl.value);
+    });
 
-// --- Chargement GTFS (comme dans SelectionstatiqueV5) ---
-async function chargerToutesDonneesGTFS() {
-  try {
-    const [trips, stops, stopTimes, calendar] = await Promise.all([
-      chargerCsvGTFS("https://tekmate-lux.github.io/Assistant-train/data/trips.txt"),
-      chargerCsvGTFS("https://tekmate-lux.github.io/Assistant-train/data/stops.txt"),
-      chargerCsvGTFS("https://tekmate-lux.github.io/Assistant-train/data/stop_times.txt"),
-      chargerCsvGTFS("https://tekmate-lux.github.io/Assistant-train/data/calendar_dates.txt"),
-    ]);
-    calendarDates = calendar;
-    trains = construireTrains(trips, stopTimes, stops);
-    console.log("✅ GTFS chargé — trains:", trains.length);
-  } catch (err) {
-    console.error("Erreur chargement GTFS :", err);
-    resultatsEl.innerHTML = "<div>Erreur lors du chargement des données.</div>";
-  }
-}
-chargerToutesDonneesGTFS();
+    // Date : valeur par défaut = aujourd’hui
+    if (!dateTrainEl.value) {
+      const t = new Date();
+      const yyyy = t.getFullYear();
+      const mm   = String(t.getMonth()+1).padStart(2,"0");
+      const dd   = String(t.getDate()).padStart(2,"0");
+      dateTrainEl.value = `${yyyy}-${mm}-${dd}`;
+    }
+    dateTrainEl.addEventListener('change', () => {
+      // on garde le bouton synchro
+      btnRech.disabled = !(gareDepartEl.value && gareArriveeEl.value && dateTrainEl.value);
+    });
 
-// --- Valider : injecte les n° et déclenche ton tableau principal ---
-document.getElementById('btnValiderSelection').addEventListener('click', () => {
-  if (selectionTrains.size === 0) {
-    alert('Veuillez sélectionner au moins une bétaillère.');
-    return;
-  }
-  const numeros = Array.from(selectionTrains);
-let input = document.getElementById('trainNumbers');
-if (!input) {
-  input = document.createElement('input');
-  input.type = 'hidden';
-  input.id = 'trainNumbers';
-  document.body.appendChild(input);
-}
-input.value = numeros.join(',');
+    // Slider
+    initSlider();
 
-const btn = document.getElementById('loadTrains');
-if (btn) {
-  btn.click();
-} else {
-  console.error('#loadTrains introuvable : impossible de générer le tableau.');
-}
-});
+    // Actions
+    btnRech.addEventListener('click', rechercherTrains);
+    btnValider.addEventListener('click', validerSelectionEtAfficher);
+
+    // Charge les données GTFS pour alimenter les propositions
+    chargerToutesDonneesGTFS();
+  })();
+
+})();
 </script>
+
 
     <script>  
   const container = document.getElementById('disruptionsSummary');
