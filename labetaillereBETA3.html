@@ -2034,23 +2034,46 @@ function parseCSV(text){
   });
 }
 async function ensureGTFSLoaded(){
-  if(GTFS.stops && GTFS.stopTimes && GTFS.trips && GTFS.stopNameToId) return;
-  const [stopsTxt, stopTimesTxt, tripsTxt] = await Promise.all([
+  if (GTFS.stops && GTFS.stopTimes && GTFS.trips && GTFS.stopNameToId && GTFS.tripById && GTFS.allowedByDate) return;
+
+  const [stopsTxt, stopTimesTxt, tripsTxt, calDatesTxt] = await Promise.all([
     fetchText('https://tekmate-lux.github.io/Assistant-train/data/stops.txt'),
     fetchText('https://tekmate-lux.github.io/Assistant-train/data/stop_times.txt'),
     fetchText('https://tekmate-lux.github.io/Assistant-train/data/trips.txt'),
+    fetchText('https://tekmate-lux.github.io/Assistant-train/data/calendar_dates.txt'),
   ]);
+
   const stops = parseCSV(stopsTxt);
-const stopTimes = parseCSV(stopTimesTxt);
-const trips = parseCSV(tripsTxt);
+  const stopTimes = parseCSV(stopTimesTxt);
+  const trips = parseCSV(tripsTxt);
+  const calendarDates = parseCSV(calDatesTxt);
 
-const stopNameToId = new Map();
-stops.forEach(s => { if(s.stop_name && s.stop_id) stopNameToId.set(s.stop_name, s.stop_id); });
+  // Index noms -> stop_id
+  const stopNameToId = new Map();
+  stops.forEach(s => { if (s.stop_name && s.stop_id) stopNameToId.set(s.stop_name, s.stop_id); });
 
-const tripById = new Map();
-trips.forEach(t => { if(t.trip_id) tripById.set(t.trip_id, t); });
+  // Index trips
+  const tripById = new Map();
+  trips.forEach(t => { if (t.trip_id) tripById.set(t.trip_id, t); });
 
-GTFS = { stops, stopTimes, trips, stopNameToId, tripById };
+  // Index des services actifs par date (YYYYMMDD) sur exception_type=1
+  // Si ton jeu GTFS n’a pas calendar.txt, on considèrera que SEULEMENT ces services sont actifs ce jour-là.
+  const allowedByDate = new Map(); // ymd -> Set(service_id)
+  calendarDates.forEach(row => {
+    // attend : service_id, date (YYYYMMDD), exception_type (1=ajout, 2=suppression)
+    const ymd = row.date;
+    const sid = row.service_id;
+    const exc = Number(row.exception_type);
+    if (!ymd || !sid) return;
+    if (exc === 1) {
+      if (!allowedByDate.has(ymd)) allowedByDate.set(ymd, new Set());
+      allowedByDate.get(ymd).add(sid);
+    }
+    // NOTE : si tu veux gérer exception_type=2 en présence d’un calendar.txt,
+    // il faut fusionner avec ce dernier. Ici, on se base uniquement sur calendar_dates.
+  });
+
+  GTFS = { stops, stopTimes, trips, calendarDates, stopNameToId, tripById, allowedByDate };
 }
 
 /* ---------- PROPOSER : liste des trains entre De/À dans la plage ---------- */
@@ -2087,6 +2110,15 @@ async function proposerTrainsOD(){
     return;
   }
 
+  // --- Filtre calendrier (par date choisie) ---
+const dateStr = $('#trainDate').val();
+const ymd = dateInputToYMD(dateStr);
+let allowed = null; // Set(service_id) ou null si pas de données
+
+if (ymd && GTFS.allowedByDate && GTFS.allowedByDate.size > 0) {
+  allowed = GTFS.allowedByDate.get(ymd) || new Set(); // services explicitement actifs ce jour-là
+}
+
   // Index stop_times par trip, tri par stop_sequence
   const byTrip = new Map();
   for(const st of GTFS.stopTimes){
@@ -2099,6 +2131,11 @@ async function proposerTrainsOD(){
 
   const found = [];
   byTrip.forEach((sts, trip_id)=>{
+    const trow = GTFS.tripById ? GTFS.tripById.get(trip_id) : null;
+if (allowed) {
+  const sid = trow ? trow.service_id : null;
+  if (!sid || !allowed.has(sid)) return; // pas actif ce jour : on saute
+}
     let iS=-1, iE=-1, dep=null, arr=null;
     for(let i=0;i<sts.length;i++){
       if(sts[i].stop_id===sid){ iS=i; dep=sts[i].departure_time; }
@@ -2118,7 +2155,7 @@ if (trow && trow.trip_short_name) {
   numero = extractTrainNumber(trow.trip_short_name);
 }
 if (!numero) {
-  numero = extractTrainNumber(trip_id); // fallback sur l'ID (ex: OCESN88705F...)
+  numero = extractTrainNumber(trip_id); // fallback
 }
 
 // Dédoublonne (plusieurs variantes du même train/tranche)
@@ -2179,6 +2216,12 @@ function extractTrainNumber(str){
   const m = String(str||'').match(/(\d{5,6})/);
   return m ? m[1] : null;
 }
+  function dateInputToYMD(str){ // "YYYY-MM-DD" -> "YYYYMMDD"
+  if(!str || !/^\d{4}-\d{2}-\d{2}$/.test(str)) return null;
+  const [y,m,d] = str.split('-');
+  return `${y}${m}${d}`;
+}
+  
 /* ---------- DOC READY ---------- */
 $(function () {
   // Date par défaut
