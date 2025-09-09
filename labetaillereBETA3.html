@@ -2001,6 +2001,159 @@ function getGareURL(nomGare) {
 /* ---------- OUTILS TEMPS ---------- */
 const ft = t => t ? t.slice(0, 2) + ':' + t.slice(2, 4) : '-';
 const dl = (b, a) => (parseInt(a.slice(0, 2)) * 60 + parseInt(a.slice(2, 4))) - (parseInt(b.slice(0, 2)) * 60 + parseInt(b.slice(2, 4)));
+    /* ---------- HELPERS POUR PROPOSER ---------- */
+// HH:MM -> minutes
+function hhmmInputToMin(hhmm){
+  if(!hhmm || !/^\d{2}:\d{2}$/.test(hhmm)) return null;
+  const [h,m] = hhmm.split(':').map(Number);
+  return h*60+m;
+}
+
+// --- GTFS minimal ---
+let GTFS = { stops:null, stopTimes:null, trips:null, stopNameToId:null };
+
+async function fetchText(url){
+  const r = await fetch(url);
+  if(!r.ok) throw new Error('HTTP '+r.status+' on '+url);
+  return await r.text();
+}
+function parseCSV(text){
+  const lines = text.trim().split(/\r?\n/);
+  const headers = lines.shift().split(',');
+  return lines.map(l=>{
+    const cols=[]; let cur='', inQ=false;
+    for(let i=0;i<l.length;i++){
+      const c=l[i];
+      if(c==='"'){ if(inQ && l[i+1]==='"'){cur+='"'; i++;} else inQ=!inQ; }
+      else if(c===',' && !inQ){ cols.push(cur); cur=''; }
+      else cur+=c;
+    }
+    cols.push(cur);
+    const row={}; headers.forEach((h,idx)=>row[h]=cols[idx]??'');
+    return row;
+  });
+}
+async function ensureGTFSLoaded(){
+  if(GTFS.stops && GTFS.stopTimes && GTFS.trips && GTFS.stopNameToId) return;
+  const [stopsTxt, stopTimesTxt, tripsTxt] = await Promise.all([
+    fetchText('https://tekmate-lux.github.io/Assistant-train/data/stops.txt'),
+    fetchText('https://tekmate-lux.github.io/Assistant-train/data/stop_times.txt'),
+    fetchText('https://tekmate-lux.github.io/Assistant-train/data/trips.txt'),
+  ]);
+  const stops = parseCSV(stopsTxt);
+  const stopTimes = parseCSV(stopTimesTxt);
+  const trips = parseCSV(tripsTxt);
+  const stopNameToId = new Map();
+  stops.forEach(s => { if(s.stop_name && s.stop_id) stopNameToId.set(s.stop_name, s.stop_id); });
+  GTFS = { stops, stopTimes, trips, stopNameToId };
+}
+
+/* ---------- PROPOSER : liste des trains entre De/À dans la plage ---------- */
+async function proposerTrainsOD(){
+  const cont = document.getElementById('propositions');
+  if(cont) cont.innerHTML = 'Recherche…';
+
+  const startName = $('#startStation').val() || '';
+  const endName   = $('#endStation').val() || '';
+  const tFromMin  = hhmmInputToMin($('#timeFrom').val());
+  const tToMin    = hhmmInputToMin($('#timeTo').val());
+
+  if(!startName || !endName){
+    if(cont) cont.innerHTML = '<p class="note">Choisis <strong>De</strong> et <strong>À</strong>.</p>';
+    return;
+  }
+  if(tFromMin == null || tToMin == null){
+    if(cont) cont.innerHTML = '<p class="note">Plage horaire invalide.</p>';
+    return;
+  }
+
+  try{
+    await ensureGTFSLoaded();
+  }catch(e){
+    if(cont) cont.innerHTML = '<p class="note">Erreur de chargement GTFS.</p>';
+    console.error(e);
+    return;
+  }
+
+  const sid = GTFS.stopNameToId.get(startName);
+  const eid = GTFS.stopNameToId.get(endName);
+  if(!sid || !eid){
+    if(cont) cont.innerHTML = '<p class="note">Gares introuvables dans les GTFS.</p>';
+    return;
+  }
+
+  // Index stop_times par trip, tri par stop_sequence
+  const byTrip = new Map();
+  for(const st of GTFS.stopTimes){
+    if(!byTrip.has(st.trip_id)) byTrip.set(st.trip_id, []);
+    byTrip.get(st.trip_id).push(st);
+  }
+  for(const arr of byTrip.values()){
+    arr.sort((a,b)=>Number(a.stop_sequence)-Number(b.stop_sequence));
+  }
+
+  const found = [];
+  byTrip.forEach((sts, trip_id)=>{
+    let iS=-1, iE=-1, dep=null, arr=null;
+    for(let i=0;i<sts.length;i++){
+      if(sts[i].stop_id===sid){ iS=i; dep=sts[i].departure_time; }
+      if(sts[i].stop_id===eid){ iE=i; arr=sts[i].arrival_time; }
+    }
+    if(iS===-1 || iE===-1 || iE<=iS) return;
+    if(!dep) return;
+
+    const [H,M] = dep.slice(0,5).split(':').map(Number);
+    const depMin = H*60+M;
+    if(depMin < tFromMin || depMin > tToMin) return;
+
+    const m = (trip_id||'').match(/\b(\d{5,6})\b/);
+    const numero = m ? m[1] : null;
+    found.push({ trip_id, numero, dep:dep.slice(0,5), arr: arr ? arr.slice(0,5) : null });
+  });
+
+  found.sort((a,b)=>a.dep.localeCompare(b.dep));
+
+  if(!cont) return;
+  if(!found.length){
+    cont.innerHTML = `<p>Aucun train ${startName} → ${endName} entre ${$('#timeFrom').val()} et ${$('#timeTo').val()}.</p>`;
+    return;
+  }
+
+  cont.innerHTML = '<ul class="list-propositions"></ul>';
+  const ul = cont.querySelector('ul');
+
+  found.forEach(f=>{
+    const li = document.createElement('li');
+    const label = f.numero ? `Train ${f.numero}` : `Trip ${f.trip_id}`;
+    const note  = `(${startName} ${f.dep} → ${endName} ${f.arr||'?'})`;
+
+    const btn = document.createElement('button');
+    btn.className = 'mini-btn';
+    btn.textContent = f.numero ? 'Ajouter' : 'Copier Trip';
+    btn.addEventListener('click', ()=>{
+      if(f.numero){
+        const cur = $('#trainNumbers').val().split(',').map(s=>s.trim()).filter(Boolean);
+        if(!cur.includes(f.numero)) cur.push(f.numero);
+        $('#trainNumbers').val(cur.join(','));
+      }else{
+        navigator.clipboard?.writeText(f.trip_id);
+      }
+    });
+
+    li.innerHTML = `<span class="line">${label} — ${note}</span> `;
+    li.appendChild(btn);
+
+    if(f.numero){
+      const dateCirculation = $('#trainDate').val();
+      const a = document.createElement('a');
+      a.href = `https://www.sncf-voyageurs.com/fr/voyagez-avec-nous/horaires-et-itineraires/recherche-de-train/detail-train/?numeroCirculation=${f.numero}&dateCirculation=${dateCirculation}`;
+      a.target = '_blank'; a.rel='noopener'; a.textContent='Voir'; a.className='mini-link';
+      li.appendChild(document.createTextNode(' '));
+      li.appendChild(a);
+    }
+    ul.appendChild(li);
+  });
+}
 
 /* ---------- DOC READY ---------- */
 $(function () {
@@ -2010,6 +2163,9 @@ $(function () {
   // Menus
   buildGareDropdown();
   buildStationSelects();
+
+  // Bouton "Proposer" (OD + plage horaire)
+$('#btnProposer').off('click').on('click', proposerTrainsOD);
 
   // Label sens dynamique (+ recharge des menus De/À)
   const updateDirectionLabel = () => {
