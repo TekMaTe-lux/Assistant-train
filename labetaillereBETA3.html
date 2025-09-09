@@ -2041,11 +2041,16 @@ async function ensureGTFSLoaded(){
     fetchText('https://tekmate-lux.github.io/Assistant-train/data/trips.txt'),
   ]);
   const stops = parseCSV(stopsTxt);
-  const stopTimes = parseCSV(stopTimesTxt);
-  const trips = parseCSV(tripsTxt);
-  const stopNameToId = new Map();
-  stops.forEach(s => { if(s.stop_name && s.stop_id) stopNameToId.set(s.stop_name, s.stop_id); });
-  GTFS = { stops, stopTimes, trips, stopNameToId };
+const stopTimes = parseCSV(stopTimesTxt);
+const trips = parseCSV(tripsTxt);
+
+const stopNameToId = new Map();
+stops.forEach(s => { if(s.stop_name && s.stop_id) stopNameToId.set(s.stop_name, s.stop_id); });
+
+const tripById = new Map();
+trips.forEach(t => { if(t.trip_id) tripById.set(t.trip_id, t); });
+
+GTFS = { stops, stopTimes, trips, stopNameToId, tripById };
 }
 
 /* ---------- PROPOSER : liste des trains entre De/À dans la plage ---------- */
@@ -2106,8 +2111,22 @@ async function proposerTrainsOD(){
     const depMin = H*60+M;
     if(depMin < tFromMin || depMin > tToMin) return;
 
-    const m = (trip_id||'').match(/\b(\d{5,6})\b/);
-    const numero = m ? m[1] : null;
+    // ... juste avant found.push(...)
+const trow = GTFS.tripById ? GTFS.tripById.get(trip_id) : null;
+let numero = null;
+if (trow && trow.trip_short_name) {
+  numero = extractTrainNumber(trow.trip_short_name);
+}
+if (!numero) {
+  numero = extractTrainNumber(trip_id); // fallback sur l'ID (ex: OCESN88705F...)
+}
+
+// Dédoublonne (plusieurs variantes du même train/tranche)
+const key = `${numero || trip_id}|${dep.slice(0,5)}|${arr ? arr.slice(0,5) : ''}`;
+if (!proposerTrainsOD._seen) proposerTrainsOD._seen = new Set();
+if (proposerTrainsOD._seen.has(key)) return;
+proposerTrainsOD._seen.add(key);
+
     found.push({ trip_id, numero, dep:dep.slice(0,5), arr: arr ? arr.slice(0,5) : null });
   });
 
@@ -2154,7 +2173,12 @@ async function proposerTrainsOD(){
     ul.appendChild(li);
   });
 }
-
+    
+// Extrait un numéro de train (5-6 chiffres) d'une chaîne (trip_short_name, trip_id…)
+function extractTrainNumber(str){
+  const m = String(str||'').match(/(\d{5,6})/);
+  return m ? m[1] : null;
+}
 /* ---------- DOC READY ---------- */
 $(function () {
   // Date par défaut
