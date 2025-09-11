@@ -1642,6 +1642,30 @@ table::before {
   background:transparent; border:none; color:#cfffff;
 }
 #selectionChips .chip-tag .close:hover{ filter:brightness(1.2); }
+
+    /* Grille responsive pour la sélection (mêmes ruptures que les cartes) */
+.selection-chips{
+  display:grid; gap:12px;
+  grid-template-columns:repeat(4, minmax(0,1fr));
+}
+@media (max-width:1024px){ .selection-chips{ grid-template-columns:repeat(3,minmax(0,1fr)); } }
+@media (max-width:700px){  .selection-chips{ grid-template-columns:repeat(2,minmax(0,1fr)); } }
+
+.selection-chips .chip-tag{
+  display:flex; align-items:center; justify-content:space-between; gap:8px;
+  padding:10px; border:1px solid #00ffff55; border-radius:14px;
+  background:linear-gradient(180deg,rgba(0,20,30,.4),rgba(0,10,18,.25));
+  color:#eaffff; font-weight:700; letter-spacing:.2px;
+  box-shadow:0 0 0 1px inset #00ffff22;
+}
+
+.selection-chips .chip-tag .close{
+  background:transparent; border:none; cursor:pointer; color:#cfffff;
+  font-size:1.1rem; line-height:1; padding:0 4px;
+}
+
+.add-inline{ display:flex; gap:8px; }
+#trainAdd{ flex:1 1 auto; }
     
 </style>
 </head>
@@ -1729,20 +1753,27 @@ table::before {
 <div class="console-buttons-shortcuts">
   <button id="btnMatin" class="mini-btn">🌅 Pointe du matin</button>
   <button id="btnSoir" class="mini-btn">🌇 Pointe du soir</button>
+  <button id="btnClearSelection" class="mini-btn">🧹 Vider</button>
 </div>
 
-  <!-- Sélection manuelle + bouton Afficher -->
+<!-- Sélection (plus d'input CSV ; chips + ajout manuel) -->
 <div class="filters-row filters-selection">
-  <div class="filter-item" style="flex: 2 1 320px;">
-    <label for="trainNumbers">Sélection (séparés par virgule) :</label>
-    <input type="text" id="trainNumbers" placeholder="ex : 88530,88532,88534" />
-    <!-- Tags (chips) des trains sélectionnés -->
-    <div id="selectionChips" aria-live="polite" style="margin-top:6px;"></div>
+  <div class="filter-item" style="flex: 2 1 420px;">
+    <label>Votre sélection :</label>
+    <div id="selectionChips" class="selection-chips" aria-live="polite"></div>
   </div>
 
-  <div class="filter-item" style="flex: 0 0 auto; display:flex; gap:8px; align-items:flex-end;">
-    <button id="btnClearSelection" class="mini-btn" type="button">Vider</button>
-    <button id="loadTrains" class="primary-btn" type="button">Afficher</button>
+  <div class="filter-item" style="flex: 1 1 260px;">
+    <label for="trainAdd">Ajouter un train :</label>
+    <div class="add-inline">
+      <input type="text" id="trainAdd" placeholder="ex : 88530 ou 88530,88532" />
+      <button id="addTrain" class="mini-btn">Ajouter</button>
+    </div>
+    <small class="hint">Entrée/virgule = ajoute plusieurs.</small>
+  </div>
+
+  <div class="filter-item" style="flex: 0 0 auto;">
+    <button id="loadTrains" class="primary-btn">Afficher</button>
   </div>
 </div>
 
@@ -2446,14 +2477,10 @@ function chipsUpdateCount(){
 }
 
 function updateSelectionUI(){
-  // 1) input CSV propre
-  const input = document.getElementById('trainNumbers');
-  const arr = Array.from(selectedTrains);
-  if (input) input.value = arr.join(',');
-
-  // 2) tags sous l'input
+  // tags sous l'input
   const zone = document.getElementById('selectionChips');
   if (!zone) return;
+  const arr = Array.from(selectedTrains);
   zone.innerHTML = arr.map(num =>
     `<span class="chip-tag" data-num="${num}">#${num}
        <button class="close" title="Retirer ${num}" aria-label="Retirer ${num}">×</button>
@@ -2486,6 +2513,51 @@ function chipsSetSelection(list){
   updateSelectionUI();
 }
 
+  function orientForPreset(kind){
+  // oriente la ligne (affecte mergedStops)
+  if ($('#directionToggle').length){
+    const wantLuxToFr = (kind === 'PM'); // le soir = Lux -> France
+    $('#directionToggle').prop('checked', wantLuxToFr);
+    buildStationSelects(); // recharge les options dans le bon ordre
+  }
+  // si De/À sont vides, on met des valeurs par défaut cohérentes
+  if (!$('#startStation').val() && !$('#endStation').val()){
+    if (kind === 'AM'){ $('#startStation').val('Metz'); $('#endStation').val('Luxembourg'); }
+    else { $('#startStation').val('Luxembourg'); $('#endStation').val('Metz'); }
+  }
+}
+
+   function addFromInput(){
+  const raw = $('#trainAdd').val().trim();
+  if (!raw) return;
+  const parts = raw.split(/[,\s;]+/).map(s=>s.trim()).filter(Boolean);
+  let added = 0;
+  parts.forEach(p=>{
+    if (/^\d{5,6}$/.test(p)){ selectedTrains.add(p); added++; }
+  });
+  $('#trainAdd').val('');
+  if (added){
+    document.querySelectorAll('#propositions .chip').forEach(c=>{
+      c.classList.toggle('is-selected', selectedTrains.has(c.dataset.num));
+    });
+    chipsUpdateCount();
+    updateSelectionUI();
+  }
+}
+ 
+function usePresetEverywhere(list, kind){
+  orientForPreset(kind);
+  // vide puis applique
+  selectedTrains.clear();
+  if (document.querySelector('#propositions .chip')) {
+    chipsSetSelection(list); // reflète visuellement si cartes présentes
+  } else {
+    list.forEach(n => selectedTrains.add(n));
+    updateSelectionUI();
+  }
+}
+  
+
 /* ====================== RENDU DES CARTES ====================== */
 function renderChips(found, startName, endName){
   const host = document.getElementById('propositions');
@@ -2496,7 +2568,6 @@ function renderChips(found, startName, endName){
     return;
   }
 
-  // ⚠️ Panneau épuré : juste l'entête + la grille de cartes (PAS de Matin/Soir, PAS de Vider, PAS d'Afficher)
   host.innerHTML = `
     <div class="chips-panel">
       <div class="chips-header">
@@ -2512,7 +2583,7 @@ function renderChips(found, startName, endName){
       </div>
     </div>`;
 
-  // Clic carte = toggle + MAJ live (selectedTrains + input + tags + compteur)
+  // clic = toggle + MAJ sélection + tags + compteur
   host.querySelectorAll('.chip').forEach(chip=>{
     chip.addEventListener('click', ()=>{
       const num = chip.dataset.num;
@@ -2525,8 +2596,7 @@ function renderChips(found, startName, endName){
     });
   });
 
-  chipsUpdateCount();        // affiche le compteur initial (0)
-  // pas de pré-sélection automatique : on repart propre après chaque recherche
+  chipsUpdateCount();
 }
 
 /* ====================== RECHERCHE (GTFS) ====================== */
@@ -2609,15 +2679,23 @@ async function proposerTrainsOD(){
 
 /* ====================== DOC READY ====================== */
 $(function () {
-  // Date par défaut + menus
+  // date par défaut + menus
   $('#trainDate').val(new Date().toISOString().slice(0,10));
   buildGareDropdown();
   buildStationSelects();
 
-  // Bouton “Proposer” -> lance la recherche et réinitialise la sélection
-  $('#btnProposer').off('click').on('click', proposerTrainsOD);
+  // Proposer (reset sélection à chaque recherche)
+  $('#btnProposer').off('click').on('click', async ()=>{
+    selectedTrains.clear();
+    updateSelectionUI();
+    await proposerTrainsOD(); // appellera renderChips(...)
+  });
 
-  // Bouton “Vider” (extérieur au panneau de cartes)
+  // Raccourcis AM/PM
+  $('#btnMatin').off('click').on('click', ()=> usePresetEverywhere(PRESET_AM, 'AM'));
+  $('#btnSoir').off('click').on('click',  ()=> usePresetEverywhere(PRESET_PM, 'PM'));
+
+  // Vider (extérieur)
   $('#btnClearSelection').off('click').on('click', ()=>{
     selectedTrains.clear();
     updateSelectionUI();
@@ -2625,46 +2703,22 @@ $(function () {
     chipsUpdateCount();
   });
 
-  // Raccourcis Matin/Soir (à l’extérieur) : appliquent partout
-  const usePresetEverywhere = (list) => {
-    selectedTrains.clear();
-    // Si des cartes sont visibles, on reflète visuellement ce qui existe
-    if (document.querySelector('#propositions .chip')) {
-      chipsSetSelection(list);
-    } else {
-      // Sinon on remplit juste l'état/input/tags
-      list.forEach(n => selectedTrains.add(n));
-      updateSelectionUI();
-    }
-  };
-  $('#btnMatin').off('click').on('click', ()=> usePresetEverywhere(PRESET_AM));
-  $('#btnSoir').off('click').on('click',  ()=> usePresetEverywhere(PRESET_PM));
+  // Ajout manuel
+  $('#addTrain').off('click').on('click', addFromInput);
+  $('#trainAdd').off('keydown').on('keydown', (e)=>{ if(e.key==='Enter'){ e.preventDefault(); addFromInput(); } });
 
-  // Saisie manuelle dans l’input => sync état + cartes + tags
-  $('#trainNumbers').off('input').on('input', ()=>{
-    const vals = $('#trainNumbers').val().split(',').map(s=>s.trim()).filter(Boolean);
-    selectedTrains.clear();
-    vals.forEach(v => selectedTrains.add(v));
-    document.querySelectorAll('#propositions .chip').forEach(c=>{
-      c.classList.toggle('is-selected', selectedTrains.has(c.dataset.num));
-    });
-    chipsUpdateCount();
-    updateSelectionUI();
-  });
-
-  // Bouton “Afficher” (le tien, unique)
+  // Afficher → utilise la sélection (plus l'input CSV)
   $('#loadTrains').off('click').on('click', async function () {
-
     await loadCompoData();
 
     const sensInverse = $('#directionToggle').is(':checked');
-    const fixedStops = getStopsForDirection(sensInverse); // ⬅️ remplace fixedStopsSens1/2
+    const fixedStops = getStopsForDirection(sensInverse);
 
     const date = $('#trainDate').val();
-    const numbers = $('#trainNumbers').val().split(',').map(s => s.trim()).filter(Boolean);
+    const numbers = Array.from(selectedTrains);   // ⬅️ ICI : on prend les chips
 
     if (!numbers.length || !date) {
-      $('#trainInfo').html('<p class="deleted">Veuillez indiquer au moins un numéro de train et une date.</p>');
+      $('#trainInfo').html('<p class="deleted">Veuillez sélectionner au moins un train et une date.</p>');
       return;
     }
 
