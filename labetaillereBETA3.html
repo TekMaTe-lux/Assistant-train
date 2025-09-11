@@ -2234,12 +2234,14 @@ function extractTrainNumber(str){
   return m ? m[1] : null;
 }
 
-/* ---------- PROPOSER : liste des trains entre De/À dans la plage ---------- */
 async function proposerTrainsOD(){
   const cont = document.getElementById('propositions');
-  if(cont) cont.innerHTML = 'Recherche…';
+  if (cont) cont.innerHTML = 'Recherche…';
 
-  // IMPORTANT : réinit du set de dédoublonnage à chaque clic
+  // ✅ vide la sélection manuelle à chaque recherche
+  $('#trainNumbers').val('');
+
+  // reset du dédoublonnage
   proposerTrainsOD._seen = new Set();
 
   const startName = $('#startStation').val() || '';
@@ -2247,38 +2249,23 @@ async function proposerTrainsOD(){
   const tFromMin  = hhmmInputToMin($('#timeFrom').val());
   const tToMin    = hhmmInputToMin($('#timeTo').val());
 
-  if(!startName || !endName){
-    if(cont) cont.innerHTML = '<p class="note">Choisis <strong>De</strong> et <strong>À</strong>.</p>';
-    return;
-  }
-  if(tFromMin == null || tToMin == null){
-    if(cont) cont.innerHTML = '<p class="note">Plage horaire invalide.</p>';
-    return;
-  }
+  if(!startName || !endName){ cont.innerHTML = '<div class="chips-panel">Choisis <b>De</b> et <b>À</b>.</div>'; return; }
+  if(tFromMin==null || tToMin==null){ cont.innerHTML = '<div class="chips-panel">Plage horaire invalide.</div>'; return; }
 
-  try{
-    await ensureGTFSLoaded();
-  }catch(e){
-    if(cont) cont.innerHTML = '<p class="note">Erreur de chargement GTFS.</p>';
-    console.error(e);
-    return;
-  }
+  try{ await ensureGTFSLoaded(); }catch(e){ console.error(e); cont.innerHTML='<div class="chips-panel">Erreur GTFS.</div>'; return; }
 
-  const startStopId = GTFS.stopNameToId.get(startName);
-  const endStopId   = GTFS.stopNameToId.get(endName);
-  if(!startStopId || !endStopId){
-    if(cont) cont.innerHTML = '<p class="note">Gares introuvables dans les GTFS.</p>';
-    return;
-  }
+  const sid = GTFS.stopNameToId.get(startName);
+  const eid = GTFS.stopNameToId.get(endName);
+  if(!sid || !eid){ cont.innerHTML = '<div class="chips-panel">Gares introuvables.</div>'; return; }
 
-  // Filtre calendrier pour la date choisie
+  // Calendrier (calendar_dates)
   const ymd = dateInputToYMD($('#trainDate').val());
-  let allowed = null; // Set(service_id) ou null
-  if (ymd && GTFS.allowedByDate && GTFS.allowedByDate.size > 0) {
+  let allowed = null;
+  if (ymd && GTFS.allowedByDate && GTFS.allowedByDate.size>0){
     allowed = GTFS.allowedByDate.get(ymd) || new Set();
   }
 
-  // Index stop_times par trip
+  // stop_times par trip triés
   const byTrip = new Map();
   for(const st of GTFS.stopTimes){
     if(!byTrip.has(st.trip_id)) byTrip.set(st.trip_id, []);
@@ -2290,84 +2277,38 @@ async function proposerTrainsOD(){
 
   const found = [];
   byTrip.forEach((sts, trip_id)=>{
-    const tripRow = GTFS.tripById ? GTFS.tripById.get(trip_id) : null;
+    const trow = GTFS.tripById ? GTFS.tripById.get(trip_id) : null;
 
-    // calendrier : ne garder que les services actifs ce jour
-    if (allowed) {
-      const serviceId = tripRow ? tripRow.service_id : null;
-      if (!serviceId || !allowed.has(serviceId)) return;
+    if (allowed){
+      const svc = trow ? trow.service_id : null;
+      if (!svc || !allowed.has(svc)) return; // pas actif ce jour
     }
 
-    let iS=-1, iE=-1, dep=null, arr=null;
+    let iS=-1,iE=-1,dep=null,arr=null;
     for(let i=0;i<sts.length;i++){
-      if(sts[i].stop_id===startStopId){ iS=i; dep=sts[i].departure_time; }
-      if(sts[i].stop_id===endStopId){   iE=i; arr=sts[i].arrival_time;   }
+      if(sts[i].stop_id===sid){ iS=i; dep=sts[i].departure_time; }
+      if(sts[i].stop_id===eid){ iE=i; arr=sts[i].arrival_time; }
     }
-    if(iS===-1 || iE===-1 || iE<=iS) return;
-    if(!dep) return;
+    if(iS===-1 || iE===-1 || iE<=iS || !dep) return;
 
     const [H,M] = dep.slice(0,5).split(':').map(Number);
     const depMin = H*60+M;
-    if(depMin < tFromMin || depMin > tToMin) return;
+    if (depMin<tFromMin || depMin>tToMin) return;
 
-    let numero = null;
-    if (tripRow && tripRow.trip_short_name) {
-      numero = extractTrainNumber(tripRow.trip_short_name);
-    }
-    if (!numero) {
-      numero = extractTrainNumber(trip_id); // fallback
-    }
+    // numéro de train
+    let numero = trow && trow.trip_short_name ? extractTrainNumber(trow.trip_short_name) : null;
+    if (!numero) numero = extractTrainNumber(trip_id);
+    if (!numero) return;
 
-    // Dédoublonnage
-    const key = `${numero || trip_id}|${dep.slice(0,5)}|${arr ? arr.slice(0,5) : ''}`;
+    const key = `${numero}|${dep.slice(0,5)}|${arr ? arr.slice(0,5) : ''}`;
     if (proposerTrainsOD._seen.has(key)) return;
     proposerTrainsOD._seen.add(key);
 
-    found.push({ trip_id, numero, dep: dep.slice(0,5), arr: arr ? arr.slice(0,5) : null });
+    found.push({ numero, dep:dep.slice(0,5), arr: arr ? arr.slice(0,5) : null });
   });
 
-  found.sort((a,b)=>a.dep.localeCompare(b.dep));
-
-  if(!cont) return;
-  if(!found.length){
-    cont.innerHTML = `<p>Aucun train ${startName} → ${endName} entre ${$('#timeFrom').val()} et ${$('#timeTo').val()}.</p>`;
-    return;
-  }
-
-  cont.innerHTML = '<ul class="list-propositions"></ul>';
-  const ul = cont.querySelector('ul');
-
-  found.forEach(f=>{
-    const li = document.createElement('li');
-    const label = f.numero ? `Train ${f.numero}` : `Trip ${f.trip_id}`;
-    const note  = `(${startName} ${f.dep} → ${endName} ${f.arr||'?'})`;
-
-    const btn = document.createElement('button');
-    btn.className = 'mini-btn';
-    btn.textContent = f.numero ? 'Ajouter' : 'Copier Trip';
-    btn.addEventListener('click', ()=>{
-      if(f.numero){
-        const cur = $('#trainNumbers').val().split(',').map(s=>s.trim()).filter(Boolean);
-        if(!cur.includes(f.numero)) cur.push(f.numero);
-        $('#trainNumbers').val(cur.join(','));
-      }else{
-        navigator.clipboard?.writeText(f.trip_id);
-      }
-    });
-
-    li.innerHTML = `<span class="line">${label} — ${note}</span> `;
-    li.appendChild(btn);
-
-    if(f.numero){
-      const dateCirculation = $('#trainDate').val();
-      const a = document.createElement('a');
-      a.href = `https://www.sncf-voyageurs.com/fr/voyagez-avec-nous/horaires-et-itineraires/recherche-de-train/detail-train/?numeroCirculation=${f.numero}&dateCirculation=${dateCirculation}`;
-      a.target = '_blank'; a.rel='noopener'; a.textContent='Voir'; a.className='mini-link';
-      li.appendChild(document.createTextNode(' '));
-      li.appendChild(a);
-    }
-    ul.appendChild(li);
-  });
+  // ✅ on affiche des CARTES (pas de <ul>)
+  renderChips(found, startName, endName);
 }
     
 // Extrait un numéro de train (5-6 chiffres) d'une chaîne (trip_short_name, trip_id…)
@@ -2382,7 +2323,7 @@ function extractTrainNumber(str){
 }
 function renderChips(found, startName, endName){
   const host = document.getElementById('propositions');
-  const trains = found.slice().sort((a,b)=>a.dep.localeCompare(b.dep));
+  const trains = (found||[]).slice().sort((a,b)=>a.dep.localeCompare(b.dep));
 
   if (!trains.length){
     host.innerHTML = `<div class="chips-panel"><p>Aucun train ${startName} → ${endName} dans cette plage.</p></div>`;
@@ -2395,85 +2336,83 @@ function renderChips(found, startName, endName){
         <div style="font-weight:700">Propositions ${startName} → ${endName}</div>
         <div class="chips-count"><span id="chipsCount">0</span> sélection(s)</div>
       </div>
+
       <div class="chips-actions">
         <button class="btn" id="chipsClear">Vider</button>
+        <button class="btn" id="chipsAM">Pointe du matin</button>
+        <button class="btn" id="chipsPM">Pointe du soir</button>
       </div>
+
       <div class="chips-wrap">
         ${trains.map(t => `
-          <div class="chip" data-num="${t.numero || ''}">
-            <span class="t-num">Train ${t.numero || '—'}</span>
+          <div class="chip" data-num="${t.numero}">
+            <span class="t-num">Train ${t.numero}</span>
             <span class="t-time">(${startName} ${t.dep} → ${endName} ${t.arr || '?'})</span>
           </div>`).join('')}
       </div>
+
       <div class="chips-footer">
         <button class="btn" id="chipsFill">Remplir la sélection</button>
         <button class="btn primary" id="chipsGo">Afficher ▶</button>
       </div>
     </div>`;
 
-  // Toggle sélection sur clic
+  // Sélection/désélection d’une carte
   host.querySelectorAll('.chip').forEach(chip=>{
     chip.addEventListener('click', ()=>{
-      if (!chip.dataset.num) return;
       chip.classList.toggle('is-selected');
       chipsUpdateCount();
     });
   });
 
-  // Vider
-  host.querySelector('#chipsClear').addEventListener('click', ()=>{
+  // Actions
+  host.querySelector('#chipsClear')?.addEventListener('click', ()=>{
     chipsSetSelection([]);
+    document.getElementById('trainNumbers').value = '';
   });
-
-  // Remplir l’input
-  host.querySelector('#chipsFill').addEventListener('click', ()=>{
-    const sel = chipsGetSelection();
-    document.getElementById('trainNumbers').value = sel.sort().join(',');
+  host.querySelector('#chipsAM')?.addEventListener('click', ()=> applyPresetToUI(PRESET_AM));
+  host.querySelector('#chipsPM')?.addEventListener('click', ()=> applyPresetToUI(PRESET_PM));
+  host.querySelector('#chipsFill')?.addEventListener('click', ()=>{
+    document.getElementById('trainNumbers').value = chipsGetSelection().sort().join(',');
   });
-
-  // Afficher (déclenche ton tableau)
-  host.querySelector('#chipsGo').addEventListener('click', ()=>{
+  host.querySelector('#chipsGo')?.addEventListener('click', ()=>{
     const box = document.getElementById('trainNumbers');
-    if (!box.value.trim()){
-      box.value = chipsGetSelection().sort().join(',');
-    }
-    $('#loadTrains').trigger('click');
+    if (!box.value.trim()) box.value = chipsGetSelection().sort().join(',');
+    $('#loadTrains').trigger('click'); // lance ton tableau
   });
-      }  
+
+  chipsUpdateCount();
+}
 /* ---------- DOC READY ---------- */
 $(function () {
-
-  $('#btnMatin').on('click', () => {
-  $('#trainNumbers').val("88704,88706,88708,88710,88802,88712,88501,88804,88714,88503,88806,88716,88505,88718,88571,88722");
-});
-
-$('#btnSoir').on('click', () => {
-  $('#trainNumbers').val("88741,88743,88745,88747,88530,88749,88751,88753,88532,88755,88813,88759,88761,88815,88534,88763,88765,88767,88769");
-});
   // Date par défaut
-  $('#trainDate').val(new Date().toISOString().split('T')[0]);
+  $('#trainDate').val(new Date().toISOString().slice(0,10));
 
   // Menus
   buildGareDropdown();
   buildStationSelects();
 
-// Proposer -> lance ta recherche GTFS et ensuite renderChips(...)
-$('#btnProposer').off('click').on('click', proposerTrainsOD);
+  // Proposer -> vide la sélection puis lance la recherche GTFS (qui finira par renderChips)
+  $('#btnProposer').off('click').on('click', async () => {
+    $('#trainNumbers').val('');                  // <-- reset à chaque recherche
+    await proposerTrainsOD();                    // doit appeler renderChips(found, start, end)
+  });
 
-// Raccourcis externes (ils agissent sur les étiquettes déjà affichées)
-$('#btnMatin').off('click').on('click', ()=> chipsSetSelection(PRESET_AM));
-$('#btnSoir').off('click').on('click',  ()=> chipsSetSelection(PRESET_PM));
-  // Label sens dynamique (+ recharge des menus De/À)
-  const updateDirectionLabel = () => {
-    const sensInverse = $('#directionToggle').is(':checked');
-    $('#directionLabel').text(sensInverse ? 'Luxembourg → France' : 'France → Luxembourg');
-    buildStationSelects();
+  // Raccourcis : si les cartes (chips) sont affichées => sélectionne visuellement,
+  // sinon on remplit l’input #trainNumbers (fallback).
+  const usePreset = (list) => {
+    if (document.querySelector('#propositions .chip')) {
+      chipsSetSelection(list);
+      document.getElementById('trainNumbers').value = chipsGetSelection().join(',');
+    } else {
+      $('#trainNumbers').val(list.join(','));
+    }
   };
-  updateDirectionLabel();
-  $('#directionToggle').on('change', updateDirectionLabel);
+  $('#btnMatin').off('click').on('click', () => usePreset(PRESET_AM));
+  $('#btnSoir').off('click').on('click',  () => usePreset(PRESET_PM));
 
-  /* ---------- BOUTON AFFICHER ---------- */
-  $('#loadTrains').click(async function () {
+  // Bouton "Afficher" (garde ton handler existant derrière)
+  $('#loadTrains').off('click').on('click', async function () {
     await loadCompoData();
 
     const sensInverse = $('#directionToggle').is(':checked');
