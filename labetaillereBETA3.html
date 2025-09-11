@@ -1626,6 +1626,23 @@ table::before {
   }
   #propositions .t-num{font-variant-numeric:tabular-nums; font-size:1.05rem}
   #propositions .t-time{font-size:.9em;opacity:.85}
+    
+/* --- Zone des trains sélectionnés (tags) --- */
+#selectionChips{
+  display:flex; flex-wrap:wrap; gap:8px; margin-top:6px;
+}
+#selectionChips .chip-tag{
+  display:inline-flex; align-items:center; gap:6px;
+  padding:6px 10px; border:1px solid #00ffff55; border-radius:999px;
+  background:#06232b; color:#cfffff; font-weight:700;
+  box-shadow:0 0 0 1px inset #00ffff22;
+}
+#selectionChips .chip-tag .close{
+  cursor:pointer; font-weight:900; padding:0 6px; line-height:1;
+  background:transparent; border:none; color:#cfffff;
+}
+#selectionChips .chip-tag .close:hover{ filter:brightness(1.2); }
+    
 </style>
 </head>
 <body>
@@ -1720,6 +1737,9 @@ table::before {
     <label for="trainNumbers">Sélection (séparés par virgule) :</label>
     <input type="text" id="trainNumbers" placeholder="ex : 88530,88532,88534" />
   </div>
+
+     <div id="selectionChips" aria-live="polite"></div>
+  </div> 
 
   <div class="filter-item" style="flex: 0 0 auto;">
     <button id="loadTrains" class="primary-btn">Afficher</button>
@@ -2331,46 +2351,67 @@ function renderChips(found, startName, endName){
   }
 
   host.innerHTML = `
-    <div class="chips-panel">
-      <div class="chips-header">
-        <div style="font-weight:700">Propositions ${startName} → ${endName}</div>
-        <div class="chips-count"><span id="chipsCount">0</span> sélection(s)</div>
-      </div>
+  <div class="chips-panel">
+    <div class="chips-header">
+      <div style="font-weight:700">Propositions ${startName} → ${endName}</div>
+      <div class="chips-count"><span id="chipsCount">0</span> sélection(s)</div>
+    </div>
 
-      <div class="chips-actions">
-        <button class="btn" id="chipsClear">Vider</button>
-        <button class="btn" id="chipsFill">Remplir la sélection</button>
-      </div>
+    <div class="chips-actions">
+      <button class="btn" id="chipsClear">Vider</button>
+      <button class="btn" id="chipsAM">Pointe du matin</button>
+      <button class="btn" id="chipsPM">Pointe du soir</button>
+    </div>
 
-      <div class="chips-wrap">
-        ${trains.map(t => `
-          <div class="chip" data-num="${t.numero}">
-            <span class="t-num">Train ${t.numero}</span>
-            <span class="t-time">(${startName} ${t.dep} → ${endName} ${t.arr || '?'})</span>
-          </div>`).join('')}
-      </div>
-    </div>`;
+    <div class="chips-wrap">
+      ${trains.map(t => `
+        <div class="chip" data-num="${t.numero}">
+          <span class="t-num">Train ${t.numero}</span>
+          <span class="t-time">(${startName} ${t.dep} → ${endName} ${t.arr || '?'})</span>
+        </div>`).join('')}
+    </div>
 
-  // sélection/désélection d’une carte
-  host.querySelectorAll('.chip').forEach(chip=>{
-    chip.addEventListener('click', ()=>{
-      chip.classList.toggle('is-selected');
-      chipsUpdateCount();
-    });
-  });
+    <div class="chips-footer">
+      <button class="btn primary" id="chipsGo">Afficher ▶</button>
+    </div>
+  </div>`;
 
-  // vider
-  host.querySelector('#chipsClear')?.addEventListener('click', ()=>{
-    chipsSetSelection([]);
-    document.getElementById('trainNumbers').value = '';
-  });
+ // clic carte = toggle + MAJ selection en live
+ host.querySelectorAll('.chip').forEach(chip=>{
+   chip.addEventListener('click', ()=>{
+     const num = chip.dataset.num;
+     if (!num) return;
+     const willSelect = !chip.classList.contains('is-selected');
+     chip.classList.toggle('is-selected', willSelect);
+     if (willSelect) selectedTrains.add(num); else selectedTrains.delete(num);
+     chipsUpdateCount();
+     updateSelectionUI(); // <-- met à jour input + tags de sélection
+   });
+ });
 
-  // remplir l’input
-  host.querySelector('#chipsFill')?.addEventListener('click', ()=>{
-    document.getElementById('trainNumbers').value = chipsGetSelection().sort().join(',');
-  });
+ // Vider = tout clean
+ host.querySelector('#chipsClear')?.addEventListener('click', ()=>{
+   selectedTrains.clear();
+   document.getElementById('trainNumbers').value = '';
+   host.querySelectorAll('.chip.is-selected').forEach(c=>c.classList.remove('is-selected'));
+   chipsUpdateCount();
+   updateSelectionUI();
+ });
 
-  chipsUpdateCount();
+ // Presets sur le panneau (sélectionne les cartes + UI)
+ host.querySelector('#chipsAM')?.addEventListener('click', ()=> chipsSetSelection(PRESET_AM));
+ host.querySelector('#chipsPM')?.addEventListener('click', ()=> chipsSetSelection(PRESET_PM));
+
+ // Afficher = déclenche ton tableau
+ host.querySelector('#chipsGo')?.addEventListener('click', ()=>{
+   if (!document.getElementById('trainNumbers').value.trim()){
+     updateSelectionUI(); // garantit l'input rempli
+   }
+   $('#loadTrains').trigger('click');
+ });
+
+ chipsUpdateCount();
+ updateSelectionUI();
 }
     // --- Presets (listes) ---
 const PRESET_AM = "88704,88706,88708,88710,88802,88712,88501,88804,88714,88503,88806,88716,88505,88718,88571,88722".split(',');
@@ -2403,41 +2444,107 @@ function applyPresetToUI(list){
     document.getElementById('trainNumbers').value = list.join(',');
   }
 }
+    // --- ÉTAT CENTRAL : sélection courante ---
+const selectedTrains = new Set();
+
+// --- Met à jour l'input + les chips de sélection ---
+function updateSelectionUI(){
+  const arr = Array.from(selectedTrains);
+  // 1) input CSV
+  const input = document.getElementById('trainNumbers');
+  if (input) input.value = arr.join(',');
+
+  // 2) tags/chips sous l'input
+  const zone = document.getElementById('selectionChips');
+  if (!zone) return;
+  zone.innerHTML = arr.map(num =>
+    `<span class="chip-tag" data-num="${num}">#${num}
+       <button class="close" title="Retirer ${num}" aria-label="Retirer ${num}">×</button>
+     </span>`
+  ).join('');
+
+  // 3) clic sur “×” => retire le train de la sélection + décocher carte si visible
+  zone.querySelectorAll('.chip-tag .close').forEach(btn=>{
+    btn.addEventListener('click', (e)=>{
+      const tag = e.currentTarget.closest('.chip-tag');
+      const num = tag?.dataset.num;
+      if (!num) return;
+      selectedTrains.delete(num);
+      // décocher la carte si elle est visible
+      const card = document.querySelector(`#propositions .chip[data-num="${num}"]`);
+      if (card) card.classList.remove('is-selected');
+      chipsUpdateCount();
+      updateSelectionUI();
+    });
+  });
+}
+
+// --- Compteur en haut du panneau ---
+function chipsUpdateCount(){
+  const el = document.querySelector('#propositions #chipsCount');
+  if (el) el.textContent = selectedTrains.size;
+}
+
+// --- Applique une sélection complète (Set + cartes + UI) ---
+function chipsSetSelection(list){
+  selectedTrains.clear();
+  list.forEach(n => selectedTrains.add(n));
+  // cartes
+  document.querySelectorAll('#propositions .chip').forEach(c=>{
+    c.classList.toggle('is-selected', selectedTrains.has(c.dataset.num));
+  });
+  chipsUpdateCount();
+  updateSelectionUI();
+}
 /* ---------- DOC READY ---------- */
 $(function () {
   // date par défaut
   $('#trainDate').val(new Date().toISOString().slice(0,10));
-
-  // menus
   buildGareDropdown();
   buildStationSelects();
 
-  // Proposer -> vide la sélection puis cherche + rend les cartes
+  // Proposer
   $('#btnProposer').off('click').on('click', async () => {
-    $('#trainNumbers').val('');     // reset à chaque recherche
-    await proposerTrainsOD();       // appellera renderChips(...)
-  });
-
-  // Raccourcis externes AM/PM (un seul jeu)
-  const applyPresetToUI = (list) => {
-  // 1) vider l'input + les cartes sélectionnées si le panneau est ouvert
+  // reset complet
+  selectedTrains.clear();
   $('#trainNumbers').val('');
+  updateSelectionUI();
 
-  const chips = document.querySelectorAll('#propositions .chip');
-  if (chips.length) {
-    chipsSetSelection([]); // désélectionne toutes les cartes
-    const want = new Set(list);
-    chips.forEach(c => c.classList.toggle('is-selected', want.has(c.dataset.num)));
+  // lance la recherche GTFS → renderChips()
+  await proposerTrainsOD();
+});
+
+  const usePresetEverywhere = (list) => {
+    // vide tout
+    selectedTrains.clear();
+    $('#trainNumbers').val('');
+
+    if (document.querySelector('#propositions .chip')) {
+      chipsSetSelection(list); // doit aussi mettre à jour selectedTrains + UI
+    } else {
+      // sinon, force l'input + tags uniquement
+      list.forEach(n => selectedTrains.add(n));
+      updateSelectionUI();
+    }
+  };
+
+  $('#btnMatin').off('click').on('click', ()=> usePresetEverywhere(PRESET_AM));
+  $('#btnSoir').off('click').on('click',  ()=> usePresetEverywhere(PRESET_PM));
+
+   /* ====== [4d] Synchroniser quand on tape manuellement dans l’input ====== */
+  $('#trainNumbers').off('input').on('input', ()=>{
+    const vals = $('#trainNumbers').val().split(',').map(s=>s.trim()).filter(Boolean);
+    selectedTrains.clear();
+    vals.forEach(v => selectedTrains.add(v));
+
+    // si des cartes sont visibles, refléter la sélection
+    document.querySelectorAll('#propositions .chip').forEach(c=>{
+      c.classList.toggle('is-selected', selectedTrains.has(c.dataset.num));
+    });
+
     chipsUpdateCount();
-  }
-
-  // 2) toujours écrire le preset complet dans l'input (même si des cartes manquent)
-  document.getElementById('trainNumbers').value = list.join(',');
-};
-
-// Handlers uniques
-$('#btnMatin').off('click').on('click', ()=> applyPresetToUI(PRESET_AM));
-$('#btnSoir').off('click').on('click',  ()=> applyPresetToUI(PRESET_PM));
+    updateSelectionUI(); // régénère les tags + nettoie l’input
+  });
 
   // Bouton “Afficher” (le tien, unique)
   $('#loadTrains').off('click').on('click', async function () {
