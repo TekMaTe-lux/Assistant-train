@@ -1627,21 +1627,36 @@ table::before {
   #propositions .t-num{font-variant-numeric:tabular-nums; font-size:1.05rem}
   #propositions .t-time{font-size:.9em;opacity:.85}
     
-/* --- Zone des trains sélectionnés (tags) --- */
+/* === Zone des trains sélectionnés (chips en GRILLE responsive) === */
 #selectionChips{
-  display:flex; flex-wrap:wrap; gap:8px; margin-top:6px;
+  display:grid; gap:12px; margin-top:6px;
+  grid-template-columns:repeat(4, minmax(0,1fr));
+  align-items:stretch;
 }
+@media (max-width:1024px){ #selectionChips{ grid-template-columns:repeat(3, minmax(0,1fr)); } }
+@media (max-width:700px){  #selectionChips{ grid-template-columns:repeat(2, minmax(0,1fr)); } }
+
+/* Chip de sélection : look carte (proche de #propositions .chip) */
 #selectionChips .chip-tag{
-  display:inline-flex; align-items:center; gap:6px;
-  padding:6px 10px; border:1px solid #00ffff55; border-radius:999px;
-  background:#06232b; color:#cfffff; font-weight:700;
+  display:flex; flex-direction:column; gap:6px;
+  width:100%; min-width:0; position:relative; overflow:hidden;
+  padding:12px; border:1px solid #00ffff55; border-radius:14px;
+  background:linear-gradient(180deg,rgba(0,20,30,.55),rgba(0,10,18,.35));
+  color:#eaffff; font-weight:700; letter-spacing:.2px;
   box-shadow:0 0 0 1px inset #00ffff22;
 }
+#selectionChips .chip-tag .t-num{ font-variant-numeric:tabular-nums; font-size:1.05rem; }
 #selectionChips .chip-tag .close{
-  cursor:pointer; font-weight:900; padding:0 6px; line-height:1;
-  background:transparent; border:none; color:#cfffff;
+  position:absolute; top:8px; right:8px;
+  cursor:pointer; line-height:20px; padding:0 6px;
+  background:transparent; border:1px solid #00ffff55; border-radius:10px; color:#cfffff;
 }
-#selectionChips .chip-tag .close:hover{ filter:brightness(1.2); }
+#selectionChips .chip-tag .close:hover{ filter:brightness(1.15); }
+
+/* Barre d’actions sous les chips (masquée quand vide) */
+.selection-actions{
+  display:flex; gap:10px; justify-content:flex-end; margin-top:10px;
+}
     
 </style>
 </head>
@@ -1736,13 +1751,15 @@ table::before {
   <div class="filter-item" style="flex: 2 1 320px;">
     <label for="trainNumbers">Sélection (séparés par virgule) :</label>
     <input type="text" id="trainNumbers" placeholder="ex : 88530,88532,88534" />
-    <!-- Tags (chips) des trains sélectionnés -->
-    <div id="selectionChips" aria-live="polite" style="margin-top:6px;"></div>
-  </div>
 
-  <div class="filter-item" style="flex: 0 0 auto; display:flex; gap:8px; align-items:flex-end;">
-    <button id="btnClearSelection" class="mini-btn" type="button">Vider</button>
-    <button id="loadTrains" class="primary-btn" type="button">Afficher</button>
+    <!-- Chips (grille responsive) -->
+    <div id="selectionChips" aria-live="polite"></div>
+
+    <!-- Actions sous la sélection (cachées si vide) -->
+    <div id="selectionActions" class="selection-actions" hidden>
+      <button id="btnClearSelection" class="mini-btn" type="button">🧹 Vider</button>
+      <button id="loadTrains" class="primary-btn" type="button">Générer le tableau</button>
+    </div>
   </div>
 </div>
 
@@ -2473,7 +2490,7 @@ function updateSelectionUI(){
 
   // 2) tags sous l'input
   const zone = document.getElementById('selectionChips');
-  if (!zone) return;
+  if (!zone) { afterSelectionRender(); return; }
   zone.innerHTML = arr.map(num =>
     `<span class="chip-tag" data-num="${num}">#${num}
        <button class="close" title="Retirer ${num}" aria-label="Retirer ${num}">×</button>
@@ -2493,8 +2510,23 @@ function updateSelectionUI(){
       updateSelectionUI();
     });
   });
+
+  // 4) montrer/masquer la barre d’actions
+  afterSelectionRender();
 }
 
+// Montre/cache la barre d'actions selon la sélection
+function toggleSelectionActions(){
+  const has = (window.selectedTrains && selectedTrains.size > 0);
+  const el = document.getElementById('selectionActions');
+  if (el) el.hidden = !has;
+}
+
+// Appelé à chaque MAJ des chips ET au chargement
+function afterSelectionRender(){
+  toggleSelectionActions();
+}
+    
 /* Applique une sélection complète aux cartes visibles (si présentes) + met à jour l'état global */
 function chipsSetSelection(list){
   selectedTrains.clear();
@@ -2516,7 +2548,7 @@ function renderChips(found, startName, endName){
     return;
   }
 
-  // ⚠️ Panneau épuré : juste l'entête + la grille de cartes (PAS de Matin/Soir, PAS de Vider, PAS d'Afficher)
+  // Panneau épuré : entête + grille de cartes
   host.innerHTML = `
     <div class="chips-panel">
       <div class="chips-header">
@@ -2532,7 +2564,7 @@ function renderChips(found, startName, endName){
       </div>
     </div>`;
 
-  // Clic carte = toggle + MAJ live (selectedTrains + input + tags + compteur)
+  // Clic carte = toggle + MAJ live
   host.querySelectorAll('.chip').forEach(chip=>{
     chip.addEventListener('click', ()=>{
       const num = chip.dataset.num;
@@ -2545,8 +2577,7 @@ function renderChips(found, startName, endName){
     });
   });
 
-  chipsUpdateCount();        // affiche le compteur initial (0)
-  // pas de pré-sélection automatique : on repart propre après chaque recherche
+  chipsUpdateCount(); // compteur initial
 }
 
 /* ====================== RECHERCHE (GTFS) ====================== */
@@ -2627,14 +2658,16 @@ async function proposerTrainsOD(){
   renderChips(found, startName, endName);
 }
 
+
 /* ====================== DOC READY ====================== */
 $(function () {
   // Date par défaut + menus
   $('#trainDate').val(new Date().toISOString().slice(0,10));
   buildGareDropdown();
   buildStationSelects();
+  afterSelectionRender();
 
-  // Bouton “Proposer” -> lance la recherche et réinitialise la sélection
+  // Bouton “Proposer” -> lance la recherche
   $('#btnProposer').off('click').on('click', proposerTrainsOD);
 
   // Bouton “Vider” (extérieur au panneau de cartes)
@@ -2645,24 +2678,38 @@ $(function () {
     chipsUpdateCount();
   });
 
-  // Raccourcis Matin/Soir (à l’extérieur) : appliquent partout
-  const usePresetEverywhere = (list) => {
-    selectedTrains.clear();
-    // Si des cartes sont visibles, on reflète visuellement ce qui existe
-    if (document.querySelector('#propositions .chip')) {
-      chipsSetSelection(list);
-    } else {
-      // Sinon on remplit juste l'état/input/tags
-      list.forEach(n => selectedTrains.add(n));
-      updateSelectionUI();
+  // --- Helper : oriente sens + valeurs De/À pour AM/PM
+  function setDirectionForPreset(kind){
+    if ($('#directionToggle').length){
+      const wantLuxToFr = (kind === 'PM'); // soir = Lux -> France
+      $('#directionToggle').prop('checked', wantLuxToFr);
+      buildStationSelects(); // recharge les options dans le bon ordre
     }
-  };
-  $('#btnMatin').off('click').on('click', () => {
-  setDirectionForPreset('AM');
-  $('#btnSoir').off('click').on('click', () => {
-  setDirectionForPreset('PM');
+    // valeurs par défaut si vides
+    if (!$('#startStation').val() && !$('#endStation').val()){
+      if (kind === 'AM'){ $('#startStation').val('Metz'); $('#endStation').val('Luxembourg'); }
+      else { $('#startStation').val('Luxembourg'); $('#endStation').val('Metz'); }
+    }
+  }
 
-  // Saisie manuelle dans l’input => sync état + cartes + tags
+  // Applique un preset partout (sans imbrication des handlers)
+  function usePresetEverywhere(list, kind){
+    setDirectionForPreset(kind);
+    selectedTrains.clear();
+    if (document.querySelector('#propositions .chip')) {
+      chipsSetSelection(list); // coche visuellement si cartes présentes
+    } else {
+      list.forEach(n => selectedTrains.add(n));
+      updateSelectionUI();     // reconstruit les chips de sélection
+    }
+    afterSelectionRender();
+  }
+
+  // Raccourcis Matin/Soir (handlers séparés)
+  $('#btnMatin').off('click').on('click', ()=> usePresetEverywhere(PRESET_AM, 'AM'));
+  $('#btnSoir').off('click').on('click',  ()=> usePresetEverywhere(PRESET_PM, 'PM'));
+
+  // Saisie manuelle => sync état + cartes + tags
   $('#trainNumbers').off('input').on('input', ()=>{
     const vals = $('#trainNumbers').val().split(',').map(s=>s.trim()).filter(Boolean);
     selectedTrains.clear();
@@ -2674,13 +2721,12 @@ $(function () {
     updateSelectionUI();
   });
 
-  // Bouton “Afficher” (le tien, unique)
+  // Bouton “Afficher”
   $('#loadTrains').off('click').on('click', async function () {
-
     await loadCompoData();
 
     const sensInverse = $('#directionToggle').is(':checked');
-    const fixedStops = getStopsForDirection(sensInverse); // ⬅️ remplace fixedStopsSens1/2
+    const fixedStops = getStopsForDirection(sensInverse); // ⬅️ utilisé plus bas dans ton code
 
     const date = $('#trainDate').val();
     const numbers = $('#trainNumbers').val().split(',').map(s => s.trim()).filter(Boolean);
