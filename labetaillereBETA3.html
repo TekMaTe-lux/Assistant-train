@@ -2413,48 +2413,45 @@ function renderChips(found, startName, endName){
  chipsUpdateCount();
  updateSelectionUI();
 }
-    // --- Presets (listes) ---
+/* ====================== PRESETS (listes) ====================== */
 const PRESET_AM = "88704,88706,88708,88710,88802,88712,88501,88804,88714,88503,88806,88716,88505,88718,88571,88722".split(',');
 const PRESET_PM = "88741,88743,88745,88747,88530,88749,88751,88753,88532,88755,88813,88759,88761,88815,88534,88763,88765,88767,88769".split(',');
 
-// --- Helpers cartes/chips ---
-function chipsGetSelection(){
-  const set = new Set();
-  document.querySelectorAll('#propositions .chip.is-selected').forEach(c=>set.add(c.dataset.num));
-  return Array.from(set);
-}
-function chipsSetSelection(list){
-  const want = new Set(list);
-  document.querySelectorAll('#propositions .chip').forEach(c=>{
-    c.classList.toggle('is-selected', want.has(c.dataset.num));
-  });
-  chipsUpdateCount();
-}
-function chipsUpdateCount(){
-  const el = document.querySelector('#propositions #chipsCount');
-  if (el) el.textContent = document.querySelectorAll('#propositions .chip.is-selected').length;
-}
-// AM/PM avec fallback (sélectionne les cartes si présentes, sinon remplit l’input)
-function applyPresetToUI(list){
-  const hasChips = document.querySelector('#propositions .chip');
-  if (hasChips){
-    chipsSetSelection(list);
-    document.getElementById('trainNumbers').value = chipsGetSelection().sort().join(',');
-  } else {
-    document.getElementById('trainNumbers').value = list.join(',');
-  }
-}
-    // --- ÉTAT CENTRAL : sélection courante ---
+/* ====================== ÉTAT CENTRAL ====================== */
 const selectedTrains = new Set();
 
-// --- Met à jour l'input + les chips de sélection ---
+/* ====================== HELPERS GÉNÉRAUX ====================== */
+// HH:MM -> "minutes depuis 00:00"
+function hhmmInputToMin(hhmm){
+  if(!hhmm || !/^\d{2}:\d{2}$/.test(hhmm)) return null;
+  const [h,m] = hhmm.split(':').map(Number);
+  return h*60+m;
+}
+// "YYYY-MM-DD" -> "YYYYMMDD"
+function dateInputToYMD(str){
+  if(!str || !/^\d{4}-\d{2}-\d{2}$/.test(str)) return null;
+  const [y,m,d] = str.split('-');
+  return `${y}${m}${d}`;
+}
+// Extrait un numéro de train (5-6 chiffres)
+function extractTrainNumber(str){
+  const m = String(str||'').match(/(\d{5,6})/);
+  return m ? m[1] : null;
+}
+
+/* ====================== UI SÉLECTION (input + tags) ====================== */
+function chipsUpdateCount(){
+  const el = document.querySelector('#propositions #chipsCount');
+  if (el) el.textContent = selectedTrains.size;
+}
+
 function updateSelectionUI(){
-  const arr = Array.from(selectedTrains);
-  // 1) input CSV
+  // 1) input CSV propre
   const input = document.getElementById('trainNumbers');
+  const arr = Array.from(selectedTrains);
   if (input) input.value = arr.join(',');
 
-  // 2) tags/chips sous l'input
+  // 2) tags sous l'input
   const zone = document.getElementById('selectionChips');
   if (!zone) return;
   zone.innerHTML = arr.map(num =>
@@ -2463,14 +2460,13 @@ function updateSelectionUI(){
      </span>`
   ).join('');
 
-  // 3) clic sur “×” => retire le train de la sélection + décocher carte si visible
+  // 3) clic “×” sur un tag -> retire de la sélection + décoche la carte si visible
   zone.querySelectorAll('.chip-tag .close').forEach(btn=>{
     btn.addEventListener('click', (e)=>{
       const tag = e.currentTarget.closest('.chip-tag');
       const num = tag?.dataset.num;
       if (!num) return;
       selectedTrains.delete(num);
-      // décocher la carte si elle est visible
       const card = document.querySelector(`#propositions .chip[data-num="${num}"]`);
       if (card) card.classList.remove('is-selected');
       chipsUpdateCount();
@@ -2479,71 +2475,181 @@ function updateSelectionUI(){
   });
 }
 
-// --- Compteur en haut du panneau ---
-function chipsUpdateCount(){
-  const el = document.querySelector('#propositions #chipsCount');
-  if (el) el.textContent = selectedTrains.size;
-}
-
-// --- Applique une sélection complète (Set + cartes + UI) ---
+/* Applique une sélection complète aux cartes visibles (si présentes) + met à jour l'état global */
 function chipsSetSelection(list){
   selectedTrains.clear();
   list.forEach(n => selectedTrains.add(n));
-  // cartes
   document.querySelectorAll('#propositions .chip').forEach(c=>{
     c.classList.toggle('is-selected', selectedTrains.has(c.dataset.num));
   });
   chipsUpdateCount();
   updateSelectionUI();
 }
-/* ---------- DOC READY ---------- */
+
+/* ====================== RENDU DES CARTES ====================== */
+function renderChips(found, startName, endName){
+  const host = document.getElementById('propositions');
+  const trains = (found||[]).slice().sort((a,b)=>a.dep.localeCompare(b.dep));
+
+  if (!trains.length){
+    host.innerHTML = `<div class="chips-panel"><p>Aucun train ${startName} → ${endName} dans cette plage.</p></div>`;
+    return;
+  }
+
+  // ⚠️ Panneau épuré : juste l'entête + la grille de cartes (PAS de Matin/Soir, PAS de Vider, PAS d'Afficher)
+  host.innerHTML = `
+    <div class="chips-panel">
+      <div class="chips-header">
+        <div style="font-weight:700">Propositions ${startName} → ${endName}</div>
+        <div class="chips-count"><span id="chipsCount">0</span> sélection(s)</div>
+      </div>
+      <div class="chips-wrap">
+        ${trains.map(t => `
+          <div class="chip" data-num="${t.numero}">
+            <span class="t-num">Train ${t.numero}</span>
+            <span class="t-time">(${startName} ${t.dep} → ${endName} ${t.arr || '?'})</span>
+          </div>`).join('')}
+      </div>
+    </div>`;
+
+  // Clic carte = toggle + MAJ live (selectedTrains + input + tags + compteur)
+  host.querySelectorAll('.chip').forEach(chip=>{
+    chip.addEventListener('click', ()=>{
+      const num = chip.dataset.num;
+      if (!num) return;
+      const willSelect = !chip.classList.contains('is-selected');
+      chip.classList.toggle('is-selected', willSelect);
+      if (willSelect) selectedTrains.add(num); else selectedTrains.delete(num);
+      chipsUpdateCount();
+      updateSelectionUI();
+    });
+  });
+
+  chipsUpdateCount();        // affiche le compteur initial (0)
+  // pas de pré-sélection automatique : on repart propre après chaque recherche
+}
+
+/* ====================== RECHERCHE (GTFS) ====================== */
+async function proposerTrainsOD(){
+  const cont = document.getElementById('propositions');
+  if (cont) cont.innerHTML = 'Recherche…';
+
+  // reset complet sélection (input + tags + état)
+  selectedTrains.clear();
+  updateSelectionUI();
+
+  // reset du dédoublonnage
+  proposerTrainsOD._seen = new Set();
+
+  const startName = $('#startStation').val() || '';
+  const endName   = $('#endStation').val() || '';
+  const tFromMin  = hhmmInputToMin($('#timeFrom').val());
+  const tToMin    = hhmmInputToMin($('#timeTo').val());
+
+  if(!startName || !endName){ cont.innerHTML = '<div class="chips-panel">Choisis <b>De</b> et <b>À</b>.</div>'; return; }
+  if(tFromMin==null || tToMin==null){ cont.innerHTML = '<div class="chips-panel">Plage horaire invalide.</div>'; return; }
+
+  try{ await ensureGTFSLoaded(); }catch(e){ console.error(e); cont.innerHTML='<div class="chips-panel">Erreur GTFS.</div>'; return; }
+
+  const sid = GTFS.stopNameToId.get(startName);
+  const eid = GTFS.stopNameToId.get(endName);
+  if(!sid || !eid){ cont.innerHTML = '<div class="chips-panel">Gares introuvables.</div>'; return; }
+
+  // Filtre calendrier (calendar_dates)
+  const ymd = dateInputToYMD($('#trainDate').val());
+  let allowed = null;
+  if (ymd && GTFS.allowedByDate && GTFS.allowedByDate.size>0){
+    allowed = GTFS.allowedByDate.get(ymd) || new Set();
+  }
+
+  // Index stop_times par trip, triés
+  const byTrip = new Map();
+  for(const st of GTFS.stopTimes){
+    if(!byTrip.has(st.trip_id)) byTrip.set(st.trip_id, []);
+    byTrip.get(st.trip_id).push(st);
+  }
+  for(const arr of byTrip.values()){
+    arr.sort((a,b)=>Number(a.stop_sequence)-Number(b.stop_sequence));
+  }
+
+  const found = [];
+  byTrip.forEach((sts, trip_id)=>{
+    const trow = GTFS.tripById ? GTFS.tripById.get(trip_id) : null;
+
+    // calendrier actif ce jour
+    if (allowed){
+      const svc = trow ? trow.service_id : null;
+      if (!svc || !allowed.has(svc)) return;
+    }
+
+    let iS=-1,iE=-1,dep=null,arr=null;
+    for(let i=0;i<sts.length;i++){
+      if(sts[i].stop_id===sid){ iS=i; dep=sts[i].departure_time; }
+      if(sts[i].stop_id===eid){ iE=i; arr=sts[i].arrival_time; }
+    }
+    if(iS===-1 || iE===-1 || iE<=iS || !dep) return;
+
+    const [H,M] = dep.slice(0,5).split(':').map(Number);
+    const depMin = H*60+M;
+    if (depMin<tFromMin || depMin>tToMin) return;
+
+    let numero = trow && trow.trip_short_name ? extractTrainNumber(trow.trip_short_name) : null;
+    if (!numero) numero = extractTrainNumber(trip_id);
+    if (!numero) return;
+
+    const key = `${numero}|${dep.slice(0,5)}|${arr ? arr.slice(0,5) : ''}`;
+    if (proposerTrainsOD._seen.has(key)) return;
+    proposerTrainsOD._seen.add(key);
+
+    found.push({ numero, dep:dep.slice(0,5), arr: arr ? arr.slice(0,5) : null });
+  });
+
+  renderChips(found, startName, endName);
+}
+
+/* ====================== DOC READY ====================== */
 $(function () {
-  // date par défaut
+  // Date par défaut + menus
   $('#trainDate').val(new Date().toISOString().slice(0,10));
   buildGareDropdown();
   buildStationSelects();
 
-  // Proposer
-  $('#btnProposer').off('click').on('click', async () => {
-  // reset complet
-  selectedTrains.clear();
-  $('#trainNumbers').val('');
-  updateSelectionUI();
+  // Bouton “Proposer” -> lance la recherche et réinitialise la sélection
+  $('#btnProposer').off('click').on('click', proposerTrainsOD);
 
-  // lance la recherche GTFS → renderChips()
-  await proposerTrainsOD();
-});
-
-  const usePresetEverywhere = (list) => {
-    // vide tout
+  // Bouton “Vider” (extérieur au panneau de cartes)
+  $('#btnClearSelection').off('click').on('click', ()=>{
     selectedTrains.clear();
-    $('#trainNumbers').val('');
+    updateSelectionUI();
+    document.querySelectorAll('#propositions .chip.is-selected').forEach(c=>c.classList.remove('is-selected'));
+    chipsUpdateCount();
+  });
 
+  // Raccourcis Matin/Soir (à l’extérieur) : appliquent partout
+  const usePresetEverywhere = (list) => {
+    selectedTrains.clear();
+    // Si des cartes sont visibles, on reflète visuellement ce qui existe
     if (document.querySelector('#propositions .chip')) {
-      chipsSetSelection(list); // doit aussi mettre à jour selectedTrains + UI
+      chipsSetSelection(list);
     } else {
-      // sinon, force l'input + tags uniquement
+      // Sinon on remplit juste l'état/input/tags
       list.forEach(n => selectedTrains.add(n));
       updateSelectionUI();
     }
   };
-
   $('#btnMatin').off('click').on('click', ()=> usePresetEverywhere(PRESET_AM));
   $('#btnSoir').off('click').on('click',  ()=> usePresetEverywhere(PRESET_PM));
 
-   /* ====== [4d] Synchroniser quand on tape manuellement dans l’input ====== */
+  // Saisie manuelle dans l’input => sync état + cartes + tags
   $('#trainNumbers').off('input').on('input', ()=>{
     const vals = $('#trainNumbers').val().split(',').map(s=>s.trim()).filter(Boolean);
     selectedTrains.clear();
     vals.forEach(v => selectedTrains.add(v));
-
-    // si des cartes sont visibles, refléter la sélection
     document.querySelectorAll('#propositions .chip').forEach(c=>{
       c.classList.toggle('is-selected', selectedTrains.has(c.dataset.num));
     });
-
     chipsUpdateCount();
-    updateSelectionUI(); // régénère les tags + nettoie l’input
+    updateSelectionUI();
   });
 
   // Bouton “Afficher” (le tien, unique)
