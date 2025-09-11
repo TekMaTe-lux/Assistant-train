@@ -1644,12 +1644,11 @@ table::before {
   box-sizing: border-box !important;
   width: 100% !important;
   display: grid !important;
-  /* auto-fill permet de multiplier les colonnes tant que ça rentre */
-  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)) !important;
-  column-gap: 16px;                   /* espace horizontal entre chips */
-  row-gap: 12px;                      /* espace vertical entre chips */
-  padding: 10px 12px;                 /* marge contre les bords */
-  margin-top: 8px;
+  /* plus la page est large, plus il y a de colonnes */
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)) !important;
+  gap: 12px 16px !important;          /* row-gap 12 / column-gap 16 */
+  padding: 10px 12px !important;      /* marge contre les bords */
+  margin-top: 8px !important;
   align-items: stretch !important;
 }
 #selectionChips > *{
@@ -1657,15 +1656,14 @@ table::before {
   box-sizing: border-box !important;
 }
 
-/* Chip compacte + mini-croix flottante (n’empiète pas) */
+/* Chips cliquables : pas de croix, surbrillance au hover */
 #selectionChips .chip-tag{
   position: relative;
   display: flex;
   align-items: center;
   gap: 6px;
   width: 100%;
-  padding: 6px 9px;
-  padding-right: 26px;                /* réserve pour la croix */
+  padding: 6px 9px;                   /* compact */
   min-height: 32px;
   border: 1px solid #00ffff55;
   border-radius: 10px;
@@ -1675,24 +1673,28 @@ table::before {
   letter-spacing: .2px;
   box-shadow: 0 0 0 1px inset #00ffff22;
   white-space: nowrap;
+  cursor: pointer;                    /* ⬅ chip cliquable */
+  transition: background .15s ease, box-shadow .15s ease, border-color .15s ease, transform .05s ease;
 }
+#selectionChips .chip-tag:hover{
+  background: linear-gradient(180deg, rgba(0,40,60,.6), rgba(0,20,36,.5));
+  border-color: #00ffff;
+  box-shadow: 0 0 10px #00ffff55, 0 0 0 1px inset #00ffff44;
+}
+#selectionChips .chip-tag:active{
+  transform: scale(.98);
+}
+#selectionChips .chip-tag:focus{
+  outline: 2px solid #00ffff; outline-offset: 2px;
+}
+
 #selectionChips .chip-tag .t-num{
   font-variant-numeric: tabular-nums;
-  font-size: .88rem;
+  font-size: .9rem;                   /* compact */
 }
-#selectionChips .chip-tag .close{
-  position: absolute;
-  top: 5px; right: 5px;
-  width: 16px; height: 16px;
-  display: inline-flex; align-items:center; justify-content:center;
-  font-size: 10px; line-height: 1;
-  border: 1px solid #00ffff55;
-  border-radius: 50%;
-  background: rgba(0,0,0,.2);
-  color: #cfffff;
-  cursor: pointer;
-}
-#selectionChips .chip-tag .close:hover{ filter: brightness(1.15); }
+
+/* Si un ancien bouton .close existe encore, on le masque de force */
+#selectionChips .chip-tag .close{ display: none !important; }
 
 /* Barre d’actions SOUS les chips (cachée quand vide par [hidden]) */
 #selectionActions{
@@ -1709,7 +1711,7 @@ table::before {
 label[for="trainNumbers"]{ display: none !important; }
 #trainNumbers{ display: none !important; }
 .csv-only{ display: none !important; }
-    
+
 </style>
 </head>
 <body>
@@ -2542,31 +2544,43 @@ function updateSelectionUI(){
   const input = document.getElementById('trainNumbers');
   if (input) input.value = arr.join(',');
 
-  // 2) (re)rendu des chips
+  // 2) (re)rendu des chips (clic sur TOUTE la chip pour retirer)
   const zone = document.getElementById('selectionChips');
   if (zone){
     zone.innerHTML = arr.map(num => `
-      <span class="chip-tag" data-num="${num}">
+      <span class="chip-tag"
+            data-num="${num}"
+            role="button"
+            tabindex="0"
+            title="Retirer ${num}">
         <span class="t-num">#${num}</span>
-        <button class="close" title="Retirer ${num}" aria-label="Retirer ${num}">×</button>
       </span>
     `).join('');
 
-    // clic sur la chip (ou la croix) => retirer
+    // suppression au clic OU au clavier (Entrée/Espace)
     zone.querySelectorAll('.chip-tag').forEach(tag=>{
-      tag.addEventListener('click', ()=>{
+      const remove = () => {
         const num = tag.dataset.num;
         if (!num) return;
         selectedTrains.delete(num);
         const card = document.querySelector(`#propositions .chip[data-num="${num}"]`);
         if (card) card.classList.remove('is-selected');
-        chipsUpdateCount();
+        if (typeof chipsUpdateCount === 'function') chipsUpdateCount();
         updateSelectionUI();
+      };
+      tag.addEventListener('click', remove);
+      tag.addEventListener('keydown', (e)=>{
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          remove();
+        }
       });
     });
 
-    // si tu n'as PAS de #selectionBlock, on cache directement la zone
-    zone.hidden = (arr.length === 0);
+    // si PAS de wrapper #selectionBlock, on cache directement la zone
+    if (!document.getElementById('selectionBlock')) {
+      zone.hidden = (arr.length === 0);
+    }
   }
 
   // 3) barre d’actions SOUS les chips
@@ -2580,6 +2594,7 @@ function updateSelectionUI(){
   // 5) compteur en-tête (si panneau propositions affiché)
   if (typeof chipsUpdateCount === 'function') chipsUpdateCount();
 }
+
 
 // Montre/cache la barre d'actions selon la sélection
 function toggleSelectionActions(){
