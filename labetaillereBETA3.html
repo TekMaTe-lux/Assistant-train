@@ -4,6 +4,8 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Comparatif Trains SNCF</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/nouislider@15.7.1/dist/nouislider.min.css">
+<script src="https://cdn.jsdelivr.net/npm/nouislider@15.7.1/dist/nouislider.min.js"></script>
   <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
   <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700&display=swap" rel="stylesheet">
   <style>
@@ -1723,7 +1725,35 @@ label[for="trainNumbers"]{ display: none !important; }
     grid-template-columns: 1fr; /* empile sur petit écran */
   }
 }
+/* grille 3 colonnes De/À/Date (déjà ajouté au tour précédent) */
+.command-console .filters-dea{
+  display:grid; gap:10px;
+  grid-template-columns: 1fr 1fr 0.8fr;
+}
+@media (max-width:980px){
+  .command-console .filters-dea{ grid-template-columns:1fr; }
+}
 
+/* Slider noUi – thème Tron */
+#timeSlider.noUi-target{
+  background:#0b1325; border:2px solid #00f0ff55; border-radius:12px;
+  box-shadow: 0 0 6px #00f0ff44 inset, 0 0 12px rgba(0,255,255,.2);
+}
+#timeSlider .noUi-connect{
+  background: linear-gradient(180deg,#00f0ff,#00d6ff);
+}
+#timeSlider .noUi-handle{
+  width:18px;height:18px;top:-7px;border-radius:50%;
+  background:#00f0ff;border:2px solid #00f0ff;
+  box-shadow:0 0 10px #00f0ff; cursor:grab;
+}
+#timeSlider .noUi-handle:active{ cursor:grabbing; }
+
+/* Masquage accessible des inputs conservés pour compat */
+.visually-hidden{
+  position:absolute !important; width:1px; height:1px;
+  padding:0; margin:-1px; overflow:hidden; clip:rect(0,0,1px,1px); white-space:nowrap; border:0;
+}
 </style>
 </head>
 <body>
@@ -1792,18 +1822,27 @@ label[for="trainNumbers"]{ display: none !important; }
   </div>
 </div>
 
-<!-- Ligne 2 : Horaire uniquement -->
+<!-- Ligne 2 : Slider horaire -->
 <div class="filters-row filters-datetime">
   <div class="filter-item time-range">
-    <label for="timeFrom">Horaire :</label>
-    <div class="time-inline">
-      <input type="time" id="timeFrom" value="06:00">
-      <span class="time-sep">à</span>
-      <input type="time" id="timeTo" value="10:00">
+    <label for="timeSlider">Horaire :</label>
+
+    <!-- Slider -->
+    <div id="timeSlider" class="time-slider" style="margin:10px 0;"></div>
+
+    <!-- Affichage live des valeurs -->
+    <div class="time-values" style="display:flex;align-items:center;gap:8px;">
+      <span id="timeFromLabel">06:00</span>
+      <span class="time-sep">→</span>
+      <span id="timeToLabel">10:00</span>
     </div>
+
+    <!-- Inputs conservés pour compat (ton JS lit #timeFrom/#timeTo) -->
+    <input type="time" id="timeFrom" value="06:00" class="visually-hidden" aria-hidden="true" tabindex="-1">
+    <input type="time" id="timeTo"   value="10:00" class="visually-hidden" aria-hidden="true" tabindex="-1">
   </div>
 </div>
-
+  
   <button id="btnProposer" class="mini-btn">Proposer</button>
 <div id="propositions" class="propositions"></div>
 
@@ -1994,7 +2033,7 @@ label[for="trainNumbers"]{ display: none !important; }
 </div>
   
  </body> 
-
+  
   <script>
 /* ---------- VISIBILITÉ DU BLOC PERTURBATIONS (au tout début) ---------- */
 const container = document.getElementById('disruptionsSummary');
@@ -2815,6 +2854,48 @@ $(function () {
   // Raccourcis Matin/Soir
   $('#btnMatin').off('click').on('click', ()=> usePresetEverywhere(PRESET_AM, 'AM'));
   $('#btnSoir').off('click').on('click',  ()=> usePresetEverywhere(PRESET_PM, 'PM'));
+
+  (function($){
+    // utilitaires
+    function hhmmToMin(v){ if(!v) return 0; const [h,m]=v.split(':').map(Number); return h*60 + m; }
+    function minToHHMM(n){
+      const m=((Math.round(n)%1440)+1440)%1440, h=Math.floor(m/60), mi=m%60;
+      return String(h).padStart(2,'0')+':'+String(mi).padStart(2,'0');
+    }
+
+    const initFrom = $('#timeFrom').val() || '06:00';
+    const initTo   = $('#timeTo').val()   || '10:00';
+
+    const sliderEl = document.getElementById('timeSlider');
+    if (!sliderEl || typeof noUiSlider === 'undefined') {
+      console.warn('noUiSlider non chargé ou #timeSlider introuvable.');
+      return;
+    }
+
+    noUiSlider.create(sliderEl, {
+      start: [ hhmmToMin(initFrom), hhmmToMin(initTo) ],
+      connect: true,
+      step: 5,
+      range: { min: 0, max: 1439 },
+      tooltips: [{ to: v => minToHHMM(v) }, { to: v => minToHHMM(v) }],
+      pips: { mode: 'positions', values: [0,25,50,75,100], density: 4 }
+    });
+
+    sliderEl.noUiSlider.on('update', function(values){
+      const a = minToHHMM(values[0]), b = minToHHMM(values[1]);
+      $('#timeFromLabel').text(a);
+      $('#timeToLabel').text(b);
+      $('#timeFrom').val(a);
+      $('#timeTo').val(b);
+    });
+
+    $('#btnMatin').off('click._slider').on('click._slider', function(){
+      sliderEl.noUiSlider.set([ hhmmToMin('06:00'), hhmmToMin('10:00') ]);
+    });
+    $('#btnSoir').off('click._slider').on('click._slider', function(){
+      sliderEl.noUiSlider.set([ hhmmToMin('16:00'), hhmmToMin('20:00') ]);
+    });
+  })(jQuery);
 
   // Bouton “Vider” (sous la sélection)
   $('#btnClearSelection').off('click').on('click', ()=>{
