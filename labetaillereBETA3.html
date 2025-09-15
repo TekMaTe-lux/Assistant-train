@@ -3377,7 +3377,7 @@ for (const num of numbers) {
 
 /* (1.5) Recenser les gares ajoutées (stop_time_effect = added) */
 const addedStopsNames = new Set();
-numbers.forEach(num => {
+numbersSorted.forEach(num => {
   const result = results[num];
   if (!result || !result.impacted) return;
   Object.values(result.impacted).forEach(imp => {
@@ -3393,7 +3393,7 @@ numbers.forEach(num => {
 
 /* 2) Gares présentes dans les trains */
 const stopsInTrains = new Set();
-numbers.forEach(num => {
+numbersSorted.forEach(num => {
   const train = results[num]?.train;
   if (!train) return;
   train.stop_times.forEach(s => stopsInTrains.add(s.stop_point.name));
@@ -3411,10 +3411,56 @@ const mergedStops = mergedStopsOrdered.concat(extrasNotInFixed);
 const startName = $('#startStation').val() || '';
 const endName   = $('#endStation').val() || '';
 const displayStops = filterByOD(mergedStops, startName, endName);
+    /* === TRI DES COLONNES PAR HEURE SUR LE COULOIR De→À === */
+
+// pivot = "De" si présent/visible ; sinon 1er arrêt affiché
+const pivot = (startName && displayStops.includes(startName)) ? startName : displayStops[0];
+
+// HHMM -> minutes (nom différent pour éviter conflit)
+function hhmmToMin2(t){
+  if (!t || t.length < 4) return null;
+  const h = parseInt(t.slice(0,2),10), m = parseInt(t.slice(2,4),10);
+  if (Number.isNaN(h) || Number.isNaN(m)) return null;
+  return h*60 + m;
+}
+
+// renvoie la 1ère heure (en minutes) du train "res" au pivot,
+// sinon au 1er arrêt suivant dans displayStops (priorité amended > base > théorique)
+function firstTimeOnCorridor(res, corridorStops, pivotName){
+  if (!res || res.error) return null;
+
+  const ordered = [pivotName, ...corridorStops.filter(n => n !== pivotName)];
+  for (const name of ordered){
+    const stop = res.train?.stop_times?.find(s => s.stop_point?.name === name);
+
+    const imp = stop
+      ? (res.impacted?.[stop.stop_point.id] || null)
+      : (Object.values(res.impacted || {}).find(x => x.stop_point?.name === name) || null);
+
+    const t = imp?.amended_departure_time || imp?.amended_arrival_time ||
+              imp?.base_departure_time    || imp?.base_arrival_time    ||
+              stop?.departure_time        || stop?.arrival_time        || null;
+
+    const v = hhmmToMin2(t);
+    if (v != null) return v;
+  }
+  return null; // rien trouvé → tri en fin
+}
+
+// copie triée des numéros selon l’heure de passage sur le corridor
+const numbersSorted = numbers.slice().sort((a,b)=>{
+  const ta = firstTimeOnCorridor(results[a], displayStops, pivot);
+  const tb = firstTimeOnCorridor(results[b], displayStops, pivot);
+  const va = (ta == null) ? 1e9 : ta;
+  const vb = (tb == null) ? 1e9 : tb;
+  if (va !== vb) return va - vb;
+  return a.localeCompare(b); // tie-break stable
+});
+
 
 /* 4) Construction du tableau */
 let html = '<table><thead><tr><th>Gare</th>';
-numbers.forEach(num => {
+numbersSorted.forEach(num => {
   const composition = (typeof compoData !== 'undefined' && compoData) ? compoData[num] : '';
   const compClass   = getCompoClass(composition); // us-train / um-train / um3-train / ''
   html += `<th class="train-header ${compClass}" data-train-number="${num}">${num}</th>`;
@@ -3422,7 +3468,7 @@ numbers.forEach(num => {
 html += '</tr><tr><th></th>';
 
 /* Ligne d’icônes (statut) */
-numbers.forEach(num => {
+numbersSorted.forEach(num => {
   const result = results[num];
   let icon = '', title = '';
   if (!result || result.error) {
@@ -3579,7 +3625,7 @@ html += '</tbody></table>';
     }
 
     let groupedDisruptions = {};
-numbers.forEach(num => {
+numbersSorted.forEach(num => {
   const result = results[num];
   if (result && result.disruptions && result.disruptions.length > 0) {
     result.disruptions.forEach(disruption => {
