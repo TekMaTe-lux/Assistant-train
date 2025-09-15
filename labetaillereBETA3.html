@@ -3800,6 +3800,28 @@ function chargerEtAfficherAlertes() {
     selectedDate.setHours(12, 0, 0, 0);
   }
 
+  // petit utilitaire local
+  const stripHtml = (s) => (s || '').replace(/<[^>]*>?/gm, '');
+
+  // détecte si une entité d'alerte cible un train affiché
+  function entityTargetsDisplayedTrain(ent, trains) {
+    const blob = [ent.trip_id, ent.vehicle_journey_id, ent.route_id, ent.name]
+      .filter(Boolean).join(' ');
+    const num = extraireNumeroTrainDepuisTripId(blob) || nettoyerNumeroTrain(blob);
+    return num && trains.includes(num);
+  }
+  function alertTargetsDisplayedTrains(alert, trains) {
+    return (alert.informed_entities || []).some(ent => entityTargetsDisplayedTrain(ent, trains));
+  }
+  function alertActiveForDate(alert, dateObj) {
+    const startMs = (alert.active_period_start != null) ? alert.active_period_start * 1000 : -Infinity;
+    const endMs   = (alert.active_period_end   != null) ? alert.active_period_end   * 1000 :  Infinity;
+    const dayStart = new Date(dateObj.getTime()); dayStart.setHours(0,0,0,0);
+    const dayEnd   = new Date(dateObj.getTime()); dayEnd.setHours(23,59,59,999);
+    // active si l’intervalle d’alerte recouvre au moins une partie de la journée choisie
+    return Math.max(startMs, dayStart.getTime()) <= Math.min(endMs, dayEnd.getTime());
+  }
+
   container.innerHTML = '<p>Chargement des alertes...</p>';
   container.style.display = 'flex';
 
@@ -3813,107 +3835,92 @@ function chargerEtAfficherAlertes() {
       titreGeneral.className = 'alertes-header';
       container.appendChild(titreGeneral);
 
-      let alertesFiltres = alertes.filter(alerte => {
-        const titre = alerte.header_text || '';
-        const descriptionHTML = alerte.description_text || '';
-        const description = descriptionHTML.replace(/<[^>]*>?/gm, '');
-        return contientMotCle(titre, motsCles) || contientMotCle(description, motsCles);
+      const trainsAffiches = getDisplayedTrainNumbers(); // ex: ["88753","88532",...]
+
+      // 1) Nouveau filtrage : ACTIF le jour choisi ET (vise un train affiché OU contient mot-clé)
+      let alertesFiltres = alertes.filter(a => {
+        const titre = a.header_text || '';
+        const desc  = stripHtml(a.description_text || '');
+        const hasKeyword = contientMotCle(titre, motsCles) || contientMotCle(desc, motsCles);
+        const hitsTrain  = alertTargetsDisplayedTrains(a, trainsAffiches);
+        const activeNow  = alertActiveForDate(a, selectedDate);
+        return activeNow && (hasKeyword || hitsTrain);
       });
 
-      const trainsAffiches = getDisplayedTrainNumbers();
-
-      alertesFiltres = alertesFiltres.filter(alerte => {
-        if (!alerte.informed_entities || alerte.informed_entities.length === 0) return false;
-        return alerte.informed_entities.some(ent => {
-          if (!ent.trip_id) return false;
-          const numTrain = extraireNumeroTrainDepuisTripId(ent.trip_id);
-          return numTrain && trainsAffiches.includes(numTrain);
-        });
-      });
-
-      alertesFiltres = alertesFiltres.filter(alerte => {
-        if (!alerte.active_period_start || !alerte.active_period_end) {
-          console.warn('Alerte sans période valide:', alerte);
-          return false;
-        }
-        const debut = new Date(alerte.active_period_start * 1000);
-        const fin = new Date(alerte.active_period_end * 1000);
-        debut.setHours(0, 0, 0, 0);
-        fin.setHours(23, 59, 59, 999);
-        return selectedDate >= debut && selectedDate <= fin;
-      });
-
-      alertesFiltres.sort((a, b) => {
-        const prioA = getStyleParCauseCode(a.cause || 0).prio;
-        const prioB = getStyleParCauseCode(b.cause || 0).prio;
-        return prioA - prioB;
+      // 2) Tri par priorité basée sur EFFECT (et plus "cause")
+      alertesFiltres.sort((A, B) => {
+        const pa = getStyleParCauseCode(A.effect).prio;
+        const pb = getStyleParCauseCode(B.effect).prio;
+        return pa - pb;
       });
 
       if (alertesFiltres.length === 0) {
-        container.innerHTML += '<p>Aucune alerte dans vos bétaillères.</p>';
+        container.innerHTML += '<p>Aucune information pour vos bétaillères.</p>';
         return;
       }
 
+      // 3) Rendu : titre SANS n° de train, sous-titre = trains concernés
       alertesFiltres.forEach(alerte => {
-        const titreBase = alerte.header_text || '';
-        let numeroTrain = null;
-        if (alerte.informed_entities) {
-          for (const ent of alerte.informed_entities) {
-            if (ent.trip_id) {
-              numeroTrain = extraireNumeroTrainDepuisTripId(ent.trip_id);
-              if (numeroTrain) break;
+        const effetCode = Number(alerte.effect);
+        const styleMeta = getStyleParCauseCode(effetCode);
+
+        const titre = (alerte.header_text || styleMeta.label).trim(); // ← pas de n°
+        const description = stripHtml(alerte.description_text || '');
+
+        // Liste unique des trains concernés
+        const trainsCibles = Array.from(new Set(
+          (alerte.informed_entities || [])
+            .map(ent => {
+              const blob = [ent.trip_id, ent.vehicle_journey_id, ent.route_id, ent.name].filter(Boolean).join(' ');
+              return extraireNumeroTrainDepuisTripId(blob) || nettoyerNumeroTrain(blob);
+            })
+            .filter(Boolean)
+        ));
+
+        // si "service réduit" (effect=2), pose un hint visuel sur l’entête de colonne du train
+        if (effetCode === 2 && trainsCibles.length) {
+          trainsCibles.forEach(numeroTrain => {
+            const header = document.querySelector(`th[data-train-number="${numeroTrain}"]`);
+            if (header) {
+              header.classList.add('us-train');
+              header.title = "Service réduit : réduction du nombre de places (UM ➜ US)";
             }
-          }
+          });
         }
 
-        const titre = numeroTrain ? `Train ${numeroTrain} - ${titreBase}` : titreBase;
-        const descriptionHTML = alerte.description_text || '';
-        const description = descriptionHTML.replace(/<[^>]*>?/gm, '');
-        const debutTS = alerte.active_period_start ? new Date(alerte.active_period_start * 1000) : null;
-        const finTS = alerte.active_period_end ? new Date(alerte.active_period_end * 1000) : null;
-        const causeCode = alerte.cause || 0;
-        const style = getStyleParCauseCode(causeCode);
-
-        if (causeCode === 2 && numeroTrain) {
-          const header = document.querySelector(`th[data-train-number="${numeroTrain}"]`);
-          if (header) {
-            header.classList.add('us-train');
-            header.title = "Service réduit : réduction du nombre de places (UM ➜ US)";
-          }
-        }
-
+        // couleur/icone via ta map existante
         let classeCouleur = 'alerte-box';
-        if (style.prio === 1) classeCouleur += ' red';
-        else if (style.prio === 2 || style.prio === 3) classeCouleur += ' orange';
+        if (styleMeta.prio === 1) classeCouleur += ' red';
+        else if (styleMeta.prio === 2 || styleMeta.prio === 3) classeCouleur += ' orange';
 
         const div = document.createElement('div');
         div.className = classeCouleur;
 
-        const titreDiv = document.createElement('div');
-        titreDiv.style.display = "flex";
-        titreDiv.style.alignItems = "center";
-        titreDiv.style.fontWeight = "600";
+        const headerDiv = document.createElement('div');
+        headerDiv.style.display = "flex";
+        headerDiv.style.alignItems = "center";
+        headerDiv.style.fontWeight = "600";
 
         const iconeSpan = document.createElement('span');
-        iconeSpan.textContent = style.icone;
+        iconeSpan.textContent = styleMeta.icone;
         iconeSpan.className = 'alerte-icon';
 
-        titreDiv.appendChild(iconeSpan);
-        titreDiv.appendChild(document.createTextNode(titre));
+        headerDiv.appendChild(iconeSpan);
+        headerDiv.appendChild(document.createTextNode(titre));
 
         const detailDiv = document.createElement('div');
         detailDiv.className = 'alerte-content';
         detailDiv.innerHTML = `
-          <p>${description}</p>
-          <p><em>Date début : ${formatDate(debutTS)} - Date fin : ${formatDate(finTS)}</em></p>
-          <p><strong>Cause :</strong> ${style.label} (code ${causeCode})</p>
+          ${description ? `<p>${description}</p>` : ''}
+          ${trainsCibles.length ? `<p style="opacity:.9;">Trains concernés : <strong>${trainsCibles.join(', ')}</strong></p>` : ''}
         `;
 
-        titreDiv.addEventListener('click', () => {
+        // toggle d’ouverture si tu veux garder le comportement accordéon
+        headerDiv.addEventListener('click', () => {
           div.classList.toggle('expanded');
         });
 
-        div.appendChild(titreDiv);
+        div.appendChild(headerDiv);
         div.appendChild(detailDiv);
         container.appendChild(div);
       });
