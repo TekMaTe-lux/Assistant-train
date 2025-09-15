@@ -2497,27 +2497,47 @@ function buildStationSelects() {
   fill(startSel, 'Toute la ligne');
   fill(endSel,   'Toute la ligne');
 }
-// — Helper: fixe le sens d’affichage pour les presets
+// — Helper: fixe le sens d’affichage ET force toujours De/À pour AM/PM
 function setDirectionForPreset(kind){
-  // AM = France -> Luxembourg ; PM = Luxembourg -> France
-  const sensInverse = (kind === 'PM'); // correspond à getStopsForDirection(sensInverse)
+  // AM = France → Luxembourg ; PM = Luxembourg → France
+  const sensInverse = (kind === 'PM');
+
+  // 1) Met à jour le toggle + reconstruit les listes dans le bon ordre
   if ($('#directionToggle').length){
     $('#directionToggle').prop('checked', sensInverse);
-    buildStationSelects(); // recharge les <select> De/À dans le bon ordre
+    buildStationSelects();
   }
-  // Si De/À sont vides, on met des valeurs par défaut cohérentes (sans forcer si l’utilisateur a choisi)
-  const hasStart = $('#startStation').val();
-  const hasEnd   = $('#endStation').val();
-  if (!hasStart && !hasEnd){
+
+  // 2) Force systématiquement De/À pour correspondre au preset cliqué
+  const $start = $('#startStation');
+  const $end   = $('#endStation');
+  const hasOpt = ($sel, v) => $sel.find(`option[value="${v}"]`).length > 0;
+
+  // on préfère Nancy si dispo, sinon Metz
+  const FR = hasOpt($start, 'Nancy') ? 'Nancy'
+           : hasOpt($start, 'Metz')  ? 'Metz'
+           : null;
+
+  // on suppose que Luxembourg est présent (au pire on tombe en fallback)
+  const LUX = hasOpt($start, 'Luxembourg') ? 'Luxembourg' : null;
+
+  if (FR && LUX){
     if (kind === 'AM'){
-      $('#startStation').val('Metz');        // départ France
-      $('#endStation').val('Luxembourg');    // arrivée Lux
+      $start.val(FR);         // France -> Lux
+      $end.val(LUX);
     } else {
-      $('#startStation').val('Luxembourg');  // départ Lux
-      $('#endStation').val('Metz');          // arrivée France
+      $start.val(LUX);        // Lux -> France
+      $end.val(FR);
+    }
+  } else {
+    // Fallback ultra robuste : premier ↔ dernier de la liste (hors option vide)
+    const opts = $start.find('option').map((_,o)=>o.value).get().filter(v=>v!=='');
+    if (opts.length >= 2){
+      if (kind === 'AM'){ $start.val(opts[0]); $end.val(opts[opts.length-1]); }
+      else { $start.val(opts[opts.length-1]); $end.val(opts[0]); }
     }
   }
-} 
+}
 // Filtre la portion entre la gare de départ et d’arrivée
 function filterByOD(orderedStops, startName, endName) {
   if (!startName && !endName) return orderedStops;
@@ -2848,9 +2868,15 @@ function renderChips(found, startName, endName){
    updateSelectionUI();
  });
 
- // Presets sur le panneau (sélectionne les cartes + UI)
- host.querySelector('#chipsAM')?.addEventListener('click', ()=> chipsSetSelection(PRESET_AM));
- host.querySelector('#chipsPM')?.addEventListener('click', ()=> chipsSetSelection(PRESET_PM));
+ // Presets sur le panneau : forcent aussi le sens De/À
+host.querySelector('#chipsAM')?.addEventListener('click', ()=>{
+  setDirectionForPreset('AM');
+  chipsSetSelection(PRESET_AM);
+});
+host.querySelector('#chipsPM')?.addEventListener('click', ()=>{
+  setDirectionForPreset('PM');
+  chipsSetSelection(PRESET_PM);
+});
 
  // Afficher = déclenche ton tableau
  host.querySelector('#chipsGo')?.addEventListener('click', ()=>{
@@ -3116,6 +3142,16 @@ $(function () {
   $('#trainDate').val(new Date().toISOString().slice(0,10));
   buildGareDropdown();
   buildStationSelects();
+
+  $('#directionToggle').off('change').on('change', function(){
+  const a = $('#startStation').val();
+  const b = $('#endStation').val();
+  buildStationSelects();   // reconstruit les options dans le nouveau sens
+  if (a && b){             // si les deux sont renseignés, on les échange
+    $('#startStation').val(b);
+    $('#endStation').val(a);
+  }
+});
 
   // cache la sélection au départ
   updateSelectionUI();
