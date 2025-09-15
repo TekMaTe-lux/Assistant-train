@@ -2732,6 +2732,100 @@ async function ensureGTFSLoaded(){
   GTFS = { stops, stopTimes, trips, calendarDates, stopNameToId, tripById, allowedByDate };
 }
 
+ /* ===== Helpers tri horaire (sélection) ===== */
+
+// petit parseur GTFS "HH:MM[:SS]" -> minutes
+function gtfsTimeToMin(t){
+  if(!t) return null;
+  const m = /^(\d{1,2}):(\d{2})/.exec(t);
+  if(!m) return null;
+  return parseInt(m[1],10)*60 + parseInt(m[2],10);
+}
+
+// construit l’index stop_times par trip_id une seule fois
+function ensureByTripIndex(){
+  if (GTFS.byTrip) return;
+  const m = new Map();
+  for(const st of GTFS.stopTimes){
+    if(!m.has(st.trip_id)) m.set(st.trip_id, []);
+    m.get(st.trip_id).push(st);
+  }
+  m.forEach(arr => arr.sort((a,b)=>Number(a.stop_sequence)-Number(b.stop_sequence)));
+  GTFS.byTrip = m;
+}
+
+// renvoie la liste d’arrêts affichés (corridor De→À) d’après les selects + sens
+function getCorridorStopsForSort(){
+  const sensInverse = $('#directionToggle').is(':checked');
+  const fixed = getStopsForDirection(sensInverse);
+  const startName = $('#startStation').val() || '';
+  const endName   = $('#endStation').val()   || '';
+  return filterByOD(fixed, startName, endName);
+}
+
+// 1ère heure trouvée pour un numéro (amended/base/teorique) sur le corridor (la + tôt)
+function firstTimeOnCorridorGTFS(trainNum, corridorStops, ymd){
+  if (!GTFS || !GTFS.trips || !GTFS.stopTimes || !GTFS.stopNameToId) return null;
+
+  ensureByTripIndex();
+
+  const stopIds = corridorStops.map(n => GTFS.stopNameToId.get(n)).filter(Boolean);
+
+  // filtre calendrier du jour
+  let allowed = null;
+  if (ymd && GTFS.allowedByDate && GTFS.allowedByDate.size>0){
+    allowed = GTFS.allowedByDate.get(ymd) || new Set();
+  }
+
+  // tous les trips qui portent ce numéro
+  const matches = GTFS.trips.filter(t=>{
+    const n = extractTrainNumber(t.trip_short_name || t.trip_id || '');
+    if (n !== trainNum) return false;
+    if (allowed && !allowed.has(t.service_id)) return false;
+    return true;
+  });
+
+  let best = null;
+  for(const trip of matches){
+    const sts = GTFS.byTrip.get(trip.trip_id) || [];
+    for(const sid of stopIds){
+      const st = sts.find(x => x.stop_id === sid);
+      if(!st) continue;
+      const v = gtfsTimeToMin(st.departure_time || st.arrival_time);
+      if (v != null && (best == null || v < best)) best = v;
+    }
+  }
+  return best; // peut être null
+}
+
+// tri d’une liste de numéros selon l’heure sur le corridor (nulls en dernier)
+function sortTrainNumbersByTime(arr){
+  if (!arr || arr.length <= 1) return arr;
+
+  // si GTFS pas prêt → on ne casse rien : on garde l’ordre (ou, au pire, tri numérique)
+  if (!GTFS || !GTFS.trips || !GTFS.stopTimes || !GTFS.stopNameToId) {
+    return arr.slice().sort((a,b)=>a.localeCompare(b));
+  }
+
+  const ymd = dateInputToYMD($('#trainDate').val());
+  const corridor = getCorridorStopsForSort();
+  const cache = new Map();
+
+  const val = (n)=>{
+    if(cache.has(n)) return cache.get(n);
+    let v = firstTimeOnCorridorGTFS(n, corridor, ymd);
+    if (v == null) v = 1e9; // pousse en fin
+    cache.set(n, v);
+    return v;
+  };
+
+  return arr.slice().sort((a,b)=>{
+    const va = val(a), vb = val(b);
+    if (va !== vb) return va - vb;
+    return a.localeCompare(b); // tie-break stable
+  });
+}   
+
 // "YYYY-MM-DD" -> "YYYYMMDD"
 function dateInputToYMD(str){
   if(!str || !/^\d{4}-\d{2}-\d{2}$/.test(str)) return null;
@@ -2952,9 +3046,26 @@ function chipsUpdateCount(){
 }
 
 function updateSelectionUI(){
-  const arr = Array.from(selectedTrains || []);
+  // 0) récupère la sélection actuelle
+  let arr = Array.from(selectedTrains || []);
 
-  // 1) compat input CSV
+  // 1a) essaie de la trier à l’heure (GTFS) → même si ajout manuel
+  try {
+    const sorted = sortTrainNumbersByTime(arr);
+    // si l’ordre change, on réécrit le Set pour figer le nouvel ordre d’itération
+    const changed = (sorted.length !== arr.length) || sorted.some((v,i)=>v !== arr[i]);
+    if (changed){
+      selectedTrains.clear();
+      sorted.forEach(n => selectedTrains.add(n));
+      arr = sorted;
+    } else {
+      arr = sorted; // identique, mais on garde la même ref
+    }
+  } catch(e){
+    console.warn('Tri horaire indisponible, on garde l’ordre courant.', e);
+  }
+
+  // 1b) met à jour l’input CSV dans l’ORDRE TRIÉ
   const input = document.getElementById('trainNumbers');
   if (input) input.value = arr.join(',');
 
@@ -3189,6 +3300,25 @@ $(function () {
   // Bouton “Proposer” -> lance la recherche
   $('#btnProposer').off('click').on('click', proposerTrainsOD);
 
+
+// dès que le sens ou De/À changent, on re-trie l’affichage de la sélection
+$(document).on('change', '#startStation, #endStation', updateSelectionUI);
+
+// si tu as un toggle de sens :
+$('#directionToggle').off('change._sort').on('change._sort', function(){
+  // ta logique existante...
+  const a = $('#startStation').val();
+  const b = $('#endStation').val();
+  buildStationSelects();
+  if (a && b){ $('#startStation').val(b); $('#endStation').val(a); }
+  // puis re-tri de la sélection
+  updateSelectionUI();
+});
+
+// les boutons AM/PM appellent déjà setDirectionForPreset ; on force un update juste après
+$('#btnMatin').off('click._resort').on('click._resort', ()=> setTimeout(updateSelectionUI, 0));
+$('#btnSoir').off('click._resort').on('click._resort',  ()=> setTimeout(updateSelectionUI, 0));
+  
   // Applique un preset partout (sélection + UI + éventuelles cartes visibles)
   function usePresetEverywhere(list, kind){
     setDirectionForPreset(kind);
@@ -3377,7 +3507,7 @@ for (const num of numbers) {
 
 /* (1.5) Recenser les gares ajoutées (stop_time_effect = added) */
 const addedStopsNames = new Set();
-numbersSorted.forEach(num => {
+numbers.forEach(num => {
   const result = results[num];
   if (!result || !result.impacted) return;
   Object.values(result.impacted).forEach(imp => {
@@ -3393,7 +3523,7 @@ numbersSorted.forEach(num => {
 
 /* 2) Gares présentes dans les trains */
 const stopsInTrains = new Set();
-numbersSorted.forEach(num => {
+numbers.forEach(num => {
   const train = results[num]?.train;
   if (!train) return;
   train.stop_times.forEach(s => stopsInTrains.add(s.stop_point.name));
@@ -3448,7 +3578,7 @@ function firstTimeOnCorridor(res, corridorStops, pivotName){
 }
 
 // copie triée des numéros selon l’heure de passage sur le corridor
-const numbersSorted = numbers.slice().sort((a,b)=>{
+const numbers = numbers.slice().sort((a,b)=>{
   const ta = firstTimeOnCorridor(results[a], displayStops, pivot);
   const tb = firstTimeOnCorridor(results[b], displayStops, pivot);
   const va = (ta == null) ? 1e9 : ta;
@@ -3460,7 +3590,7 @@ const numbersSorted = numbers.slice().sort((a,b)=>{
 
 /* 4) Construction du tableau */
 let html = '<table><thead><tr><th>Gare</th>';
-numbersSorted.forEach(num => {
+numbers.forEach(num => {
   const composition = (typeof compoData !== 'undefined' && compoData) ? compoData[num] : '';
   const compClass   = getCompoClass(composition); // us-train / um-train / um3-train / ''
   html += `<th class="train-header ${compClass}" data-train-number="${num}">${num}</th>`;
@@ -3468,7 +3598,7 @@ numbersSorted.forEach(num => {
 html += '</tr><tr><th></th>';
 
 /* Ligne d’icônes (statut) */
-numbersSorted.forEach(num => {
+numbers.forEach(num => {
   const result = results[num];
   let icon = '', title = '';
   if (!result || result.error) {
@@ -3625,7 +3755,7 @@ html += '</tbody></table>';
     }
 
     let groupedDisruptions = {};
-numbersSorted.forEach(num => {
+numbers.forEach(num => {
   const result = results[num];
   if (result && result.disruptions && result.disruptions.length > 0) {
     result.disruptions.forEach(disruption => {
