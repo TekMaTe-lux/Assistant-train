@@ -3263,14 +3263,23 @@ document.getElementById('propositions')?.replaceChildren();
 
     $('#trainInfo').html('<p>Chargement de vos bétaillères…</p>');
 
-    // On va (re)générer un tableau
+/* ===== Helper compo (US / UM / UM3) ===== */
+function getCompoClass(comp){
+  const c = (comp || '').toString().trim().toUpperCase().replace(/\s+/g,'');
+  if (c === 'US') return 'us-train';
+  if (c === 'UM3' || c === 'UMX3' || c === 'UM-3') return 'um3-train';
+  if (c.startsWith('UM')) return 'um-train'; // fallback UM/UM2
+  return '';
+}
+
+/* On va (re)générer un tableau */
 mainTableRendered = true;
-// On supprime totalement le panneau de propositions
+/* On supprime totalement le panneau de propositions */
 document.getElementById('propositions')?.replaceChildren();
 
-    const results = {};
+const results = {};
 
-// 1) Récupération des données API pour chaque train
+/* 1) Récupération des données API pour chaque train */
 for (const num of numbers) {
   const url = `https://assistant-train-cx5u.vercel.app/api/train?id=vehicle_journeys/vehicle_journey:SNCF:${date}:${num}:1187:Train`;
   try {
@@ -3287,8 +3296,7 @@ for (const num of numbers) {
       if (d.cause && !disruptionCauses.includes(d.cause)) disruptionCauses.push(d.cause);
       for (const o of d.impacted_objects || []) {
         for (const s of o.impacted_stops || []) {
-          // on enregistre l'impact par stop_point.id
-          impacted[s.stop_point.id] = s;
+          impacted[s.stop_point.id] = s; // index par stop_point.id
         }
       }
     }
@@ -3314,7 +3322,7 @@ for (const num of numbers) {
   }
 }
 
-// === (1.5) Recenser les gares "ajoutées" via impacted_stops ===
+/* (1.5) Recenser les gares ajoutées (stop_time_effect = added) */
 const addedStopsNames = new Set();
 numbers.forEach(num => {
   const result = results[num];
@@ -3330,7 +3338,7 @@ numbers.forEach(num => {
   });
 });
 
-// 2) Gares réellement présentes dans les trains (base)
+/* 2) Gares présentes dans les trains */
 const stopsInTrains = new Set();
 numbers.forEach(num => {
   const train = results[num]?.train;
@@ -3338,29 +3346,29 @@ numbers.forEach(num => {
   train.stop_times.forEach(s => stopsInTrains.add(s.stop_point.name));
 });
 
-// 3) Liste filtrée en gardant l’ordre de la ligne + ajouts "added"
+/* 3) Ordre de ligne + ajouts "added" */
 const mergedStopsOrdered = fixedStops.filter(
   name => stopsInTrains.has(name) || addedStopsNames.has(name)
 );
-// si un arrêt ajouté n’existe pas dans fixedStops (rare), on le met à la fin
+// si un arrêt ajouté n’existe pas dans fixedStops, on le met à la fin
 const extrasNotInFixed = [...addedStopsNames].filter(n => !fixedStops.includes(n));
 const mergedStops = mergedStopsOrdered.concat(extrasNotInFixed);
 
-// 🔹 Filtre De/À pour l’affichage (le tableau reste basé sur "numbers")
+/* Filtre De/À pour l’affichage */
 const startName = $('#startStation').val() || '';
 const endName   = $('#endStation').val() || '';
 const displayStops = filterByOD(mergedStops, startName, endName);
 
-// 4) Construction du tableau
+/* 4) Construction du tableau */
 let html = '<table><thead><tr><th>Gare</th>';
 numbers.forEach(num => {
-const composition = compoData[num];                 // "US", "UM", "UM3", etc.
-const compClass   = getCompoClass(composition);     // → us-train / um3-train / um-train / ''
-html += `<th class="train-header ${compClass}" data-train-number="${num}">${num}</th>`;
-
+  const composition = (typeof compoData !== 'undefined' && compoData) ? compoData[num] : '';
+  const compClass   = getCompoClass(composition); // us-train / um-train / um3-train / ''
+  html += `<th class="train-header ${compClass}" data-train-number="${num}">${num}</th>`;
 });
 html += '</tr><tr><th></th>';
 
+/* Ligne d’icônes (statut) */
 numbers.forEach(num => {
   const result = results[num];
   let icon = '', title = '';
@@ -3368,7 +3376,7 @@ numbers.forEach(num => {
     icon = '❌'; title = result?.error || 'Erreur';
   } else {
     const disruptions = result.disruptions || [];
-    const impacted = result.impacted;
+    const impacted = result.impacted || {};
     const hasDelay = Object.values(impacted).some(s =>
       (s.amended_departure_time || s.amended_arrival_time) &&
       (s.base_departure_time || s.base_arrival_time) &&
@@ -3384,14 +3392,14 @@ numbers.forEach(num => {
 
     if (isFull) {
       icon = '❌'; title = 'Train supprimé';
-      if (result.disruptionCauses.length) title += ' : ' + result.disruptionCauses.join(', ');
-      icon = `<span class="blink-red-icon">${icon}</span>`;
+      if (result.disruptionCauses?.length) title += ' : ' + result.disruptionCauses.join(', ');
+      // ⚠️ pas de barré/rouge ici, on garde les barrés seulement dans les cases horaires
     } else if (isPartial || isPartialEnd) {
       icon = '⚠️'; title = 'Suppression partielle';
-      if (result.disruptionCauses.length) title += ' : ' + result.disruptionCauses.join(', ');
+      if (result.disruptionCauses?.length) title += ' : ' + result.disruptionCauses.join(', ');
     } else if (hasDelay) {
       icon = '⏰'; title = 'Retard';
-      if (result.disruptionCauses.length) title += ' : ' + result.disruptionCauses.join(', ');
+      if (result.disruptionCauses?.length) title += ' : ' + result.disruptionCauses.join(', ');
     } else {
       icon = ''; title = 'Sans perturbation';
     }
@@ -3401,21 +3409,21 @@ numbers.forEach(num => {
 
 html += '</tr></thead><tbody>';
 
-// 5) Lignes
+/* 5) Lignes (gares) */
 for (const stopName of displayStops) {
   html += `<tr><td>${stopName}</td>`;
 
-  numbers.forEach(num => {
+  for (const num of numbers) {
     const result = results[num];
     if (!result || result.error) {
       html += `<td class="deleted">${result?.error || 'Erreur'}</td>`;
-      return;
+      continue;
     }
 
-    // (a) stop "de base" (horaire théorique)
+    // (a) stop théorique (dans le trip de base)
     let stop = result.train.stop_times.find(s => s.stop_point.name === stopName);
 
-    // (b) impact : par id si on a un stop, sinon on cherche par nom (cas "added")
+    // (b) impact : par id si on a un stop, sinon par nom (cas "added")
     let imp = null;
     if (stop) {
       imp = result.impacted[stop.stop_point.id] || null;
@@ -3423,7 +3431,7 @@ for (const stopName of displayStops) {
       imp = Object.values(result.impacted).find(x => x.stop_point?.name === stopName) || null;
     }
 
-    // (c) base/amended
+    // (c) heures base/amended
     const base =
       (imp && (imp.base_departure_time || imp.base_arrival_time)) ||
       (stop && (stop.departure_time || stop.arrival_time)) ||
@@ -3433,6 +3441,7 @@ for (const stopName of displayStops) {
       (imp && (imp.amended_departure_time || imp.amended_arrival_time)) ||
       null;
 
+    // statuts
     const departureDeleted = imp?.departure_status === 'deleted';
     const arrivalDeleted   = imp?.arrival_status === 'deleted';
     const isStopDeleted    = departureDeleted && arrivalDeleted;
@@ -3444,58 +3453,53 @@ for (const stopName of displayStops) {
     const newEndIndex   = result.train.stop_times.findIndex(s => s.stop_point.id === result.newEnd);
     const originalEndId = result.train.stop_times[result.train.stop_times.length - 1]?.stop_point?.id;
 
-    let content = '-';
-
-    // === ARRÊT AJOUTÉ : pas de stop "base" mais amended présent & statut added ===
+    // === ARRÊT AJOUTÉ ===
     const isAddedStop =
       !!amended &&
       (!base || !stop) &&
       (imp?.stop_time_effect === 'added' || imp?.departure_status === 'added' || imp?.arrival_status === 'added');
 
     if (isAddedStop) {
-  const t = amended || base; // sécurité si amended manquant
-  content = `<span class="added-stop" title="Arrêt exceptionnel">${ft(t)}</span>`;
-  html += `<td>${content}</td>`;
-  return;
-}
-
-    // === Cas normal (avec base disponible) ===
-    if (base) {
-      content = ft(base);
-
-      const isFirstStop = stopName === result.train.stop_times[0]?.stop_point?.name;
-      const isLastStop  = stopName === result.train.stop_times[result.train.stop_times.length - 1]?.stop_point?.name;
-
-      const isFull = result.disruptions.some(d => ['NO_SERVICE','CANCELLATION'].includes(d.severity?.effect));
-      if (isFull) {
-        content = `<span class="deleted">${content}</span>`;
-      } else if (imp && imp.stop_point && imp.stop_point.id === result.newStart && index > 0) {
-        content = `<span class="new-start">${content}</span>`;
-      } else if (imp && imp.stop_point && imp.stop_point.id === result.newEnd && imp.stop_point.id !== originalEndId) {
-        if (amended && dl(base, amended) > 0) {
-          content = `<span class="delay-strike blink-red">${ft(base)}</span><br><span class="delayed">${ft(amended)}</span>`;
-        } else {
-          content = `<span class="delay-strike blink-red">${ft(base)}</span>`;
-        }
-      } else if (
-        isStopDeleted ||
-        (newStartIndex >= 0 && index >= 0 && index < newStartIndex) ||
-        (newEndIndex   >= 0 && index >= 0 && index > newEndIndex)
-      ) {
-        content = `<span class="deleted">${content}</span>`;
-      } else if (amended && dl(base, amended) > 0) {
-        content = `<span class="delay-strike">${ft(base)}</span><br><span class="delayed">${ft(amended)}</span>`;
-      } else if (isFirstStop || isLastStop) {
-        content = `<strong>${content}</strong>`;
-      }
-
-      html += `<td>${content}</td>`;
-      return;
+      html += `<td><span class="added-stop" title="Arrêt exceptionnel">${ft(amended)}</span></td>`;
+      continue;
     }
 
-    // === pas de base et pas reconnu "added" => pas d'heure pour ce train à cette gare
-    html += `<td>-</td>`;
-  });
+    // === cas normal ===
+    if (!base) {
+      html += `<td>-</td>`;
+      continue;
+    }
+
+    let content = ft(base);
+
+    const isFirstStop = stopName === result.train.stop_times[0]?.stop_point?.name;
+    const isLastStop  = stopName === result.train.stop_times[result.train.stop_times.length - 1]?.stop_point?.name;
+
+    const isFull = result.disruptions.some(d => ['NO_SERVICE','CANCELLATION'].includes(d.severity?.effect));
+    if (isFull) {
+      content = `<span class="deleted">${content}</span>`;
+    } else if (imp && imp.stop_point && imp.stop_point.id === result.newStart && index > 0) {
+      content = `<span class="new-start">${content}</span>`;
+    } else if (imp && imp.stop_point && imp.stop_point.id === result.newEnd && imp.stop_point.id !== originalEndId) {
+      if (amended && dl(base, amended) > 0) {
+        content = `<span class="delay-strike blink-red">${ft(base)}</span><br><span class="delayed">${ft(amended)}</span>`;
+      } else {
+        content = `<span class="delay-strike blink-red">${ft(base)}</span>`;
+      }
+    } else if (
+      isStopDeleted ||
+      (newStartIndex >= 0 && index >= 0 && index < newStartIndex) ||
+      (newEndIndex   >= 0 && index >= 0 && index > newEndIndex)
+    ) {
+      content = `<span class="deleted">${content}</span>`;
+    } else if (amended && dl(base, amended) > 0) {
+      content = `<span class="delay-strike">${ft(base)}</span><br><span class="delayed">${ft(amended)}</span>`;
+    } else if (isFirstStop || isLastStop) {
+      content = `<strong>${content}</strong>`;
+    }
+
+    html += `<td>${content}</td>`;
+  }
 
   html += '</tr>';
 }
