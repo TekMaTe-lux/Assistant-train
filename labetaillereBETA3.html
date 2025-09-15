@@ -2518,6 +2518,7 @@ function setDirectionForPreset(kind){
     }
   }
 } 
+
 // Filtre la portion entre la gare de départ et d’arrivée
 function filterByOD(orderedStops, startName, endName) {
   if (!startName && !endName) return orderedStops;
@@ -3123,45 +3124,38 @@ $(function () {
   // Bouton “Proposer” -> lance la recherche
   $('#btnProposer').off('click').on('click', proposerTrainsOD);
 
+  // ===== Utilitaires HH:MM <-> minutes (partagés slider + AM/PM) =====
+  function hhmmToMin(v){ if(!v) return 0; const [h,m]=v.split(':').map(Number); return h*60 + m; }
+  function minToHHMM(n){
+    const m=((Math.round(n)%1440)+1440)%1440, h=Math.floor(m/60), mi=m%60;
+    return String(h).padStart(2,'0')+':'+String(mi).padStart(2,'0');
+  }
+
   // Helper : oriente sens + valeurs De/À pour AM/PM
   function setDirectionForPreset(kind){
     if ($('#directionToggle').length){
       const wantLuxToFr = (kind === 'PM'); // soir = Lux -> France
       $('#directionToggle').prop('checked', wantLuxToFr);
-      buildStationSelects();
+      buildStationSelects(); // reconstruit les listes dans le bon ordre
     }
-    // valeurs par défaut si vides
+    // valeurs par défaut si vides (on ne force pas si l’utilisateur a déjà choisi)
     if (!$('#startStation').val() && !$('#endStation').val()){
       if (kind === 'AM'){ $('#startStation').val('Metz'); $('#endStation').val('Luxembourg'); }
       else { $('#startStation').val('Luxembourg'); $('#endStation').val('Metz'); }
     }
   }
 
-  // Applique un preset partout (sélection + UI + éventuelles cartes visibles)
-  function usePresetEverywhere(list, kind){
-    setDirectionForPreset(kind);
-    selectedTrains.clear();
-    if (document.querySelector('#propositions .chip')) {
-      chipsSetSelection(list); // coche visuellement si cartes présentes + met à jour selectedTrains
-    } else {
-      list.forEach(n => selectedTrains.add(n));
-      updateSelectionUI();     // construit/affiche les chips + actions sous la sélection
-    }
-    if (typeof chipsUpdateCount === 'function') chipsUpdateCount();
-  }
+  // Rebuild De/À si l’utilisateur change le sens via le toggle (préserve les choix actuels)
+  $('#directionToggle').off('change').on('change', function(){
+    const a = $('#startStation').val();
+    const b = $('#endStation').val();
+    buildStationSelects();
+    if (a) $('#startStation').val(a);
+    if (b) $('#endStation').val(b);
+  });
 
-  // Raccourcis Matin/Soir
-  $('#btnMatin').off('click').on('click', ()=> usePresetEverywhere(PRESET_AM, 'AM'));
-  $('#btnSoir').off('click').on('click',  ()=> usePresetEverywhere(PRESET_PM, 'PM'));
-
+  // ===== Slider horaire (noUiSlider) =====
   (function($){
-    // utilitaires
-    function hhmmToMin(v){ if(!v) return 0; const [h,m]=v.split(':').map(Number); return h*60 + m; }
-    function minToHHMM(n){
-      const m=((Math.round(n)%1440)+1440)%1440, h=Math.floor(m/60), mi=m%60;
-      return String(h).padStart(2,'0')+':'+String(mi).padStart(2,'0');
-    }
-
     const initFrom = $('#timeFrom').val() || '06:00';
     const initTo   = $('#timeTo').val()   || '10:00';
 
@@ -3172,16 +3166,12 @@ $(function () {
     }
 
     noUiSlider.create(sliderEl, {
-  start: [ hhmmToMin(initFrom), hhmmToMin(initTo) ],
-  connect: true,
-  step: 5,
-  range: { min: 0, max: 1439 },
-
-  tooltips: [
-    { to: v => minToHHMM(v) },
-    { to: v => minToHHMM(v) }
-  ],
-});
+      start: [ hhmmToMin(initFrom), hhmmToMin(initTo) ],
+      connect: true,
+      step: 5,
+      range: { min: 0, max: 1439 },
+      tooltips: false // désactive l'heure au-dessus des poignées
+    });
 
     sliderEl.noUiSlider.on('update', function(values){
       const a = minToHHMM(values[0]), b = minToHHMM(values[1]);
@@ -3190,16 +3180,22 @@ $(function () {
       $('#timeFrom').val(a);
       $('#timeTo').val(b);
     });
-
-    $('#btnMatin').off('click._slider').on('click._slider', function(){
-      sliderEl.noUiSlider.set([ hhmmToMin('06:00'), hhmmToMin('10:00') ]);
-    });
-    $('#btnSoir').off('click._slider').on('click._slider', function(){
-      sliderEl.noUiSlider.set([ hhmmToMin('16:00'), hhmmToMin('20:00') ]);
-    });
   })(jQuery);
 
-  // Bouton “Vider” (sous la sélection)
+  // ===== Raccourcis Matin/Soir (fixent sens + slider) =====
+  $('#btnMatin').off('click.preset').on('click.preset', function () {
+    setDirectionForPreset('AM'); // France -> Luxembourg
+    const s = document.getElementById('timeSlider');
+    if (s && s.noUiSlider) s.noUiSlider.set([ hhmmToMin('06:00'), hhmmToMin('10:00') ]);
+  });
+
+  $('#btnSoir').off('click.preset').on('click.preset', function () {
+    setDirectionForPreset('PM'); // Luxembourg -> France
+    const s = document.getElementById('timeSlider');
+    if (s && s.noUiSlider) s.noUiSlider.set([ hhmmToMin('16:00'), hhmmToMin('20:00') ]);
+  });
+
+  // ===== Sélection : Vider / Saisie manuelle =====
   $('#btnClearSelection').off('click').on('click', ()=>{
     selectedTrains.clear();
     // décocher visuellement les cartes si visibles
@@ -3220,7 +3216,7 @@ $(function () {
     updateSelectionUI();
   });
 
- function addManualTrain(){
+  function addManualTrain(){
     const $inp = $('#manualTrainInput');
     if (!$inp.length) return;
     const raw = ($inp.val() || '').trim();
@@ -3240,7 +3236,8 @@ $(function () {
   $(document).on('click', '#btnAddTrain', addManualTrain);
   $(document).on('keydown', '#manualTrainInput', function(e){
     if (e.key === 'Enter') addManualTrain();
-  }); 
+  });
+});
 
   // Bouton “Générer le tableau”
   $('#loadTrains').off('click').on('click', async function () {
