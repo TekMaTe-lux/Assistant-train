@@ -2623,48 +2623,6 @@ if (!document.getElementById('css-row-focus')) {
   st.textContent = `.row-focus{outline:2px solid #00ffff;box-shadow:0 0 0 2px #00ffff inset}`;
   document.head.appendChild(st);
 }
-// CSS pour DnD fluide + mobile (rail horizontal)
-(function(){
-  const css = `
-    #selectionChips{
-      display:flex;
-      flex-wrap:nowrap;          /* 🚫 plus de colonnes */
-      overflow-x:auto;           /* rail scrollable */
-      gap:8px;
-      align-items:flex-start;
-      padding-bottom:6px;
-      -webkit-overflow-scrolling:touch;
-      overscroll-behavior:contain;
-      scroll-snap-type:x proximity;
-    }
-    #selectionChips::-webkit-scrollbar{ height:6px }
-    #selectionChips .chip-tag{
-      flex:0 0 auto;             /* largeur fixe, pas de shrink */
-      cursor:grab;
-      user-select:none;
-      touch-action:none;         /* évite le scroll pendant drag */
-      scroll-snap-align:start;
-      transition: transform 150ms ease, opacity 150ms ease;
-    }
-    #selectionChips .chip-tag.dragging{ opacity:.85; cursor:grabbing; z-index:5 }
-    #selectionChips .chip-placeholder{
-      width:var(--ph-w,64px);
-      height:var(--ph-h,28px);
-      border:2px dashed #00ffff66;
-      border-radius:16px;
-      margin:0 2px;
-      flex:0 0 auto;
-    }
-    .chip-ghost{
-      position:fixed; left:0; top:0; transform:translate(-50%,-50%);
-      pointer-events:none; margin:0; z-index:9999; transition:none;
-      box-shadow:0 8px 24px rgba(0,0,0,.18);
-    }
-  `;
-  const old = document.getElementById('css-dnd-chips');
-  if (old) old.textContent = css;
-  else { const st=document.createElement('style'); st.id='css-dnd-chips'; st.textContent=css; document.head.appendChild(st); }
-})();
 
 /* ---------- LIENS GARES ---------- */
 const gareLiensLux = {
@@ -2772,6 +2730,90 @@ async function ensureGTFSLoaded(){
   });
 
   GTFS = { stops, stopTimes, trips, calendarDates, stopNameToId, tripById, allowedByDate };
+/* ===== Tri sélection : helpers & cache ===== */
+let autoSortSelection = true;
+const timeCache = new Map(); // clé: `${num}|${ymd}|${start}|${end}|${sensInverse}` -> minutes
+
+function gtfsTimeToMin(t){
+  if (!t) return null;
+  const m = /^(\d{1,2}):(\d{2})/.exec(t);
+  if (!m) return null;
+  return parseInt(m[1],10)*60 + parseInt(m[2],10);
+}
+
+function ensureByTripIndex(){
+  if (GTFS.byTrip) return;
+  const m = new Map();
+  for(const st of GTFS.stopTimes){
+    if(!m.has(st.trip_id)) m.set(st.trip_id, []);
+    m.get(st.trip_id).push(st);
+  }
+  m.forEach(arr => arr.sort((a,b)=>Number(a.stop_sequence)-Number(b.stop_sequence)));
+  GTFS.byTrip = m;
+}
+
+function getCorridorStops(){
+  const sensInverse = $('#directionToggle').is(':checked');
+  const fixed = getStopsForDirection(sensInverse);
+  const startName = $('#startStation').val() || '';
+  const endName   = $('#endStation').val()   || '';
+  return filterByOD(fixed, startName, endName);
+}
+
+function firstTimeForNumberGTFS(num){
+  if (!GTFS || !GTFS.trips || !GTFS.stopTimes || !GTFS.stopNameToId) return null;
+
+  const ymd = dateInputToYMD($('#trainDate').val());
+  const sensInverse = $('#directionToggle').is(':checked') ? '1' : '0';
+  const startName = $('#startStation').val() || '';
+  const endName   = $('#endStation').val()   || '';
+  const cacheKey = `${num}|${ymd}|${startName}|${endName}|${sensInverse}`;
+  if (timeCache.has(cacheKey)) return timeCache.get(cacheKey);
+
+  ensureByTripIndex();
+
+  const corridor = getCorridorStops();
+  const stopIds = corridor.map(n => GTFS.stopNameToId.get(n)).filter(Boolean);
+
+  let allowed = null;
+  if (ymd && GTFS.allowedByDate && GTFS.allowedByDate.size>0){
+    allowed = GTFS.allowedByDate.get(ymd) || new Set();
+  }
+
+  let best = null;
+  for(const t of GTFS.trips){
+    const n = extractTrainNumber(t.trip_short_name || t.trip_id || '');
+    if (n !== num) continue;
+    if (allowed && !allowed.has(t.service_id)) continue;
+
+    const sts = GTFS.byTrip.get(t.trip_id) || [];
+    for(const sid of stopIds){
+      const st = sts.find(x => x.stop_id === sid);
+      if(!st) continue;
+      const v = gtfsTimeToMin(st.departure_time || st.arrival_time);
+      if (v != null && (best == null || v < best)) best = v;
+    }
+  }
+
+  timeCache.set(cacheKey, best);
+  return best;
+}
+
+function sortTrainNumbersByTime(arr){
+  if (!arr || arr.length <= 1) return arr;
+  if (!GTFS || !GTFS.trips || !GTFS.stopTimes || !GTFS.stopNameToId){
+    // fallback simple si GTFS pas prêt
+    return arr.slice().sort((a,b)=>a.localeCompare(b));
+  }
+  return arr.slice().sort((a,b)=>{
+    const va = firstTimeForNumberGTFS(a);
+    const vb = firstTimeForNumberGTFS(b);
+    const A = (va==null) ? 1e9 : va;
+    const B = (vb==null) ? 1e9 : vb;
+    if (A !== B) return A - B;
+    return a.localeCompare(b);
+  });
+}
 }
 
 // "YYYY-MM-DD" -> "YYYYMMDD"
@@ -2994,13 +3036,26 @@ function chipsUpdateCount(){
 }
 
 function updateSelectionUI(){
-  const arr = Array.from(selectedTrains || []);
+  // 0) récupère la sélection (Set -> Array)
+  let arr = Array.from(selectedTrains || []);
 
-  // 1) compat input CSV
+  // 1) TRI AUTO si activé
+  if (autoSortSelection) {
+    try {
+      arr = sortTrainNumbersByTime(arr); // tri corridor De→À
+      // stabilise l'ordre interne du Set
+      selectedTrains.clear();
+      arr.forEach(n => selectedTrains.add(n));
+    } catch(e){
+      console.warn('Tri auto indisponible, on garde l’ordre courant.', e);
+    }
+  }
+
+  // 2) met à jour l’input CSV dans l’ordre courant (trié ou manuel)
   const input = document.getElementById('trainNumbers');
   if (input) input.value = arr.join(',');
 
-  // 2) rendu des chips sélection
+  // 3) rendu des chips sélection
   const zone = document.getElementById('selectionChips');
   if (zone){
     zone.innerHTML = arr.map(num => `
@@ -3020,10 +3075,7 @@ function updateSelectionUI(){
         chipsUpdateCount();
         updateSelectionUI();
       };
-      tag.addEventListener('click', (e)=>{
-  if (tag.classList.contains('dragging')) return; // évite le clic fantôme après un drag
-  remove();
-});
+      tag.addEventListener('click', remove);
       tag.addEventListener('keydown', (e)=>{
         if (e.key === 'Enter' || e.key === ' ') {
           e.preventDefault();
@@ -3036,29 +3088,73 @@ function updateSelectionUI(){
     if (!document.getElementById('selectionBlock')) {
       zone.hidden = (arr.length === 0);
     }
-    // Active le drag & drop manuel sur les chips sélection
-attachDndToSelectionChips();
+
+    /* === Drag & Drop pour ordre manuel (actif seulement si tri auto OFF) === */
+    const enableDrag = !autoSortSelection;
+    let dragSrc = null;
+
+    zone.querySelectorAll('.chip-tag').forEach(tag=>{
+      tag.setAttribute('draggable', enableDrag ? 'true' : 'false');
+
+      tag.addEventListener('dragstart', (e)=>{
+        if (!enableDrag) return;
+        dragSrc = tag;
+        tag.classList.add('dragging');
+        e.dataTransfer.effectAllowed = 'move';
+      });
+      tag.addEventListener('dragend', ()=>{
+        tag.classList.remove('dragging');
+        dragSrc = null;
+      });
+
+      tag.addEventListener('dragover', (e)=>{
+        if (!enableDrag) return;
+        e.preventDefault();
+      });
+
+      tag.addEventListener('drop', (e)=>{
+        if (!enableDrag) return;
+        e.preventDefault();
+        if (!dragSrc || dragSrc === tag) return;
+
+        const parent = tag.parentNode;
+        const rect = tag.getBoundingClientRect();
+        const before = (e.clientY - rect.top) < rect.height/2;
+        parent.insertBefore(dragSrc, before ? tag : tag.nextSibling);
+
+        // applique le nouvel ordre DOM -> Set -> input
+        const chips = Array.from(parent.querySelectorAll('.chip-tag'));
+        const newArr = chips.map(c => c.dataset.num).filter(Boolean);
+        selectedTrains.clear();
+        newArr.forEach(n => selectedTrains.add(n));
+
+        // mets à jour input CSV & compteurs sans re-tri
+        const inp = document.getElementById('trainNumbers');
+        if (inp) inp.value = newArr.join(',');
+        if (typeof chipsUpdateCount === 'function') chipsUpdateCount();
+      });
+    });
   }
 
-  // 3) barre d’actions + bloc
+  // 4) barre d’actions + bloc
   const actions = document.getElementById('selectionActions');
   if (actions) actions.hidden = (arr.length === 0);
 
-  // 4) wrapper optionnel (si présent)
+  // 5) wrapper optionnel (si présent)
   const block = document.getElementById('selectionBlock');
   if (block) block.hidden = (arr.length === 0);
 
-  // 5) compteur en-tête du panneau de sélection
+  // 6) compteur en-tête du panneau de sélection
   const selCount = document.getElementById('selCount');
   if (selCount) selCount.textContent = arr.length;
 
-  // footer "Générer le tableau" visible seulement s'il y a une sélection
+  // 7) footer "Générer le tableau" visible seulement s'il y a une sélection
   const footer = document.getElementById('selectionFooter');
   if (footer) footer.hidden = (arr.length === 0);
 
-  // laisse le compteur des propositions si tu l'utilises ailleurs
+  // 8) laisse le compteur des propositions si tu l'utilises ailleurs
   if (typeof chipsUpdateCount === 'function') chipsUpdateCount();
-}  
+} 
 
 // Montre/cache la barre d'actions selon la sélection
 function toggleSelectionActions(){
@@ -3081,147 +3177,6 @@ function chipsSetSelection(list){
   });
   chipsUpdateCount();
   updateSelectionUI();
-}
-  // === Drag & Drop fluide + mobile (Pointer Events) pour #selectionChips — rail horizontal ===
-let _drag = null;
-
-function attachDndToSelectionChips(){
-  const zone = document.getElementById('selectionChips');
-  if (!zone) return;
-
-  // Reset
-  zone.querySelectorAll('.chip-tag').forEach(tag=>{
-    tag.classList.remove('dragging');
-    tag.onpointerdown = null;
-    tag.style.touchAction = 'none';
-  });
-
-  zone.querySelectorAll('.chip-tag').forEach(tag=>{
-    const num = tag.dataset.num;
-    if (!num) return;
-
-    tag.onpointerdown = (ev)=>{
-      if (ev.pointerType === 'mouse' && ev.button !== 0) return;
-      ev.preventDefault();
-      tag.setPointerCapture?.(ev.pointerId);
-
-      const rect = tag.getBoundingClientRect();
-      const zoneRect = zone.getBoundingClientRect();
-
-      // placeholder dans le flux
-      const ph = document.createElement('span');
-      ph.className = 'chip-placeholder';
-      ph.style.setProperty('--ph-w', rect.width + 'px');
-      ph.style.setProperty('--ph-h', rect.height + 'px');
-      zone.insertBefore(ph, tag);
-      tag.style.display = 'none';
-
-      // ghost qui suit le doigt
-      const ghost = tag.cloneNode(true);
-      ghost.classList.remove('chip-tag'); ghost.classList.add('chip-ghost');
-      ghost.style.width  = rect.width + 'px';
-      ghost.style.height = rect.height + 'px';
-      document.body.appendChild(ghost);
-
-      const start = { x: ev.clientX, y: ev.clientY };
-      let last    = { x: start.x,    y: start.y };
-      positionGhost(ghost, last.x, last.y);
-      tag.classList.add('dragging');
-
-      _drag = { zone, tag, ph, ghost, start, last, zoneRect };
-
-      const onMove = (e)=>{
-        if (!_drag) return;
-        _drag.last = { x: e.clientX, y: e.clientY };
-        positionGhost(_drag.ghost, _drag.last.x, _drag.last.y);
-
-        // Autoscroll horizontal du rail
-        autoScrollX(_drag.zone, e.clientX);
-
-        // Replacer le placeholder sur le rail (calcul purement horizontal)
-        relocatePlaceholderHorizontal(_drag.zone, _drag.ph, _drag.last);
-
-        // Micro FLIP pour douceur
-        flipOnce(_drag.zone);
-      };
-
-      const onUp = ()=>{
-        if (!_drag) return;
-
-        _drag.tag.style.display = '';
-        _drag.tag.classList.remove('dragging');
-        _drag.zone.insertBefore(_drag.tag, _drag.ph);
-        _drag.ph.remove();
-        _drag.ghost.remove();
-
-        // MàJ ordre -> Set + input via updateSelectionUI()
-        const order = Array.from(_drag.zone.querySelectorAll('.chip-tag')).map(el => el.dataset.num);
-        selectedTrains.clear();
-        order.forEach(n => selectedTrains.add(n));
-
-        _drag = null;
-        updateSelectionUI();
-
-        window.removeEventListener('pointermove',  onMove, { passive:false });
-        window.removeEventListener('pointerup',    onUp,   { passive:false });
-        window.removeEventListener('pointercancel',onUp,   { passive:false });
-      };
-
-      window.addEventListener('pointermove',  onMove, { passive:false });
-      window.addEventListener('pointerup',    onUp,   { passive:false });
-      window.addEventListener('pointercancel',onUp,   { passive:false });
-    };
-  });
-
-  function positionGhost(el, x, y){ el.style.left = x + 'px'; el.style.top = y + 'px'; }
-
-  function autoScrollX(container, clientX){
-    const r = container.getBoundingClientRect();
-    const pad = 32; // zone sensible
-    const speed = 14;
-    if (clientX < r.left + pad)        container.scrollLeft -= speed;
-    else if (clientX > r.right - pad)  container.scrollLeft += speed;
-  }
-
-  // calcule la meilleure position sur une SEULE LIGNE horizontale
-  function relocatePlaceholderHorizontal(zone, ph, pos){
-    const zoneRect = zone.getBoundingClientRect();
-    const xInZone = pos.x - zoneRect.left + zone.scrollLeft; // coordonnée x relative au rail
-    const chips = Array.from(zone.querySelectorAll('.chip-tag'))
-                  .filter(el => el !== _drag?.tag); // le vrai tag est temporairement hidden
-
-    if (chips.length === 0){ zone.appendChild(ph); return; }
-
-    let insertIndex = chips.length; // par défaut, en fin
-    for (let i=0;i<chips.length;i++){
-      const r = chips[i].getBoundingClientRect();
-      const center = (r.left - zoneRect.left + zone.scrollLeft) + r.width/2;
-      if (xInZone < center){ insertIndex = i; break; }
-    }
-    const ref = chips[insertIndex] || null;
-    if (ref !== ph) zone.insertBefore(ph, ref);
-  }
-
-  // petite anim FLIP (douceur quand le DOM bouge)
-  function flipOnce(zone){
-    const nodes = Array.from(zone.children);
-    const prev = new Map(nodes.map(n => [n, n._r]));
-    nodes.forEach(n => { n._r = n.getBoundingClientRect(); });
-
-    nodes.forEach(n=>{
-      const p = prev.get(n), c = n._r;
-      if (!p || !c) return;
-      const dx = p.left - c.left, dy = p.top - c.top;
-      if (dx || dy){
-        n.style.transition = 'transform 0s';
-        n.style.transform = `translate(${dx}px, ${dy}px)`;
-        requestAnimationFrame(()=>{
-          n.style.transition = 'transform 150ms ease';
-          n.style.transform = '';
-        });
-      }
-    });
-  }
 }
     
 /* ====================== RENDU DES CARTES ====================== */
@@ -3370,9 +3325,38 @@ $(function () {
     $('#endStation').val(a);
   }
 });
+  
+  $('#directionToggle').on('change._order', function(){
+  timeCache.clear();
+  updateSelectionUI(); // re-tri la sélection selon le nouveau couloir
+});
 
   // cache la sélection au départ
   updateSelectionUI();
+
+  $(document).on('change', '#startStation, #endStation', function(){
+  timeCache.clear();
+  updateSelectionUI(); // re-tri si Tri auto ON
+});
+
+  // Ajoute un toggle "Tri auto" à droite du header de #selectionBlock (si pas déjà là)
+(function(){
+  const hdr = document.querySelector('#selectionBlock .chips-header');
+  if (hdr && !document.getElementById('autoSortToggle')){
+    const wrap = document.createElement('label');
+    wrap.style.marginLeft = 'auto';
+    wrap.style.display = 'flex';
+    wrap.style.alignItems = 'center';
+    wrap.style.gap = '6px';
+    wrap.innerHTML = `<input type="checkbox" id="autoSortToggle" checked> Tri auto`;
+    hdr.appendChild(wrap);
+
+    $('#autoSortToggle').on('change', function(){
+      autoSortSelection = this.checked;
+      updateSelectionUI(); // re-rend (et re-trie si ON)
+    });
+  }
+})();
 
   // Bouton “Proposer” -> lance la recherche
   $('#btnProposer').off('click').on('click', proposerTrainsOD);
@@ -3393,6 +3377,15 @@ $(function () {
   // Raccourcis Matin/Soir
   $('#btnMatin').off('click').on('click', ()=> usePresetEverywhere(PRESET_AM, 'AM'));
   $('#btnSoir').off('click').on('click',  ()=> usePresetEverywhere(PRESET_PM, 'PM'));
+
+  $('#btnMatin').on('click._order', function(){
+  timeCache.clear();
+  setTimeout(updateSelectionUI, 0); // laisse usePresetEverywhere finir, puis re-tri
+});
+$('#btnSoir').on('click._order', function(){
+  timeCache.clear();
+  setTimeout(updateSelectionUI, 0);
+});
 
   (function($){
     // utilitaires
