@@ -2623,31 +2623,47 @@ if (!document.getElementById('css-row-focus')) {
   st.textContent = `.row-focus{outline:2px solid #00ffff;box-shadow:0 0 0 2px #00ffff inset}`;
   document.head.appendChild(st);
 }
- // CSS pour le drag fluide + mobile des chips sélection
+// CSS pour DnD fluide + mobile (rail horizontal)
 (function(){
   const css = `
-    #selectionChips{ display:flex; flex-wrap:wrap; gap:8px; align-items:flex-start }
-    #selectionChips .chip-tag{ cursor:grab; user-select:none; touch-action:none;
-      transition: transform 150ms ease, opacity 150ms ease }
-    #selectionChips .chip-tag.dragging{ opacity:.8; cursor:grabbing; z-index:5 }
+    #selectionChips{
+      display:flex;
+      flex-wrap:nowrap;          /* 🚫 plus de colonnes */
+      overflow-x:auto;           /* rail scrollable */
+      gap:8px;
+      align-items:flex-start;
+      padding-bottom:6px;
+      -webkit-overflow-scrolling:touch;
+      overscroll-behavior:contain;
+      scroll-snap-type:x proximity;
+    }
+    #selectionChips::-webkit-scrollbar{ height:6px }
+    #selectionChips .chip-tag{
+      flex:0 0 auto;             /* largeur fixe, pas de shrink */
+      cursor:grab;
+      user-select:none;
+      touch-action:none;         /* évite le scroll pendant drag */
+      scroll-snap-align:start;
+      transition: transform 150ms ease, opacity 150ms ease;
+    }
+    #selectionChips .chip-tag.dragging{ opacity:.85; cursor:grabbing; z-index:5 }
     #selectionChips .chip-placeholder{
-      width:var(--ph-w,64px); height:var(--ph-h,28px); border:2px dashed #00ffff66;
-      border-radius:16px; margin:0 2px; flex:0 0 auto
+      width:var(--ph-w,64px);
+      height:var(--ph-h,28px);
+      border:2px dashed #00ffff66;
+      border-radius:16px;
+      margin:0 2px;
+      flex:0 0 auto;
     }
     .chip-ghost{
       position:fixed; left:0; top:0; transform:translate(-50%,-50%);
       pointer-events:none; margin:0; z-index:9999; transition:none;
-      box-shadow:0 8px 24px rgba(0,0,0,.18)
+      box-shadow:0 8px 24px rgba(0,0,0,.18);
     }
   `;
   const old = document.getElementById('css-dnd-chips');
   if (old) old.textContent = css;
-  else {
-    const st = document.createElement('style');
-    st.id = 'css-dnd-chips';
-    st.textContent = css;
-    document.head.appendChild(st);
-  }
+  else { const st=document.createElement('style'); st.id='css-dnd-chips'; st.textContent=css; document.head.appendChild(st); }
 })();
 
 /* ---------- LIENS GARES ---------- */
@@ -3066,36 +3082,33 @@ function chipsSetSelection(list){
   chipsUpdateCount();
   updateSelectionUI();
 }
-  // === Drag & Drop fluide + mobile (Pointer Events) pour #selectionChips ===
+  // === Drag & Drop fluide + mobile (Pointer Events) pour #selectionChips — rail horizontal ===
 let _drag = null;
 
 function attachDndToSelectionChips(){
   const zone = document.getElementById('selectionChips');
   if (!zone) return;
 
-  // Reset styles + handlers de l’ancienne passe
+  // Reset
   zone.querySelectorAll('.chip-tag').forEach(tag=>{
-    tag.classList.remove('dragging','drop-before','drop-after');
-    tag.onpointerdown = null; // évite les doublons
-    tag.style.touchAction = 'none'; // évite le scroll/zoom pendant le drag
+    tag.classList.remove('dragging');
+    tag.onpointerdown = null;
+    tag.style.touchAction = 'none';
   });
 
-  // Attache le pointerdown sur chaque chip
   zone.querySelectorAll('.chip-tag').forEach(tag=>{
     const num = tag.dataset.num;
     if (!num) return;
 
     tag.onpointerdown = (ev)=>{
-      // Souris : clic gauche uniquement
       if (ev.pointerType === 'mouse' && ev.button !== 0) return;
-
       ev.preventDefault();
       tag.setPointerCapture?.(ev.pointerId);
 
-      // Dimensions du chip d’origine
       const rect = tag.getBoundingClientRect();
+      const zoneRect = zone.getBoundingClientRect();
 
-      // Placeholder qui reste dans le flux
+      // placeholder dans le flux
       const ph = document.createElement('span');
       ph.className = 'chip-placeholder';
       ph.style.setProperty('--ph-w', rect.width + 'px');
@@ -3103,10 +3116,9 @@ function attachDndToSelectionChips(){
       zone.insertBefore(ph, tag);
       tag.style.display = 'none';
 
-      // Ghost qui suit le doigt
+      // ghost qui suit le doigt
       const ghost = tag.cloneNode(true);
-      ghost.classList.remove('chip-tag');
-      ghost.classList.add('chip-ghost');
+      ghost.classList.remove('chip-tag'); ghost.classList.add('chip-ghost');
       ghost.style.width  = rect.width + 'px';
       ghost.style.height = rect.height + 'px';
       document.body.appendChild(ghost);
@@ -3116,56 +3128,33 @@ function attachDndToSelectionChips(){
       positionGhost(ghost, last.x, last.y);
       tag.classList.add('dragging');
 
-      _drag = { zone, tag, ph, ghost, start, last };
+      _drag = { zone, tag, ph, ghost, start, last, zoneRect };
 
       const onMove = (e)=>{
         if (!_drag) return;
         _drag.last = { x: e.clientX, y: e.clientY };
         positionGhost(_drag.ghost, _drag.last.x, _drag.last.y);
 
-        // Animation FLIP (fluide quand les éléments se réordonnent)
-        const itemsBefore = Array.from(_drag.zone.children).filter(el =>
-          el.classList.contains('chip-tag') || el.classList.contains('chip-placeholder')
-        );
-        const prevRect = new Map(itemsBefore.map(el => [el, el.getBoundingClientRect()]));
+        // Autoscroll horizontal du rail
+        autoScrollX(_drag.zone, e.clientX);
 
-        relocatePlaceholder(_drag.zone, _drag.ph, _drag.last);
+        // Replacer le placeholder sur le rail (calcul purement horizontal)
+        relocatePlaceholderHorizontal(_drag.zone, _drag.ph, _drag.last);
 
-        const itemsAfter = Array.from(_drag.zone.children).filter(el =>
-          el.classList.contains('chip-tag') || el.classList.contains('chip-placeholder')
-        );
-        itemsAfter.forEach(el=>{
-          const p = prevRect.get(el); if (!p) return;
-          const n = el.getBoundingClientRect();
-          const dx = p.left - n.left;
-          const dy = p.top  - n.top;
-          if (dx || dy){
-            el.style.transition = 'transform 0s';
-            el.style.transform  = `translate(${dx}px, ${dy}px)`;
-            requestAnimationFrame(()=>{
-              el.style.transition = 'transform 150ms ease';
-              el.style.transform  = '';
-            });
-          }
-        });
-
-        // (option) Auto-scroll vertical si proche des bords
-        const margin = 40;
-        if (e.clientY < margin)       window.scrollBy(0, -12);
-        else if (window.innerHeight - e.clientY < margin) window.scrollBy(0, 12);
+        // Micro FLIP pour douceur
+        flipOnce(_drag.zone);
       };
 
       const onUp = ()=>{
         if (!_drag) return;
 
-        // Replace le vrai chip à l’emplacement du placeholder
         _drag.tag.style.display = '';
         _drag.tag.classList.remove('dragging');
         _drag.zone.insertBefore(_drag.tag, _drag.ph);
         _drag.ph.remove();
         _drag.ghost.remove();
 
-        // Recalcule l’ordre → Set + input (#trainNumbers) via updateSelectionUI()
+        // MàJ ordre -> Set + input via updateSelectionUI()
         const order = Array.from(_drag.zone.querySelectorAll('.chip-tag')).map(el => el.dataset.num);
         selectedTrains.clear();
         order.forEach(n => selectedTrains.add(n));
@@ -3173,9 +3162,9 @@ function attachDndToSelectionChips(){
         _drag = null;
         updateSelectionUI();
 
-        window.removeEventListener('pointermove', onMove, { passive:false });
-        window.removeEventListener('pointerup',   onUp,   { passive:false });
-        window.removeEventListener('pointercancel', onUp, { passive:false });
+        window.removeEventListener('pointermove',  onMove, { passive:false });
+        window.removeEventListener('pointerup',    onUp,   { passive:false });
+        window.removeEventListener('pointercancel',onUp,   { passive:false });
       };
 
       window.addEventListener('pointermove',  onMove, { passive:false });
@@ -3184,42 +3173,56 @@ function attachDndToSelectionChips(){
     };
   });
 
-  function positionGhost(el, x, y){
-    el.style.left = x + 'px';
-    el.style.top  = y + 'px';
+  function positionGhost(el, x, y){ el.style.left = x + 'px'; el.style.top = y + 'px'; }
+
+  function autoScrollX(container, clientX){
+    const r = container.getBoundingClientRect();
+    const pad = 32; // zone sensible
+    const speed = 14;
+    if (clientX < r.left + pad)        container.scrollLeft -= speed;
+    else if (clientX > r.right - pad)  container.scrollLeft += speed;
   }
 
-  // Logique pour déplacer le placeholder selon la position du doigt
-  function relocatePlaceholder(zone, ph, pos){
-    let over = document.elementFromPoint(pos.x, pos.y);
-    // remonte jusqu’à un chip/tag valide ou la zone
-    while (over && over !== zone &&
-           !over.classList?.contains('chip-tag') &&
-           !over.classList?.contains('chip-placeholder')) {
-      over = over.parentElement;
+  // calcule la meilleure position sur une SEULE LIGNE horizontale
+  function relocatePlaceholderHorizontal(zone, ph, pos){
+    const zoneRect = zone.getBoundingClientRect();
+    const xInZone = pos.x - zoneRect.left + zone.scrollLeft; // coordonnée x relative au rail
+    const chips = Array.from(zone.querySelectorAll('.chip-tag'))
+                  .filter(el => el !== _drag?.tag); // le vrai tag est temporairement hidden
+
+    if (chips.length === 0){ zone.appendChild(ph); return; }
+
+    let insertIndex = chips.length; // par défaut, en fin
+    for (let i=0;i<chips.length;i++){
+      const r = chips[i].getBoundingClientRect();
+      const center = (r.left - zoneRect.left + zone.scrollLeft) + r.width/2;
+      if (xInZone < center){ insertIndex = i; break; }
     }
-
-    const children = Array.from(zone.children).filter(el =>
-      el.classList.contains('chip-tag') || el.classList.contains('chip-placeholder')
-    );
-
-    if (!over || over === ph){
-      zone.appendChild(ph);
-      return;
-    }
-
-    const rect = over.getBoundingClientRect();
-    // si on est au même niveau vertical, coupe à mi-largeur ; sinon, coupe à mi-hauteur (wrap)
-    const sameRow = pos.y >= rect.top && pos.y <= rect.bottom;
-    const before = sameRow ? (pos.x < rect.left + rect.width/2)
-                           : (pos.y < rect.top  + rect.height/2);
-
-    const idx = children.indexOf(over);
-    const targetIndex = before ? idx : idx + 1;
-    const at = children[targetIndex] || null;
-    if (at !== ph) zone.insertBefore(ph, at);
+    const ref = chips[insertIndex] || null;
+    if (ref !== ph) zone.insertBefore(ph, ref);
   }
-} 
+
+  // petite anim FLIP (douceur quand le DOM bouge)
+  function flipOnce(zone){
+    const nodes = Array.from(zone.children);
+    const prev = new Map(nodes.map(n => [n, n._r]));
+    nodes.forEach(n => { n._r = n.getBoundingClientRect(); });
+
+    nodes.forEach(n=>{
+      const p = prev.get(n), c = n._r;
+      if (!p || !c) return;
+      const dx = p.left - c.left, dy = p.top - c.top;
+      if (dx || dy){
+        n.style.transition = 'transform 0s';
+        n.style.transform = `translate(${dx}px, ${dy}px)`;
+        requestAnimationFrame(()=>{
+          n.style.transition = 'transform 150ms ease';
+          n.style.transform = '';
+        });
+      }
+    });
+  }
+}
     
 /* ====================== RENDU DES CARTES ====================== */
 function renderChips(found, startName, endName){
