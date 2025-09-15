@@ -638,6 +638,17 @@ table::before {
   text-decoration: line-through;
   animation: blinkRedStrike 1.2s infinite;
 }
+    /* Arrêt exceptionnel (ajouté dynamiquement par l'API) */
+.added-stop{
+  color:#00ffa6;
+  font-weight:700;
+  white-space:nowrap;
+}
+.added-stop .plus{
+  font-weight:900;
+  margin-right:4px;
+}
+
  .us-train {
   color: #bf00ff;
   text-shadow: 0 0 5px #bf00ff, 0 0 10px #8000ff;
@@ -3245,173 +3256,235 @@ document.getElementById('propositions')?.replaceChildren();
 
     const results = {};
 
-    // 1) Récupération des données API pour chaque train
-    for (const num of numbers) {
-      const url = `https://assistant-train-cx5u.vercel.app/api/train?id=vehicle_journeys/vehicle_journey:SNCF:${date}:${num}:1187:Train`;
-      try {
-        const res = await $.ajax({ url });
-        const train = res.vehicle_journeys?.[0];
-        if (!train) { results[num] = { error: 'Non trouvé' }; continue; }
+// 1) Récupération des données API pour chaque train
+for (const num of numbers) {
+  const url = `https://assistant-train-cx5u.vercel.app/api/train?id=vehicle_journeys/vehicle_journey:SNCF:${date}:${num}:1187:Train`;
+  try {
+    const res = await $.ajax({ url });
+    const train = res.vehicle_journeys?.[0];
+    if (!train) { results[num] = { error: 'Non trouvé' }; continue; }
 
-        const disruptions = res.disruptions || [];
-        const impacted = {};
-        let newStart = null, newEnd = null;
+    const disruptions = res.disruptions || [];
+    const impacted = {};
+    let newStart = null, newEnd = null;
 
-        let disruptionCauses = [];
-        for (const d of disruptions) {
-          if (d.cause && !disruptionCauses.includes(d.cause)) disruptionCauses.push(d.cause);
-          for (const o of d.impacted_objects || []) {
-            for (const s of o.impacted_stops || []) impacted[s.stop_point.id] = s;
-          }
+    let disruptionCauses = [];
+    for (const d of disruptions) {
+      if (d.cause && !disruptionCauses.includes(d.cause)) disruptionCauses.push(d.cause);
+      for (const o of d.impacted_objects || []) {
+        for (const s of o.impacted_stops || []) {
+          // on enregistre l'impact par stop_point.id
+          impacted[s.stop_point.id] = s;
         }
-
-        for (let s of train.stop_times) {
-          const id = s.stop_point.id;
-          const imp = impacted[id];
-          if (imp && imp.departure_status !== 'deleted') { newStart = id; break; }
-        }
-        for (let i = train.stop_times.length - 1; i >= 0; i--) {
-          const s = train.stop_times[i];
-          const id = s.stop_point.id;
-          const imp = impacted[id];
-          if (imp && imp.arrival_status !== 'deleted') { newEnd = id; break; }
-        }
-
-        results[num] = { train, impacted, newStart, newEnd, disruptions, disruptionCauses };
-      } catch (e) {
-        console.error("Erreur lors de la requête API:", e);
-        results[num] = { error: 'Erreur API' };
       }
     }
 
-    // 2) Gares réellement présentes dans les trains
-    const stopsInTrains = new Set();
-    numbers.forEach(num => {
-      const train = results[num]?.train;
-      if (!train) return;
-      train.stop_times.forEach(s => stopsInTrains.add(s.stop_point.name));
-    });
+    // nouveau départ = premier stop non "deleted" côté départ
+    for (let s of train.stop_times) {
+      const id = s.stop_point.id;
+      const imp = impacted[id];
+      if (imp && imp.departure_status !== 'deleted') { newStart = id; break; }
+    }
+    // nouveau terminus = dernier stop non "deleted" côté arrivée
+    for (let i = train.stop_times.length - 1; i >= 0; i--) {
+      const s = train.stop_times[i];
+      const id = s.stop_point.id;
+      const imp = impacted[id];
+      if (imp && imp.arrival_status !== 'deleted') { newEnd = id; break; }
+    }
 
-    // 3) Liste filtrée en gardant l’ordre de la ligne
-    const mergedStops = fixedStops.filter(stopName => stopsInTrains.has(stopName));
+    results[num] = { train, impacted, newStart, newEnd, disruptions, disruptionCauses };
+  } catch (e) {
+    console.error("Erreur lors de la requête API:", e);
+    results[num] = { error: 'Erreur API' };
+  }
+}
 
-    // 🔹 AJOUT : filtre De/À pour l’affichage des lignes (le tableau reste basé sur "numbers")
-    const startName = $('#startStation').val() || '';
-    const endName   = $('#endStation').val() || '';
-    const displayStops = filterByOD(mergedStops, startName, endName);
+// === (1.5) Recenser les gares "ajoutées" via impacted_stops ===
+const addedStopsNames = new Set();
+numbers.forEach(num => {
+  const result = results[num];
+  if (!result || !result.impacted) return;
+  Object.values(result.impacted).forEach(imp => {
+    const isAdded =
+      imp?.stop_time_effect === 'added' ||
+      imp?.departure_status === 'added' ||
+      imp?.arrival_status === 'added';
+    if (isAdded && imp?.stop_point?.name) {
+      addedStopsNames.add(imp.stop_point.name);
+    }
+  });
+});
 
-    // 4) Construction du tableau
-    let html = '<table><thead><tr><th>Gare</th>';
-    numbers.forEach(num => {
-      const composition = compoData[num];
-      const classe = composition === 'US' ? ' us-train' : '';
-      html += `<th class="train-header${classe}" data-train-number="${num}">${num}</th>`;
-    });
-    html += '</tr><tr><th></th>';
+// 2) Gares réellement présentes dans les trains (base)
+const stopsInTrains = new Set();
+numbers.forEach(num => {
+  const train = results[num]?.train;
+  if (!train) return;
+  train.stop_times.forEach(s => stopsInTrains.add(s.stop_point.name));
+});
 
-    numbers.forEach(num => {
-      const result = results[num];
-      let icon = '', title = '';
-      if (!result || result.error) {
-        icon = '❌'; title = result?.error || 'Erreur';
-      } else {
-        const disruptions = result.disruptions || [];
-        const impacted = result.impacted;
-        const hasDelay = Object.values(impacted).some(s =>
-          (s.amended_departure_time || s.amended_arrival_time) &&
-          (s.base_departure_time || s.base_arrival_time) &&
-          dl(s.base_departure_time || s.base_arrival_time, s.amended_departure_time || s.amended_arrival_time) > 0
-        );
-        const newStartId = result.newStart;
-        const originalStartId = result.train.stop_times[0].stop_point.id;
-        const isPartial = newStartId && newStartId !== originalStartId;
-        const isFull = disruptions.some(d => ['NO_SERVICE','CANCELLATION'].includes(d.severity?.effect));
-        const newEndId = result.newEnd;
-        const originalEndId = result.train.stop_times[result.train.stop_times.length - 1].stop_point.id;
-        const isPartialEnd = newEndId && newEndId !== originalEndId;
+// 3) Liste filtrée en gardant l’ordre de la ligne + ajouts "added"
+const mergedStopsOrdered = fixedStops.filter(
+  name => stopsInTrains.has(name) || addedStopsNames.has(name)
+);
+// si un arrêt ajouté n’existe pas dans fixedStops (rare), on le met à la fin
+const extrasNotInFixed = [...addedStopsNames].filter(n => !fixedStops.includes(n));
+const mergedStops = mergedStopsOrdered.concat(extrasNotInFixed);
 
-        if (isFull) {
-          icon = '❌'; title = 'Train supprimé';
-          if (result.disruptionCauses.length) title += ' : ' + result.disruptionCauses.join(', ');
-          icon = `<span class="blink-red">${icon}</span>`;
-        } else if (isPartial || isPartialEnd) {
-          icon = '⚠️'; title = 'Suppression partielle';
-          if (result.disruptionCauses.length) title += ' : ' + result.disruptionCauses.join(', ');
-        } else if (hasDelay) {
-          icon = '⏰'; title = 'Retard';
-          if (result.disruptionCauses.length) title += ' : ' + result.disruptionCauses.join(', ');
+// 🔹 Filtre De/À pour l’affichage (le tableau reste basé sur "numbers")
+const startName = $('#startStation').val() || '';
+const endName   = $('#endStation').val() || '';
+const displayStops = filterByOD(mergedStops, startName, endName);
+
+// 4) Construction du tableau
+let html = '<table><thead><tr><th>Gare</th>';
+numbers.forEach(num => {
+  const composition = compoData[num];
+  const classe = composition === 'US' ? ' us-train' : '';
+  html += `<th class="train-header${classe}" data-train-number="${num}">${num}</th>`;
+});
+html += '</tr><tr><th></th>';
+
+numbers.forEach(num => {
+  const result = results[num];
+  let icon = '', title = '';
+  if (!result || result.error) {
+    icon = '❌'; title = result?.error || 'Erreur';
+  } else {
+    const disruptions = result.disruptions || [];
+    const impacted = result.impacted;
+    const hasDelay = Object.values(impacted).some(s =>
+      (s.amended_departure_time || s.amended_arrival_time) &&
+      (s.base_departure_time || s.base_arrival_time) &&
+      dl(s.base_departure_time || s.base_arrival_time, s.amended_departure_time || s.amended_arrival_time) > 0
+    );
+    const newStartId = result.newStart;
+    const originalStartId = result.train.stop_times[0].stop_point.id;
+    const isPartial = newStartId && newStartId !== originalStartId;
+    const isFull = disruptions.some(d => ['NO_SERVICE','CANCELLATION'].includes(d.severity?.effect));
+    const newEndId = result.newEnd;
+    const originalEndId = result.train.stop_times[result.train.stop_times.length - 1].stop_point.id;
+    const isPartialEnd = newEndId && newEndId !== originalEndId;
+
+    if (isFull) {
+      icon = '❌'; title = 'Train supprimé';
+      if (result.disruptionCauses.length) title += ' : ' + result.disruptionCauses.join(', ');
+      icon = `<span class="blink-red">${icon}</span>`;
+    } else if (isPartial || isPartialEnd) {
+      icon = '⚠️'; title = 'Suppression partielle';
+      if (result.disruptionCauses.length) title += ' : ' + result.disruptionCauses.join(', ');
+    } else if (hasDelay) {
+      icon = '⏰'; title = 'Retard';
+      if (result.disruptionCauses.length) title += ' : ' + result.disruptionCauses.join(', ');
+    } else {
+      icon = ''; title = 'Sans perturbation';
+    }
+  }
+  html += `<th><span class="icon" title="${title}">${icon}</span></th>`;
+});
+
+html += '</tr></thead><tbody>';
+
+// 5) Lignes
+for (const stopName of displayStops) {
+  html += `<tr><td>${stopName}</td>`;
+
+  numbers.forEach(num => {
+    const result = results[num];
+    if (!result || result.error) {
+      html += `<td class="deleted">${result?.error || 'Erreur'}</td>`;
+      return;
+    }
+
+    // (a) stop "de base" (horaire théorique)
+    let stop = result.train.stop_times.find(s => s.stop_point.name === stopName);
+
+    // (b) impact : par id si on a un stop, sinon on cherche par nom (cas "added")
+    let imp = null;
+    if (stop) {
+      imp = result.impacted[stop.stop_point.id] || null;
+    } else {
+      imp = Object.values(result.impacted).find(x => x.stop_point?.name === stopName) || null;
+    }
+
+    // (c) base/amended
+    const base =
+      (imp && (imp.base_departure_time || imp.base_arrival_time)) ||
+      (stop && (stop.departure_time || stop.arrival_time)) ||
+      null;
+
+    const amended =
+      (imp && (imp.amended_departure_time || imp.amended_arrival_time)) ||
+      null;
+
+    const departureDeleted = imp?.departure_status === 'deleted';
+    const arrivalDeleted   = imp?.arrival_status === 'deleted';
+    const isStopDeleted    = departureDeleted && arrivalDeleted;
+
+    const index = stop
+      ? result.train.stop_times.findIndex(s => s.stop_point.id === stop.stop_point.id)
+      : -1;
+    const newStartIndex = result.train.stop_times.findIndex(s => s.stop_point.id === result.newStart);
+    const newEndIndex   = result.train.stop_times.findIndex(s => s.stop_point.id === result.newEnd);
+    const originalEndId = result.train.stop_times[result.train.stop_times.length - 1]?.stop_point?.id;
+
+    let content = '-';
+
+    // === ARRÊT AJOUTÉ : pas de stop "base" mais amended présent & statut added ===
+    const isAddedStop =
+      !!amended &&
+      (!base || !stop) &&
+      (imp?.stop_time_effect === 'added' || imp?.departure_status === 'added' || imp?.arrival_status === 'added');
+
+    if (isAddedStop) {
+      content = `<span class="added-stop" title="Arrêt exceptionnel"><span class="plus">➕</span>${ft(amended)}</span>`;
+      html += `<td>${content}</td>`;
+      return;
+    }
+
+    // === Cas normal (avec base disponible) ===
+    if (base) {
+      content = ft(base);
+
+      const isFirstStop = stopName === result.train.stop_times[0]?.stop_point?.name;
+      const isLastStop  = stopName === result.train.stop_times[result.train.stop_times.length - 1]?.stop_point?.name;
+
+      const isFull = result.disruptions.some(d => ['NO_SERVICE','CANCELLATION'].includes(d.severity?.effect));
+      if (isFull) {
+        content = `<span class="deleted">${content}</span>`;
+      } else if (imp && imp.stop_point && imp.stop_point.id === result.newStart && index > 0) {
+        content = `<span class="new-start">${content}</span>`;
+      } else if (imp && imp.stop_point && imp.stop_point.id === result.newEnd && imp.stop_point.id !== originalEndId) {
+        if (amended && dl(base, amended) > 0) {
+          content = `<span class="delay-strike blink-red">${ft(base)}</span><br><span class="delayed">${ft(amended)}</span>`;
         } else {
-          icon = ''; title = 'Sans perturbation';
-        }
-      }
-      html += `<th><span class="icon" title="${title}">${icon}</span></th>`;
-    });
-
-    html += '</tr></thead><tbody>';
-
-    // 5) Lignes
-    for (const stopName of displayStops) {
-      html += `<tr><td>${stopName}</td>`;
-
-      numbers.forEach(num => {
-        const result = results[num];
-        if (!result || result.error) {
-          html += `<td class="deleted">${result?.error || 'Erreur'}</td>`;
-          return;
-        }
-        const stop = result.train.stop_times.find(s => s.stop_point.name === stopName);
-        if (!stop) { html += `<td>-</td>`; return; }
-
-        const id = stop.stop_point.id;
-        const imp = result.impacted[id] || {};
-
-        const amended = imp.amended_departure_time || imp.amended_arrival_time;
-        const departureDeleted = imp.departure_status === 'deleted';
-        const arrivalDeleted = imp.arrival_status === 'deleted';
-        const isStopDeleted = departureDeleted && arrivalDeleted;
-        const base = imp.base_departure_time || imp.base_arrival_time || stop.departure_time || stop.arrival_time;
-        const index = result.train.stop_times.findIndex(s => s.stop_point.id === id);
-        const newStartIndex = result.train.stop_times.findIndex(s => s.stop_point.id === result.newStart);
-        const newEndIndex = result.train.stop_times.findIndex(s => s.stop_point.id === result.newEnd);
-        const originalEndId = result.train.stop_times[result.train.stop_times.length - 1].stop_point.id;
-
-        let content = ft(base);
-        const isFirstStop = stopName === result.train.stop_times[0]?.stop_point?.name;
-        const isLastStop = stopName === result.train.stop_times[result.train.stop_times.length - 1]?.stop_point?.name;
-
-        if (id === originalEndId && result.newEnd && result.newEnd !== originalEndId) {
           content = `<span class="delay-strike blink-red">${ft(base)}</span>`;
-        } else if (amended && dl(base, amended) > 0) {
-          content = `<span class="delay-strike">${ft(base)}</span><br><span class="delayed">${ft(amended)}</span>`;
-        } else if (isFirstStop || isLastStop) {
-          content = `<strong>${content}</strong>`;
         }
+      } else if (
+        isStopDeleted ||
+        (newStartIndex >= 0 && index >= 0 && index < newStartIndex) ||
+        (newEndIndex   >= 0 && index >= 0 && index > newEndIndex)
+      ) {
+        content = `<span class="deleted">${content}</span>`;
+      } else if (amended && dl(base, amended) > 0) {
+        content = `<span class="delay-strike">${ft(base)}</span><br><span class="delayed">${ft(amended)}</span>`;
+      } else if (isFirstStop || isLastStop) {
+        content = `<strong>${content}</strong>`;
+      }
 
-        const isFull = result.disruptions.some(d => ['NO_SERVICE','CANCELLATION'].includes(d.severity?.effect));
-        if (isFull) {
-          content = `<span class="deleted">${content}</span>`;
-        } else if (id === result.newStart && index !== 0) {
-          content = `<span class="new-start">${content}</span>`;
-        } else if (id === result.newEnd && id !== originalEndId) {
-          if (amended && dl(base, amended) > 0) {
-            content = `<span class="delay-strike blink-red">${ft(base)}</span><br><span class="delayed">${ft(amended)}</span>`;
-          } else {
-            content = `<span class="delay-strike blink-red">${ft(base)}</span>`;
-          }
-        } else if (
-          isStopDeleted ||
-          (newStartIndex >= 0 && index < newStartIndex) ||
-          (newEndIndex >= 0 && index > newEndIndex)
-        ) {
-          content = `<span class="deleted">${content}</span>`;
-        }
-
-        html += `<td>${content}</td>`;
-      });
-      html += '</tr>';
+      html += `<td>${content}</td>`;
+      return;
     }
 
-    html += '</tbody></table>';
+    // === pas de base et pas reconnu "added" => pas d'heure pour ce train à cette gare
+    html += `<td>-</td>`;
+  });
+
+  html += '</tr>';
+}
+
+html += '</tbody></table>';
 
     // 6) Injection + hooks + liens
     $('#trainInfo').html(
