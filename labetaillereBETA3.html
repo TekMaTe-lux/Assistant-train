@@ -3885,28 +3885,31 @@ $(function () {
 });
 
 /* ---------- GTFS-RT : loader centralisé + auto-apply ---------- */
+const SAME_ORIGIN_JSON = (()=>{
+  // /Assistant-train/labetaillereBETA3.html -> /Assistant-train/retards_nancymetzlux.json
+  const base = location.origin + location.pathname.replace(/\/[^\/]*$/, '/');
+  return base + 'retards_nancymetzlux.json';
+})();
+
 const GTFS_RT_CANDIDATES = [
-  "https://raw.githubusercontent.com/TekMaTe-lux/Assistant-train/main/Assistant-train/retards_nancymetzlux.json",
-  "https://raw.githubusercontent.com/tekmate-lux/Assistant-train/main/Assistant-train/retards_nancymetzlux.json",
-  // CDN (évite parfois des 403/404 temporaires du raw)
-  "https://cdn.jsdelivr.net/gh/TekMaTe-lux/Assistant-train@main/Assistant-train/retards_nancymetzlux.json",
-  "https://cdn.jsdelivr.net/gh/tekmate-lux/Assistant-train@main/Assistant-train/retards_nancymetzlux.json"
+  SAME_ORIGIN_JSON, // ← prioritaire si le fichier est servi par GitHub Pages
+  'https://tekmate-lux.github.io/Assistant-train/retards_nancymetzlux.json',
+  'https://raw.githubusercontent.com/tekmate-lux/Assistant-train/main/Assistant-train/retards_nancymetzlux.json',
+  'https://cdn.jsdelivr.net/gh/tekmate-lux/Assistant-train@main/Assistant-train/retards_nancymetzlux.json'
 ];
 
-// garde-fou global (évite redeclaration)
+// garde-fou global (pas de redeclaration)
 if (typeof window.retardsGTFS === 'undefined') window.retardsGTFS = null;
 
-async function fetchWithTimeout(url, ms = 8000, opts = {}) {
+async function fetchWithTimeoutNoHeaders(url, ms = 8000) {
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), ms);
   try {
     const res = await fetch(url, {
       cache: 'no-store',
-      mode: 'cors',
-      referrerPolicy: 'no-referrer',
-      headers: { 'pragma': 'no-cache', 'cache-control': 'no-cache' },
-      signal: ctrl.signal,
-      ...opts
+      // surtout pas de headers custom -> évite le préflight CORS
+      // pas de mode:'no-cors' (sinon opaque et illisible)
+      signal: ctrl.signal
     });
     return res;
   } finally {
@@ -3915,51 +3918,39 @@ async function fetchWithTimeout(url, ms = 8000, opts = {}) {
 }
 
 async function loadGtfsRetards({ forceFresh = false } = {}) {
-  const qs = (u) => u + (u.includes('?') ? '&' : '?') + 't=' + (forceFresh ? Date.now() : 'soft');
+  const withBuster = (u) => u + (u.includes('?') ? '&' : '?') + 't=' + (forceFresh ? Date.now() : 'soft');
 
   let lastErr = null;
   for (const base of GTFS_RT_CANDIDATES) {
-    const url = qs(base);
+    const url = withBuster(base);
     try {
       console.log('[GTFS-RT] tentative:', url);
-      const res = await fetchWithTimeout(url, 8000);
-      if (!res.ok) {
-        const txt = await res.text().catch(()=> '');
-        throw new Error(`HTTP ${res.status} ${res.statusText} — ${txt.slice(0,200)}`);
-      }
-
-      // on tente JSON, mais si ça plante, on log le texte brut
-      let data;
-      try {
-        data = await res.json();
-      } catch (e) {
-        const txt = await fetchWithTimeout(url, 8000).then(r=>r.text());
-        console.error('[GTFS-RT] JSON parse error. Body preview:', txt.slice(0,300));
-        throw new Error('JSON invalide');
-      }
-
-      // succès
+      const res = await fetchWithTimeoutNoHeaders(url, 8000);
+      if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText}`);
+      const data = await res.json(); // si CORS OK et JSON correct
       window.retardsGTFS = data;
       console.log('✅ GTFS-RT chargé via', base, 'à', new Date().toISOString());
       tryApplyGtfsToCurrentTable();
-      return; // STOP ici
+      return;
     } catch (e) {
       console.warn('[GTFS-RT] échec sur', base, e);
       lastErr = e;
-      continue; // essaie suivant
     }
   }
-  // si on arrive ici, tout a échoué
   throw lastErr || new Error('Impossible de charger GTFS-RT depuis les miroirs.');
 }
 
+// 1er chargement au load (frais)
+window.addEventListener('load', () => {
+  loadGtfsRetards({ forceFresh: true }).catch(err => console.error("Erreur GTFS-RT au load:", err));
+});
+
+// applique si tableau présent + date = aujourd’hui
 function tryApplyGtfsToCurrentTable() {
-  // n’appliquer que pour “aujourd’hui”
   if (typeof isSelectedDateToday === 'function' && !isSelectedDateToday()) return;
   if (!window.retardsGTFS) return;
   const table = document.querySelector('#trainInfo table');
   if (!table) return;
-  // évite les doublons visuels
   table.querySelectorAll('.gtfs-retard').forEach(n => n.remove());
   if (typeof applyRetardsFromGTFS === 'function') applyRetardsFromGTFS(window.retardsGTFS);
 }
