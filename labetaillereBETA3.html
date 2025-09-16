@@ -3701,6 +3701,9 @@ html += '</tbody></table>';
       '<div class="table-scroll">' + html + '</div>' +
       '<div id="lastUpdated" class="last-updated" aria-live="polite"></div>'
     );
+
+    // (après injection DOM du tableau)
+setTimeout(tryApplyGtfsToCurrentTable, 0);  // applique les pastilles GTFS
     
     // Météo pour les gares affichées
 updateWeatherBadges();
@@ -3859,27 +3862,52 @@ document.querySelectorAll('#trainInfo table tr td:first-child').forEach(td => {
     // ===== FIN handler "#loadTrains"
   });
 
-  // Bouton "Actualiser les données"
-  $('#refreshButton').off('click').on('click', function () {
-    const el = document.getElementById('lastUpdated');
-    if (el) el.textContent = 'Actualisation en cours…';
-    $('#loadTrains').click();
-  });
+  // Bouton "Actualiser les données" : refetch FRESH puis régénère
+$('#refreshButton').off('click').on('click', async function () {
+  const el = document.getElementById('lastUpdated');
+  if (el) el.textContent = 'Actualisation en cours…';
+  try {
+    await loadGtfsRetards({ forceFresh: true }); // <-- refetch dur
+  } catch (e) {
+    console.error(e);
+    alert("Échec de l'actualisation GTFS-RT.");
+  }
+  $('#loadTrains').click();       // régénère le tableau
+  setLastUpdated();
 });
 
-/* ---------- CHARGEMENT GTFS-RT AU LOAD ---------- */
-window.onload = function() {
-  const url = "https://raw.githubusercontent.com/TekMaTe-lux/Assistant-train/main/Assistant-train/retards_nancymetzlux.json";
-  const cacheBuster = `?t=${new Date().getTime()}`;
-  fetch(url + cacheBuster)
-    .then(r => r.json())
-    .then(data => {
-      retardsGTFS = data;
-      console.log("✅ Retards GTFS chargés avec mise à jour !");
-      applyRetardsFromGTFS(retardsGTFS);
-    })
-    .catch(err => console.error("Erreur lors du chargement des retards GTFS-RT :", err));
-};
+/* ---------- GTFS-RT : loader centralisé + auto-apply ---------- */
+const GTFS_RT_URL = "https://raw.githubusercontent.com/TekMaTe-lux/Assistant-train/main/Assistant-train/retards_nancymetzlux.json";
+// garde-fou global (évite toute redeclaration)
+if (typeof window.retardsGTFS === 'undefined') window.retardsGTFS = null;
+
+async function loadGtfsRetards({ forceFresh = false } = {}) {
+  const url = GTFS_RT_URL + (GTFS_RT_URL.includes('?') ? '&' : '?') + 't=' + (forceFresh ? Date.now() : 'soft');
+  const res = await fetch(url, {
+    cache: 'no-store',
+    headers: { 'pragma': 'no-cache', 'cache-control': 'no-cache' }
+  });
+  if (!res.ok) throw new Error('HTTP ' + res.status);
+  window.retardsGTFS = await res.json();
+  console.log('✅ GTFS-RT chargé', new Date().toISOString());
+  tryApplyGtfsToCurrentTable();
+}
+
+function tryApplyGtfsToCurrentTable() {
+  // n’appliquer que pour “aujourd’hui”
+  if (typeof isSelectedDateToday === 'function' && !isSelectedDateToday()) return;
+  if (!window.retardsGTFS) return;
+  const table = document.querySelector('#trainInfo table');
+  if (!table) return;
+  // évite les doublons visuels
+  table.querySelectorAll('.gtfs-retard').forEach(n => n.remove());
+  if (typeof applyRetardsFromGTFS === 'function') applyRetardsFromGTFS(window.retardsGTFS);
+}
+
+// Charger GTFS-RT frais quand la page est prête
+window.addEventListener('load', () => {
+  loadGtfsRetards({ forceFresh: true }).catch(err => console.error("Erreur GTFS-RT au load:", err));
+});
 
 /* ---------- TIMESTAMP ---------- */
 function setLastUpdated() {
