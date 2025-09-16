@@ -2623,6 +2623,19 @@ if (!document.getElementById('css-row-focus')) {
   st.textContent = `.row-focus{outline:2px solid #00ffff;box-shadow:0 0 0 2px #00ffff inset}`;
   document.head.appendChild(st);
 }
+ // CSS pour le drag & drop des chips sélection
+if (!document.getElementById('css-dnd-chips')) {
+  const st = document.createElement('style');
+  st.id = 'css-dnd-chips';
+  st.textContent = `
+    #selectionChips { display:flex; flex-wrap:wrap; gap:8px; }
+    #selectionChips .chip-tag { cursor: grab; user-select:none; }
+    #selectionChips .chip-tag.dragging { opacity:.5; cursor: grabbing; }
+    #selectionChips .chip-tag.drop-before { box-shadow: -2px 0 0 0 #00ffff inset; }
+    #selectionChips .chip-tag.drop-after  { box-shadow:  2px 0 0 0 #00ffff inset; }
+  `;
+  document.head.appendChild(st);
+}  
 
 /* ---------- LIENS GARES ---------- */
 const gareLiensLux = {
@@ -2730,90 +2743,6 @@ async function ensureGTFSLoaded(){
   });
 
   GTFS = { stops, stopTimes, trips, calendarDates, stopNameToId, tripById, allowedByDate };
-/* ===== Tri sélection : helpers & cache ===== */
-let autoSortSelection = true;
-const timeCache = new Map(); // clé: `${num}|${ymd}|${start}|${end}|${sensInverse}` -> minutes
-
-function gtfsTimeToMin(t){
-  if (!t) return null;
-  const m = /^(\d{1,2}):(\d{2})/.exec(t);
-  if (!m) return null;
-  return parseInt(m[1],10)*60 + parseInt(m[2],10);
-}
-
-function ensureByTripIndex(){
-  if (GTFS.byTrip) return;
-  const m = new Map();
-  for(const st of GTFS.stopTimes){
-    if(!m.has(st.trip_id)) m.set(st.trip_id, []);
-    m.get(st.trip_id).push(st);
-  }
-  m.forEach(arr => arr.sort((a,b)=>Number(a.stop_sequence)-Number(b.stop_sequence)));
-  GTFS.byTrip = m;
-}
-
-function getCorridorStops(){
-  const sensInverse = $('#directionToggle').is(':checked');
-  const fixed = getStopsForDirection(sensInverse);
-  const startName = $('#startStation').val() || '';
-  const endName   = $('#endStation').val()   || '';
-  return filterByOD(fixed, startName, endName);
-}
-
-function firstTimeForNumberGTFS(num){
-  if (!GTFS || !GTFS.trips || !GTFS.stopTimes || !GTFS.stopNameToId) return null;
-
-  const ymd = dateInputToYMD($('#trainDate').val());
-  const sensInverse = $('#directionToggle').is(':checked') ? '1' : '0';
-  const startName = $('#startStation').val() || '';
-  const endName   = $('#endStation').val()   || '';
-  const cacheKey = `${num}|${ymd}|${startName}|${endName}|${sensInverse}`;
-  if (timeCache.has(cacheKey)) return timeCache.get(cacheKey);
-
-  ensureByTripIndex();
-
-  const corridor = getCorridorStops();
-  const stopIds = corridor.map(n => GTFS.stopNameToId.get(n)).filter(Boolean);
-
-  let allowed = null;
-  if (ymd && GTFS.allowedByDate && GTFS.allowedByDate.size>0){
-    allowed = GTFS.allowedByDate.get(ymd) || new Set();
-  }
-
-  let best = null;
-  for(const t of GTFS.trips){
-    const n = extractTrainNumber(t.trip_short_name || t.trip_id || '');
-    if (n !== num) continue;
-    if (allowed && !allowed.has(t.service_id)) continue;
-
-    const sts = GTFS.byTrip.get(t.trip_id) || [];
-    for(const sid of stopIds){
-      const st = sts.find(x => x.stop_id === sid);
-      if(!st) continue;
-      const v = gtfsTimeToMin(st.departure_time || st.arrival_time);
-      if (v != null && (best == null || v < best)) best = v;
-    }
-  }
-
-  timeCache.set(cacheKey, best);
-  return best;
-}
-
-function sortTrainNumbersByTime(arr){
-  if (!arr || arr.length <= 1) return arr;
-  if (!GTFS || !GTFS.trips || !GTFS.stopTimes || !GTFS.stopNameToId){
-    // fallback simple si GTFS pas prêt
-    return arr.slice().sort((a,b)=>a.localeCompare(b));
-  }
-  return arr.slice().sort((a,b)=>{
-    const va = firstTimeForNumberGTFS(a);
-    const vb = firstTimeForNumberGTFS(b);
-    const A = (va==null) ? 1e9 : va;
-    const B = (vb==null) ? 1e9 : vb;
-    if (A !== B) return A - B;
-    return a.localeCompare(b);
-  });
-}
 }
 
 // "YYYY-MM-DD" -> "YYYYMMDD"
@@ -3036,26 +2965,13 @@ function chipsUpdateCount(){
 }
 
 function updateSelectionUI(){
-  // 0) récupère la sélection (Set -> Array)
-  let arr = Array.from(selectedTrains || []);
+  const arr = Array.from(selectedTrains || []);
 
-  // 1) TRI AUTO si activé
-  if (autoSortSelection) {
-    try {
-      arr = sortTrainNumbersByTime(arr); // tri corridor De→À
-      // stabilise l'ordre interne du Set
-      selectedTrains.clear();
-      arr.forEach(n => selectedTrains.add(n));
-    } catch(e){
-      console.warn('Tri auto indisponible, on garde l’ordre courant.', e);
-    }
-  }
-
-  // 2) met à jour l’input CSV dans l’ordre courant (trié ou manuel)
+  // 1) compat input CSV
   const input = document.getElementById('trainNumbers');
   if (input) input.value = arr.join(',');
 
-  // 3) rendu des chips sélection
+  // 2) rendu des chips sélection
   const zone = document.getElementById('selectionChips');
   if (zone){
     zone.innerHTML = arr.map(num => `
@@ -3075,7 +2991,10 @@ function updateSelectionUI(){
         chipsUpdateCount();
         updateSelectionUI();
       };
-      tag.addEventListener('click', remove);
+      tag.addEventListener('click', (e)=>{
+  if (tag.classList.contains('dragging')) return; // ignore le click fantôme après un drag
+  remove();
+});
       tag.addEventListener('keydown', (e)=>{
         if (e.key === 'Enter' || e.key === ' ') {
           e.preventDefault();
@@ -3088,73 +3007,29 @@ function updateSelectionUI(){
     if (!document.getElementById('selectionBlock')) {
       zone.hidden = (arr.length === 0);
     }
-
-    /* === Drag & Drop pour ordre manuel (actif seulement si tri auto OFF) === */
-    const enableDrag = !autoSortSelection;
-    let dragSrc = null;
-
-    zone.querySelectorAll('.chip-tag').forEach(tag=>{
-      tag.setAttribute('draggable', enableDrag ? 'true' : 'false');
-
-      tag.addEventListener('dragstart', (e)=>{
-        if (!enableDrag) return;
-        dragSrc = tag;
-        tag.classList.add('dragging');
-        e.dataTransfer.effectAllowed = 'move';
-      });
-      tag.addEventListener('dragend', ()=>{
-        tag.classList.remove('dragging');
-        dragSrc = null;
-      });
-
-      tag.addEventListener('dragover', (e)=>{
-        if (!enableDrag) return;
-        e.preventDefault();
-      });
-
-      tag.addEventListener('drop', (e)=>{
-        if (!enableDrag) return;
-        e.preventDefault();
-        if (!dragSrc || dragSrc === tag) return;
-
-        const parent = tag.parentNode;
-        const rect = tag.getBoundingClientRect();
-        const before = (e.clientY - rect.top) < rect.height/2;
-        parent.insertBefore(dragSrc, before ? tag : tag.nextSibling);
-
-        // applique le nouvel ordre DOM -> Set -> input
-        const chips = Array.from(parent.querySelectorAll('.chip-tag'));
-        const newArr = chips.map(c => c.dataset.num).filter(Boolean);
-        selectedTrains.clear();
-        newArr.forEach(n => selectedTrains.add(n));
-
-        // mets à jour input CSV & compteurs sans re-tri
-        const inp = document.getElementById('trainNumbers');
-        if (inp) inp.value = newArr.join(',');
-        if (typeof chipsUpdateCount === 'function') chipsUpdateCount();
-      });
-    });
+    // Active le drag & drop manuel sur les chips sélection
+attachDndToSelectionChips();
   }
 
-  // 4) barre d’actions + bloc
+  // 3) barre d’actions + bloc
   const actions = document.getElementById('selectionActions');
   if (actions) actions.hidden = (arr.length === 0);
 
-  // 5) wrapper optionnel (si présent)
+  // 4) wrapper optionnel (si présent)
   const block = document.getElementById('selectionBlock');
   if (block) block.hidden = (arr.length === 0);
 
-  // 6) compteur en-tête du panneau de sélection
+  // 5) compteur en-tête du panneau de sélection
   const selCount = document.getElementById('selCount');
   if (selCount) selCount.textContent = arr.length;
 
-  // 7) footer "Générer le tableau" visible seulement s'il y a une sélection
+  // footer "Générer le tableau" visible seulement s'il y a une sélection
   const footer = document.getElementById('selectionFooter');
   if (footer) footer.hidden = (arr.length === 0);
 
-  // 8) laisse le compteur des propositions si tu l'utilises ailleurs
+  // laisse le compteur des propositions si tu l'utilises ailleurs
   if (typeof chipsUpdateCount === 'function') chipsUpdateCount();
-} 
+}  
 
 // Montre/cache la barre d'actions selon la sélection
 function toggleSelectionActions(){
@@ -3177,6 +3052,77 @@ function chipsSetSelection(list){
   });
   chipsUpdateCount();
   updateSelectionUI();
+}
+    // --- Drag & Drop manuel des chips dans #selectionChips ---
+let draggedNum = null;
+
+function attachDndToSelectionChips(){
+  const zone = document.getElementById('selectionChips');
+  if (!zone) return;
+
+  // Nettoie des traces d'un précédent rendu
+  zone.querySelectorAll('.drop-before,.drop-after').forEach(el=>{
+    el.classList.remove('drop-before','drop-after');
+  });
+
+  zone.querySelectorAll('.chip-tag').forEach(tag=>{
+    const num = tag.dataset.num;
+    if (!num) return;
+
+    tag.setAttribute('draggable', 'true');
+
+    tag.addEventListener('dragstart', (e)=>{
+      draggedNum = num;
+      tag.classList.add('dragging');
+      try { e.dataTransfer.setData('text/plain', num); } catch {}
+      e.dataTransfer.effectAllowed = 'move';
+    });
+
+    tag.addEventListener('dragend', ()=>{
+      tag.classList.remove('dragging');
+      zone.querySelectorAll('.drop-before,.drop-after').forEach(el=>{
+        el.classList.remove('drop-before','drop-after');
+      });
+      draggedNum = null;
+    });
+
+    tag.addEventListener('dragover', (e)=>{
+      e.preventDefault(); // autorise le drop
+      const rect = tag.getBoundingClientRect();
+      const before = (e.clientX - rect.left) < rect.width/2;
+      zone.querySelectorAll('.drop-before,.drop-after').forEach(el=>{
+        el.classList.remove('drop-before','drop-after');
+      });
+      tag.classList.add(before ? 'drop-before' : 'drop-after');
+    });
+
+    tag.addEventListener('drop', (e)=>{
+      e.preventDefault();
+      const targetNum = tag.dataset.num;
+      if (!draggedNum || !targetNum || draggedNum === targetNum) return;
+
+      const rect = tag.getBoundingClientRect();
+      const placeBefore = (e.clientX - rect.left) < rect.width/2;
+
+      // ordre courant d'après le DOM
+      const curOrder = Array.from(zone.querySelectorAll('.chip-tag')).map(el => el.dataset.num);
+
+      // retire l’élément déplacé
+      const without = curOrder.filter(n => n !== draggedNum);
+
+      // insère avant/après la cible
+      let idx = without.indexOf(targetNum);
+      if (placeBefore) without.splice(idx, 0, draggedNum);
+      else            without.splice(idx+1, 0, draggedNum);
+
+      // reconstruit le Set dans ce nouvel ordre (le Set garde l'ordre d'insertion)
+      selectedTrains.clear();
+      without.forEach(n => selectedTrains.add(n));
+
+      // rerender → met aussi à jour #trainNumbers
+      updateSelectionUI();
+    });
+  });
 }
     
 /* ====================== RENDU DES CARTES ====================== */
@@ -3325,38 +3271,9 @@ $(function () {
     $('#endStation').val(a);
   }
 });
-  
-  $('#directionToggle').on('change._order', function(){
-  timeCache.clear();
-  updateSelectionUI(); // re-tri la sélection selon le nouveau couloir
-});
 
   // cache la sélection au départ
   updateSelectionUI();
-
-  $(document).on('change', '#startStation, #endStation', function(){
-  timeCache.clear();
-  updateSelectionUI(); // re-tri si Tri auto ON
-});
-
-  // Ajoute un toggle "Tri auto" à droite du header de #selectionBlock (si pas déjà là)
-(function(){
-  const hdr = document.querySelector('#selectionBlock .chips-header');
-  if (hdr && !document.getElementById('autoSortToggle')){
-    const wrap = document.createElement('label');
-    wrap.style.marginLeft = 'auto';
-    wrap.style.display = 'flex';
-    wrap.style.alignItems = 'center';
-    wrap.style.gap = '6px';
-    wrap.innerHTML = `<input type="checkbox" id="autoSortToggle" checked> Tri auto`;
-    hdr.appendChild(wrap);
-
-    $('#autoSortToggle').on('change', function(){
-      autoSortSelection = this.checked;
-      updateSelectionUI(); // re-rend (et re-trie si ON)
-    });
-  }
-})();
 
   // Bouton “Proposer” -> lance la recherche
   $('#btnProposer').off('click').on('click', proposerTrainsOD);
@@ -3377,15 +3294,6 @@ $(function () {
   // Raccourcis Matin/Soir
   $('#btnMatin').off('click').on('click', ()=> usePresetEverywhere(PRESET_AM, 'AM'));
   $('#btnSoir').off('click').on('click',  ()=> usePresetEverywhere(PRESET_PM, 'PM'));
-
-  $('#btnMatin').on('click._order', function(){
-  timeCache.clear();
-  setTimeout(updateSelectionUI, 0); // laisse usePresetEverywhere finir, puis re-tri
-});
-$('#btnSoir').on('click._order', function(){
-  timeCache.clear();
-  setTimeout(updateSelectionUI, 0);
-});
 
   (function($){
     // utilitaires
