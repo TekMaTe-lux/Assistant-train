@@ -3859,81 +3859,27 @@ document.querySelectorAll('#trainInfo table tr td:first-child').forEach(td => {
     // ===== FIN handler "#loadTrains"
   });
 
-/* ---------- GTFS-RT : chargement centralisé ---------- */
-const GTFS_RT_URL = "https://raw.githubusercontent.com/TekMaTe-lux/Assistant-train/main/Assistant-train/retards_nancymetzlux.json";
-if (typeof window.retardsGTFS === 'undefined') window.retardsGTFS = null;
-
-async function loadGtfsRetards({ forceFresh = false } = {}) {
-  const url = GTFS_RT_URL + (GTFS_RT_URL.includes('?') ? '&' : '?') + 't=' + (forceFresh ? Date.now() : 'soft');
-  const res = await fetch(url, {
-    cache: 'no-store',
-    headers: { 'pragma': 'no-cache', 'cache-control': 'no-cache' }
-  });
-  if (!res.ok) throw new Error('HTTP ' + res.status);
-  window.retardsGTFS = await res.json(); // <— ici
-  console.log('✅ GTFS-RT chargé', new Date().toISOString());
-  tryApplyGtfsToCurrentTable();
-}
-
-function tryApplyGtfsToCurrentTable() {
-  if (!window.retardsGTFS) return;        // <— ici
-  if (!isSelectedDateToday()) {
-    console.log('ℹ️ GTFS-RT non appliqué (date ≠ aujourd’hui).');
-    return;
-  }
-  const table = document.querySelector('table');
-  if (!table) return;
-  table.querySelectorAll('.gtfs-retard').forEach(n => n.remove());
-  applyRetardsFromGTFS(window.retardsGTFS); // <— ici
-}
-
-/* ---------- AU LOAD ---------- */
-window.addEventListener('load', () => {
-  // 1) Charger GTFS-RT frais au démarrage
-  loadGtfsRetards({ forceFresh: true }).catch(err => {
-    console.error("Erreur GTFS-RT au load:", err);
-  });
-
-  // 2) Quand on (re)génère le tableau, tenter d’appliquer immédiatement le GTFS-RT courant
-  const boutonAfficher = document.getElementById('loadTrains');
-  if (boutonAfficher) {
-    boutonAfficher.addEventListener('click', () => {
-      // ton code existant...
-      waitForTableAndLoadAlerts();
-      // après l’injection du tableau, applique les retards si on est sur aujourd’hui
-      // (petit délai pour laisser le DOM s’injecter si besoin)
-      setTimeout(tryApplyGtfsToCurrentTable, 0);
-    });
-  }
-
-  // 3) Bouton “Actualiser les données” : re-fetch vraiment FRESH puis régénère
-  $('#refreshButton').off('click').on('click', async function () {
+  // Bouton "Actualiser les données"
+  $('#refreshButton').off('click').on('click', function () {
     const el = document.getElementById('lastUpdated');
     if (el) el.textContent = 'Actualisation en cours…';
-    try {
-      await loadGtfsRetards({ forceFresh: true }); // <-- refetch dur
-    } catch (e) {
-      console.error(e);
-      alert("Échec de l'actualisation GTFS-RT.");
-    }
-    // puis on relance la génération du tableau (ton flux existant)
     $('#loadTrains').click();
-    setLastUpdated();
   });
-
-  // 4) Sur changement de date, on re-tente d’appliquer (ou non) selon la règle “aujourd’hui”
-  const dateInput = document.getElementById('trainDate');
-  if (dateInput) {
-    dateInput.addEventListener('change', () => {
-      // si on revient à aujourd’hui et qu’on a un cache en mémoire, applique ;
-      // sinon, pas d’application. Tu peux aussi relancer un fetch si tu veux :
-      // if (isSelectedDateToday()) loadGtfsRetards({ forceFresh: true });
-      tryApplyGtfsToCurrentTable();
-      waitForTableAndLoadAlerts();
-      setLastUpdated();
-    });
-  }
 });
+
+/* ---------- CHARGEMENT GTFS-RT AU LOAD ---------- */
+window.onload = function() {
+  const url = "https://raw.githubusercontent.com/TekMaTe-lux/Assistant-train/main/Assistant-train/retards_nancymetzlux.json";
+  const cacheBuster = `?t=${new Date().getTime()}`;
+  fetch(url + cacheBuster)
+    .then(r => r.json())
+    .then(data => {
+      retardsGTFS = data;
+      console.log("✅ Retards GTFS chargés avec mise à jour !");
+      applyRetardsFromGTFS(retardsGTFS);
+    })
+    .catch(err => console.error("Erreur lors du chargement des retards GTFS-RT :", err));
+};
 
 /* ---------- TIMESTAMP ---------- */
 function setLastUpdated() {
