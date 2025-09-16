@@ -3899,6 +3899,29 @@ function setLastUpdated() {
   }
   el.innerHTML = `Généré le ${nowTxt} — Données valables le <strong>${validTxt}</strong>`;
 }
+function todayYMDLux(){
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Europe/Luxembourg',
+    year: 'numeric', month: '2-digit', day: '2-digit'
+  }).formatToParts(new Date());
+  const y = parts.find(p=>p.type==='year').value;
+  const m = parts.find(p=>p.type==='month').value;
+  const d = parts.find(p=>p.type==='day').value;
+  return `${y}-${m}-${d}`; // "YYYY-MM-DD"
+}
+
+function selectedDateYMD(){
+  const inp = document.getElementById('trainDate');
+  const v = inp?.value || '';
+  return (/^\d{4}-\d{2}-\d{2}$/.test(v) ? v : null);
+}
+
+function isSelectedDateToday(){
+  const sel = selectedDateYMD();
+  if (!sel) return true;           // pas de date => on considère aujourd’hui
+  return sel === todayYMDLux();
+}
+    
 
 /* ---------- APPLICATION DES RETARDS GTFS-RT DANS LE TABLEAU ---------- */
 function applyRetardsFromGTFS(retardsGTFS) {
@@ -4142,12 +4165,40 @@ function waitForTableAndLoadAlerts() {
   }
 }
 window.addEventListener('load', () => {
+  // charge les alertes dès que le tableau est dispo
   waitForTableAndLoadAlerts();
+
+  // clic sur "Générer le tableau"
   const boutonAfficher = document.getElementById('loadTrains');
   if (boutonAfficher) {
     boutonAfficher.addEventListener('click', () => {
       waitForTableAndLoadAlerts();
+      // le rendu du tableau appelle déjà updateWeatherBadges() + startWeatherAutorefresh()
+      // (si tu as inséré ces appels juste après l'injection du HTML)
     });
+  }
+
+  // changement de date : n'afficher la météo que pour "aujourd'hui"
+  const dateInput = document.getElementById('trainDate');
+  if (dateInput) {
+    const onDateChange = () => {
+      // coupe le rafraîchissement auto météo
+      if (typeof wxTimer !== 'undefined' && wxTimer) {
+        clearInterval(wxTimer);
+        wxTimer = null;
+      }
+      // met à jour/efface les pastilles selon la date sélectionnée
+      if (typeof updateWeatherBadges === 'function') updateWeatherBadges();
+      // relance le timer uniquement si la date est aujourd'hui
+      if (typeof startWeatherAutorefresh === 'function') startWeatherAutorefresh();
+
+      // recharge/filtre les alertes pour la nouvelle date
+      waitForTableAndLoadAlerts();
+    };
+
+    dateInput.addEventListener('change', onDateChange);
+    // (optionnel) réagir en direct pendant la saisie
+    // dateInput.addEventListener('input', onDateChange);
   }
 });
 </script>
@@ -4473,82 +4524,159 @@ function wmoToIcon(code, isDay = true){
   return { ico: "❔", label: `Code ${code}` };
 }
 
-
-// --------- Fetch météo pour N gares en un appel ----------
+// --------- Fetch météo pour N gares en un appel (robuste) ----------
 async function fetchWeatherForStations(stationNames){
-  const coords = stationNames
-    .map(name => ({ name, ...(GARE_COORDS[name]||{}) }))
-    .filter(s => Number.isFinite(s.lat) && Number.isFinite(s.lon));
+  // Dédoublonne et garde seulement les gares avec lat/lon valides
+  const seen = new Set();
+  const coords = [];
+  for (const name of stationNames || []) {
+    if (!name || seen.has(name)) continue;
+    seen.add(name);
+    const c = (GARE_COORDS && GARE_COORDS[name]) || null;
+    if (c && Number.isFinite(c.lat) && Number.isFinite(c.lon)) {
+      coords.push({ name, lat: +c.lat, lon: +c.lon });
+    }
+  }
 
+  // Rien à interroger
   if (!coords.length) return new Map();
 
+  // Construit l’URL de manière sûre
   const latList = coords.map(c => c.lat).join(',');
   const lonList = coords.map(c => c.lon).join(',');
+  const qs = new URLSearchParams({
+    latitude: latList,
+    longitude: lonList,
+    current: 'temperature_2m,weather_code,is_day',
+    timezone: 'Europe/Luxembourg'
+  });
+  const url = `https://api.open-meteo.com/v1/forecast?${qs.toString()}`;
 
-  const url = `https://api.open-meteo.com/v1/forecast` +
-    `?latitude=${encodeURIComponent(latList)}` +
-    `&longitude=${encodeURIComponent(lonList)}` +
-    `&current=temperature_2m,weather_code,is_day` +
-    `&timezone=auto`;
+  // Timeout (7s) pour éviter de bloquer l’UI
+  const ctrl = new AbortController();
+  const to = setTimeout(() => ctrl.abort(), 7000);
 
-  const res = await fetch(url);
-  if (!res.ok) throw new Error('Météo HTTP '+res.status);
-  const json = await res.json();
+  let json;
+  try {
+    const res = await fetch(url, { signal: ctrl.signal });
+    clearTimeout(to);
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    json = await res.json();
+  } catch (e) {
+    // On remonte une Map vide : le caller décidera quoi afficher
+    console.warn('Météo indisponible:', e?.message || e);
+    return new Map();
+  }
+
+  // Open-Meteo renvoie un objet (1 point) ou un tableau (N points).
   const list = Array.isArray(json) ? json : [json];
 
+  // Map gare -> données
   const out = new Map();
-  list.forEach((loc, idx) => {
-    const name = coords[idx].name;
+  for (let i = 0; i < coords.length; i++) {
+    const name = coords[i].name;
+    const loc  = list[i] || {};
     const curr = loc.current || {};
     out.set(name, {
-      temp: curr.temperature_2m,
-      code: curr.weather_code,
+      temp: (typeof curr.temperature_2m === 'number') ? curr.temperature_2m : null,
+      code: (typeof curr.weather_code === 'number') ? curr.weather_code : null,
       isDay: !!curr.is_day,
-      time: curr.time
+      time: curr.time || null
     });
-  });
+  }
   return out;
 }
 
-// --------- Remplissage des <span class="wx"> ----------
+// --------- Remplissage des <span class="wx"> (affiche uniquement pour AUJOURD'HUI) ----------
 async function updateWeatherBadges(){
+  // Fonction locale : est-ce bien la date du jour (Europe/Luxembourg) ?
+  const isSelectedDateTodayLocal = () => {
+    try {
+      const inp = document.getElementById('trainDate');
+      const v = inp?.value || '';
+      // Si pas de date → on considère "aujourd'hui"
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(v)) return true;
+      const fmt = new Intl.DateTimeFormat('en-CA', {
+        timeZone: 'Europe/Luxembourg',
+        year: 'numeric', month: '2-digit', day: '2-digit'
+      });
+      const parts = Object.fromEntries(fmt.formatToParts(new Date()).map(p => [p.type, p.value]));
+      const today = `${parts.year}-${parts.month}-${parts.day}`;
+      return v === today;
+    } catch { return true; }
+  };
+
   const rows = Array.from(document.querySelectorAll('#trainInfo tr[data-gare]'));
   if (!rows.length) return;
 
-  const names = [...new Set(rows.map(r => r.dataset.gare))];
-  let data;
-  try {
-    data = await fetchWeatherForStations(names);
-  } catch (e) {
-    console.warn('Météo indisponible', e);
+  // Si la date n'est pas aujourd'hui → on nettoie et on sort
+  if (!isSelectedDateTodayLocal()){
+    rows.forEach(r => {
+      const wx = r.querySelector('.wx');
+      if (wx) { wx.textContent = ''; wx.removeAttribute('title'); }
+    });
     return;
   }
 
+  // Noms uniques des gares visibles
+  const names = [...new Set(rows.map(r => r.dataset.gare).filter(Boolean))];
+
+  // Récupère les données
+  const data = await fetchWeatherForStations(names);
+
+  // Injecte/Nettoie pour chaque ligne
   rows.forEach(r => {
     const name = r.dataset.gare;
     const wx = r.querySelector('.wx');
     if (!wx) return;
-    const d = data.get(name);
-    if (!d) { wx.textContent = ''; return; }
-    const { ico, label } = wmoToIcon(d.code, d.isDay);
-const t = (d.temp != null) ? Math.round(d.temp) + '°' : '';
-const url = buildWeatherLinkByName(name);
 
-if (url) {
-  wx.innerHTML = `<a class="wx-link" href="${url}" target="_blank" rel="noopener"
-                    title="${label}${t ? ' • '+t : ''}">
-    <span class="wx-ico">${ico}</span> <span class="wx-t">${t}</span>
-  </a>`;
-} else {
-  wx.textContent = `${ico} ${t}`;
-  wx.title = label + (t ? ' • ' + t : '');
-}
+    const d = data.get(name);
+    if (!d || d.code == null) {
+      wx.textContent = '';
+      wx.removeAttribute('title');
+      return;
+    }
+
+    const { ico, label } = (typeof wmoToIcon === 'function')
+      ? wmoToIcon(d.code, d.isDay)
+      : { ico: '❔', label: `Code ${d.code}` };
+
+    const t = (typeof d.temp === 'number') ? Math.round(d.temp) + '°' : '';
+    const url = (typeof buildWeatherLinkByName === 'function') ? buildWeatherLinkByName(name) : null;
+
+    if (url) {
+      wx.innerHTML = `<a class="wx-link" href="${url}" target="_blank" rel="noopener"
+                        title="${label}${t ? ' • '+t : ''}">
+        <span class="wx-ico">${ico}</span><span class="wx-t">${t}</span>
+      </a>`;
+    } else {
+      wx.textContent = `${ico}${t ? ' ' + t : ''}`;
+      wx.title = `${label}${t ? ' • ' + t : ''}`;
+    }
   });
 }
 
+// --------- Auto-refresh (uniquement pour aujourd’hui) ----------
 let wxTimer = null;
-function startWeatherAutorefresh(intervalMs = 5*60*1000){
+function startWeatherAutorefresh(intervalMs = 5 * 60 * 1000){
   clearInterval(wxTimer);
+  // Lance le timer seulement si la date affichée est "aujourd'hui"
+  const dateInput = document.getElementById('trainDate');
+  const getIsToday = () => {
+    try {
+      const v = dateInput?.value || '';
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(v)) return true;
+      const fmt = new Intl.DateTimeFormat('en-CA', {
+        timeZone: 'Europe/Luxembourg',
+        year: 'numeric', month: '2-digit', day: '2-digit'
+      });
+      const parts = Object.fromEntries(fmt.formatToParts(new Date()).map(p => [p.type, p.value]));
+      const today = `${parts.year}-${parts.month}-${parts.day}`;
+      return v === today;
+    } catch { return true; }
+  };
+
+  if (!getIsToday()) return;
   wxTimer = setInterval(updateWeatherBadges, intervalMs);
 }
      </script>
