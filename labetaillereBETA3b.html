@@ -6,6 +6,7 @@
   <title>Comparatif Trains SNCF</title>
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/nouislider@15.7.1/dist/nouislider.min.css">
 <script src="https://cdn.jsdelivr.net/npm/nouislider@15.7.1/dist/nouislider.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.2/Sortable.min.js"></script>
   <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
   <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700&display=swap" rel="stylesheet">
   <style>
@@ -2623,46 +2624,43 @@ if (!document.getElementById('css-row-focus')) {
   st.textContent = `.row-focus{outline:2px solid #00ffff;box-shadow:0 0 0 2px #00ffff inset}`;
   document.head.appendChild(st);
 }
-// CSS pour DnD fluide + mobile (rail horizontal)
+// CSS rail horizontal + styles Sortable
 (function(){
   const css = `
     #selectionChips{
       display:flex;
-      flex-wrap:nowrap;          /* 🚫 plus de colonnes */
+      flex-wrap:nowrap;          /* une seule ligne -> pas de yoyo */
       overflow-x:auto;           /* rail scrollable */
       gap:8px;
-      align-items:flex-start;
       padding-bottom:6px;
       -webkit-overflow-scrolling:touch;
       overscroll-behavior:contain;
-      scroll-snap-type:x proximity;
+      align-items:flex-start;
     }
     #selectionChips::-webkit-scrollbar{ height:6px }
+
     #selectionChips .chip-tag{
-      flex:0 0 auto;             /* largeur fixe, pas de shrink */
+      flex:0 0 auto;             /* largeur auto mais pas de wrap */
       cursor:grab;
       user-select:none;
-      touch-action:none;         /* évite le scroll pendant drag */
-      scroll-snap-align:start;
+      touch-action:none;         /* pas de scroll pendant drag */
       transition: transform 150ms ease, opacity 150ms ease;
     }
-    #selectionChips .chip-tag.dragging{ opacity:.85; cursor:grabbing; z-index:5 }
-    #selectionChips .chip-placeholder{
-      width:var(--ph-w,64px);
-      height:var(--ph-h,28px);
-      border:2px dashed #00ffff66;
+
+    /* classes natives SortableJS */
+    #selectionChips .sortable-chosen { opacity:.9 }
+    #selectionChips .sortable-ghost  {
+      opacity:.6;
+      background:rgba(0,255,255,.08);
       border-radius:16px;
-      margin:0 2px;
-      flex:0 0 auto;
     }
-    .chip-ghost{
-      position:fixed; left:0; top:0; transform:translate(-50%,-50%);
-      pointer-events:none; margin:0; z-index:9999; transition:none;
+    #selectionChips .sortable-drag   {
+      z-index:5;
       box-shadow:0 8px 24px rgba(0,0,0,.18);
     }
   `;
-  const old = document.getElementById('css-dnd-chips');
-  if (old) old.textContent = css;
+  const el = document.getElementById('css-dnd-chips');
+  if (el) el.textContent = css;
   else { const st=document.createElement('style'); st.id='css-dnd-chips'; st.textContent=css; document.head.appendChild(st); }
 })();
 
@@ -3003,13 +3001,14 @@ function updateSelectionUI(){
   // 2) rendu des chips sélection
   const zone = document.getElementById('selectionChips');
   if (zone){
+    // (ré)génère le HTML des chips
     zone.innerHTML = arr.map(num => `
       <span class="chip-tag" data-num="${num}" role="button" tabindex="0" title="Retirer ${num}">
         <span class="t-num">#${num}</span>
       </span>
     `).join('');
 
-    // suppression au clic OU au clavier (Entrée/Espace)
+    // remove au clic / clavier (désactivé si on est en train de drag)
     zone.querySelectorAll('.chip-tag').forEach(tag=>{
       const remove = () => {
         const num = tag.dataset.num;
@@ -3017,48 +3016,51 @@ function updateSelectionUI(){
         selectedTrains.delete(num);
         const card = document.querySelector(`#propositions .chip[data-num="${num}"]`);
         if (card) card.classList.remove('is-selected');
-        chipsUpdateCount();
+        chipsUpdateCount?.();
         updateSelectionUI();
       };
-      tag.addEventListener('click', (e)=>{
-  if (tag.classList.contains('dragging')) return; // évite le clic fantôme après un drag
+      tag.addEventListener('click', ()=>{
+        const t = Number(zone.dataset.justDroppedAt || 0);
+  if (t && Date.now() - t < 250) return;
+
   remove();
 });
       tag.addEventListener('keydown', (e)=>{
-        if (e.key === 'Enter' || e.key === ' ') {
-          e.preventDefault();
-          remove();
-        }
+        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); remove(); }
       });
     });
 
-    // si PAS de wrapper #selectionBlock, on cache directement la zone
+    // rail visible uniquement si on a des chips (sauf si #selectionBlock gère l’affichage)
     if (!document.getElementById('selectionBlock')) {
       zone.hidden = (arr.length === 0);
     }
-    // Active le drag & drop manuel sur les chips sélection
-attachDndToSelectionChips();
+
+    // (ré)initialise le DnD APRÈS insertion DOM
+    requestAnimationFrame(()=>{
+      if (window.Sortable) {
+        initSelectionSortable();
+      } else {
+        console.warn('SortableJS non chargé ; le drag & drop est désactivé.');
+      }
+    });
   }
 
   // 3) barre d’actions + bloc
   const actions = document.getElementById('selectionActions');
   if (actions) actions.hidden = (arr.length === 0);
 
-  // 4) wrapper optionnel (si présent)
   const block = document.getElementById('selectionBlock');
   if (block) block.hidden = (arr.length === 0);
 
-  // 5) compteur en-tête du panneau de sélection
   const selCount = document.getElementById('selCount');
   if (selCount) selCount.textContent = arr.length;
 
-  // footer "Générer le tableau" visible seulement s'il y a une sélection
   const footer = document.getElementById('selectionFooter');
   if (footer) footer.hidden = (arr.length === 0);
 
-  // laisse le compteur des propositions si tu l'utilises ailleurs
-  if (typeof chipsUpdateCount === 'function') chipsUpdateCount();
-}  
+  // compteur en-tête “Propositions”
+  chipsUpdateCount?.();
+}
 
 // Montre/cache la barre d'actions selon la sélection
 function toggleSelectionActions(){
@@ -3082,146 +3084,46 @@ function chipsSetSelection(list){
   chipsUpdateCount();
   updateSelectionUI();
 }
-  // === Drag & Drop fluide + mobile (Pointer Events) pour #selectionChips — rail horizontal ===
-let _drag = null;
+      
+// === SortableJS pour #selectionChips (rail horizontal) ===
+let selectionSortable = null;
 
-function attachDndToSelectionChips(){
+function initSelectionSortable(){
   const zone = document.getElementById('selectionChips');
-  if (!zone) return;
+  if (!zone || !window.Sortable) return;
 
-  // Reset
-  zone.querySelectorAll('.chip-tag').forEach(tag=>{
-    tag.classList.remove('dragging');
-    tag.onpointerdown = null;
-    tag.style.touchAction = 'none';
-  });
+  if (selectionSortable) { selectionSortable.destroy(); selectionSortable = null; }
 
-  zone.querySelectorAll('.chip-tag').forEach(tag=>{
-    const num = tag.dataset.num;
-    if (!num) return;
+  selectionSortable = Sortable.create(zone, {
+    animation: 150,
+    easing: 'cubic-bezier(0.2, 0, 0, 1)',
+    forceFallback: true,
+    fallbackOnBody: true,
+    fallbackTolerance: 5,
+    scroll: true,
+    bubbleScroll: true,
+    scrollSensitivity: 40,
+    scrollSpeed: 14,
+    ghostClass: 'sortable-ghost',
+    chosenClass: 'sortable-chosen',
+    dragClass: 'sortable-drag',
 
-    tag.onpointerdown = (ev)=>{
-      if (ev.pointerType === 'mouse' && ev.button !== 0) return;
-      ev.preventDefault();
-      tag.setPointerCapture?.(ev.pointerId);
+    onStart(){ zone.dataset.dragging = '1'; },
+    onEnd(){
+  zone.dataset.justDroppedAt = String(Date.now());
+  delete zone.dataset.dragging;
+},
 
-      const rect = tag.getBoundingClientRect();
-      const zoneRect = zone.getBoundingClientRect();
-
-      // placeholder dans le flux
-      const ph = document.createElement('span');
-      ph.className = 'chip-placeholder';
-      ph.style.setProperty('--ph-w', rect.width + 'px');
-      ph.style.setProperty('--ph-h', rect.height + 'px');
-      zone.insertBefore(ph, tag);
-      tag.style.display = 'none';
-
-      // ghost qui suit le doigt
-      const ghost = tag.cloneNode(true);
-      ghost.classList.remove('chip-tag'); ghost.classList.add('chip-ghost');
-      ghost.style.width  = rect.width + 'px';
-      ghost.style.height = rect.height + 'px';
-      document.body.appendChild(ghost);
-
-      const start = { x: ev.clientX, y: ev.clientY };
-      let last    = { x: start.x,    y: start.y };
-      positionGhost(ghost, last.x, last.y);
-      tag.classList.add('dragging');
-
-      _drag = { zone, tag, ph, ghost, start, last, zoneRect };
-
-      const onMove = (e)=>{
-        if (!_drag) return;
-        _drag.last = { x: e.clientX, y: e.clientY };
-        positionGhost(_drag.ghost, _drag.last.x, _drag.last.y);
-
-        // Autoscroll horizontal du rail
-        autoScrollX(_drag.zone, e.clientX);
-
-        // Replacer le placeholder sur le rail (calcul purement horizontal)
-        relocatePlaceholderHorizontal(_drag.zone, _drag.ph, _drag.last);
-
-        // Micro FLIP pour douceur
-        flipOnce(_drag.zone);
-      };
-
-      const onUp = ()=>{
-        if (!_drag) return;
-
-        _drag.tag.style.display = '';
-        _drag.tag.classList.remove('dragging');
-        _drag.zone.insertBefore(_drag.tag, _drag.ph);
-        _drag.ph.remove();
-        _drag.ghost.remove();
-
-        // MàJ ordre -> Set + input via updateSelectionUI()
-        const order = Array.from(_drag.zone.querySelectorAll('.chip-tag')).map(el => el.dataset.num);
-        selectedTrains.clear();
-        order.forEach(n => selectedTrains.add(n));
-
-        _drag = null;
-        updateSelectionUI();
-
-        window.removeEventListener('pointermove',  onMove, { passive:false });
-        window.removeEventListener('pointerup',    onUp,   { passive:false });
-        window.removeEventListener('pointercancel',onUp,   { passive:false });
-      };
-
-      window.addEventListener('pointermove',  onMove, { passive:false });
-      window.addEventListener('pointerup',    onUp,   { passive:false });
-      window.addEventListener('pointercancel',onUp,   { passive:false });
-    };
-  });
-
-  function positionGhost(el, x, y){ el.style.left = x + 'px'; el.style.top = y + 'px'; }
-
-  function autoScrollX(container, clientX){
-    const r = container.getBoundingClientRect();
-    const pad = 32; // zone sensible
-    const speed = 14;
-    if (clientX < r.left + pad)        container.scrollLeft -= speed;
-    else if (clientX > r.right - pad)  container.scrollLeft += speed;
-  }
-
-  // calcule la meilleure position sur une SEULE LIGNE horizontale
-  function relocatePlaceholderHorizontal(zone, ph, pos){
-    const zoneRect = zone.getBoundingClientRect();
-    const xInZone = pos.x - zoneRect.left + zone.scrollLeft; // coordonnée x relative au rail
-    const chips = Array.from(zone.querySelectorAll('.chip-tag'))
-                  .filter(el => el !== _drag?.tag); // le vrai tag est temporairement hidden
-
-    if (chips.length === 0){ zone.appendChild(ph); return; }
-
-    let insertIndex = chips.length; // par défaut, en fin
-    for (let i=0;i<chips.length;i++){
-      const r = chips[i].getBoundingClientRect();
-      const center = (r.left - zoneRect.left + zone.scrollLeft) + r.width/2;
-      if (xInZone < center){ insertIndex = i; break; }
+    onSort(){
+      // MAJ ordre -> Set + input (sans re-render complet)
+      const order = Array.from(zone.querySelectorAll('.chip-tag')).map(el => el.dataset.num);
+      selectedTrains.clear();
+      order.forEach(n => selectedTrains.add(n));
+      const input = document.getElementById('trainNumbers');
+      if (input) input.value = order.join(',');
+      chipsUpdateCount?.();
     }
-    const ref = chips[insertIndex] || null;
-    if (ref !== ph) zone.insertBefore(ph, ref);
-  }
-
-  // petite anim FLIP (douceur quand le DOM bouge)
-  function flipOnce(zone){
-    const nodes = Array.from(zone.children);
-    const prev = new Map(nodes.map(n => [n, n._r]));
-    nodes.forEach(n => { n._r = n.getBoundingClientRect(); });
-
-    nodes.forEach(n=>{
-      const p = prev.get(n), c = n._r;
-      if (!p || !c) return;
-      const dx = p.left - c.left, dy = p.top - c.top;
-      if (dx || dy){
-        n.style.transition = 'transform 0s';
-        n.style.transform = `translate(${dx}px, ${dy}px)`;
-        requestAnimationFrame(()=>{
-          n.style.transition = 'transform 150ms ease';
-          n.style.transform = '';
-        });
-      }
-    });
-  }
+  });
 }
     
 /* ====================== RENDU DES CARTES ====================== */
