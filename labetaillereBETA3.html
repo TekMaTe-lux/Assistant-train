@@ -3001,28 +3001,63 @@ function updateSelectionUI(){
   // 2) rendu des chips sélection
   const zone = document.getElementById('selectionChips');
   if (zone){
+    // (ré)génère le HTML des chips
+    zone.innerHTML = arr.map(num => `
+      <span class="chip-tag" data-num="${num}" role="button" tabindex="0" title="Retirer ${num}">
+        <span class="t-num">#${num}</span>
+      </span>
+    `).join('');
+
+    // remove au clic / clavier (désactivé si on est en train de drag)
     zone.querySelectorAll('.chip-tag').forEach(tag=>{
-      // remplace ton addEventListener('click', remove) par :
       const remove = () => {
         const num = tag.dataset.num;
         if (!num) return;
         selectedTrains.delete(num);
         const card = document.querySelector(`#propositions .chip[data-num="${num}"]`);
         if (card) card.classList.remove('is-selected');
-        chipsUpdateCount();
+        chipsUpdateCount?.();
         updateSelectionUI();
       };
-      tag.addEventListener('click', (e)=>{
-        // si un drag est/était en cours, on ignore le clic fantôme
-        if (zone.dataset.dragging === '1') return;
+      tag.addEventListener('click', ()=>{
+        if (zone.dataset.dragging === '1') return; // pas de remove juste après un drag
         remove();
       });
       tag.addEventListener('keydown', (e)=>{
         if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); remove(); }
       });
     });
+
+    // rail visible uniquement si on a des chips (sauf si #selectionBlock gère l’affichage)
+    if (!document.getElementById('selectionBlock')) {
+      zone.hidden = (arr.length === 0);
+    }
+
+    // (ré)initialise le DnD APRÈS insertion DOM
+    requestAnimationFrame(()=>{
+      if (window.Sortable) {
+        initSelectionSortable();
+      } else {
+        console.warn('SortableJS non chargé ; le drag & drop est désactivé.');
+      }
+    });
   }
-  initSelectionSortable();
+
+  // 3) barre d’actions + bloc
+  const actions = document.getElementById('selectionActions');
+  if (actions) actions.hidden = (arr.length === 0);
+
+  const block = document.getElementById('selectionBlock');
+  if (block) block.hidden = (arr.length === 0);
+
+  const selCount = document.getElementById('selCount');
+  if (selCount) selCount.textContent = arr.length;
+
+  const footer = document.getElementById('selectionFooter');
+  if (footer) footer.hidden = (arr.length === 0);
+
+  // compteur en-tête “Propositions”
+  chipsUpdateCount?.();
 }
 
 // Montre/cache la barre d'actions selon la sélection
@@ -3053,21 +3088,16 @@ let selectionSortable = null;
 
 function initSelectionSortable(){
   const zone = document.getElementById('selectionChips');
-  if (!zone) return;
+  if (!zone || !window.Sortable) return;
 
-  // si ré-render : on recrée proprement
-  if (selectionSortable) {
-    selectionSortable.destroy();
-    selectionSortable = null;
-  }
+  if (selectionSortable) { selectionSortable.destroy(); selectionSortable = null; }
 
   selectionSortable = Sortable.create(zone, {
     animation: 150,
     easing: 'cubic-bezier(0.2, 0, 0, 1)',
-    direction: 'horizontal',     // important
-    forceFallback: true,         // mobile fluide (fallback JS)
+    forceFallback: true,
     fallbackOnBody: true,
-    fallbackTolerance: 5,        // évite les clics fantômes
+    fallbackTolerance: 5,
     scroll: true,
     bubbleScroll: true,
     scrollSensitivity: 40,
@@ -3077,26 +3107,16 @@ function initSelectionSortable(){
     dragClass: 'sortable-drag',
 
     onStart(){ zone.dataset.dragging = '1'; },
-    onEnd(){
-      delete zone.dataset.dragging;
-    },
+    onEnd(){ delete zone.dataset.dragging; },
 
-    onSort(evt){
-      // 1) ordre courant depuis le DOM
-      const order = Array.from(zone.querySelectorAll('.chip-tag'))
-                        .map(el => el.dataset.num);
-
-      // 2) met à jour l'état central dans le même ordre
+    onSort(){
+      // MAJ ordre -> Set + input (sans re-render complet)
+      const order = Array.from(zone.querySelectorAll('.chip-tag')).map(el => el.dataset.num);
       selectedTrains.clear();
       order.forEach(n => selectedTrains.add(n));
-
-      // 3) synchronise l'input CSV (pas de re-render ici)
       const input = document.getElementById('trainNumbers');
       if (input) input.value = order.join(',');
-
-      // 4) met à jour compteurs/CTA
-      if (typeof chipsUpdateCount === 'function') chipsUpdateCount();
-      // (ne PAS appeler updateSelectionUI() ici pour éviter de casser le drag)
+      chipsUpdateCount?.();
     }
   });
 }
