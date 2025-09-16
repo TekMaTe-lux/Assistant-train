@@ -728,6 +728,14 @@ table::before {
   text-decoration: underline dotted;
   text-shadow: 0 0 4px #aaa;
 }
+    
+#trainInfo .wx {
+  margin-left: .5rem;
+  white-space: nowrap;
+  font-size: .95em;
+  opacity: .95;
+}
+    
   #alertes {
   display: none; /* caché au départ */
   margin: 20px 0;
@@ -3554,7 +3562,11 @@ html += '</tr></thead><tbody>';
 
 /* 5) Lignes (gares) */
 for (const stopName of displayStops) {
-  html += `<tr><td>${stopName}</td>`;
+  html += `<tr data-gare="${stopName}">
+  <td>
+    <span class="gare-label">${stopName}</span>
+    <span class="wx" aria-live="polite"></span>
+  </td>`;
 
   for (const num of numbers) {
     const result = results[num];
@@ -3655,6 +3667,10 @@ html += '</tbody></table>';
       '<div class="table-scroll">' + html + '</div>' +
       '<div id="lastUpdated" class="last-updated" aria-live="polite"></div>'
     );
+    
+    // Météo pour les gares affichées
+updateWeatherBadges();
+startWeatherAutorefresh(); // toutes les 5 min
 
     // Active le menu “Aller à une gare”
     hookGareDropdownBehavior();
@@ -3769,14 +3785,16 @@ numbers.forEach(num => {
       header.removeAttribute('title');
     });
 
-    // Liens gares sur 1ère colonne
-    document.querySelectorAll('#trainInfo table tr td:first-child').forEach(td => {
-      const nomGare = td.textContent.trim();
-      const url = getGareURL(nomGare);
-      if (url && url !== nomGare) {
-        td.innerHTML = `<a href="${url}" target="_blank" class="gare-link">${nomGare}</a>`;
-      }
-    });
+    // Liens gares sur 1ère colonne (préserve .wx)
+document.querySelectorAll('#trainInfo table tr td:first-child').forEach(td => {
+  const label = td.querySelector('.gare-label');
+  if (!label) return;
+  const nomGare = label.textContent.trim();
+  const url = getGareURL(nomGare);
+  if (url && url !== nomGare) {
+    label.innerHTML = `<a href="${url}" target="_blank" class="gare-link">${nomGare}</a>`;
+  }
+});
 
     // Liens vers fiche train SNCF
     const dateCirculation = $('#trainDate').val();
@@ -4358,6 +4376,118 @@ betaInput.addEventListener("keyup", (e) => {
     if(e.key === "Enter") betaValidate.click();
 });
 </script>
+  
+   <script>
+// --------- COORDS (à compléter si besoin) ----------
+const GARE_COORDS = {
+  "Luxembourg":        { lat: 49.598, lon: 6.134 },
+  "Bettembourg":       { lat: 49.518, lon: 6.105 },
+  "Howald":            { lat: 49.579, lon: 6.132 },
+  "Metz":              { lat: 49.119, lon: 6.176 },
+  "Thionville":        { lat: 49.360, lon: 6.170 },
+  "Hagondange":        { lat: 49.257, lon: 6.168 },
+  "Uckange":           { lat: 49.302, lon: 6.155 },
+  "Hettange-Grande":   { lat: 49.403, lon: 6.152 },
+  "Woippy":            { lat: 49.152, lon: 6.165 },
+  "Maizières-lès-Metz":{ lat: 49.222, lon: 6.165 },
+  "Pagny-sur-Moselle": { lat: 48.984, lon: 6.026 },
+  "Pont-à-Mousson":    { lat: 48.907, lon: 6.063 },
+  "Nancy":             { lat: 48.692, lon: 6.184 }
+  // ajoute les autres gares si tu en as
+};
+
+// --------- WMO -> icône + libellé ----------
+function wmoToIcon(code, isDay = true){
+  if (code === 0) return { ico: "☀️", label: "Ciel clair" };
+  if ([1,2,3].includes(code)) return { ico: isDay ? "🌤️" : "☁️", label: "Nuageux" };
+  if ([45,48].includes(code)) return { ico: "🌫️", label: "Brouillard" };
+  if ([51,53,55].includes(code)) return { ico: "🌦️", label: "Bruine" };
+  if ([56,57].includes(code)) return { ico: "🌧️", label: "Bruine verglaçante" };
+  if ([61,63].includes(code)) return { ico: "🌧️", label: "Pluie" };
+  if (code === 65) return { ico: "🌧️", label: "Pluie forte" };
+  if ([66,67].includes(code)) return { ico: "🌧️", label: "Pluie verglaçante" };
+  if ([71,73].includes(code)) return { ico: "🌨️", label: "Neige" };
+  if (code === 75) return { ico: "❄️", label: "Neige forte" };
+  if (code === 77) return { ico: "🌨️", label: "Grains de neige" };
+  if ([80,81].includes(code)) return { ico: "🌦️", label: "Averses" };
+  if (code === 82) return { ico: "🌧️", label: "Averses fortes" };
+  if (code === 85) return { ico: "🌨️", label: "Averses de neige" };
+  if (code === 86) return { ico: "❄️", label: "Averses de neige fortes" };
+  if (code === 95) return { ico: "⛈️", label: "Orage" };
+  if ([96,99].includes(code)) return { ico: "⛈️", label: "Orage (grêle)" };
+  return { ico: "❔", label: "Inconnu" };
+}
+
+// --------- Fetch météo pour N gares en un appel ----------
+async function fetchWeatherForStations(stationNames){
+  const coords = stationNames
+    .map(name => ({ name, ...(GARE_COORDS[name]||{}) }))
+    .filter(s => Number.isFinite(s.lat) && Number.isFinite(s.lon));
+
+  if (!coords.length) return new Map();
+
+  const latList = coords.map(c => c.lat).join(',');
+  const lonList = coords.map(c => c.lon).join(',');
+
+  const url = `https://api.open-meteo.com/v1/forecast` +
+    `?latitude=${encodeURIComponent(latList)}` +
+    `&longitude=${encodeURIComponent(lonList)}` +
+    `&current=temperature_2m,weather_code,is_day` +
+    `&timezone=auto`;
+
+  const res = await fetch(url);
+  if (!res.ok) throw new Error('Météo HTTP '+res.status);
+  const json = await res.json();
+  const list = Array.isArray(json) ? json : [json];
+
+  const out = new Map();
+  list.forEach((loc, idx) => {
+    const name = coords[idx].name;
+    const curr = loc.current || {};
+    out.set(name, {
+      temp: curr.temperature_2m,
+      code: curr.weather_code,
+      isDay: !!curr.is_day,
+      time: curr.time
+    });
+  });
+  return out;
+}
+
+// --------- Remplissage des <span class="wx"> ----------
+async function updateWeatherBadges(){
+  const rows = Array.from(document.querySelectorAll('#trainInfo tr[data-gare]'));
+  if (!rows.length) return;
+
+  const names = [...new Set(rows.map(r => r.dataset.gare))];
+  let data;
+  try {
+    data = await fetchWeatherForStations(names);
+  } catch (e) {
+    console.warn('Météo indisponible', e);
+    return;
+  }
+
+  rows.forEach(r => {
+    const name = r.dataset.gare;
+    const wx = r.querySelector('.wx');
+    if (!wx) return;
+    const d = data.get(name);
+    if (!d) { wx.textContent = ''; return; }
+    const { ico, label } = wmoToIcon(d.code, d.isDay);
+    const t = (d.temp != null) ? Math.round(d.temp) + '°' : '';
+    wx.textContent = `${ico} ${t}`;
+    wx.title = `${label}${t ? ' • ' + t : ''}`;
+  });
+}
+
+let wxTimer = null;
+function startWeatherAutorefresh(intervalMs = 5*60*1000){
+  clearInterval(wxTimer);
+  wxTimer = setInterval(updateWeatherBadges, intervalMs);
+}
+     </script>
+     
   <script>
 (function(){
   const modal      = document.getElementById('tableModal');
