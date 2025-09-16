@@ -3870,34 +3870,87 @@ $(function () {
 
   // Bouton "Actualiser les données" : refetch FRESH puis régénère
   $('#refreshButton').off('click').on('click', async function () {
-    const el = document.getElementById('lastUpdated');
-    if (el) el.textContent = 'Actualisation en cours…';
-    try {
-      await loadGtfsRetards({ forceFresh: true }); // <-- refetch dur
-    } catch (e) {
-      console.error(e);
-      alert("Échec de l'actualisation GTFS-RT.");
-    }
-    $('#loadTrains').click();       // régénère le tableau
-    setLastUpdated();
-  });
+  const el = document.getElementById('lastUpdated');
+  if (el) el.textContent = 'Actualisation en cours…';
+  try {
+    await loadGtfsRetards({ forceFresh: true }); // refetch dur + fallbacks
+  } catch (e) {
+    console.error(e);
+    alert("Échec de l'actualisation GTFS-RT.\n" + (e && e.message ? e.message : ''));
+    return; // évite de régénérer avec des données inchangées
+  }
+  $('#loadTrains').click();       // régénère le tableau avec les nouvelles pastilles
+  setLastUpdated();
+});
 });
 
 /* ---------- GTFS-RT : loader centralisé + auto-apply ---------- */
-const GTFS_RT_URL = "https://raw.githubusercontent.com/TekMaTe-lux/Assistant-train/main/Assistant-train/retards_nancymetzlux.json";
-// garde-fou global (évite toute redeclaration)
+const GTFS_RT_CANDIDATES = [
+  "https://raw.githubusercontent.com/TekMaTe-lux/Assistant-train/main/Assistant-train/retards_nancymetzlux.json",
+  "https://raw.githubusercontent.com/tekmate-lux/Assistant-train/main/Assistant-train/retards_nancymetzlux.json",
+  // CDN (évite parfois des 403/404 temporaires du raw)
+  "https://cdn.jsdelivr.net/gh/TekMaTe-lux/Assistant-train@main/Assistant-train/retards_nancymetzlux.json",
+  "https://cdn.jsdelivr.net/gh/tekmate-lux/Assistant-train@main/Assistant-train/retards_nancymetzlux.json"
+];
+
+// garde-fou global (évite redeclaration)
 if (typeof window.retardsGTFS === 'undefined') window.retardsGTFS = null;
 
+async function fetchWithTimeout(url, ms = 8000, opts = {}) {
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), ms);
+  try {
+    const res = await fetch(url, {
+      cache: 'no-store',
+      mode: 'cors',
+      referrerPolicy: 'no-referrer',
+      headers: { 'pragma': 'no-cache', 'cache-control': 'no-cache' },
+      signal: ctrl.signal,
+      ...opts
+    });
+    return res;
+  } finally {
+    clearTimeout(t);
+  }
+}
+
 async function loadGtfsRetards({ forceFresh = false } = {}) {
-  const url = GTFS_RT_URL + (GTFS_RT_URL.includes('?') ? '&' : '?') + 't=' + (forceFresh ? Date.now() : 'soft');
-  const res = await fetch(url, {
-    cache: 'no-store',
-    headers: { 'pragma': 'no-cache', 'cache-control': 'no-cache' }
-  });
-  if (!res.ok) throw new Error('HTTP ' + res.status);
-  window.retardsGTFS = await res.json();
-  console.log('✅ GTFS-RT chargé', new Date().toISOString());
-  tryApplyGtfsToCurrentTable();
+  const qs = (u) => u + (u.includes('?') ? '&' : '?') + 't=' + (forceFresh ? Date.now() : 'soft');
+
+  let lastErr = null;
+  for (const base of GTFS_RT_CANDIDATES) {
+    const url = qs(base);
+    try {
+      console.log('[GTFS-RT] tentative:', url);
+      const res = await fetchWithTimeout(url, 8000);
+      if (!res.ok) {
+        const txt = await res.text().catch(()=> '');
+        throw new Error(`HTTP ${res.status} ${res.statusText} — ${txt.slice(0,200)}`);
+      }
+
+      // on tente JSON, mais si ça plante, on log le texte brut
+      let data;
+      try {
+        data = await res.json();
+      } catch (e) {
+        const txt = await fetchWithTimeout(url, 8000).then(r=>r.text());
+        console.error('[GTFS-RT] JSON parse error. Body preview:', txt.slice(0,300));
+        throw new Error('JSON invalide');
+      }
+
+      // succès
+      window.retardsGTFS = data;
+      console.log('✅ GTFS-RT chargé via', base, 'à', new Date().toISOString());
+      tryApplyGtfsToCurrentTable();
+      return; // STOP ici
+    } catch (e) {
+      console.warn('[GTFS-RT] échec sur', base, e);
+      lastErr = e;
+      continue; // essaie suivant
+    }
+  }
+  // si on arrive ici, tout a échoué
+  throw lastErr || new Error('Impossible de charger GTFS-RT depuis les miroirs.');
 }
 
 function tryApplyGtfsToCurrentTable() {
@@ -3911,7 +3964,7 @@ function tryApplyGtfsToCurrentTable() {
   if (typeof applyRetardsFromGTFS === 'function') applyRetardsFromGTFS(window.retardsGTFS);
 }
 
-// Charger GTFS-RT frais quand la page est prête
+// Charger GTFS-RT frais quand la page est prête (1ère fois)
 window.addEventListener('load', () => {
   loadGtfsRetards({ forceFresh: true }).catch(err => console.error("Erreur GTFS-RT au load:", err));
 });
