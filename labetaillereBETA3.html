@@ -2061,7 +2061,14 @@ label[for="trainNumbers"]{ display:none !important; }
   align-items: center;
   padding: 8px 0;
 }
-
+.filters-transfer .filter-item input[type="checkbox"] {
+  accent-color: #00ffff; /* TRON cyan */
+}
+.filters-transfer .filter-item input[type="number"] {
+  background:#0b1220; color:#bff; border:1px solid #00ffff66; border-radius:6px; padding:6px 8px;
+  box-shadow: inset 0 0 8px #00ffff22; outline:none;
+}
+.filters-transfer label span { color:#bff; }
 
 </style>
 </head>
@@ -2159,6 +2166,20 @@ label[for="trainNumbers"]{ display:none !important; }
         <button id="btnSoir"  class="mini-btn preset-btn" type="button"
                 title="Pré-sélection soir (16:00–20:00)" aria-label="Pré-sélection soir">🌇 PM</button>
       </div>
+    </div>
+  </div>
+</div>
+
+  <div class="filters-row filters-transfer">
+  <div class="filter-item" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+    <label for="allowTransfer" style="display:flex;align-items:center;gap:8px;">
+      <input id="allowTransfer" type="checkbox">
+      <span>Autoriser 1 correspondance</span>
+    </label>
+    <div style="display:flex;align-items:center;gap:6px;">
+      <label for="minTransfer" style="opacity:.9;">Délai min :</label>
+      <input id="minTransfer" type="number" value="5" min="1" step="1" style="width:4.5rem;">
+      <span>min</span>
     </div>
   </div>
 </div>
@@ -2814,6 +2835,203 @@ async function ensureGTFSLoaded(){
   GTFS = { stops, stopTimes, trips, calendarDates, stopNameToId, tripById, allowedByDate };
 }
 
+    /* ====================== CORRESPONDANCES (1 changement) ====================== */
+// HH:MM:SS -> secondes
+function toSec(hms){
+  if (!hms) return null;
+  const [H,M,S] = hms.split(':').map(Number);
+  return H*3600 + M*60 + (S||0);
+}
+function toHHMM(sec){
+  const s = Math.max(0, sec|0);
+  const h = Math.floor(s/3600)%24, m = Math.floor((s%3600)/60);
+  return String(h).padStart(2,'0')+':'+String(m).padStart(2,'0');
+}
+
+// Construit des index rapides (cachés dans GTFS) la 1re fois
+function ensureTransferIndexesBuilt(){
+  if (GTFS._stopTimesByTripSec && GTFS._depsByStop) return;
+
+  // 1) stop_times par trip, avec arr/dep en secondes
+  const byTripSec = new Map();
+  for (const st of GTFS.stopTimes){
+    if (!byTripSec.has(st.trip_id)) byTripSec.set(st.trip_id, []);
+    byTripSec.get(st.trip_id).push({
+      stop_id: st.stop_id,
+      arrS: toSec(st.arrival_time),
+      depS: toSec(st.departure_time),
+      seq: Number(st.stop_sequence)
+    });
+  }
+  for (const arr of byTripSec.values()){
+    arr.sort((a,b)=>a.seq-b.seq);
+  }
+
+  // 2) index départs par stop_id (triés par depS)
+  const depsByStop = new Map();
+  byTripSec.forEach((sts, trip_id)=>{
+    for (const r of sts){
+      if (r.depS==null) continue;
+      if (!depsByStop.has(r.stop_id)) depsByStop.set(r.stop_id, []);
+      depsByStop.get(r.stop_id).push({ trip_id, depS: r.depS, seq: r.seq });
+    }
+  });
+  for (const list of depsByStop.values()) list.sort((a,b)=>a.depS-b.depS);
+
+  // 3) maps utiles
+  const stopIdToName = new Map();
+  for (const s of GTFS.stops) stopIdToName.set(s.stop_id, s.stop_name);
+
+  const tripById = GTFS.tripById; // déjà construit plus haut
+
+  GTFS._stopTimesByTripSec = byTripSec;
+  GTFS._depsByStop = depsByStop;
+  GTFS._stopIdToName = stopIdToName;
+  GTFS._tripById = tripById;
+}
+
+// Service actif ce jour (avec ton calendar_dates existant)
+function serviceActiveForDate(trip_id, ymd){
+  const t = GTFS._tripById?.get(trip_id);
+  if (!t) return false;
+  const svc = t.service_id;
+  if (!GTFS.allowedByDate || GTFS.allowedByDate.size===0) return true; // pas de filtre dispo
+  const allowed = GTFS.allowedByDate.get(ymd);
+  if (!allowed) return false;
+  return allowed.has(svc);
+}
+
+/**
+ * Recherche des itinéraires avec 1 correspondance.
+ * - originId/destId: stop_id GTFS
+ * - t0Min/t1Min : fenêtre départ [min, min]
+ * - minTransferMin : temps mini de correspondance en minutes
+ * - ymd : "YYYYMMDD"
+ * - allowedInterchanges : Set<stop_id> ou null (si tu veux restreindre à Metz par ex)
+ */
+function findOneTransferItineraries({originId, destId, t0Min, t1Min, minTransferMin=5, ymd, allowedInterchanges=null, maxResults=30}){
+  ensureTransferIndexesBuilt();
+  const depWinStartS = t0Min*60, depWinEndS = t1Min*60, minTransferS = minTransferMin*60;
+
+  const out = [];
+  const depsAtOrigin = GTFS._depsByStop.get(originId) || [];
+
+  // binaire: premier départ >= depWinStartS
+  let lo=0, hi=depsAtOrigin.length-1, startIdx=depsAtOrigin.length;
+  while (lo<=hi){ const mid=(lo+hi)>>1; if (depsAtOrigin[mid].depS>=depWinStartS){ startIdx=mid; hi=mid-1; } else lo=mid+1; }
+
+  for (let i=startIdx; i<depsAtOrigin.length; i++){
+    const d1 = depsAtOrigin[i];
+    if (d1.depS>depWinEndS) break;
+
+    const trip1 = d1.trip_id;
+    if (!serviceActiveForDate(trip1, ymd)) continue;
+
+    const st1 = GTFS._stopTimesByTripSec.get(trip1);
+    if (!st1) continue;
+
+    // index de origin dans le trip1
+    const idxOrigin = st1.findIndex(r=>r.stop_id===originId && r.seq===d1.seq);
+    if (idxOrigin<0) continue;
+
+    // parcourir les arrêts après origin comme gares de correspondance
+    for (let j=idxOrigin+1; j<st1.length; j++){
+      const inter = st1[j];
+      const interId = inter.stop_id;
+      if (allowedInterchanges && !allowedInterchanges.has(interId)) continue;
+
+      const arrInterS = inter.arrS;
+      if (arrInterS==null) continue;
+
+      const earliestDep2 = arrInterS + minTransferS;
+
+      // second tronçon: départs depuis interId
+      const depsAtInter = GTFS._depsByStop.get(interId) || [];
+
+      // binaire >= earliestDep2
+      let lo2=0, hi2=depsAtInter.length-1, start2=depsAtInter.length;
+      while (lo2<=hi2){ const mid=(lo2+hi2)>>1; if (depsAtInter[mid].depS>=earliestDep2){ start2=mid; hi2=mid-1; } else lo2=mid+1; }
+
+      // balayer quelques départs après earliestDep2
+      for (let k=start2; k<depsAtInter.length && k<start2+60; k++){
+        const d2 = depsAtInter[k];
+        const trip2 = d2.trip_id;
+        if (!serviceActiveForDate(trip2, ymd)) continue;
+
+        const st2 = GTFS._stopTimesByTripSec.get(trip2);
+        if (!st2) continue;
+
+        // index inter dans trip2
+        const idxInter2 = st2.findIndex(r=>r.stop_id===interId && r.seq===d2.seq);
+        if (idxInter2<0) continue;
+
+        // aller jusqu'à dest
+        const toDest = st2.slice(idxInter2+1).find(r=>r.stop_id===destId);
+        if (!toDest) continue;
+
+        // OK: construire itinéraire
+        const dep1S = st1[idxOrigin].depS;
+        const arr1S = arrInterS;
+        const dep2S = st2[idxInter2].depS;
+        const arr2S = toDest.arrS;
+
+        // Filtre: départ 1 dans la fenêtre
+        if (dep1S<depWinStartS || dep1S>depWinEndS) continue;
+
+        // numéros
+        const num1 = extractTrainNumber(GTFS._tripById.get(trip1)?.trip_short_name) || extractTrainNumber(trip1);
+        const num2 = extractTrainNumber(GTFS._tripById.get(trip2)?.trip_short_name) || extractTrainNumber(trip2);
+        if (!num1 || !num2) continue;
+
+        out.push({
+          viaId: interId,
+          viaName: GTFS._stopIdToName.get(interId) || interId,
+          num1, num2,
+          dep1: toHHMM(dep1S), arr1: toHHMM(arr1S),
+          dep2: toHHMM(dep2S), arr2: toHHMM(arr2S),
+          waitMin: Math.round((dep2S-arr1S)/60),
+          durMin:  Math.round((arr2S-dep1S)/60)
+        });
+
+        if (out.length>=maxResults) break;
+      }
+      if (out.length>=maxResults) break;
+    }
+    if (out.length>=maxResults) break;
+  }
+
+  // tri par arrivée finale puis durée totale
+  out.sort((a,b)=> a.arr2.localeCompare(b.arr2) || (a.durMin - b.durMin));
+  return out;
+}
+
+/* Rendu compact des correspondances dans #propositions (cartes dédiées) */
+function renderTransferCards(transfers, startName, endName){
+  if (!transfers || !transfers.length) return '';
+  return `
+  <div class="chips-panel" style="margin-top:12px">
+    <div class="chips-header">
+      <div style="font-weight:700">Itinéraires avec 1 correspondance</div>
+      <div class="chips-count">${transfers.length}</div>
+    </div>
+    <div class="chips-wrap">
+      ${transfers.map(t=>`
+        <div class="chip transfer" data-num1="${t.num1}" data-num2="${t.num2}">
+          <div style="display:flex;flex-direction:column;gap:2px">
+            <div><b>${startName}</b> ${t.dep1} → <b>${t.viaName}</b> ${t.arr1} — Train ${t.num1}</div>
+            <div>Attente: ${t.waitMin} min</div>
+            <div><b>${t.viaName}</b> ${t.dep2} → <b>${endName}</b> ${t.arr2} — Train ${t.num2}</div>
+            <div style="opacity:.8">Durée totale: ${t.durMin} min</div>
+          </div>
+        </div>
+      `).join('')}
+    </div>
+    <div class="chips-footer">
+      <small>Astuce : cliquer une carte “correspondance” ajoute/retire ses 2 trains à la sélection.</small>
+    </div>
+  </div>`;
+}
+
 // "YYYY-MM-DD" -> "YYYYMMDD"
 function dateInputToYMD(str){
   if(!str || !/^\d{4}-\d{2}-\d{2}$/.test(str)) return null;
@@ -2827,23 +3045,22 @@ function extractTrainNumber(str){
   return m ? m[1] : null;
 }
 
+/* ====================== RECHERCHE OD (directs + correspondances) ====================== */
 async function proposerTrainsOD(){
   const cont = document.getElementById('propositions');
   if (cont) cont.innerHTML = 'Recherche…';
 
-  // ✅ vide la sélection manuelle à chaque recherche
-  $('#trainNumbers').val('');
+  mainTableRendered = false;
+  document.getElementById('trainInfo')?.replaceChildren();
 
-  // On repasse en mode "propositions" (les cartes peuvent s'afficher)
-mainTableRendered = false;
-// (optionnel) on retire un tableau déjà présent pour éviter la double vue
-document.getElementById('trainInfo')?.replaceChildren();
+  // reset sélection visuelle mais on garde Set (pour empiler au clic si on veut)
+  selectedTrains.clear();
+  updateSelectionUI();
 
-  // reset du dédoublonnage
   proposerTrainsOD._seen = new Set();
 
   const startName = $('#startStation').val() || '';
-  const endName   = $('#endStation').val() || '';
+  const endName   = $('#endStation').val()   || '';
   const tFromMin  = hhmmInputToMin($('#timeFrom').val());
   const tToMin    = hhmmInputToMin($('#timeTo').val());
 
@@ -2856,14 +3073,14 @@ document.getElementById('trainInfo')?.replaceChildren();
   const eid = GTFS.stopNameToId.get(endName);
   if(!sid || !eid){ cont.innerHTML = '<div class="chips-panel">Gares introuvables.</div>'; return; }
 
-  // Calendrier (calendar_dates)
-  const ymd = dateInputToYMD($('#trainDate').val());
+  // calendrier (calendar_dates)
+  const ymd = dateInputToYMD($('#trainDate').val()) || '';
   let allowed = null;
   if (ymd && GTFS.allowedByDate && GTFS.allowedByDate.size>0){
     allowed = GTFS.allowedByDate.get(ymd) || new Set();
   }
 
-  // stop_times par trip triés
+  // === DIRECTS (identique à ta logique d’origine) ===
   const byTrip = new Map();
   for(const st of GTFS.stopTimes){
     if(!byTrip.has(st.trip_id)) byTrip.set(st.trip_id, []);
@@ -2873,13 +3090,13 @@ document.getElementById('trainInfo')?.replaceChildren();
     arr.sort((a,b)=>Number(a.stop_sequence)-Number(b.stop_sequence));
   }
 
-  const found = [];
+  const directs = [];
   byTrip.forEach((sts, trip_id)=>{
     const trow = GTFS.tripById ? GTFS.tripById.get(trip_id) : null;
 
     if (allowed){
       const svc = trow ? trow.service_id : null;
-      if (!svc || !allowed.has(svc)) return; // pas actif ce jour
+      if (!svc || !allowed.has(svc)) return;
     }
 
     let iS=-1,iE=-1,dep=null,arr=null;
@@ -2893,7 +3110,6 @@ document.getElementById('trainInfo')?.replaceChildren();
     const depMin = H*60+M;
     if (depMin<tFromMin || depMin>tToMin) return;
 
-    // numéro de train
     let numero = trow && trow.trip_short_name ? extractTrainNumber(trow.trip_short_name) : null;
     if (!numero) numero = extractTrainNumber(trip_id);
     if (!numero) return;
@@ -2902,11 +3118,94 @@ document.getElementById('trainInfo')?.replaceChildren();
     if (proposerTrainsOD._seen.has(key)) return;
     proposerTrainsOD._seen.add(key);
 
-    found.push({ numero, dep:dep.slice(0,5), arr: arr ? arr.slice(0,5) : null });
+    directs.push({ numero, dep:dep.slice(0,5), arr: arr ? arr.slice(0,5) : null });
   });
 
-  // ✅ on affiche des CARTES (pas de <ul>)
-  renderChips(found, startName, endName);
+  // === CORRESPONDANCES (si activé) ===
+  let transfers = [];
+  const allowTransfers = document.getElementById('allowTransfer')?.checked;
+  if (allowTransfers){
+    const minTransferMin = Math.max(1, Number(document.getElementById('minTransfer')?.value || 5));
+    // Option : restreindre à Metz si tu veux (décommente si besoin)
+    // const metzId = GTFS.stopNameToId.get('Metz');
+    // const allowedSet = metzId ? new Set([metzId]) : null;
+    const allowedSet = null; // toutes gares possibles comme correspondance
+
+    transfers = findOneTransferItineraries({
+      originId: sid,
+      destId:   eid,
+      t0Min:    tFromMin,
+      t1Min:    tToMin,
+      minTransferMin,
+      ymd,
+      allowedInterchanges: allowedSet,
+      maxResults: 24
+    });
+  }
+
+  // === RENDU combiné ===
+  const host = document.getElementById('propositions');
+  if (!host) return;
+
+  // cartes “directs”
+  const directsHTML = (function(){
+    const trains = (directs||[]).slice().sort((a,b)=>a.dep.localeCompare(b.dep));
+    if (!trains.length) {
+      return `<div class="chips-panel"><p>Aucun train direct ${startName} → ${endName} dans cette plage.</p></div>`;
+    }
+    return `
+      <div class="chips-panel">
+        <div class="chips-header">
+          <div style="font-weight:700">Propositions directes ${startName} → ${endName}</div>
+          <div class="chips-count"><span id="chipsCount">0</span> sélection(s)</div>
+        </div>
+        <div class="chips-wrap">
+          ${trains.map(t => `
+            <div class="chip" data-num="${t.numero}">
+              <span class="t-num">Train ${t.numero}</span>
+              <span class="t-time">(${startName} ${t.dep} → ${endName} ${t.arr || '?'})</span>
+            </div>`).join('')}
+        </div>
+      </div>`;
+  })();
+
+  const transfersHTML = renderTransferCards(transfers, startName, endName);
+
+  host.innerHTML = directsHTML + transfersHTML;
+
+  // Comportement cartes “directs” (inchangé)
+  host.querySelectorAll('.chip[data-num]').forEach((chip)=>{
+    chip.addEventListener('click', ()=>{
+      const num = chip.dataset.num;
+      if (!num) return;
+      const willSelect = !chip.classList.contains('is-selected');
+      chip.classList.toggle('is-selected', willSelect);
+      if (willSelect) selectedTrains.add(num); else selectedTrains.delete(num);
+      if (typeof chipsUpdateCount === 'function') chipsUpdateCount();
+      updateSelectionUI();
+    });
+  });
+
+  // Comportement cartes “correspondance” -> ajout/retrait des 2 trains
+  host.querySelectorAll('.chip.transfer').forEach((chip)=>{
+    chip.addEventListener('click', ()=>{
+      const n1 = chip.dataset.num1, n2 = chip.dataset.num2;
+      const isOn = chip.classList.contains('is-selected');
+      chip.classList.toggle('is-selected', !isOn);
+
+      if (!isOn){ selectedTrains.add(n1); selectedTrains.add(n2); }
+      else { selectedTrains.delete(n1); selectedTrains.delete(n2); }
+
+      // refléter visuellement si les cartes “directes” de n1/n2 existent
+      host.querySelectorAll(`.chip[data-num="${n1}"], .chip[data-num="${n2}"]`)
+        .forEach(c=> c.classList.toggle('is-selected', selectedTrains.has(c.dataset.num)));
+
+      if (typeof chipsUpdateCount === 'function') chipsUpdateCount();
+      updateSelectionUI();
+    });
+  });
+
+  if (typeof chipsUpdateCount === 'function') chipsUpdateCount();
 }
     
 // Extrait un numéro de train (5-6 chiffres) d'une chaîne (trip_short_name, trip_id…)
