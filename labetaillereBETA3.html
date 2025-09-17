@@ -4842,8 +4842,8 @@ betaInput.addEventListener("keyup", (e) => {
 });
 </script>
   
-   <script>
-// --------- COORDS (à compléter si besoin) ----------
+  <script>
+// --------- COORDS connues + cache dynamique (rempli via GTFS si besoin) ----------
 const GARE_COORDS = {
   "Luxembourg":        { lat: 49.598, lon: 6.134 },
   "Bettembourg":       { lat: 49.518, lon: 6.105 },
@@ -4858,11 +4858,47 @@ const GARE_COORDS = {
   "Pagny-sur-Moselle": { lat: 48.984, lon: 6.026 },
   "Pont-à-Mousson":    { lat: 48.907, lon: 6.063 },
   "Nancy":             { lat: 48.692, lon: 6.184 }
-  // ajoute les autres gares si tu en as
 };
+const WX_COORDS_CACHE = new Map(); // alimenté dynamiquement depuis le GTFS
 
+// --------- Résolution de coordonnées par nom de gare (priorité: manuel -> cache -> GTFS) ----------
+async function resolveCoordsByName(name){
+  if (!name) return null;
+  if (GARE_COORDS[name]) return GARE_COORDS[name];
+  if (WX_COORDS_CACHE.has(name)) return WX_COORDS_CACHE.get(name);
+
+  // Besoin des helpers déjà présents dans ton script principal
+  if (typeof ensureGTFSLoaded !== 'function' || typeof getIdsForName !== 'function') return null;
+
+  try {
+    await ensureGTFSLoaded();
+    if (typeof buildStationGroups === 'function') buildStationGroups();
+
+    const ids = getIdsForName(name); // Set de stop_id pour la gare (regroupé par parent_station)
+    if (!ids || !ids.size) return null;
+
+    let sumLat = 0, sumLon = 0, n = 0;
+    ids.forEach(id => {
+      const st = GTFS.idToStop?.get(id);
+      const la = parseFloat(st?.stop_lat);
+      const lo = parseFloat(st?.stop_lon);
+      if (Number.isFinite(la) && Number.isFinite(lo)) { sumLat += la; sumLon += lo; n++; }
+    });
+    if (!n) return null;
+
+    const c = { lat: +(sumLat/n).toFixed(5), lon: +(sumLon/n).toFixed(5) };
+    WX_COORDS_CACHE.set(name, c);
+    // optionnel : on hydrate aussi l’objet statique pour les prochains appels synchrones
+    GARE_COORDS[name] = c;
+    return c;
+  } catch {
+    return null;
+  }
+}
+
+// --------- Lien Windy pour une gare (utilise manuel, cache ou GTFS) ----------
 function buildWeatherLinkByName(name, zoom = 10){
-  const c = GARE_COORDS[name];
+  const c = GARE_COORDS[name] || WX_COORDS_CACHE.get(name);
   if (!c) return null;
   const lat = Number(c.lat).toFixed(3);
   const lon = Number(c.lon).toFixed(3);
@@ -4871,57 +4907,44 @@ function buildWeatherLinkByName(name, zoom = 10){
 
 // --------- WMO -> icône + libellé ----------
 function wmoToIcon(code, isDay = true){
-  // 0 = ciel clair
   if (code === 0) return { ico: isDay ? "☀️" : "🌙", label: "Ciel clair" };
-
-  // 1 = peu nuageux, 2 = partiellement nuageux, 3 = couvert
   if (code === 1) return { ico: isDay ? "🌤️" : "☁️", label: "Peu nuageux" };
   if (code === 2) return { ico: "⛅", label: "Partiellement nuageux" };
   if (code === 3) return { ico: "☁️", label: "Couvert" };
-
   if ([45,48].includes(code)) return { ico: "🌫️", label: "Brouillard" };
-
   if ([51,53,55].includes(code)) return { ico: "🌦️", label: "Bruine" };
   if ([56,57].includes(code)) return { ico: "🌧️", label: "Bruine verglaçante" };
-
   if ([61,63].includes(code)) return { ico: "🌧️", label: "Pluie" };
   if (code === 65) return { ico: "🌧️", label: "Pluie forte" };
   if ([66,67].includes(code)) return { ico: "🌧️", label: "Pluie verglaçante" };
-
   if ([71,73].includes(code)) return { ico: "🌨️", label: "Neige" };
   if (code === 75) return { ico: "❄️", label: "Neige forte" };
   if (code === 77) return { ico: "🌨️", label: "Grains de neige" };
-
   if ([80,81].includes(code)) return { ico: "🌦️", label: "Averses" };
   if (code === 82) return { ico: "🌧️", label: "Averses fortes" };
-
   if (code === 85) return { ico: "🌨️", label: "Averses de neige" };
   if (code === 86) return { ico: "❄️", label: "Averses de neige fortes" };
-
   if (code === 95) return { ico: "⛈️", label: "Orage" };
   if ([96,99].includes(code)) return { ico: "⛈️", label: "Orage (grêle)" };
-
   return { ico: "❔", label: `Code ${code}` };
 }
 
-// --------- Fetch météo pour N gares en un appel (robuste) ----------
+// --------- Fetch météo pour N gares (utilise GTFS pour compléter les coords manquantes) ----------
 async function fetchWeatherForStations(stationNames){
-  // Dédoublonne et garde seulement les gares avec lat/lon valides
   const seen = new Set();
   const coords = [];
   for (const name of stationNames || []) {
     if (!name || seen.has(name)) continue;
     seen.add(name);
-    const c = (GARE_COORDS && GARE_COORDS[name]) || null;
-    if (c && Number.isFinite(c.lat) && Number.isFinite(c.lon)) {
+
+    const c = GARE_COORDS[name] || await resolveCoordsByName(name);
+    if (c && Number.isFinite(+c.lat) && Number.isFinite(+c.lon)) {
       coords.push({ name, lat: +c.lat, lon: +c.lon });
     }
   }
 
-  // Rien à interroger
   if (!coords.length) return new Map();
 
-  // Construit l’URL de manière sûre
   const latList = coords.map(c => c.lat).join(',');
   const lonList = coords.map(c => c.lon).join(',');
   const qs = new URLSearchParams({
@@ -4932,7 +4955,6 @@ async function fetchWeatherForStations(stationNames){
   });
   const url = `https://api.open-meteo.com/v1/forecast?${qs.toString()}`;
 
-  // Timeout (7s) pour éviter de bloquer l’UI
   const ctrl = new AbortController();
   const to = setTimeout(() => ctrl.abort(), 7000);
 
@@ -4943,15 +4965,12 @@ async function fetchWeatherForStations(stationNames){
     if (!res.ok) throw new Error('HTTP ' + res.status);
     json = await res.json();
   } catch (e) {
-    // On remonte une Map vide : le caller décidera quoi afficher
     console.warn('Météo indisponible:', e?.message || e);
     return new Map();
   }
 
-  // Open-Meteo renvoie un objet (1 point) ou un tableau (N points).
   const list = Array.isArray(json) ? json : [json];
 
-  // Map gare -> données
   const out = new Map();
   for (let i = 0; i < coords.length; i++) {
     const name = coords[i].name;
@@ -4969,12 +4988,10 @@ async function fetchWeatherForStations(stationNames){
 
 // --------- Remplissage des <span class="wx"> (affiche uniquement pour AUJOURD'HUI) ----------
 async function updateWeatherBadges(){
-  // Fonction locale : est-ce bien la date du jour (Europe/Luxembourg) ?
   const isSelectedDateTodayLocal = () => {
     try {
       const inp = document.getElementById('trainDate');
       const v = inp?.value || '';
-      // Si pas de date → on considère "aujourd'hui"
       if (!/^\d{4}-\d{2}-\d{2}$/.test(v)) return true;
       const fmt = new Intl.DateTimeFormat('en-CA', {
         timeZone: 'Europe/Luxembourg',
@@ -4989,7 +5006,6 @@ async function updateWeatherBadges(){
   const rows = Array.from(document.querySelectorAll('#trainInfo tr[data-gare]'));
   if (!rows.length) return;
 
-  // Si la date n'est pas aujourd'hui → on nettoie et on sort
   if (!isSelectedDateTodayLocal()){
     rows.forEach(r => {
       const wx = r.querySelector('.wx');
@@ -4998,13 +5014,9 @@ async function updateWeatherBadges(){
     return;
   }
 
-  // Noms uniques des gares visibles
   const names = [...new Set(rows.map(r => r.dataset.gare).filter(Boolean))];
-
-  // Récupère les données
   const data = await fetchWeatherForStations(names);
 
-  // Injecte/Nettoie pour chaque ligne
   rows.forEach(r => {
     const name = r.dataset.gare;
     const wx = r.querySelector('.wx');
@@ -5040,7 +5052,6 @@ async function updateWeatherBadges(){
 let wxTimer = null;
 function startWeatherAutorefresh(intervalMs = 5 * 60 * 1000){
   clearInterval(wxTimer);
-  // Lance le timer seulement si la date affichée est "aujourd'hui"
   const dateInput = document.getElementById('trainDate');
   const getIsToday = () => {
     try {
@@ -5059,8 +5070,8 @@ function startWeatherAutorefresh(intervalMs = 5 * 60 * 1000){
   if (!getIsToday()) return;
   wxTimer = setInterval(updateWeatherBadges, intervalMs);
 }
-     </script>
-     
+</script>
+ 
   <script>
 (function(){
   const modal      = document.getElementById('tableModal');
