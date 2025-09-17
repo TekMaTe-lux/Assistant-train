@@ -2764,8 +2764,9 @@ function getGareURL(nomGare) {
 }
 
 /************  CONFIG COURTE  ************/
-const FORCE_VIA_METZ = true;      // ← correspondances à Metz uniquement
-const KEEP_ONLY_EARLIEST_TRANSFER = true; // ← n’afficher que la 1ʳᵉ correspondance la plus proche
+const FORCE_VIA_METZ = true;                // correspondances à Metz uniquement
+const KEEP_ONLY_EARLIEST_TRANSFER = true;   // n’afficher que la 1ʳᵉ correspondance la plus proche
+const STRICT_CALENDAR = false;              // 🔴 ne PAS filtrer avec calendar_dates seul
 
 /************  HELPERS TEMPS & TEXTE  ************/
 const ft = t => t ? t.slice(0,2)+':'+t.slice(2,4) : '-';
@@ -2906,12 +2907,19 @@ function mergeDeparturesForIds(idsSet){
 
 /************  CALENDRIER (calendar_dates)  ************/
 function serviceActiveForDate(trip_id, ymd){
-  const t = GTFS._tripById?.get(trip_id); if(!t) return false;
+  // Sans calendar.txt complet, ne pas durcir via calendar_dates.
+  // On retourne TRUE pour ne pas “manger” les directs.
+  if (!STRICT_CALENDAR) return true;
+
+  const t = GTFS._tripById?.get(trip_id);
+  if (!t) return true;
+  if (!ymd) return true;
+
+  // Si on activait STRICT_CALENDAR et qu'on avait un vrai calendrier,
+  // on pourrait whitelister par allowedByDate[ymd]. Ici on laisse true.
   const svc = t.service_id;
-  // Si aucune exception chargée OU pas d’entrée pour ce jour -> ne filtre pas
-  if (!GTFS.allowedByDate || GTFS.allowedByDate.size===0) return true;
+  if (!GTFS.allowedByDate || GTFS.allowedByDate.size === 0) return true;
   if (!GTFS.allowedByDate.has(ymd)) return true;
-  // Si le jour a des ajouts explicites -> autoriser seulement les services ajoutés
   const allowedSet = GTFS.allowedByDate.get(ymd);
   return allowedSet ? allowedSet.has(svc) : true;
 }
@@ -2938,16 +2946,17 @@ function findOneTransferItineraries({
 
     const idxOrigin = st1.findIndex(r=>r.seq===d1.seq); if(idxOrigin<0) continue;
 
-    // ⛔ si ce train atteint déjà la destination -> pas de correspondance pour celui-ci
+    // ❌ Pas de correspondance si ce train va déjà jusqu'à la destination
     const trip1ReachesDest = st1.slice(idxOrigin+1).some(r => destIds.has(r.stop_id));
     if (trip1ReachesDest) continue;
 
-    let pushedForThisTrip1 = false; // une seule correspondance pour ce train 1
+    let pushedForThisTrip1 = false; // -> une seule correspondance proposée pour ce train amont
 
     for (let j=idxOrigin+1;j<st1.length && !pushedForThisTrip1;j++){
       const inter = st1[j]; const interId = inter.stop_id;
 
-      if (allowedInterchanges && !allowedInterchanges.has(interId)) continue; // ici: Metz only
+      // Metz uniquement si allowedInterchanges fourni
+      if (allowedInterchanges && !allowedInterchanges.has(interId)) continue;
 
       const arrInterS = inter.arrS; if(arrInterS==null) continue;
       const earliest = arrInterS + minWait;
@@ -2959,7 +2968,7 @@ function findOneTransferItineraries({
       let lo2=0, hi2=deps2.length-1, start2=deps2.length;
       while (lo2<=hi2){ const mid=(lo2+hi2)>>1; if (deps2[mid].depS>=earliest){ start2=mid; hi2=mid-1; } else lo2=mid+1; }
 
-      // ➜ prendre uniquement la 1ʳᵉ correspondance valide
+      // ➜ garder seulement la 1ʳᵉ correspondance valide (la plus proche)
       for (let k=start2;k<deps2.length;k++){
         const d2 = deps2[k]; const trip2=d2.trip_id; if(!serviceActiveForDate(trip2, ymd)) continue;
         const st2 = GTFS._stopTimesByTripSec.get(trip2); if(!st2) continue;
@@ -2984,7 +2993,7 @@ function findOneTransferItineraries({
           durMin:  Math.round((arr2S-dep1S)/60)
         });
 
-        pushedForThisTrip1 = true; // ✅ une seule proposition depuis ce train 1
+        pushedForThisTrip1 = true; // ✅ on arrête après la 1ʳᵉ correspondance
         break;
       }
     }
