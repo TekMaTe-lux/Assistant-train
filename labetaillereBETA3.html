@@ -2779,7 +2779,38 @@ function dateInputToYMD(str){ if(!str||!/^\d{4}-\d{2}-\d{2}$/.test(str)) return 
 function extractTrainNumber(str){ const m = String(str||'').match(/(\d{5,6})/); return m ? m[1] : null; }
 function toSec(hms){ if(!hms) return null; const [H,M,S]=hms.split(':').map(Number); return H*3600+M*60+(S||0); }
 function toHHMM(sec){ const s=Math.max(0,sec|0); const h=Math.floor(s/3600)%24,m=Math.floor((s%3600)/60); return String(h).padStart(2,'0')+':'+String(m).padStart(2,'0'); }
+function uniqDirects(list){
+  const bestByKey = new Map(); // clé: num|dep
+  for (const t of list){
+    const key = `${t.numero}|${t.dep}`;
+    const prev = bestByKey.get(key);
+    // si on a deux entrées identiques, on garde celle avec une arrivée connue
+    if (!prev || (!prev.arr && t.arr)) bestByKey.set(key, t);
+  }
+  return Array.from(bestByKey.values());
+}
 
+function keepFirstTransferPerFirstLeg(list){
+  // garde une seule correspondance (la plus proche) par 1er train (num1|dep1)
+  const best = new Map();
+  for (const t of list){
+    const key = `${t.num1}|${t.dep1}`;
+    const prev = best.get(key);
+    if (!prev || t.dep2 < prev.dep2) best.set(key, t); // la 1ère dispo à Metz
+  }
+  return Array.from(best.values());
+}
+
+function uniqTransfers(list){
+  const map = new Map();
+  for (const t of list){
+    const key = `${t.num1}|${t.dep1}|${t.viaName}|${t.num2}|${t.dep2}|${t.arr2}`;
+    if (!map.has(key)) map.set(key, t);
+  }
+  return Array.from(map.values());
+}
+
+    
 /************  CHARGEMENT GTFS (stops/stop_times/trips/calendar_dates)  ************/
 let GTFS = { stops:null, stopTimes:null, trips:null, tripById:null, stopNameToId:null, allowedByDate:null };
 
@@ -2801,50 +2832,42 @@ function parseCSV(text){
 }
 
 async function ensureGTFSLoaded(){
-  if (
-    GTFS.stops && GTFS.stopTimes && GTFS.trips && GTFS.tripById &&
-    GTFS.stopNameToId && GTFS.calendarByService && GTFS.exceptionsByServiceDate
-  ) return;
+  if (GTFS.stops && GTFS.stopTimes && GTFS.trips && GTFS.tripById && GTFS.stopNameToId && GTFS.calendarByService && GTFS.exceptionsByDate) return;
 
-  const base = 'https://tekmate-lux.github.io/Assistant-train/data/';
   const [stopsTxt, stopTimesTxt, tripsTxt, calTxt, calDatesTxt] = await Promise.all([
-    fetchText(base + 'stops.txt'),
-    fetchText(base + 'stop_times.txt'),
-    fetchText(base + 'trips.txt'),
-    fetchText(base + 'calendar.txt').catch(()=>''),        // <- NOUVEAU
-    fetchText(base + 'calendar_dates.txt').catch(()=>''),  // déjà présent
+    fetchText('https://tekmate-lux.github.io/Assistant-train/data/stops.txt'),
+    fetchText('https://tekmate-lux.github.io/Assistant-train/data/stop_times.txt'),
+    fetchText('https://tekmate-lux.github.io/Assistant-train/data/trips.txt'),
+    fetchText('https://tekmate-lux.github.io/Assistant-train/data/calendar.txt'),
+    fetchText('https://tekmate-lux.github.io/Assistant-train/data/calendar_dates.txt'),
   ]);
 
-  const stops        = parseCSV(stopsTxt);
-  const stopTimes    = parseCSV(stopTimesTxt);
-  const trips        = parseCSV(tripsTxt);
-  const calendar     = calTxt ? parseCSV(calTxt) : [];
-  const calendarDates= calDatesTxt ? parseCSV(calDatesTxt) : [];
+  const stops = parseCSV(stopsTxt);
+  const stopTimes = parseCSV(stopTimesTxt);
+  const trips = parseCSV(tripsTxt);
+  const calendar = parseCSV(calTxt);
+  const calendarDates = parseCSV(calDatesTxt);
 
   const stopNameToId = new Map();
-  stops.forEach(s => { if (s.stop_name && s.stop_id && !stopNameToId.has(s.stop_name)) stopNameToId.set(s.stop_name, s.stop_id); });
+  stops.forEach(s => { if (s.stop_name && s.stop_id) if(!stopNameToId.has(s.stop_name)) stopNameToId.set(s.stop_name, s.stop_id); });
 
   const tripById = new Map();
   trips.forEach(t => { if (t.trip_id) tripById.set(t.trip_id, t); });
 
-  // Index calendrier
-  const calendarByService = new Map(); // service_id -> row calendar
-  for (const r of calendar) {
-    if (!r.service_id) continue;
-    calendarByService.set(r.service_id, r);
-  }
+  // Index calendrier de base : service_id -> row (mon..sun, start_date, end_date)
+  const calendarByService = new Map();
+  calendar.forEach(row => { if (row.service_id) calendarByService.set(row.service_id, row); });
 
-  const exceptionsByServiceDate = new Map(); // `${service_id}|${yyyymmdd}` -> 1 (add) / 2 (remove)
-  for (const r of calendarDates) {
-    if (!r.service_id || !r.date) continue;
-    exceptionsByServiceDate.set(`${r.service_id}|${r.date}`, Number(r.exception_type));
-  }
+  // Exceptions : ymd -> (service_id -> exception_type)
+  const exceptionsByDate = new Map();
+  calendarDates.forEach(row => {
+    const ymd = row.date, svc = row.service_id, exc = Number(row.exception_type);
+    if (!ymd || !svc || !exc) return;
+    if (!exceptionsByDate.has(ymd)) exceptionsByDate.set(ymd, new Map());
+    exceptionsByDate.get(ymd).set(svc, exc); // 1 = added, 2 = removed
+  });
 
-  GTFS = {
-    stops, stopTimes, trips, calendar, calendarDates,
-    tripById, stopNameToId,
-    calendarByService, exceptionsByServiceDate
-  };
+  GTFS = { stops, stopTimes, trips, calendar, calendarDates, tripById, stopNameToId, calendarByService, exceptionsByDate };
 }
 
 /************  GROUPES DE STOPS PAR GARE (stop_name/parent_station)  ************/
@@ -2922,25 +2945,41 @@ function mergeDeparturesForIds(idsSet){
 
 /************  CALENDRIER (calendar_dates)  ************/
 function serviceActiveForDate(trip_id, ymd){
-  if (!ymd) return true; // par sécurité si pas de date saisie
+  if (!trip_id || !ymd) return false;
 
-  const t = GTFS._tripById?.get(trip_id);
+  const t = GTFS.tripById?.get(trip_id);
   if (!t) return false;
   const svc = t.service_id;
   if (!svc) return false;
 
-  // 1) Exceptions priment
-  const exc = GTFS.exceptionsByServiceDate?.get(`${svc}|${ymd}`);
+  // Exceptions priment si présentes
+  const exc = GTFS.exceptionsByDate?.get(ymd)?.get(svc);
   if (exc === 1) return true;   // ajouté ce jour
   if (exc === 2) return false;  // supprimé ce jour
 
-  // 2) Sinon, calendrier hebdo
-  const cal = GTFS.calendarByService?.get(svc);
-  if (!cal) return true; // si pas de calendar.txt, on ne bloque pas
+  // Sinon calendrier de base
+  const base = GTFS.calendarByService?.get(svc);
+  if (!base) return false;
 
-  if (!ymdBetween(ymd, cal.start_date, cal.end_date)) return false;
-  const wd = weekdayStrFromYMD(ymd); // 'monday'..'sunday'
-  return (cal[wd] === '1' || cal[wd] === 1);
+  // plage de dates
+  const d = Number(ymd);
+  const start = Number(base.start_date);
+  const end   = Number(base.end_date);
+  if (!(d >= start && d <= end)) return false;
+
+  // jour de semaine
+  const dt = new Date(ymd.slice(0,4)+'-'+ymd.slice(4,6)+'-'+ymd.slice(6,8)+'T12:00:00');
+  const wd = dt.getUTCDay(); // 0=Dim ... 6=Sam
+  const flags = {
+    0: Number(base.sunday||0),
+    1: Number(base.monday||0),
+    2: Number(base.tuesday||0),
+    3: Number(base.wednesday||0),
+    4: Number(base.thursday||0),
+    5: Number(base.friday||0),
+    6: Number(base.saturday||0),
+  };
+  return flags[wd] === 1;
 }
     
 /************  RECHERCHE ITINÉRAIRES 1 CORRESPONDANCE  ************/
@@ -3156,6 +3195,7 @@ async function proposerTrainsOD(){
   // DIRECTS
   const directs = [];
   byTrip.forEach((sts, trip_id)=>{
+    const directsUniq = uniqDirects(directs);
     const trow = GTFS.tripById ? GTFS.tripById.get(trip_id) : null;
     if (ymd && GTFS.allowedByDate && GTFS.allowedByDate.has(ymd)) {
   if (!serviceActiveForDate(trip_id, ymd)) return;
@@ -3186,21 +3226,24 @@ async function proposerTrainsOD(){
   // CORRESPONDANCES (si checkbox cochée)
 let transfers = [];
 const allowTransfers = (document.getElementById('allowTransfer')?.checked ?? true);
-
 if (allowTransfers){
   const minTransferMin = Math.max(1, Number(document.getElementById('minTransfer')?.value || 5));
 
-  // on force via Metz uniquement (c’est ce que tu veux pour les petites gares)
-  transfers = findOneTransferItineraries({
-  originIds,
-  destIds,
-  t0Min: tFromMin,
-  t1Min: tToMin,
-  minTransferMin,
-  ymd,
-  allowedInterchanges: FORCE_VIA_METZ ? getIdsForName('Metz') : null,
-  maxResults: 60
-});
+  const allowedSet = getIdsForName('Metz'); // <— on force Metz
+
+  const raw = findOneTransferItineraries({
+    originIds,
+    destIds,
+    t0Min: tFromMin,
+    t1Min: tToMin,
+    minTransferMin,
+    ymd,
+    allowedInterchanges: allowedSet,
+    maxResults: 200
+  });
+
+  // 1 seule correspondance (la plus proche) par premier train + dédup
+  transfers = uniqTransfers(keepFirstTransferPerFirstLeg(raw));
 }
 
   // RENDU
@@ -3208,7 +3251,7 @@ if (allowTransfers){
   if (!host) return;
 
   const directsHTML = (function(){
-    const trains = (directs||[]).slice().sort((a,b)=>a.dep.localeCompare(b.dep));
+    const trains = (directsUniq||[]).slice().sort((a,b)=>a.dep.localeCompare(b.dep));
     if (!trains.length) {
       return `<div class="chips-panel"><p>Aucun train direct ${startName} → ${endName} dans cette plage.</p></div>`;
     }
