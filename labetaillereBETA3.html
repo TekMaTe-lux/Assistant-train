@@ -2764,7 +2764,8 @@ function getGareURL(nomGare) {
 }
 
 /************  CONFIG COURTE  ************/
-const FORCE_VIA_METZ = true;
+const FORCE_VIA_METZ = true;      // ← correspondances à Metz uniquement
+const KEEP_ONLY_EARLIEST_TRANSFER = true; // ← n’afficher que la 1ʳᵉ correspondance la plus proche
 
 /************  HELPERS TEMPS & TEXTE  ************/
 const ft = t => t ? t.slice(0,2)+':'+t.slice(2,4) : '-';
@@ -2926,7 +2927,7 @@ function findOneTransferItineraries({
   const out = [];
   const depList = mergeDeparturesForIds(originIds);
 
-  // binaire: 1er départ >= fenêtre
+  // index du 1er départ >= fenêtre
   let lo=0, hi=depList.length-1, startIdx=depList.length;
   while (lo<=hi){ const mid=(lo+hi)>>1; if (depList[mid].depS>=depStart){ startIdx=mid; hi=mid-1; } else lo=mid+1; }
 
@@ -2937,14 +2938,16 @@ function findOneTransferItineraries({
 
     const idxOrigin = st1.findIndex(r=>r.seq===d1.seq); if(idxOrigin<0) continue;
 
-    let pushedForThisTrip1 = false; // ← on ne garde qu'UNE correspondance par train 1
+    // ⛔ si ce train atteint déjà la destination -> pas de correspondance pour celui-ci
+    const trip1ReachesDest = st1.slice(idxOrigin+1).some(r => destIds.has(r.stop_id));
+    if (trip1ReachesDest) continue;
 
-    // on cherche l'interchange (ici Metz via allowedInterchanges)
+    let pushedForThisTrip1 = false; // une seule correspondance pour ce train 1
+
     for (let j=idxOrigin+1;j<st1.length && !pushedForThisTrip1;j++){
       const inter = st1[j]; const interId = inter.stop_id;
 
-      // si on force Metz, on ignore toute autre gare
-      if (allowedInterchanges && !allowedInterchanges.has(interId)) continue;
+      if (allowedInterchanges && !allowedInterchanges.has(interId)) continue; // ici: Metz only
 
       const arrInterS = inter.arrS; if(arrInterS==null) continue;
       const earliest = arrInterS + minWait;
@@ -2952,19 +2955,18 @@ function findOneTransferItineraries({
       const interGroup = getIdsForName(GTFS.idToName.get(interId) || '');
       const deps2 = mergeDeparturesForIds(interGroup);
 
-      // binaire 2 : 1er départ2 >= earliest
+      // 1er départ 2 >= earliest
       let lo2=0, hi2=deps2.length-1, start2=deps2.length;
       while (lo2<=hi2){ const mid=(lo2+hi2)>>1; if (deps2[mid].depS>=earliest){ start2=mid; hi2=mid-1; } else lo2=mid+1; }
 
-      // === PRENDRE UNIQUEMENT LA 1ʳᵉ CORRESPONDANCE VALIDE ===
+      // ➜ prendre uniquement la 1ʳᵉ correspondance valide
       for (let k=start2;k<deps2.length;k++){
         const d2 = deps2[k]; const trip2=d2.trip_id; if(!serviceActiveForDate(trip2, ymd)) continue;
         const st2 = GTFS._stopTimesByTripSec.get(trip2); if(!st2) continue;
 
         const idxInter2 = st2.findIndex(r=>r.seq===d2.seq); if(idxInter2<0) continue;
-
         const toDest = st2.slice(idxInter2+1).find(r=> destIds.has(r.stop_id));
-        if(!toDest) continue; // ce départ ne va pas jusqu'à la destination
+        if(!toDest) continue;
 
         const dep1S=st1[idxOrigin].depS, arr1S=arrInterS, dep2S=st2[idxInter2].depS, arr2S=toDest.arrS;
         if (dep1S<depStart || dep1S>depEnd) break;
@@ -2982,11 +2984,10 @@ function findOneTransferItineraries({
           durMin:  Math.round((arr2S-dep1S)/60)
         });
 
-        pushedForThisTrip1 = true; // ✅ une seule correspondance pour ce train 1
-        break; // on s'arrête dès la 1ʳᵉ valide (la plus proche)
+        pushedForThisTrip1 = true; // ✅ une seule proposition depuis ce train 1
+        break;
       }
     }
-
     if (out.length>=maxResults) break;
   }
 
@@ -3058,7 +3059,9 @@ async function proposerTrainsOD(){
   const directs = [];
   byTrip.forEach((sts, trip_id)=>{
     const trow = GTFS.tripById ? GTFS.tripById.get(trip_id) : null;
-    if (!serviceActiveForDate(trip_id, ymd)) return;
+    if (ymd && GTFS.allowedByDate && GTFS.allowedByDate.has(ymd)) {
+  if (!serviceActiveForDate(trip_id, ymd)) return;
+}
 
     let iS=-1,iE=-1,dep=null,arr=null;
     for(let i=0;i<sts.length;i++){
@@ -3084,23 +3087,29 @@ async function proposerTrainsOD(){
 
   // CORRESPONDANCES (si checkbox cochée)
   let transfers = [];
-  const allowTransfers = (document.getElementById('allowTransfer')?.checked ?? true);
-  if (allowTransfers){
-    const minTransferMin = Math.max(1, Number(document.getElementById('minTransfer')?.value || 5));
-    // Forcer via Metz (validation de ton exemple) si config active
-    const allowedSet = FORCE_VIA_METZ ? getIdsForName('Metz') : null;
+const allowTransfers = (document.getElementById('allowTransfer')?.checked ?? true);
+if (allowTransfers){
+  const minTransferMin = Math.max(1, Number(document.getElementById('minTransfer')?.value || 5));
 
-    transfers = findOneTransferItineraries({
-      originIds,
-      destIds,
-      t0Min: tFromMin,
-      t1Min: tToMin,
-      minTransferMin,
-      ymd,
-      allowedInterchanges: allowedSet, // mets null pour toutes gares
-      maxResults: 40
-    });
+  // Metz uniquement
+  const allowedSet = getIdsForName('Metz');
+
+  transfers = findOneTransferItineraries({
+    originIds,
+    destIds,
+    t0Min: tFromMin,
+    t1Min: tToMin,
+    minTransferMin,
+    ymd,
+    allowedInterchanges: allowedSet,
+    maxResults: 40
+  });
+
+  // Option : n’afficher que la toute 1ʳᵉ correspondance (la plus proche)
+  if (KEEP_ONLY_EARLIEST_TRANSFER && transfers.length) {
+    transfers = [transfers[0]];
   }
+}
 
   // RENDU
   const host = document.getElementById('propositions');
