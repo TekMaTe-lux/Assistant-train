@@ -3558,8 +3558,8 @@ $(function () {
   $('#btnSoir').off('click').on('click',  ()=> usePresetEverywhere(PRESET_PM, 'PM'));
 
   (function($){
-  // utilitaires locaux
-  function hhmmToMin(v){ if(!v) return 0; const [h,m]=v.split(':').map(Number); return h*60 + m; }
+  // utils
+  function hhmmToMin(v){ if(!v) return 0; const [h,m]=v.split(':').map(Number); return h*60+m; }
   function minToHHMM(n){
     const m=((Math.round(n)%1440)+1440)%1440, h=Math.floor(m/60), mi=m%60;
     return String(h).padStart(2,'0')+':'+String(mi).padStart(2,'0');
@@ -3582,81 +3582,38 @@ $(function () {
     return;
   }
 
+  // Range inchangé: 00:00 → 23:59
   noUiSlider.create(sliderEl, {
     start: [ hhmmToMin(initFrom), hhmmToMin(initTo) ],
     connect: true,
     step: 5,
     range: { min: 0, max: 1439 },
-    tooltips: [
-      { to: v => minToHHMM(v) },
-      { to: v => minToHHMM(v) }
-    ],
+    tooltips: [{ to: v => minToHHMM(v) }, { to: v => minToHHMM(v) }],
   });
 
-  // Sync -> labels + inputs
+  // Sync labels + inputs
   sliderEl.noUiSlider.on('update', function(values){
     const a = minToHHMM(values[0]), b = minToHHMM(values[1]);
-    $('#timeFromLabel').text(a);
-    $('#timeToLabel').text(b);
-    $('#timeFrom').val(a);
-    $('#timeTo').val(b);
+    $('#timeFromLabel').text(a); $('#timeToLabel').text(b);
+    $('#timeFrom').val(a);       $('#timeTo').val(b);
   });
 
-  // Adapte la borne min à "maintenant" si la date = aujourd’hui
-  function adaptTimeSliderToDate(){
+  // Fenêtre par défaut: aujourd’hui => maintenant → +3h ; sinon => tes valeurs init
+  function setDefaultWindow(){
     const isToday = (typeof isSelectedDateToday === 'function') ? isSelectedDateToday() : true;
-    const curVals = sliderEl.noUiSlider.get().map(x => Math.round(x));
-    const defaultSpan = Math.max(5, hhmmToMin(initTo) - hhmmToMin(initFrom));
-    const span = Math.max(5, (curVals[1] - curVals[0]) || defaultSpan);
-
     if (isToday){
-      const nowMin = roundUpToStep(luxNowMinutes(), 5);
-      // borne min = maintenant
-      sliderEl.noUiSlider.updateOptions({ range: { min: nowMin, max: 1439 } }, false);
-      const start = Math.max(nowMin, curVals[0]);
-      const end   = Math.min(1439, Math.max(start + 5, start + span));
-      sliderEl.noUiSlider.set([start, end]);
+      const now = roundUpToStep(luxNowMinutes(), 5);
+      const end = Math.min(1439, now + 180); // +3h
+      sliderEl.noUiSlider.set([now, end]);
     } else {
-      // autres jours -> min = 00:00
-      sliderEl.noUiSlider.updateOptions({ range: { min: 0, max: 1439 } }, false);
-      // si l’ancienne borne min avait clampé la valeur, on remet une fenêtre standard
-      const start = Math.max(0, curVals[0] || hhmmToMin(initFrom));
-      const end   = Math.min(1439, (curVals[1] || hhmmToMin(initTo)));
-      sliderEl.noUiSlider.set([start, Math.max(start+5, end)]);
+      sliderEl.noUiSlider.set([hhmmToMin(initFrom), hhmmToMin(initTo)]);
     }
-
-    // force la MAJ des labels/inputs
-    const values = sliderEl.noUiSlider.get();
-    $('#timeFromLabel').text(minToHHMM(values[0]));
-    $('#timeToLabel').text(minToHHMM(values[1]));
-    $('#timeFrom').val(minToHHMM(values[0]));
-    $('#timeTo').val(minToHHMM(values[1]));
   }
 
-  // 1ʳᵉ adaptation au chargement
-  adaptTimeSliderToDate();
-
-  // Ré-adapte quand la date change
-  $('#trainDate').off('change._sliderBounds').on('change._sliderBounds', adaptTimeSliderToDate);
-
-  // Boutons Matin/Soir -> respectent la borne min du jour
-  $('#btnMatin').off('click._slider').on('click._slider', function(){
-    const isToday = (typeof isSelectedDateToday === 'function') ? isSelectedDateToday() : true;
-    const minBound = isToday ? roundUpToStep(luxNowMinutes(),5) : 0;
-    const targetStart = Math.max(hhmmToMin('06:00'), minBound);
-    const targetEnd   = Math.max(targetStart+5, hhmmToMin('10:00'));
-    sliderEl.noUiSlider.updateOptions({ range: { min: isToday ? minBound : 0, max: 1439 } }, false);
-    sliderEl.noUiSlider.set([targetStart, targetEnd]);
-  });
-
-  $('#btnSoir').off('click._slider').on('click._slider', function(){
-    const isToday = (typeof isSelectedDateToday === 'function') ? isSelectedDateToday() : true;
-    const minBound = isToday ? roundUpToStep(luxNowMinutes(),5) : 0;
-    const targetStart = Math.max(hhmmToMin('16:00'), minBound);
-    const targetEnd   = Math.max(targetStart+5, hhmmToMin('20:00'));
-    sliderEl.noUiSlider.updateOptions({ range: { min: isToday ? minBound : 0, max: 1439 } }, false);
-    sliderEl.noUiSlider.set([targetStart, targetEnd]);
-  });
+  // au chargement
+  setDefaultWindow();
+  // si on change la date, on recalcule la fenêtre par défaut
+  $('#trainDate').off('change._defaultWindow').on('change._defaultWindow', setDefaultWindow);
 })(jQuery);
 
   // Bouton “Vider” (sous la sélection)
