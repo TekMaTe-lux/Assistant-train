@@ -4259,7 +4259,10 @@ function applyRetardsFromGTFS(retardsGTFS) {
 }
 /* ---------- ALERTES ---------- */
 const urlAlertes = 'https://raw.githubusercontent.com/tekmate-lux/Assistant-train/main/Assistant-train/alertes_sncftoutes.json';
-const motsCles = ['Luxembourg', 'Metz', 'Thionville'];
+const motsCles = Array.from(new Set([
+  ...garesParLigne.map(g => g.nom),
+  'CFL','Moselle','Meurthe-et-Moselle','Luxembourg'
+]));
 
 const causesMap = {
   1: {prio: 1, couleur: '#dc3545', icone: '❌', label: 'Suppression (NO_SERVICE)'},
@@ -4298,8 +4301,61 @@ function getDisplayedTrainNumbers() {
     .map(th => nettoyerNumeroTrain(th.dataset.trainNumber.trim()))
     .filter(n => n !== null);
 }
+/* ====== Filtres “corridor” pour les alertes (évite Lyon/Valence/Avignon & co) ====== */
+let CORRIDOR = { stopIds: null, routeIds: null, tripTouchesCache: new Map() };
 
-function chargerEtAfficherAlertes() {
+function buildCorridorFilters(){
+  if (CORRIDOR.stopIds) return;
+  // stop_ids de toutes les gares de la ligne (en tenant compte des parent_station)
+  const stopIds = new Set();
+  garesParLigne.forEach(g => getIdsForName(g.nom).forEach(id => stopIds.add(id)));
+
+  // route_ids qui passent par au moins une gare du corridor
+  const routeIds = new Set();
+  const tripById = GTFS.tripById || new Map();
+  GTFS.stopTimes.forEach(st => {
+    if (stopIds.has(st.stop_id)) {
+      const trip = tripById.get(st.trip_id);
+      if (trip && trip.route_id) routeIds.add(trip.route_id);
+    }
+  });
+
+  CORRIDOR = { stopIds, routeIds, tripTouchesCache: new Map() };
+}
+
+function tripTouchesCorridor(trip_id){
+  const cache = CORRIDOR.tripTouchesCache;
+  if (cache.has(trip_id)) return cache.get(trip_id);
+
+  const list = (GTFS._stopTimesByTripSec && GTFS._stopTimesByTripSec.get(trip_id))
+    || GTFS.stopTimes.filter(st => st.trip_id === trip_id).map(st => ({ stop_id: st.stop_id }));
+
+  const touches = list.some(r => CORRIDOR.stopIds.has(r.stop_id));
+  cache.set(trip_id, touches);
+  return touches;
+}
+
+function entityTouchesCorridor(ent, ymd){
+  // stop ciblé ?
+  if (ent.stop_id && CORRIDOR.stopIds.has(ent.stop_id)) return true;
+  // route ciblée ?
+  if (ent.route_id && CORRIDOR.routeIds.has(ent.route_id)) return true;
+  // trip ciblé et actif ce jour + qui passe par le corridor ?
+  const tripId = ent.trip_id || ent.vehicle_journey_id || null;
+  if (tripId && GTFS.tripById?.has(tripId) && serviceActiveForDate(tripId, ymd) && tripTouchesCorridor(tripId)) {
+    return true;
+  }
+  return false;
+}
+
+function alertTargetsOurCorridor(alert, ymd){
+  const ents = alert.informed_entities || [];
+  for (const ent of ents){
+    if (entityTouchesCorridor(ent, ymd)) return true;
+  }
+  return false;
+} 
+async function chargerEtAfficherAlertes() {
   const container = document.getElementById('alertes');
   if (!container) return;
 
@@ -4312,6 +4368,12 @@ function chargerEtAfficherAlertes() {
     selectedDate = new Date();
     selectedDate.setHours(12, 0, 0, 0);
   }
+
+  const ymd = `${selectedDate.getFullYear()}${String(selectedDate.getMonth()+1).padStart(2,'0')}${String(selectedDate.getDate()).padStart(2,'0')}`;
+
+try { await ensureGTFSLoaded(); } catch(e){ console.warn('GTFS non chargé pour alertes:', e); }
+buildStationGroups();
+buildCorridorFilters();
 
   // petit utilitaire local
   const stripHtml = (s) => (s || '').replace(/<[^>]*>?/gm, '');
@@ -4354,10 +4416,10 @@ function chargerEtAfficherAlertes() {
       let alertesFiltres = alertes.filter(a => {
         const titre = a.header_text || '';
         const desc  = stripHtml(a.description_text || '');
-        const hasKeyword = contientMotCle(titre, motsCles) || contientMotCle(desc, motsCles);
-        const hitsTrain  = alertTargetsDisplayedTrains(a, trainsAffiches);
-        const activeNow  = alertActiveForDate(a, selectedDate);
-        return activeNow && (hasKeyword || hitsTrain);
+        const hasKeyword   = contientMotCle(titre, motsCles) || contientMotCle(desc, motsCles);
+const hitsCorridor = alertTargetsOurCorridor(a, ymd); // ✅ plus robuste que “numéro qui ressemble”
+const activeNow    = alertActiveForDate(a, selectedDate);
+return activeNow && (hasKeyword || hitsCorridor);
       });
 
       // 2) Tri par priorité basée sur EFFECT (et plus "cause")
@@ -4382,24 +4444,28 @@ function chargerEtAfficherAlertes() {
 
         // Liste unique des trains concernés
         const trainsCibles = Array.from(new Set(
-          (alerte.informed_entities || [])
-            .map(ent => {
-              const blob = [ent.trip_id, ent.vehicle_journey_id, ent.route_id, ent.name].filter(Boolean).join(' ');
-              return extraireNumeroTrainDepuisTripId(blob) || nettoyerNumeroTrain(blob);
-            })
-            .filter(Boolean)
-        ));
+  (alerte.informed_entities || [])
+    .filter(ent => entityTouchesCorridor(ent, ymd))
+    .map(ent => {
+      const tripId = ent.trip_id || ent.vehicle_journey_id || null;
+      const t = tripId ? GTFS.tripById?.get(tripId) : null;
+      const num = t?.trip_short_name ? extractTrainNumber(t.trip_short_name) : null;
+      return num;
+    })
+    .filter(Boolean)
+));
 
         // si "service réduit" (effect=2), pose un hint visuel sur l’entête de colonne du train
-        if (effetCode === 2 && trainsCibles.length) {
-          trainsCibles.forEach(numeroTrain => {
-            const header = document.querySelector(`th[data-train-number="${numeroTrain}"]`);
-            if (header) {
-              header.classList.add('us-train');
-              header.title = "Service réduit : réduction du nombre de places (UM ➜ US)";
-            }
-          });
-        }
+        const targetsDisplayed = trainsCibles.filter(n => trainsAffiches.includes(n));
+if (effetCode === 2 && targetsDisplayed.length){
+  targetsDisplayed.forEach(numeroTrain => {
+    const header = document.querySelector(`th[data-train-number="${numeroTrain}"]`);
+    if (header) {
+      header.classList.add('us-train');
+      header.title = "Service réduit : réduction du nombre de places (UM ➜ US)";
+    }
+  });
+}
 
         // couleur/icone via ta map existante
         let classeCouleur = 'alerte-box';
