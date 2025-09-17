@@ -2810,9 +2810,9 @@ function uniqTransfers(list){
   return Array.from(map.values());
 }
 
+    /************  CHARGEMENT GTFS (stops/stop_times/trips/calendar_dates only)  ************/
     
-/************  CHARGEMENT GTFS (stops/stop_times/trips/calendar_dates)  ************/
-let GTFS = { stops:null, stopTimes:null, trips:null, tripById:null, stopNameToId:null, allowedByDate:null };
+let GTFS = { stops:null, stopTimes:null, trips:null, tripById:null, stopNameToId:null, allowedByDate:null, removedByDate:null };
 
 async function fetchText(url){
   const r = await fetch(url); if(!r.ok) throw new Error('HTTP '+r.status+' on '+url); return await r.text();
@@ -2832,20 +2832,18 @@ function parseCSV(text){
 }
 
 async function ensureGTFSLoaded(){
-  if (GTFS.stops && GTFS.stopTimes && GTFS.trips && GTFS.tripById && GTFS.stopNameToId && GTFS.calendarByService && GTFS.exceptionsByDate) return;
+  if (GTFS.stops && GTFS.stopTimes && GTFS.trips && GTFS.tripById && GTFS.stopNameToId && GTFS.allowedByDate) return;
 
-  const [stopsTxt, stopTimesTxt, tripsTxt, calTxt, calDatesTxt] = await Promise.all([
+  const [stopsTxt, stopTimesTxt, tripsTxt, calDatesTxt] = await Promise.all([
     fetchText('https://tekmate-lux.github.io/Assistant-train/data/stops.txt'),
     fetchText('https://tekmate-lux.github.io/Assistant-train/data/stop_times.txt'),
     fetchText('https://tekmate-lux.github.io/Assistant-train/data/trips.txt'),
-    fetchText('https://tekmate-lux.github.io/Assistant-train/data/calendar.txt'),
     fetchText('https://tekmate-lux.github.io/Assistant-train/data/calendar_dates.txt'),
   ]);
 
-  const stops = parseCSV(stopsTxt);
-  const stopTimes = parseCSV(stopTimesTxt);
-  const trips = parseCSV(tripsTxt);
-  const calendar = parseCSV(calTxt);
+  const stops       = parseCSV(stopsTxt);
+  const stopTimes   = parseCSV(stopTimesTxt);
+  const trips       = parseCSV(tripsTxt);
   const calendarDates = parseCSV(calDatesTxt);
 
   const stopNameToId = new Map();
@@ -2854,20 +2852,22 @@ async function ensureGTFSLoaded(){
   const tripById = new Map();
   trips.forEach(t => { if (t.trip_id) tripById.set(t.trip_id, t); });
 
-  // Index calendrier de base : service_id -> row (mon..sun, start_date, end_date)
-  const calendarByService = new Map();
-  calendar.forEach(row => { if (row.service_id) calendarByService.set(row.service_id, row); });
-
-  // Exceptions : ymd -> (service_id -> exception_type)
-  const exceptionsByDate = new Map();
+  // yyyymmdd -> Set(service_id) ajoutés ; et yyyymmdd -> Set(service_id) supprimés
+  const allowedByDate = new Map();
+  const removedByDate = new Map();
   calendarDates.forEach(row => {
-    const ymd = row.date, svc = row.service_id, exc = Number(row.exception_type);
-    if (!ymd || !svc || !exc) return;
-    if (!exceptionsByDate.has(ymd)) exceptionsByDate.set(ymd, new Map());
-    exceptionsByDate.get(ymd).set(svc, exc); // 1 = added, 2 = removed
+    const ymd = row.date, serviceId = row.service_id, exc = Number(row.exception_type);
+    if (!ymd || !serviceId) return;
+    if (exc === 1) {
+      if (!allowedByDate.has(ymd)) allowedByDate.set(ymd, new Set());
+      allowedByDate.get(ymd).add(serviceId);
+    } else if (exc === 2) {
+      if (!removedByDate.has(ymd)) removedByDate.set(ymd, new Set());
+      removedByDate.get(ymd).add(serviceId);
+    }
   });
 
-  GTFS = { stops, stopTimes, trips, calendar, calendarDates, tripById, stopNameToId, calendarByService, exceptionsByDate };
+  GTFS = { stops, stopTimes, trips, calendarDates, tripById, stopNameToId, allowedByDate, removedByDate };
 }
 
 /************  GROUPES DE STOPS PAR GARE (stop_name/parent_station)  ************/
@@ -2945,41 +2945,19 @@ function mergeDeparturesForIds(idsSet){
 
 /************  CALENDRIER (calendar_dates)  ************/
 function serviceActiveForDate(trip_id, ymd){
-  if (!trip_id || !ymd) return false;
+  if (!trip_id || !ymd) return false; // exige une date
+  const t = GTFS.tripById?.get(trip_id); if(!t) return false;
+  const svc = t.service_id; if(!svc) return false;
 
-  const t = GTFS.tripById?.get(trip_id);
-  if (!t) return false;
-  const svc = t.service_id;
-  if (!svc) return false;
+  // Si on a des données de dates : on est STRICT
+  if (GTFS.allowedByDate && GTFS.allowedByDate.size > 0) {
+    const allowedSet = GTFS.allowedByDate.get(ymd);
+    if (allowedSet) return allowedSet.has(svc); // présent ce jour
+    return false; // pas listé ce jour => on N'AFFICHE PAS
+  }
 
-  // Exceptions priment si présentes
-  const exc = GTFS.exceptionsByDate?.get(ymd)?.get(svc);
-  if (exc === 1) return true;   // ajouté ce jour
-  if (exc === 2) return false;  // supprimé ce jour
-
-  // Sinon calendrier de base
-  const base = GTFS.calendarByService?.get(svc);
-  if (!base) return false;
-
-  // plage de dates
-  const d = Number(ymd);
-  const start = Number(base.start_date);
-  const end   = Number(base.end_date);
-  if (!(d >= start && d <= end)) return false;
-
-  // jour de semaine
-  const dt = new Date(ymd.slice(0,4)+'-'+ymd.slice(4,6)+'-'+ymd.slice(6,8)+'T12:00:00');
-  const wd = dt.getUTCDay(); // 0=Dim ... 6=Sam
-  const flags = {
-    0: Number(base.sunday||0),
-    1: Number(base.monday||0),
-    2: Number(base.tuesday||0),
-    3: Number(base.wednesday||0),
-    4: Number(base.thursday||0),
-    5: Number(base.friday||0),
-    6: Number(base.saturday||0),
-  };
-  return flags[wd] === 1;
+  // Fallback ultra-rare si calendar_dates est vide: on laisse passer pour ne pas tout cacher
+  return true;
 }
     
 /************  RECHERCHE ITINÉRAIRES 1 CORRESPONDANCE  ************/
@@ -3193,35 +3171,35 @@ async function proposerTrainsOD(){
   for(const arr of byTrip.values()) arr.sort((a,b)=>Number(a.stop_sequence)-Number(b.stop_sequence));
 
   // DIRECTS
-  const directs = [];
-  byTrip.forEach((sts, trip_id)=>{
-    const directsUniq = uniqDirects(directs);
-    const trow = GTFS.tripById ? GTFS.tripById.get(trip_id) : null;
-    if (ymd && GTFS.allowedByDate && GTFS.allowedByDate.has(ymd)) {
+const directs = [];
+byTrip.forEach((sts, trip_id)=>{
   if (!serviceActiveForDate(trip_id, ymd)) return;
-}
 
-    let iS=-1,iE=-1,dep=null,arr=null;
-    for(let i=0;i<sts.length;i++){
-      if(originIds.has(sts[i].stop_id)){ iS=i; dep=sts[i].departure_time; }
-      if(destIds.has(sts[i].stop_id))  { iE=i; arr=sts[i].arrival_time; }
-    }
-    if(iS===-1 || iE===-1 || iE<=iS || !dep) return;
+  const trow = GTFS.tripById ? GTFS.tripById.get(trip_id) : null;
 
-    const [H,M] = dep.slice(0,5).split(':').map(Number);
-    const depMin = H*60+M;
-    if (depMin<tFromMin || depMin>tToMin) return;
+  let iS=-1,iE=-1,dep=null,arr=null;
+  for(let i=0;i<sts.length;i++){
+    if(originIds.has(sts[i].stop_id)){ iS=i; dep=sts[i].departure_time; }
+    if(destIds.has(sts[i].stop_id))  { iE=i; arr=sts[i].arrival_time; }
+  }
+  if(iS===-1 || iE===-1 || iE<=iS || !dep) return;
 
-    let numero = trow && trow.trip_short_name ? extractTrainNumber(trow.trip_short_name) : null;
-    if (!numero) numero = extractTrainNumber(trip_id);
-    if (!numero) return;
+  const depMin = Number(dep.slice(0,2))*60 + Number(dep.slice(3,5));
+  if (depMin<tFromMin || depMin>tToMin) return;
 
-    const key = `${numero}|${dep.slice(0,5)}`;
-    if (proposerTrainsOD._seen.has(key)) return;
-    proposerTrainsOD._seen.add(key);
+  let numero = trow?.trip_short_name ? extractTrainNumber(trow.trip_short_name) : null;
+  if (!numero) numero = extractTrainNumber(trip_id);
+  if (!numero) return;
 
-    directs.push({ numero, dep:dep.slice(0,5), arr: arr ? arr.slice(0,5) : null });
-  });
+  const key = `${numero}|${dep.slice(0,5)}`;
+  if (proposerTrainsOD._seen.has(key)) return;
+  proposerTrainsOD._seen.add(key);
+
+  directs.push({ numero, dep:dep.slice(0,5), arr: arr ? arr.slice(0,5) : null });
+});
+
+// dédup finale des directs
+const directsUniqList = uniqDirects(directs);
 
   // CORRESPONDANCES (si checkbox cochée)
 let transfers = [];
@@ -3251,7 +3229,7 @@ if (allowTransfers){
   if (!host) return;
 
   const directsHTML = (function(){
-    const trains = (directsUniq||[]).slice().sort((a,b)=>a.dep.localeCompare(b.dep));
+    const trains = (directsUniqList||[]).slice().sort((a,b)=>a.dep.localeCompare(b.dep));
     if (!trains.length) {
       return `<div class="chips-panel"><p>Aucun train direct ${startName} → ${endName} dans cette plage.</p></div>`;
     }
