@@ -2801,35 +2801,50 @@ function parseCSV(text){
 }
 
 async function ensureGTFSLoaded(){
-  if (GTFS.stops && GTFS.stopTimes && GTFS.trips && GTFS.tripById && GTFS.stopNameToId && GTFS.allowedByDate) return;
+  if (
+    GTFS.stops && GTFS.stopTimes && GTFS.trips && GTFS.tripById &&
+    GTFS.stopNameToId && GTFS.calendarByService && GTFS.exceptionsByServiceDate
+  ) return;
 
-  const [stopsTxt, stopTimesTxt, tripsTxt, calDatesTxt] = await Promise.all([
-    fetchText('https://tekmate-lux.github.io/Assistant-train/data/stops.txt'),
-    fetchText('https://tekmate-lux.github.io/Assistant-train/data/stop_times.txt'),
-    fetchText('https://tekmate-lux.github.io/Assistant-train/data/trips.txt'),
-    fetchText('https://tekmate-lux.github.io/Assistant-train/data/calendar_dates.txt'),
+  const base = 'https://tekmate-lux.github.io/Assistant-train/data/';
+  const [stopsTxt, stopTimesTxt, tripsTxt, calTxt, calDatesTxt] = await Promise.all([
+    fetchText(base + 'stops.txt'),
+    fetchText(base + 'stop_times.txt'),
+    fetchText(base + 'trips.txt'),
+    fetchText(base + 'calendar.txt').catch(()=>''),        // <- NOUVEAU
+    fetchText(base + 'calendar_dates.txt').catch(()=>''),  // déjà présent
   ]);
 
-  const stops = parseCSV(stopsTxt);
-  const stopTimes = parseCSV(stopTimesTxt);
-  const trips = parseCSV(tripsTxt);
-  const calendarDates = parseCSV(calDatesTxt);
+  const stops        = parseCSV(stopsTxt);
+  const stopTimes    = parseCSV(stopTimesTxt);
+  const trips        = parseCSV(tripsTxt);
+  const calendar     = calTxt ? parseCSV(calTxt) : [];
+  const calendarDates= calDatesTxt ? parseCSV(calDatesTxt) : [];
 
-  const stopNameToId = new Map(); // (fallback) nom -> 1er stop_id
-  stops.forEach(s => { if (s.stop_name && s.stop_id) if(!stopNameToId.has(s.stop_name)) stopNameToId.set(s.stop_name, s.stop_id); });
+  const stopNameToId = new Map();
+  stops.forEach(s => { if (s.stop_name && s.stop_id && !stopNameToId.has(s.stop_name)) stopNameToId.set(s.stop_name, s.stop_id); });
 
   const tripById = new Map();
   trips.forEach(t => { if (t.trip_id) tripById.set(t.trip_id, t); });
 
-  const allowedByDate = new Map(); // yyyymmdd -> Set(service_id) “ajouté” (exception_type=1)
-  calendarDates.forEach(row => {
-    const ymd = row.date, serviceId = row.service_id, exc = Number(row.exception_type);
-    if (!ymd || !serviceId) return;
-    if (exc === 1) { if (!allowedByDate.has(ymd)) allowedByDate.set(ymd, new Set()); allowedByDate.get(ymd).add(serviceId); }
-    // (exc==2) suppressions ignorées ici volontairement (on ne durcit pas)
-  });
+  // Index calendrier
+  const calendarByService = new Map(); // service_id -> row calendar
+  for (const r of calendar) {
+    if (!r.service_id) continue;
+    calendarByService.set(r.service_id, r);
+  }
 
-  GTFS = { stops, stopTimes, trips, calendarDates, tripById, stopNameToId, allowedByDate };
+  const exceptionsByServiceDate = new Map(); // `${service_id}|${yyyymmdd}` -> 1 (add) / 2 (remove)
+  for (const r of calendarDates) {
+    if (!r.service_id || !r.date) continue;
+    exceptionsByServiceDate.set(`${r.service_id}|${r.date}`, Number(r.exception_type));
+  }
+
+  GTFS = {
+    stops, stopTimes, trips, calendar, calendarDates,
+    tripById, stopNameToId,
+    calendarByService, exceptionsByServiceDate
+  };
 }
 
 /************  GROUPES DE STOPS PAR GARE (stop_name/parent_station)  ************/
@@ -2907,23 +2922,27 @@ function mergeDeparturesForIds(idsSet){
 
 /************  CALENDRIER (calendar_dates)  ************/
 function serviceActiveForDate(trip_id, ymd){
-  // Sans calendar.txt complet, ne pas durcir via calendar_dates.
-  // On retourne TRUE pour ne pas “manger” les directs.
-  if (!STRICT_CALENDAR) return true;
+  if (!ymd) return true; // par sécurité si pas de date saisie
 
   const t = GTFS._tripById?.get(trip_id);
-  if (!t) return true;
-  if (!ymd) return true;
-
-  // Si on activait STRICT_CALENDAR et qu'on avait un vrai calendrier,
-  // on pourrait whitelister par allowedByDate[ymd]. Ici on laisse true.
+  if (!t) return false;
   const svc = t.service_id;
-  if (!GTFS.allowedByDate || GTFS.allowedByDate.size === 0) return true;
-  if (!GTFS.allowedByDate.has(ymd)) return true;
-  const allowedSet = GTFS.allowedByDate.get(ymd);
-  return allowedSet ? allowedSet.has(svc) : true;
-}
+  if (!svc) return false;
 
+  // 1) Exceptions priment
+  const exc = GTFS.exceptionsByServiceDate?.get(`${svc}|${ymd}`);
+  if (exc === 1) return true;   // ajouté ce jour
+  if (exc === 2) return false;  // supprimé ce jour
+
+  // 2) Sinon, calendrier hebdo
+  const cal = GTFS.calendarByService?.get(svc);
+  if (!cal) return true; // si pas de calendar.txt, on ne bloque pas
+
+  if (!ymdBetween(ymd, cal.start_date, cal.end_date)) return false;
+  const wd = weekdayStrFromYMD(ymd); // 'monday'..'sunday'
+  return (cal[wd] === '1' || cal[wd] === 1);
+}
+    
 /************  RECHERCHE ITINÉRAIRES 1 CORRESPONDANCE  ************/
 function findOneTransferItineraries({
   originIds, destIds, t0Min, t1Min, minTransferMin=5, ymd,
@@ -3054,7 +3073,7 @@ async function proposerTrainsOD(){
   const destIds   = getIdsForName(endName);
 
   // calendrier
-  const ymd = dateInputToYMD($('#trainDate').val()) || '';
+  const ymd = dateInputToYMD($('#trainDate').val()) || todayYMDLux().replace(/-/g,'');
 
   // index stop_times par trip (directs)
   const byTrip = new Map();
@@ -3087,7 +3106,7 @@ async function proposerTrainsOD(){
     if (!numero) numero = extractTrainNumber(trip_id);
     if (!numero) return;
 
-    const key = `${numero}|${dep.slice(0,5)}|${arr ? arr.slice(0,5) : ''}`;
+    const key = `${numero}|${dep.slice(0,5)}`;
     if (proposerTrainsOD._seen.has(key)) return;
     proposerTrainsOD._seen.add(key);
 
@@ -3195,11 +3214,19 @@ function dateInputToYMD(str){
   const [y,m,d] = str.split('-');
   return `${y}${m}${d}`;
 }
+function ymdBetween(ymd, start, end){ return ymd >= start && ymd <= end; }
+function weekdayStrFromYMD(ymd){
+  // 0=Sun..6=Sat -> 'sunday'..'saturday'
+  const y = +ymd.slice(0,4), m = +ymd.slice(4,6)-1, d = +ymd.slice(6,8);
+  const dt = new Date(Date.UTC(y,m,d));
+  return ['sunday','monday','tuesday','wednesday','thursday','friday','saturday'][dt.getUTCDay()];
+} 
 // Extrait un numéro de train (5-6 chiffres)
 function extractTrainNumber(str){
   const m = String(str||'').match(/(\d{5,6})/);
   return m ? m[1] : null;
 }
+  
 
 /* ====================== UI SÉLECTION (input + tags) ====================== */
 function chipsUpdateCount(){
