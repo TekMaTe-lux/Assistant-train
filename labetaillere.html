@@ -2820,7 +2820,7 @@ function uniqTransfers(list){
 }
 
 /************ CHARGEMENT GTFS (stops/stop_times/trips/calendar_dates only) ************/
-    
+
 let GTFS = { 
   stops:null, 
   stopTimes:null, 
@@ -2832,9 +2832,29 @@ let GTFS = {
 };
 
 async function fetchText(url){
-  const r = await fetch(url);
+  const r = await fetch(url, { cache: 'no-store' });
   if(!r.ok) throw new Error('HTTP '+r.status+' on '+url);
   return await r.text();
+}
+
+// Bases candidates (testées dans l’ordre)
+const GTFS_BASES = [
+  new URL('data/', location.href).href,                     // ex: https://www.labetaillere.fr/data/
+  new URL('Assistant-train/data/', location.href).href,     // ex: https://www.labetaillere.fr/Assistant-train/data/
+  'https://tekmate-lux.github.io/Assistant-train/data/'     // ancien chemin GitHub Pages (fallback)
+];
+
+async function fetchGTFSFile(filename){
+  let lastErr;
+  for (const base of GTFS_BASES){
+    try {
+      return await fetchText(base + filename);
+    } catch(e){
+      lastErr = e;
+      // on essaie la base suivante
+    }
+  }
+  throw lastErr || new Error('Impossible de charger '+filename);
 }
 
 function parseCSV(text){
@@ -2863,10 +2883,10 @@ async function ensureGTFSLoaded(){
   if (GTFS.stops && GTFS.stopTimes && GTFS.trips && GTFS.tripById && GTFS.stopNameToId && GTFS.allowedByDate) return;
   
   const [stopsTxt, stopTimesTxt, tripsTxt, calDatesTxt] = await Promise.all([
-    fetchText('https://tekmate-lux.github.io/Assistant-train/data/stops.txt'),
-    fetchText('https://tekmate-lux.github.io/Assistant-train/data/stop_times.txt'),
-    fetchText('https://tekmate-lux.github.io/Assistant-train/data/trips.txt'),
-    fetchText('https://tekmate-lux.github.io/Assistant-train/data/calendar_dates.txt'),
+    fetchGTFSFile('stops.txt'),
+    fetchGTFSFile('stop_times.txt'),
+    fetchGTFSFile('trips.txt'),
+    fetchGTFSFile('calendar_dates.txt'),
   ]);
 
   const stops = parseCSV(stopsTxt);
@@ -2915,6 +2935,9 @@ async function ensureGTFSLoaded(){
 /************  GROUPES DE STOPS PAR GARE (stop_name/parent_station)  ************/
 function buildStationGroups(){
   if (GTFS.nameToIds && GTFS.idToName) return;
+  // Protection anti-null si ça n'a pas fini de charger
+  if (!Array.isArray(GTFS.stops)) return;
+
   const idToStop = new Map(GTFS.stops.map(s => [s.stop_id, s]));
   const nameToIds = new Map();
   const parentToIds = new Map();
@@ -2942,6 +2965,7 @@ function buildStationGroups(){
   GTFS.idToName  = idToName;
   GTFS.idToStop  = idToStop;
 }
+
 function getIdsForName(name){
   buildStationGroups();
   const ids = GTFS.nameToIds?.get(name);
@@ -2953,6 +2977,7 @@ function getIdsForName(name){
 /************  INDEXES POUR RECHERCHE DE CORRESPONDANCES  ************/
 function ensureTransferIndexesBuilt(){
   if (GTFS._stopTimesByTripSec && GTFS._depsByStop) return;
+  if (!Array.isArray(GTFS.stopTimes)) return; // protection
 
   const byTripSec = new Map();
   for (const st of GTFS.stopTimes){
@@ -2980,6 +3005,7 @@ function ensureTransferIndexesBuilt(){
   GTFS._depsByStop = depsByStop;
   GTFS._tripById = GTFS.tripById;
 }
+
 function mergeDeparturesForIds(idsSet){
   const arr=[]; idsSet.forEach(id=>{ const l=GTFS._depsByStop.get(id); if(l&&l.length) arr.push(...l); });
   arr.sort((a,b)=>a.depS-b.depS); return arr;
