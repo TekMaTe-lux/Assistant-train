@@ -2819,42 +2819,36 @@ function uniqTransfers(list){
   return Array.from(map.values());
 }
 
-    /************  CHARGEMENT GTFS (stops/stop_times/trips/calendar_dates only)  ************/
-    
+/************  CHARGEMENT GTFS (stops/stop_times/trips/calendar_dates only)  ************/
+
 let GTFS = { stops:null, stopTimes:null, trips:null, stopNameToId:null, tripById:null, allowedByDate:null };
 
-// -- utilitaires inchangés (avec no-cache pour éviter les vieilles versions)
+// === utilitaires inchangés ===
 async function fetchText(url){
-  const r = await fetch(url, { cache:'no-cache' });
-  if(!r.ok) throw new Error('HTTP '+r.status+' on '+url);
+  const r = await fetch(url); 
+  if(!r.ok) throw new Error('HTTP '+r.status+' on '+url); 
   return r.text();
 }
 
-// -- lire une entrée texte dans un ZIP (JSZip requis)
+// === nouveau petit helper pour lire stop_times.txt à l'intérieur du ZIP ===
 async function fetchZipEntryText(zipUrl, entryName){
-  const res = await fetch(zipUrl, { cache:'no-cache' });
+  const res = await fetch(zipUrl);
   if(!res.ok) throw new Error(`HTTP ${res.status} ${zipUrl}`);
   const blob = await res.blob();
   const zip = await JSZip.loadAsync(blob);
-
-  // d'abord le nom exact, sinon n'importe quel fichier se terminant par stop_times.txt
   let file = zip.file(entryName);
   if(!file){
+    // si le zip contient un sous-dossier, on prend tout fichier finissant par stop_times.txt
     const candidates = zip.file(/stop_times\.txt$/i);
     if (candidates && candidates.length) file = candidates[0];
   }
   if(!file) throw new Error(`Entrée manquante dans le ZIP: ${entryName}`);
-
   return file.async('string');
 }
 
-// -- parser CSV (identique, avec retrait du BOM éventuel sur la 1re ligne)
+// === ton parseur CSV d'origine (inchangé) ===
 function parseCSV(text){
-  const lines = text.trim().split(/\r?\n/);
-  let headerLine = lines.shift() ?? '';
-  headerLine = headerLine.replace(/^\uFEFF/, ''); // supprime BOM UTF-8 si présent
-  const headers = headerLine.split(',');
-
+  const lines=text.trim().split(/\r?\n/); const headers=lines.shift().split(',');
   return lines.map(l=>{
     const cols=[]; let cur='',inQ=false;
     for(let i=0;i<l.length;i++){
@@ -2863,55 +2857,45 @@ function parseCSV(text){
       else if(c===',' && !inQ){ cols.push(cur); cur=''; }
       else cur+=c;
     }
-    cols.push(cur);
-    const row={}; headers.forEach((h,idx)=> row[h] = cols[idx] ?? '');
-    return row;
+    cols.push(cur); const row={}; headers.forEach((h,idx)=>row[h]=cols[idx]??''); return row;
   });
 }
 
 async function ensureGTFSLoaded(){
   if (GTFS.stops && GTFS.stopTimes && GTFS.trips && GTFS.stopNameToId && GTFS.tripById && GTFS.allowedByDate) return;
 
-  const v='2025-09-18'; // maj ce tag à chaque nouveau stop_times.zip pour casser le cache
-
-  // mêmes sources qu'avant pour ces 3 fichiers
-  const URL_STOPS   = 'https://tekmate-lux.github.io/Assistant-train/data/stops.txt';
-  const URL_TRIPS   = 'https://tekmate-lux.github.io/Assistant-train/data/trips.txt';
-  const URL_CALDATE = 'https://tekmate-lux.github.io/Assistant-train/data/calendar_dates.txt';
-
-  // seule différence : stop_times vient du ZIP hébergé sur Pages (pas de CORS)
-  const URL_STOP_TIMES_ZIP = `https://tekmate-lux.github.io/Assistant-train/data/stop_times.zip?v=${encodeURIComponent(v)}`;
-
-  // petit fallback : si le ZIP a un souci, on retombe sur l'ancien .txt (si présent)
-  async function fetchStopTimesText(){
-    try {
-      return await fetchZipEntryText(URL_STOP_TIMES_ZIP, 'stop_times.txt');
-    } catch (e) {
-      console.warn('Lecture ZIP échouée, essai fallback .txt', e);
-      return fetchText(`https://tekmate-lux.github.io/Assistant-train/data/stop_times.txt?v=${encodeURIComponent(v)}`);
-    }
-  }
-
-  const [stopsTxt, stopTimesTxt, tripsTxt, calDatesTxt] = await Promise.all([
-    fetchText(URL_STOPS),
-    fetchStopTimesText(),
-    fetchText(URL_TRIPS),
-    fetchText(URL_CALDATE),
+  // mêmes liens qu'avant pour 3 fichiers
+  const [stopsTxt, tripsTxt, calDatesTxt] = await Promise.all([
+    fetchText('https://tekmate-lux.github.io/Assistant-train/data/stops.txt'),
+    fetchText('https://tekmate-lux.github.io/Assistant-train/data/trips.txt'),
+    fetchText('https://tekmate-lux.github.io/Assistant-train/data/calendar_dates.txt'),
   ]);
 
+  // seule différence: stop_times vient du ZIP (3 Mo) sur Pages
+  const v = '2025-09-18'; // mets à jour à chaque nouveau ZIP pour forcer le refresh navigateur
+  let stopTimesTxt;
+  try {
+    stopTimesTxt = await fetchZipEntryText(
+      `https://tekmate-lux.github.io/Assistant-train/data/stop_times.zip?v=${encodeURIComponent(v)}`,
+      'stop_times.txt'
+    );
+  } catch (e) {
+    console.warn('ZIP stop_times indisponible, fallback sur .txt', e);
+    // fallback uniquement si tu laisses aussi le .txt en parallèle
+    stopTimesTxt = await fetchText('https://tekmate-lux.github.io/Assistant-train/data/stop_times.txt');
+  }
+
   const stops         = parseCSV(stopsTxt);
-  const stopTimes     = parseCSV(stopTimesTxt);   // ← même format qu'avant
+  const stopTimes     = parseCSV(stopTimesTxt);   // même format qu'avant
   const trips         = parseCSV(tripsTxt);
   const calendarDates = parseCSV(calDatesTxt);
 
-  // ⚠️ on garde EXACTEMENT ta logique d'avant
   const stopNameToId = new Map();
   stops.forEach(s => { if (s.stop_name && s.stop_id) stopNameToId.set(s.stop_name, s.stop_id); });
 
   const tripById = new Map();
   trips.forEach(t => { if (t.trip_id) tripById.set(t.trip_id, t); });
 
-  // seulement exception_type = 1 comme avant (ajouts)
   const allowedByDate = new Map(); // yyyymmdd -> Set(service_id)
   calendarDates.forEach(row => {
     const ymd = row.date;
