@@ -4183,19 +4183,19 @@ $('#refreshButton').off('click').on('click', async function () {
 
 /* ---------- GTFS-RT : loader centralisé + auto-apply ---------- */
 const SAME_ORIGIN_JSON = (()=>{
-  // /Assistant-train/labetaillereBETA3.html -> /Assistant-train/retards_nancymetzlux.json
+  // /labetaillere.html -> /retards_nancymetzlux.json (si tu le seras un jour en local)
   const base = location.origin + location.pathname.replace(/\/[^\/]*$/, '/');
   return base + 'retards_nancymetzlux.json';
 })();
 
+// Ordre : même origine (si jamais tu le copies localement) -> RAW GitHub -> jsDelivr -> API GitHub
 const GTFS_RT_CANDIDATES = [
-  SAME_ORIGIN_JSON, // ← prioritaire si le fichier est servi par GitHub Pages
-  'https://tekmate-lux.github.io/Assistant-train/retards_nancymetzlux.json',
-  'https://raw.githubusercontent.com/tekmate-lux/Assistant-train/main/Assistant-train/retards_nancymetzlux.json',
-  'https://cdn.jsdelivr.net/gh/tekmate-lux/Assistant-train@main/Assistant-train/retards_nancymetzlux.json'
+  SAME_ORIGIN_JSON,
+  'https://raw.githubusercontent.com/TekMaTe-lux/Assistant-train/main/Assistant-train/retards_nancymetzlux.json',
+  'https://cdn.jsdelivr.net/gh/TekMaTe-lux/Assistant-train@main/Assistant-train/retards_nancymetzlux.json'
 ];
+// NB: on enlève volontairement l’URL GitHub Pages (tekmate-lux.github.io) qui cause des 301 sans CORS.
 
-// garde-fou global (pas de redeclaration)
 if (typeof window.retardsGTFS === 'undefined') window.retardsGTFS = null;
 
 async function fetchWithTimeoutNoHeaders(url, ms = 8000) {
@@ -4204,8 +4204,7 @@ async function fetchWithTimeoutNoHeaders(url, ms = 8000) {
   try {
     const res = await fetch(url, {
       cache: 'no-store',
-      // surtout pas de headers custom -> évite le préflight CORS
-      // pas de mode:'no-cors' (sinon opaque et illisible)
+      // pas de headers custom pour éviter le préflight CORS
       signal: ctrl.signal
     });
     return res;
@@ -4214,17 +4213,52 @@ async function fetchWithTimeoutNoHeaders(url, ms = 8000) {
   }
 }
 
+async function fetchFromGitHubAPI() {
+  // Dernier fallback : API GitHub Contents (CORS OK), on décode le Base64
+  const apiUrls = [
+    'https://api.github.com/repos/TekMaTe-lux/Assistant-train/contents/Assistant-train/retards_nancymetzlux.json',
+    'https://api.github.com/repos/TekMaTe-lux/Assistant-train/contents/retards_nancymetzlux.json'
+  ];
+  for (const apiUrl of apiUrls) {
+    try {
+      const r = await fetch(apiUrl, {
+        cache: 'no-store',
+        headers: { 'Accept': 'application/vnd.github+json' }
+      });
+      if (!r.ok) continue;
+      const meta = await r.json();
+      if (meta && meta.content) {
+        const text = atob(String(meta.content).replace(/\n/g, ''));
+        return JSON.parse(text);
+      }
+    } catch {}
+  }
+  throw new Error('GitHub API fallback indisponible.');
+}
+
 async function loadGtfsRetards({ forceFresh = false } = {}) {
   const withBuster = (u) => u + (u.includes('?') ? '&' : '?') + 't=' + (forceFresh ? Date.now() : 'soft');
 
   let lastErr = null;
+
+  // 1) Essais directs (same-origin/raw/jsDelivr)
   for (const base of GTFS_RT_CANDIDATES) {
     const url = withBuster(base);
     try {
       console.log('[GTFS-RT] tentative:', url);
       const res = await fetchWithTimeoutNoHeaders(url, 8000);
       if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText}`);
-      const data = await res.json(); // si CORS OK et JSON correct
+
+      // Certains CDN peuvent renvoyer text/plain : on lit le texte puis JSON.parse au besoin
+      const ct = (res.headers.get('content-type') || '').toLowerCase();
+      let data;
+      if (ct.includes('application/json')) {
+        data = await res.json();
+      } else {
+        const txt = await res.text();
+        data = JSON.parse(txt);
+      }
+
       window.retardsGTFS = data;
       console.log('✅ GTFS-RT chargé via', base, 'à', new Date().toISOString());
       tryApplyGtfsToCurrentTable();
@@ -4234,6 +4268,18 @@ async function loadGtfsRetards({ forceFresh = false } = {}) {
       lastErr = e;
     }
   }
+
+  // 2) Fallback via API GitHub (CORS OK)
+  try {
+    const data = await fetchFromGitHubAPI();
+    window.retardsGTFS = data;
+    console.log('✅ GTFS-RT chargé via GitHub API à', new Date().toISOString());
+    tryApplyGtfsToCurrentTable();
+    return;
+  } catch (e) {
+    lastErr = e;
+  }
+
   throw lastErr || new Error('Impossible de charger GTFS-RT depuis les miroirs.');
 }
 
@@ -4251,11 +4297,6 @@ function tryApplyGtfsToCurrentTable() {
   table.querySelectorAll('.gtfs-retard').forEach(n => n.remove());
   if (typeof applyRetardsFromGTFS === 'function') applyRetardsFromGTFS(window.retardsGTFS);
 }
-
-// Charger GTFS-RT frais quand la page est prête (1ère fois)
-window.addEventListener('load', () => {
-  loadGtfsRetards({ forceFresh: true }).catch(err => console.error("Erreur GTFS-RT au load:", err));
-});
 
 /* ---------- TIMESTAMP ---------- */
 function setLastUpdated() {
@@ -4297,6 +4338,7 @@ function isSelectedDateToday(){
   if (!sel) return true;           // pas de date => on considère aujourd’hui
   return sel === todayYMDLux();
 }
+
 
 /* ---------- APPLICATION DES RETARDS GTFS-RT DANS LE TABLEAU ---------- */
 function applyRetardsFromGTFS(retardsGTFS) {
