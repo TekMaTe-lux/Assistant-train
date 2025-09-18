@@ -2826,6 +2826,22 @@ let GTFS = { stops:null, stopTimes:null, trips:null, tripById:null, stopNameToId
 async function fetchText(url){
   const r = await fetch(url); if(!r.ok) throw new Error('HTTP '+r.status+' on '+url); return await r.text();
 }
+async function fetchZipEntryText(zipUrl, entryName){
+  const res = await fetch(zipUrl, { cache:'no-cache' });
+  if(!res.ok) throw new Error(`HTTP ${res.status} ${zipUrl}`);
+  const blob = await res.blob();
+  const zip = await JSZip.loadAsync(blob);
+
+  // Cherche d'abord le nom exact, sinon toute entrée finissant par stop_times.txt
+  let file = zip.file(entryName);
+  if(!file){
+    const candidates = zip.file(/stop_times\.txt$/i);
+    if (candidates && candidates.length) file = candidates[0];
+  }
+  if(!file) throw new Error(`Entrée manquante dans le ZIP: ${entryName}`);
+
+  return file.async('string');
+}   
 function parseCSV(text){
   const lines=text.trim().split(/\r?\n/); const headers=lines.shift().split(',');
   return lines.map(l=>{
@@ -2839,32 +2855,51 @@ function parseCSV(text){
     cols.push(cur); const row={}; headers.forEach((h,idx)=>row[h]=cols[idx]??''); return row;
   });
 }
-
+// Charge tout (utilise stop_times.zip au lieu du .txt pour éviter CORS et réduire la taille)
 async function ensureGTFSLoaded(){
   if (GTFS.stops && GTFS.stopTimes && GTFS.trips && GTFS.tripById && GTFS.stopNameToId && GTFS.allowedByDate) return;
 
-  const STOP_TIMES_VER = '2025-09-18'; // ← mets à jour ce tag à chaque nouvelle publication
-  const STOP_TIMES_URL = 'https://github.com/TekMaTe-lux/Assistant-train/releases/download/gtfs-stable/stop_times.txt?v=' + encodeURIComponent(STOP_TIMES_VER);  
+  // Mets à jour ce tag quand tu remplaces le ZIP pour casser le cache navigateur
+  const v = '2025-09-18';
+
+  // URLs Pages (même origine => pas de CORS)
+  const URL_STOPS   = 'https://tekmate-lux.github.io/Assistant-train/data/stops.txt';
+  const URL_TRIPS   = 'https://tekmate-lux.github.io/Assistant-train/data/trips.txt';
+  const URL_CALDATE = 'https://tekmate-lux.github.io/Assistant-train/data/calendar_dates.txt';
+  const URL_ZIP     = `https://tekmate-lux.github.io/Assistant-train/data/stop_times.zip?v=${encodeURIComponent(v)}`;
+
+  // Si besoin, on peut prévoir un fallback vers l'ancien .txt (au cas où le ZIP manque)
+  async function fetchStopTimes(){
+    try {
+      return await fetchZipEntryText(URL_ZIP, 'stop_times.txt');
+    } catch (e) {
+      console.warn('Lecture ZIP échouée, tentative fallback .txt', e);
+      // Fallback (optionnel) — ne sera utilisé que si tu conserves aussi le .txt :
+      return fetchText(`https://tekmate-lux.github.io/Assistant-train/data/stop_times.txt?v=${encodeURIComponent(v)}`);
+    }
+  }
 
   const [stopsTxt, stopTimesTxt, tripsTxt, calDatesTxt] = await Promise.all([
-    fetchText('https://tekmate-lux.github.io/Assistant-train/data/stops.txt'),
-    fetchText(STOP_TIMES_URL),
-    fetchText('https://tekmate-lux.github.io/Assistant-train/data/trips.txt'),
-    fetchText('https://tekmate-lux.github.io/Assistant-train/data/calendar_dates.txt'),
+    fetchText(URL_STOPS),
+    fetchStopTimes(),
+    fetchText(URL_TRIPS),
+    fetchText(URL_CALDATE),
   ]);
 
-  const stops       = parseCSV(stopsTxt);
-  const stopTimes   = parseCSV(stopTimesTxt);
-  const trips       = parseCSV(tripsTxt);
+  const stops         = parseCSV(stopsTxt);
+  const stopTimes     = parseCSV(stopTimesTxt);
+  const trips         = parseCSV(tripsTxt);
   const calendarDates = parseCSV(calDatesTxt);
 
+  // Index nom -> id d'arrêt (première occurrence)
   const stopNameToId = new Map();
-  stops.forEach(s => { if (s.stop_name && s.stop_id) if(!stopNameToId.has(s.stop_name)) stopNameToId.set(s.stop_name, s.stop_id); });
+  stops.forEach(s => { if (s.stop_name && s.stop_id && !stopNameToId.has(s.stop_name)) stopNameToId.set(s.stop_name, s.stop_id); });
 
+  // Index trip_id -> ligne trip
   const tripById = new Map();
   trips.forEach(t => { if (t.trip_id) tripById.set(t.trip_id, t); });
 
-  // yyyymmdd -> Set(service_id) ajoutés ; et yyyymmdd -> Set(service_id) supprimés
+  // Exceptions de service (calendar_dates)
   const allowedByDate = new Map();
   const removedByDate = new Map();
   calendarDates.forEach(row => {
@@ -2881,7 +2916,7 @@ async function ensureGTFSLoaded(){
 
   GTFS = { stops, stopTimes, trips, calendarDates, tripById, stopNameToId, allowedByDate, removedByDate };
 }
-
+    
 /************  GROUPES DE STOPS PAR GARE (stop_name/parent_station)  ************/
 function buildStationGroups(){
   if (GTFS.nameToIds && GTFS.idToName) return;
