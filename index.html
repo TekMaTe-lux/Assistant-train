@@ -2074,16 +2074,29 @@ label[for="trainNumbers"]{ display:none !important; }
 }
 .filters-transfer label span { color:#bff; }
 
-</style>
-  <style id="table-viewer-css">
-  .tv-overlay{position:fixed; inset:0; z-index:9999; background:rgba(0,0,0,.7); display:none;}
-  .tv-toolbar{position:absolute; top:10px; right:10px; display:flex; gap:8px; background:rgba(0,0,0,.55); border:1px solid rgba(255,255,255,.12); padding:6px 8px; border-radius:10px; backdrop-filter: blur(8px);}
-  .tv-btn{appearance:none; border:1px solid rgba(255,255,255,.2); background:rgba(255,255,255,.06); color:#fff; padding:6px 10px; border-radius:8px; cursor:pointer; font:500 13px/1 system-ui,Segoe UI,Roboto;}
-  .tv-btn:hover{ background:rgba(255,255,255,.12) }
-  .tv-stage{position:absolute; inset:0; overflow:hidden; touch-action:none; cursor:grab;}
-  .tv-stage.dragging{ cursor:grabbing; }
-  .tv-canvas{position:absolute; left:0; top:0; transform-origin: 0 0; will-change: transform;}
-  .tv-fab{position:absolute; right:10px; bottom:10px; z-index:2; padding:6px 10px; border-radius:9999px; border:1px solid #00f0ff55; background:#001a1a; color:#00f0ff; font:600 13px/1 system-ui; cursor:pointer;}
+<style id="mobile-zoom-css">
+  .mz-overlay{position:fixed; inset:0; z-index:9999; background:rgba(0,0,0,.75); display:none;}
+  .mz-stage{position:absolute; inset:0; overflow:hidden; touch-action:none; cursor:grab;}
+  .mz-canvas{position:absolute; left:0; top:0; transform-origin:0 0; will-change:transform;}
+  .mz-hint{position:absolute; left:12px; bottom:12px; color:#ddd; font:500 12px/1.2 system-ui; opacity:.9; pointer-events:none;}
+
+  /* Copie des styles liens pour l’overlay (même rendu que le tableau) */
+  .mz-overlay a.gare-link{ color:#00ffff; font-weight:600; text-decoration:none; transition:all .2s; border-bottom:1px dashed transparent; }
+  .mz-overlay a.gare-link:hover{ color:#ff00cc; border-bottom:1px dashed #ff00cc; text-shadow:0 0 4px #ff00cc; }
+  .mz-overlay a.train-link{ color:inherit; text-decoration:none; font-weight:inherit; cursor:pointer; }
+  .mz-overlay .wx a.wx-link{
+    color:inherit; text-decoration:none; display:inline-flex; align-items:center; gap:.35rem;
+    padding:.15rem .45rem; border-radius:9999px; background:rgba(0,0,0,.04); border:1px solid rgba(0,0,0,.06); line-height:1.1;
+  }
+  .mz-overlay .wx .wx-ico{ line-height:1; }
+  .mz-overlay .wx .wx-t{ font-variant-numeric:tabular-nums; opacity:.9; }
+  .mz-overlay .wx a.wx-link:hover{ background:rgba(0,0,0,.06); border-color:rgba(0,0,0,.1); }
+  .mz-overlay .wx a.wx-link:focus{ outline:none; box-shadow:0 0 0 2px rgba(0,128,255,.15); background:rgba(0,0,0,.06); }
+  .mz-overlay .wx a.wx-link:visited{ color:inherit; }
+  @media (prefers-color-scheme: dark){
+    .mz-overlay .wx a.wx-link{ background:rgba(255,255,255,.06); border-color:rgba(255,255,255,.08); }
+    .mz-overlay .wx a.wx-link:hover{ background:rgba(255,255,255,.08); border-color:rgba(255,255,255,.14); }
+  }
 </style>
 </head>
 <body>
@@ -5317,164 +5330,143 @@ function startWeatherAutorefresh(intervalMs = 5 * 60 * 1000){
   });
 })();
 </script>
-  <script>
+<script>
 (function(){
-  let overlay, stage, canvas, toolbar;
-  let originParent=null, originNext=null, placeholder=null, movedNode=null;
-  let scale=1, minScale=.2, maxScale=4, tx=0, ty=0;
-  let isDragging=false, lastX=0, lastY=0;
+  let overlay, stage, canvas, movedNode, placeholder, originParent, originNext;
+  let scale=1, tx=0, ty=0, minScale=.3, maxScale=4;
+  let isPanning=false, lastX=0, lastY=0;
+  const activeTouches=new Map();
+  let longPressTimer=null, longPressTriggered=false;
 
+  const isTouch = ()=> matchMedia('(any-pointer: coarse)').matches || 'ontouchstart' in window;
   const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
+
   function ensureOverlay(){
     if (overlay) return;
-    overlay = document.createElement('div'); overlay.className='tv-overlay'; overlay.id='tv-overlay';
-    overlay.innerHTML = `
-      <div class="tv-toolbar">
-        <button class="tv-btn" data-act="fit">Ajuster</button>
-        <button class="tv-btn" data-act="minus">−</button>
-        <button class="tv-btn" data-act="100">100%</button>
-        <button class="tv-btn" data-act="plus">+</button>
-        <button class="tv-btn" data-act="png">PNG</button>
-        <button class="tv-btn" data-act="close">✕</button>
-      </div>
-      <div class="tv-stage"><div class="tv-canvas"></div></div>`;
+    overlay=document.createElement('div'); overlay.className='mz-overlay'; overlay.id='mz-overlay';
+    overlay.innerHTML=`<div class="mz-stage"><div class="mz-canvas"></div></div>
+                       <div class="mz-hint">Pincer pour zoomer · Glisser pour déplacer · Taper en dehors pour fermer</div>`;
     document.body.appendChild(overlay);
-    stage   = overlay.querySelector('.tv-stage');
-    canvas  = overlay.querySelector('.tv-canvas');
-    toolbar = overlay.querySelector('.tv-toolbar');
+    stage=overlay.querySelector('.mz-stage'); canvas=overlay.querySelector('.mz-canvas');
 
-    toolbar.addEventListener('click', async (e)=>{
-      const act = e.target?.dataset?.act; if(!act) return;
-      if (act==='close') return closeViewer();
-      if (act==='fit')   return fit();
-      if (act==='100')   return setZoom(1, stage.clientWidth/2, stage.clientHeight/2);
-      if (act==='plus')  return setZoom(scale*1.15, stage.clientWidth/2, stage.clientHeight/2);
-      if (act==='minus') return setZoom(scale/1.15, stage.clientWidth/2, stage.clientHeight/2);
-      if (act==='png')   return exportPNG();
-    });
+    const apply=()=>{ canvas.style.transform=`translate(${tx}px,${ty}px) scale(${scale})`; };
 
-    stage.addEventListener('wheel', (e)=>{
-      e.preventDefault();
-      const rect = stage.getBoundingClientRect();
-      const cx = e.clientX - rect.left, cy = e.clientY - rect.top;
-      const k = Math.exp(-e.deltaY * 0.0016);
-      setZoom(scale*k, cx, cy);
-    }, {passive:false});
+    stage.addEventListener('pointerdown',(e)=>{
+      stage.setPointerCapture(e.pointerId);
+      activeTouches.set(e.pointerId,{x:e.clientX,y:e.clientY});
+      if(activeTouches.size===1){
+        isPanning=true; lastX=e.clientX; lastY=e.clientY;
+        longPressTriggered=false;
+        longPressTimer=setTimeout(()=>{ longPressTriggered=true; generateImagePreview(); },650);
+      }else if(activeTouches.size===2){ clearTimeout(longPressTimer); }
+    },{passive:false});
 
-    stage.addEventListener('pointerdown', (e)=>{
-      isDragging=true; stage.setPointerCapture(e.pointerId);
-      stage.classList.add('dragging');
-      lastX=e.clientX; lastY=e.clientY;
-    });
-    stage.addEventListener('pointermove', (e)=>{
-      if (!isDragging) return;
-      const dx=e.clientX-lastX, dy=e.clientY-lastY;
-      lastX=e.clientX; lastY=e.clientY;
-      tx += dx; ty += dy; applyTransform();
-    });
-    stage.addEventListener('pointerup', (e)=>{
-      isDragging=false; stage.releasePointerCapture(e.pointerId);
-      stage.classList.remove('dragging');
-    });
+    stage.addEventListener('pointermove',(e)=>{
+      if(!activeTouches.has(e.pointerId)) return;
+      activeTouches.set(e.pointerId,{x:e.clientX,y:e.clientY});
+      if(activeTouches.size===1 && isPanning){
+        const dx=e.clientX-lastX, dy=e.clientY-lastY; lastX=e.clientX; lastY=e.clientY; tx+=dx; ty+=dy; apply();
+      }else if(activeTouches.size>=2){
+        clearTimeout(longPressTimer);
+        const [p1,p2]=Array.from(activeTouches.values()).slice(0,2);
+        const mx=(p1.x+p2.x)/2, my=(p1.y+p2.y)/2;
+        const dist=Math.hypot(p2.x-p1.x, p2.y-p1.y);
+        if(!stage._pinchStart){ stage._pinchStart={dist,scale,tx,ty,cx:mx,cy:my}; }
+        else{
+          const s=stage._pinchStart; const k=dist/s.dist;
+          const newScale=clamp(s.scale*k,minScale,maxScale);
+          const kx=newScale/s.scale;
+          tx = s.cx - (s.cx - s.tx)*kx;
+          ty = s.cy - (s.cy - s.ty)*kx;
+          scale=newScale; apply();
+        }
+      }
+    },{passive:false});
 
-    stage.addEventListener('dblclick', ()=>{
-      if (Math.abs(scale-1) < 0.05) fit(); else setZoom(1, stage.clientWidth/2, stage.clientHeight/2);
-    });
+    function endTouch(e){
+      if(activeTouches.has(e.pointerId)) activeTouches.delete(e.pointerId);
+      if(activeTouches.size<2) stage._pinchStart=null;
+      if(activeTouches.size===0){ isPanning=false; clearTimeout(longPressTimer); }
+    }
+    stage.addEventListener('pointerup',endTouch);
+    stage.addEventListener('pointercancel',endTouch);
 
-    window.addEventListener('keydown', (e)=>{ if(e.key==='Escape' && overlay.style.display==='block') closeViewer(); });
-    overlay.addEventListener('mousedown', (e)=>{ if(e.target===overlay) closeViewer(); });
+    // fermer si on tape sur le fond sombre
+    overlay.addEventListener('pointerdown',(e)=>{ if(e.target===overlay) closeViewer(); });
+    stage.style.touchAction='none';
+
+    overlay._apply=apply;
   }
 
-  function applyTransform(){ canvas.style.transform = `translate(${tx}px, ${ty}px) scale(${scale})`; }
-  function setZoom(next, cx, cy){
-    const newScale = clamp(next, minScale, maxScale);
-    const k = newScale/scale;
-    tx = cx - (cx - tx) * k;
-    ty = cy - (cy - ty) * k;
-    scale = newScale; applyTransform();
-  }
   function fit(){
-    const node = movedNode?.querySelector('table') || movedNode || canvas.firstElementChild;
-    if (!node) return;
-    const sw = node.scrollWidth || node.offsetWidth;
-    const sh = node.scrollHeight || node.offsetHeight;
-    if (!sw || !sh) return;
-    const pad = 20;
-    const rx = (stage.clientWidth - pad) / sw;
-    const ry = (stage.clientHeight - pad) / sh;
-    scale = clamp(Math.min(rx, ry), minScale, maxScale);
-    tx = Math.round((stage.clientWidth  - sw*scale)/2);
-    ty = Math.round((stage.clientHeight - sh*scale)/2);
-    applyTransform();
+    const node=(movedNode?.querySelector('table'))||movedNode||canvas.firstElementChild;
+    if(!node) return;
+    const sw=node.scrollWidth||node.offsetWidth, sh=node.scrollHeight||node.offsetHeight;
+    const pad=22, rx=(stage.clientWidth-pad)/sw, ry=(stage.clientHeight-pad)/sh;
+    scale=clamp(Math.min(rx,ry), .2, 4); tx=Math.round((stage.clientWidth-sw*scale)/2); ty=Math.round((stage.clientHeight-sh*scale)/2);
+    overlay._apply();
   }
+
   function openViewer(target){
     ensureOverlay();
-    if (!target) { alert('Tableau introuvable'); return; }
-    const p = target.parentNode;
-    originParent = p; originNext = target.nextSibling;
-    placeholder  = document.createComment('tv-placeholder');
-    p.insertBefore(placeholder, target);
-    canvas.appendChild(target);
-    movedNode = target;
-    overlay.style.display='block';
-    document.body.style.overflow='hidden';
-    scale=1; tx=0; ty=0; applyTransform();
-    requestAnimationFrame(fit);
-  }
-  function closeViewer(){
-    overlay.style.display='none';
-    document.body.style.overflow='';
-    if (movedNode && placeholder && originParent){
-      originParent.insertBefore(movedNode, originNext);
-      placeholder.remove();
-    }
-    movedNode=null; placeholder=null; originParent=null; originNext=null;
-  }
-  async function exportPNG(){
-    const node = (movedNode?.querySelector('table')) || movedNode;
-    if (!node) return;
-    if (!window.htmlToImage){
-      await new Promise((res,rej)=>{
-        const s=document.createElement('script');
-        s.src='https://cdn.jsdelivr.net/npm/html-to-image@1.11.11/dist/html-to-image.min.js';
-        s.onload=res; s.onerror=()=>rej(new Error('html-to-image introuvable'));
-        document.head.appendChild(s);
-      });
-    }
-    const prev = node.style.transform;
-    node.style.transform = 'none';
-    try{
-      const dataUrl = await htmlToImage.toPng(node, { pixelRatio: 2, cacheBust: true,
-        backgroundColor: getComputedStyle(document.body).backgroundColor || '#ffffff' });
-      const a = document.createElement('a');
-      a.href = dataUrl;
-      a.download = `tableau-trains-${new Date().toISOString().slice(0,19).replace(/[:T]/g,'-')}.png`;
-      document.body.appendChild(a); a.click(); a.remove();
-    }catch(err){
-      alert('Export PNG impossible.\n'+(err?.message||err));
-    }finally{
-      node.style.transform = prev;
-    }
+    if(!target) return;
+    originParent=target.parentNode; originNext=target.nextSibling;
+    placeholder=document.createComment('mz-placeholder'); originParent.insertBefore(placeholder,target);
+    canvas.appendChild(target); movedNode=target;
+    overlay.style.display='block'; document.body.style.overflow='hidden';
+    scale=1; tx=0; ty=0; overlay._apply(); requestAnimationFrame(fit);
   }
 
-  // API globale
-  window.openTableViewer = function(){
-    const target = document.querySelector('#trainInfo .table-scroll');
-    openViewer(target);
+  function closeViewer(){
+    overlay.style.display='none'; document.body.style.overflow='';
+    const img=canvas.querySelector('img[data-mz-snapshot]'); if(img) img.remove();
+    if(movedNode && placeholder && originParent){ originParent.insertBefore(movedNode,originNext); placeholder.remove(); }
+    movedNode=null; placeholder=null; originParent=null; originNext=null;
+  }
+
+  async function generateImagePreview(){
+    // remplace visuellement par une <img> pour permettre “appui long → enregistrer l’image”
+    const node=(movedNode?.querySelector('table'))||movedNode; if(!node) return;
+    try{
+      if(!window.htmlToImage){
+        await new Promise((res,rej)=>{ const s=document.createElement('script');
+          s.src='https://cdn.jsdelivr.net/npm/html-to-image@1.11.11/dist/html-to-image.min.js';
+          s.onload=res; s.onerror=()=>rej(new Error('html-to-image introuvable')); document.head.appendChild(s); });
+      }
+      const prev=node.style.transform; node.style.transform='none';
+      const dataUrl=await htmlToImage.toPng(node,{pixelRatio:2, cacheBust:true,
+        backgroundColor:getComputedStyle(document.body).backgroundColor||'#ffffff'});
+      node.style.transform=prev;
+
+      const img=new Image(); img.src=dataUrl; img.alt='capture tableau'; img.decoding='async';
+      img.setAttribute('data-mz-snapshot',''); img.style.maxWidth='none'; img.style.display='block';
+      canvas.appendChild(img); movedNode.style.display='none';
+      const hint=overlay.querySelector('.mz-hint');
+      if(hint) hint.textContent='Astuce : laissez le doigt appuyé sur l’image pour l’enregistrer';
+    }catch(e){ console.warn('Snapshot échoué:', e); }
+  }
+
+  // API publique : active UNIQUEMENT sur mobile / écrans tactiles
+  window.enableMobileTableZoom = function(){
+    if(!isTouch()) return; // ➜ aucun zoom sur PC
+    const wrap=document.querySelector('#trainInfo .table-scroll'); if(!wrap) return;
+
+    // simple TAP pour ouvrir l’overlay (on évite le conflit avec le scroll horizontal)
+    let tapTimer=null, sx=0, sy=0, moved=false;
+    wrap.addEventListener('touchstart',(e)=>{
+      if(tapTimer) clearTimeout(tapTimer);
+      sx=e.touches[0].clientX; sy=e.touches[0].clientY; moved=false;
+      tapTimer=setTimeout(()=>{ tapTimer=null; }, 280);
+    },{passive:true});
+    wrap.addEventListener('touchmove',(e)=>{
+      const dx=Math.abs(e.touches[0].clientX-sx), dy=Math.abs(e.touches[0].clientY-sy);
+      if(dx>8 || dy>8) moved=true;
+    },{passive:true});
+    wrap.addEventListener('touchend',()=>{
+      if(!tapTimer) return; clearTimeout(tapTimer); tapTimer=null;
+      if(!moved) openViewer(wrap);
+    });
   };
-  window.attachZoomFab = function(){
-    const wrap = document.querySelector('#trainInfo .table-scroll');
-    if (!wrap || wrap.querySelector('.tv-fab')) return;
-    const btn = document.createElement('button');
-    btn.className='tv-fab'; btn.type='button'; btn.textContent='🔍 Zoom';
-    btn.addEventListener('click', ()=> openViewer(wrap));
-    wrap.style.position='relative';
-    wrap.appendChild(btn);
-  };
-  document.addEventListener('dblclick', (e)=>{
-    const box = e.target.closest('#trainInfo .table-scroll');
-    if (box) openViewer(box);
-  });
 })();
 </script>
 </body>
