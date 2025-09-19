@@ -4036,7 +4036,7 @@ function addManualTrain(){
       '<div class="table-scroll">' + html + '</div>' +
       '<div id="lastUpdated" class="last-updated" aria-live="polite"></div>'
     );
-    attachZoomFab();
+    enableMobileTableZoom();
     // Météo pour les gares affichées
     updateWeatherBadges();
     startWeatherAutorefresh(); // toutes les 5 min
@@ -5408,43 +5408,92 @@ function startWeatherAutorefresh(intervalMs = 5 * 60 * 1000){
   }
 
   function openViewer(target){
-    ensureOverlay();
-    if(!target) return;
-    originParent=target.parentNode; originNext=target.nextSibling;
-    placeholder=document.createComment('mz-placeholder'); originParent.insertBefore(placeholder,target);
-    canvas.appendChild(target); movedNode=target;
-    overlay.style.display='block'; document.body.style.overflow='hidden';
-    scale=1; tx=0; ty=0; overlay._apply(); requestAnimationFrame(fit);
-  }
+  ensureOverlay();
+  if(!target) return;
+
+  // purge précédents contenus de l’overlay
+  canvas.innerHTML = '';
+
+  // clone profond du conteneur scrollable (on clone l’HTML final, météo comprise)
+  movedNode = target.cloneNode(true);
+  // éviter doublons d'id
+  if (movedNode.id) movedNode.id = movedNode.id + '-clone';
+  // injecte le clone dans l’overlay
+  canvas.appendChild(movedNode);
+
+  overlay.style.display='block';
+  document.body.style.overflow='hidden';
+  scale=1; tx=0; ty=0; overlay._apply();
+  requestAnimationFrame(fit);
+}
 
   function closeViewer(){
-    overlay.style.display='none'; document.body.style.overflow='';
-    const img=canvas.querySelector('img[data-mz-snapshot]'); if(img) img.remove();
-    if(movedNode && placeholder && originParent){ originParent.insertBefore(movedNode,originNext); placeholder.remove(); }
-    movedNode=null; placeholder=null; originParent=null; originNext=null;
-  }
+  overlay.style.display='none';
+  document.body.style.overflow='';
+  // nettoie juste l’overlay ; on n’a rien déplacé dans le DOM principal
+  canvas.innerHTML = '';
+}
 
   async function generateImagePreview(){
-    // remplace visuellement par une <img> pour permettre “appui long → enregistrer l’image”
-    const node=(movedNode?.querySelector('table'))||movedNode; if(!node) return;
-    try{
-      if(!window.htmlToImage){
-        await new Promise((res,rej)=>{ const s=document.createElement('script');
-          s.src='https://cdn.jsdelivr.net/npm/html-to-image@1.11.11/dist/html-to-image.min.js';
-          s.onload=res; s.onerror=()=>rej(new Error('html-to-image introuvable')); document.head.appendChild(s); });
-      }
-      const prev=node.style.transform; node.style.transform='none';
-      const dataUrl=await htmlToImage.toPng(node,{pixelRatio:2, cacheBust:true,
-        backgroundColor:getComputedStyle(document.body).backgroundColor||'#ffffff'});
-      node.style.transform=prev;
+  // on génère une image par-dessus le CLONE, sans le cacher
+  const node = (movedNode?.querySelector('table')) || movedNode;
+  if (!node) return;
 
-      const img=new Image(); img.src=dataUrl; img.alt='capture tableau'; img.decoding='async';
-      img.setAttribute('data-mz-snapshot',''); img.style.maxWidth='none'; img.style.display='block';
-      canvas.appendChild(img); movedNode.style.display='none';
-      const hint=overlay.querySelector('.mz-hint');
-      if(hint) hint.textContent='Astuce : laissez le doigt appuyé sur l’image pour l’enregistrer';
-    }catch(e){ console.warn('Snapshot échoué:', e); }
+  try{
+    if(!window.htmlToImage){
+      await new Promise((res,rej)=>{
+        const s=document.createElement('script');
+        s.src='https://cdn.jsdelivr.net/npm/html-to-image@1.11.11/dist/html-to-image.min.js';
+        s.onload=res; s.onerror=()=>rej(new Error('html-to-image introuvable'));
+        document.head.appendChild(s);
+      });
+    }
+
+    const prev = node.style.transform;
+    node.style.transform = 'none';
+    const dataUrl = await htmlToImage.toPng(node, {
+      pixelRatio: 2,
+      cacheBust: true,
+      backgroundColor: getComputedStyle(document.body).backgroundColor || '#ffffff'
+    });
+    node.style.transform = prev;
+
+    // superpose une <img> cliquable (appui long natif -> Enregistrer l’image)
+    // sans supprimer le tableau cloné (la météo reste visible dessous)
+    const img = new Image();
+    img.src = dataUrl;
+    img.alt = 'capture tableau';
+    img.decoding = 'async';
+    img.setAttribute('data-mz-snapshot','');
+
+    // couvre exactement le tableau cloné
+    Object.assign(img.style, {
+      position: 'absolute',
+      left: '0', top: '0',
+      width: node.offsetWidth + 'px',
+      height: node.offsetHeight + 'px',
+      // on laisse visible pour l’enregistrement, rendu identique au clone
+      // (si tu préfères, tu peux mettre une légère transparence: opacity: 0.999)
+      opacity: '1',
+      pointerEvents: 'auto'
+    });
+
+    // positionner l’image au même offset que le tableau (dans la canvas)
+    const r = node.getBoundingClientRect();
+    const rc = canvas.getBoundingClientRect();
+    img.style.left = (r.left - rc.left) + 'px';
+    img.style.top  = (r.top  - rc.top)  + 'px';
+
+    // retire une précédente capture s’il y en a
+    canvas.querySelectorAll('img[data-mz-snapshot]').forEach(x => x.remove());
+    canvas.appendChild(img);
+
+    const hint = overlay.querySelector('.mz-hint');
+    if (hint) hint.textContent = 'Astuce : appui long sur l’image pour l’enregistrer';
+  }catch(e){
+    console.warn('Snapshot échoué:', e);
   }
+}
 
   // API publique : active UNIQUEMENT sur mobile / écrans tactiles
   window.enableMobileTableZoom = function(){
