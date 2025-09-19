@@ -4036,7 +4036,7 @@ function addManualTrain(){
       '<div class="table-scroll">' + html + '</div>' +
       '<div id="lastUpdated" class="last-updated" aria-live="polite"></div>'
     );
-    enableMobileTableZoom();
+    
     // Météo pour les gares affichées
     updateWeatherBadges();
     startWeatherAutorefresh(); // toutes les 5 min
@@ -5330,6 +5330,194 @@ function startWeatherAutorefresh(intervalMs = 5 * 60 * 1000){
   });
 })();
 </script>
+<script>
+/* ========== Aperçu mobile plein écran en image (pinch uniquement) ========== */
+(function(){
+  const isMobileTouch = () => (navigator.maxTouchPoints||0) > 0 && matchMedia('(pointer:coarse)').matches;
 
+  let overlay, sheet, img, scale=1, tx=0, ty=0;
+  let p1=null, p2=null, startDist=0, startScale=1, startTx=0, startTy=0;
+  let opening = false; // évite multiples ouvertures
+
+  function ensureOverlay(){
+    if (overlay) return;
+    overlay = document.createElement('div');
+    overlay.id = 'tableZoomOverlay';
+    overlay.style.cssText = `
+      position:fixed; inset:0; z-index:9999; display:none;
+      background:rgba(0,0,0,.85); touch-action:none; overscroll-behavior:contain;
+    `;
+    sheet = document.createElement('div');
+    sheet.style.cssText = `position:absolute; inset:0; overflow:hidden;`;
+    img = document.createElement('img');
+    img.alt = 'Aperçu du tableau';
+    img.style.cssText = `
+      position:absolute; left:0; top:0; max-width:none; max-height:none;
+      transform-origin:0 0; will-change:transform; user-select:none; -webkit-user-drag:none;
+    `;
+    sheet.appendChild(img);
+    overlay.appendChild(sheet);
+    document.body.appendChild(overlay);
+
+    // fermer si on tape le fond (pas l'image)
+    overlay.addEventListener('pointerup', (e)=>{
+      if (e.pointerType==='touch' && e.target===overlay) closeOverlay();
+    });
+
+    // gestes (pinch/pan) dans l’overlay
+    overlay.addEventListener('pointerdown', onPD);
+    overlay.addEventListener('pointermove', onPM);
+    overlay.addEventListener('pointerup', onPU);
+    overlay.addEventListener('pointercancel', onPU);
+  }
+
+  function openOverlay(dataURL, natW, natH){
+    ensureOverlay();
+    img.onload = ()=>{
+      overlay.style.display='block';
+      document.body.style.overflow='hidden';
+      // auto-fit centré
+      const vw = sheet.clientWidth, vh = sheet.clientHeight;
+      const s = Math.min(vw/natW, vh/natH);
+      scale = Math.max(1, s);
+      tx = (vw - natW*scale)/2;
+      ty = (vh - natH*scale)/2;
+      applyTransform();
+      opening = false;
+    };
+    img.src = dataURL;
+  }
+  function closeOverlay(){
+    overlay.style.display='none';
+    document.body.style.overflow='';
+    img.removeAttribute('src');
+    p1=p2=null;
+  }
+  function applyTransform(){ img.style.transform = `translate(${tx}px, ${ty}px) scale(${scale})`; }
+
+  // pointeurs (pour l’overlay)
+  function ptr(e){ const r = sheet.getBoundingClientRect(); return {id:e.pointerId,x:e.clientX-r.left,y:e.clientY-r.top}; }
+  function dist(a,b){ const dx=a.x-b.x, dy=a.y-b.y; return Math.hypot(dx,dy); }
+  function onPD(e){
+    if (e.pointerType!=='touch') return;
+    sheet.setPointerCapture?.(e.pointerId);
+    const p = ptr(e);
+    if (!p1) p1 = p;
+    else if (!p2) {
+      p2 = p; startDist = dist(p1,p2);
+      startScale = scale; startTx = tx; startTy = ty;
+    }
+    e.preventDefault();
+  }
+  function onPM(e){
+    if (e.pointerType!=='touch') return;
+    const p = ptr(e);
+    if (p1 && p1.id===e.pointerId) p1 = p;
+    if (p2 && p2.id===e.pointerId) p2 = p;
+
+    if (p1 && p2){
+      const midX=(p1.x+p2.x)/2, midY=(p1.y+p2.y)/2;
+      const k = dist(p1,p2) / Math.max(1, startDist);
+      const newScale = Math.min(4, Math.max(1, startScale*k));
+      const nx = (midX - startTx)/startScale, ny = (midY - startTy)/startScale;
+      tx = midX - nx*newScale; ty = midY - ny*newScale; scale = newScale;
+      applyTransform();
+    } else if (p1 && !p2){
+      tx += e.movementX; ty += e.movementY; applyTransform();
+    }
+    e.preventDefault();
+  }
+  function onPU(e){
+    if (e.pointerType!=='touch') return;
+    if (p2 && p2.id===e.pointerId) p2=null;
+    else if (p1 && p1.id===e.pointerId) { p1=p2; p2=null; }
+    e.preventDefault();
+  }
+
+  // capture PNG du tableau (styles inclus) via html-to-image (lazy-load)
+  async function captureTablePng(scroller){
+    if (!window.htmlToImage){
+      await new Promise((ok,ko)=>{
+        const s=document.createElement('script');
+        s.src='https://cdn.jsdelivr.net/npm/html-to-image@1.11.11/dist/html-to-image.min.js';
+        s.onload=ok; s.onerror=()=>ko(new Error('html-to-image introuvable'));
+        document.head.appendChild(s);
+      });
+    }
+    await (document.fonts?.ready || Promise.resolve());
+
+    // on clone seulement le TABLE, pas le cadre scrollable
+    const sourceTable = scroller.querySelector('table');
+    if (!sourceTable) throw new Error('Tableau introuvable');
+
+    const staging = document.createElement('div');
+    staging.style.cssText = 'position:fixed; left:-10000px; top:0; opacity:0; pointer-events:none; z-index:-1;';
+    const cloneTable = sourceTable.cloneNode(true);
+    staging.appendChild(cloneTable);
+    document.body.appendChild(staging);
+
+    const natW = cloneTable.offsetWidth;
+    const natH = cloneTable.offsetHeight;
+
+    const bg = getComputedStyle(document.body).backgroundColor || '#ffffff';
+    const dataUrl = await htmlToImage.toPng(cloneTable, { pixelRatio: 2, cacheBust:true, backgroundColor: bg });
+
+    staging.remove();
+    return { dataUrl, natW, natH };
+  }
+
+  // Déclenchement : **pinch-out** uniquement (mobile)
+  function attachPinchToOpen(){
+    if (!isMobileTouch()) return; // PC: off
+    const scroller = document.querySelector('#trainInfo .table-scroll');
+    if (!scroller) return;
+
+    let pinchArmed = false, startD = 0, openedOnce=false;
+
+    scroller.addEventListener('touchstart', (e)=>{
+      if (e.touches.length >= 2){
+        // on arme un pinch si 2 doigts posés
+        const [a,b] = e.touches;
+        startD = Math.hypot(a.clientX-b.clientX, a.clientY-b.clientY);
+        pinchArmed = true;
+        openedOnce = false;
+      } else {
+        pinchArmed = false;
+      }
+    }, {passive:true});
+
+    scroller.addEventListener('touchmove', async (e)=>{
+      if (!pinchArmed || opening || openedOnce) return;
+      if (e.touches.length < 2) { pinchArmed=false; return; }
+
+      const [a,b] = e.touches;
+      const d = Math.hypot(a.clientX-b.clientX, a.clientY-b.clientY);
+      // seuil léger pour un vrai pinch-out
+      if (d > startD * 1.08){
+        // On ouvre → on bloque le zoom de page
+        e.preventDefault();
+        opening = true;
+        try{
+          const { dataUrl, natW, natH } = await captureTablePng(scroller);
+          openOverlay(dataUrl, natW, natH);
+          openedOnce = true;
+        } catch(err){
+          console.warn('Capture PNG échouée:', err);
+        } finally {
+          opening = false;
+        }
+      }
+    }, {passive:false});
+
+    scroller.addEventListener('touchend', ()=>{
+      // si l’utilisateur relâche avant d’atteindre le seuil → rien
+      pinchArmed = false;
+    }, {passive:true});
+    scroller.addEventListener('touchcancel', ()=>{ pinchArmed=false; }, {passive:true});
+  }
+
+  window.addEventListener('load', attachPinchToOpen);
+})();
+</script>
 </body>
 </html>
