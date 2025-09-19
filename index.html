@@ -2475,6 +2475,13 @@ $('#fermerBlague, #fondModal').click(function() {
   $('#fondModal').fadeOut();
 });
 
+// ===== Numéro de train : 5 ou 6 chiffres =====
+const TRAIN_NUM_RE = /\b\d{5,6}\b/;
+function extractTrainNumber(s){
+  const m = String(s || '').match(TRAIN_NUM_RE);
+  return m ? m[0] : null;
+}
+    
 /* ---------- DONNÉES COMPO + GTFS-RT (unifiée) ---------- */
 if (typeof window.retardsGTFS === 'undefined') window.retardsGTFS = null;
 if (typeof window.retardsGTFS_SOURCE === 'undefined') window.retardsGTFS_SOURCE = null;
@@ -2493,7 +2500,6 @@ async function loadCompoData() {
     console.error("Erreur lors du chargement des compositions :", error);
   }
 }
-
 
 /* ---------- LIGNE : GARES + OUTILS D’ORDRE/SÉLECTEUR ---------- */
 const garesParLigne = [
@@ -3370,6 +3376,13 @@ if (allowTransfers){
   const transfersHTML = renderTransferCards(transfers, startName, endName);
   host.innerHTML = directsHTML + transfersHTML;
 
+  // Force le texte affiché à utiliser exactement le data-num (aucune troncature possible)
+document.querySelectorAll('#propositions .chip').forEach(chip => {
+  const n = chip.dataset.num;                 // "123456" si 6 chiffres
+  const t = chip.querySelector('.t-num');
+  if (t) t.textContent = 'Train ' + n;
+});
+
   // Clic cartes “directs”
   host.querySelectorAll('.chip[data-num]').forEach((chip)=>{
     chip.addEventListener('click', ()=>{
@@ -3443,15 +3456,6 @@ function uniqTransfers(list){
   }
   return Array.from(map.values());
 }
-// Extrait un numéro de train (5-6 chiffres)
-    
-const TRAIN_NUM_RE = /\b\d{5,6}\b/;   
-    
-function extractTrainNumber(s){
-  const m = String(s||'').match(TRAIN_NUM_RE);
-  return m ? m[0] : null;
-}
-  
 
 /* ====================== UI SÉLECTION (input + tags) ====================== */
 function chipsUpdateCount(){
@@ -3703,34 +3707,34 @@ $(function () {
   });
 
   // Saisie manuelle (si tu gardes l’input CSV masqué pour compat)
-  $('#trainNumbers').off('input').on('input', ()=>{
-    const vals = $('#trainNumbers').val().split(',').map(s=>s.trim()).filter(Boolean);
-    selectedTrains.clear();
-    vals.forEach(v => selectedTrains.add(v));
-    document.querySelectorAll('#propositions .chip').forEach(c=>{
-      c.classList.toggle('is-selected', selectedTrains.has(c.dataset.num));
-    });
-    if (typeof chipsUpdateCount === 'function') chipsUpdateCount();
-    updateSelectionUI();
+  $('#trainNumbers').off('input').on('input', () => {
+  const raw = $('#trainNumbers').val();
+  const tokens = String(raw || '')
+    .split(/[,\s]+/)
+    .map(s => (String(s).match(TRAIN_NUM_RE) || [])[0])
+    .filter(Boolean);
+  selectedTrains.clear();
+  tokens.forEach(num => selectedTrains.add(num));
+  document.querySelectorAll('#propositions .chip').forEach(c=>{
+    c.classList.toggle('is-selected', selectedTrains.has(c.dataset.num));
   });
-
-  function addManualTrain(){
-    const $inp = $('#manualTrainInput');
-    if (!$inp.length) return;
-    const raw = ($inp.val() || '').trim();
-    const m = raw.match(/(\d{5,6})/);
-    const num = m ? m[1] : null;
-    if (!num){
-      $inp.addClass('input-error');
-      setTimeout(()=> $inp.removeClass('input-error'), 400);
-      return;
-    }
-    selectedTrains.add(num);
-    updateSelectionUI();
-    const card = document.querySelector(`#propositions .chip[data-num="${num}"]`);
-    if (card) card.classList.add('is-selected');
-    $inp.val('');
+  if (typeof chipsUpdateCount === 'function') chipsUpdateCount();
+  updateSelectionUI();
+});
+function addManualTrain(){
+  const $inp = $('#manualTrainInput');
+  const raw = String($inp.val() || '').trim();
+  const num = (raw.match(TRAIN_NUM_RE) || [])[0];
+  if (!num){
+    $inp.addClass('input-error'); setTimeout(()=> $inp.removeClass('input-error'), 400);
+    return;
   }
+  selectedTrains.add(num);
+  updateSelectionUI();
+  const card = document.querySelector(`#propositions .chip[data-num="${num}"]`);
+  if (card) card.classList.add('is-selected');
+  $inp.val('');
+}
   $(document).on('click', '#btnAddTrain', addManualTrain);
   $(document).on('keydown', '#manualTrainInput', function(e){
     if (e.key === 'Enter') addManualTrain();
@@ -4426,13 +4430,8 @@ function formatDate(d) {
   const pad = n => n.toString().padStart(2, '0');
   return `${pad(d.getDate())}/${pad(d.getMonth() + 1)}/${d.getFullYear()} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
-function extraireNumeroTrainDepuisTripId(tripId) {
-  const match = tripId.match(TRAIN_NUM_RE);
-  return match ? match[0] : null;
-}
-function nettoyerNumeroTrain(numero) {
-  const match = numero.match(TRAIN_NUM_RE);
-  return match ? match[0] : null;
+function extraireNumeroTrainDepuisTripId(tripId){ return extractTrainNumber(tripId); }
+function nettoyerNumeroTrain(numero){ return extractTrainNumber(numero); }
 }
 function getDisplayedTrainNumbers() {
   const headers = document.querySelectorAll("table tr th[data-train-number]");
