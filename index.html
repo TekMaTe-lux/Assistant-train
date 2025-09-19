@@ -2075,6 +2075,16 @@ label[for="trainNumbers"]{ display:none !important; }
 .filters-transfer label span { color:#bff; }
 
 </style>
+  <style id="table-viewer-css">
+  .tv-overlay{position:fixed; inset:0; z-index:9999; background:rgba(0,0,0,.7); display:none;}
+  .tv-toolbar{position:absolute; top:10px; right:10px; display:flex; gap:8px; background:rgba(0,0,0,.55); border:1px solid rgba(255,255,255,.12); padding:6px 8px; border-radius:10px; backdrop-filter: blur(8px);}
+  .tv-btn{appearance:none; border:1px solid rgba(255,255,255,.2); background:rgba(255,255,255,.06); color:#fff; padding:6px 10px; border-radius:8px; cursor:pointer; font:500 13px/1 system-ui,Segoe UI,Roboto;}
+  .tv-btn:hover{ background:rgba(255,255,255,.12) }
+  .tv-stage{position:absolute; inset:0; overflow:hidden; touch-action:none; cursor:grab;}
+  .tv-stage.dragging{ cursor:grabbing; }
+  .tv-canvas{position:absolute; left:0; top:0; transform-origin: 0 0; will-change: transform;}
+  .tv-fab{position:absolute; right:10px; bottom:10px; z-index:2; padding:6px 10px; border-radius:9999px; border:1px solid #00f0ff55; background:#001a1a; color:#00f0ff; font:600 13px/1 system-ui; cursor:pointer;}
+</style>
 </head>
 <body>
 <!-- Modal d'accès bêta -->
@@ -4013,7 +4023,8 @@ function addManualTrain(){
       '<div class="table-scroll">' + html + '</div>' +
       '<div id="lastUpdated" class="last-updated" aria-live="polite"></div>'
     );
-
+    🔍 Zoom” sur le tableau
+    attachZoomFab();
     // Météo pour les gares affichées
     updateWeatherBadges();
     startWeatherAutorefresh(); // toutes les 5 min
@@ -5304,6 +5315,166 @@ function startWeatherAutorefresh(intervalMs = 5 * 60 * 1000){
     if (modal.style.display === 'flex' && modalInner.dataset.mode === 'fit'){
       openTableModalFit();
     }
+  });
+})();
+</script>
+  <script>
+(function(){
+  let overlay, stage, canvas, toolbar;
+  let originParent=null, originNext=null, placeholder=null, movedNode=null;
+  let scale=1, minScale=.2, maxScale=4, tx=0, ty=0;
+  let isDragging=false, lastX=0, lastY=0;
+
+  const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
+  function ensureOverlay(){
+    if (overlay) return;
+    overlay = document.createElement('div'); overlay.className='tv-overlay'; overlay.id='tv-overlay';
+    overlay.innerHTML = `
+      <div class="tv-toolbar">
+        <button class="tv-btn" data-act="fit">Ajuster</button>
+        <button class="tv-btn" data-act="minus">−</button>
+        <button class="tv-btn" data-act="100">100%</button>
+        <button class="tv-btn" data-act="plus">+</button>
+        <button class="tv-btn" data-act="png">PNG</button>
+        <button class="tv-btn" data-act="close">✕</button>
+      </div>
+      <div class="tv-stage"><div class="tv-canvas"></div></div>`;
+    document.body.appendChild(overlay);
+    stage   = overlay.querySelector('.tv-stage');
+    canvas  = overlay.querySelector('.tv-canvas');
+    toolbar = overlay.querySelector('.tv-toolbar');
+
+    toolbar.addEventListener('click', async (e)=>{
+      const act = e.target?.dataset?.act; if(!act) return;
+      if (act==='close') return closeViewer();
+      if (act==='fit')   return fit();
+      if (act==='100')   return setZoom(1, stage.clientWidth/2, stage.clientHeight/2);
+      if (act==='plus')  return setZoom(scale*1.15, stage.clientWidth/2, stage.clientHeight/2);
+      if (act==='minus') return setZoom(scale/1.15, stage.clientWidth/2, stage.clientHeight/2);
+      if (act==='png')   return exportPNG();
+    });
+
+    stage.addEventListener('wheel', (e)=>{
+      e.preventDefault();
+      const rect = stage.getBoundingClientRect();
+      const cx = e.clientX - rect.left, cy = e.clientY - rect.top;
+      const k = Math.exp(-e.deltaY * 0.0016);
+      setZoom(scale*k, cx, cy);
+    }, {passive:false});
+
+    stage.addEventListener('pointerdown', (e)=>{
+      isDragging=true; stage.setPointerCapture(e.pointerId);
+      stage.classList.add('dragging');
+      lastX=e.clientX; lastY=e.clientY;
+    });
+    stage.addEventListener('pointermove', (e)=>{
+      if (!isDragging) return;
+      const dx=e.clientX-lastX, dy=e.clientY-lastY;
+      lastX=e.clientX; lastY=e.clientY;
+      tx += dx; ty += dy; applyTransform();
+    });
+    stage.addEventListener('pointerup', (e)=>{
+      isDragging=false; stage.releasePointerCapture(e.pointerId);
+      stage.classList.remove('dragging');
+    });
+
+    stage.addEventListener('dblclick', ()=>{
+      if (Math.abs(scale-1) < 0.05) fit(); else setZoom(1, stage.clientWidth/2, stage.clientHeight/2);
+    });
+
+    window.addEventListener('keydown', (e)=>{ if(e.key==='Escape' && overlay.style.display==='block') closeViewer(); });
+    overlay.addEventListener('mousedown', (e)=>{ if(e.target===overlay) closeViewer(); });
+  }
+
+  function applyTransform(){ canvas.style.transform = `translate(${tx}px, ${ty}px) scale(${scale})`; }
+  function setZoom(next, cx, cy){
+    const newScale = clamp(next, minScale, maxScale);
+    const k = newScale/scale;
+    tx = cx - (cx - tx) * k;
+    ty = cy - (cy - ty) * k;
+    scale = newScale; applyTransform();
+  }
+  function fit(){
+    const node = movedNode?.querySelector('table') || movedNode || canvas.firstElementChild;
+    if (!node) return;
+    const sw = node.scrollWidth || node.offsetWidth;
+    const sh = node.scrollHeight || node.offsetHeight;
+    if (!sw || !sh) return;
+    const pad = 20;
+    const rx = (stage.clientWidth - pad) / sw;
+    const ry = (stage.clientHeight - pad) / sh;
+    scale = clamp(Math.min(rx, ry), minScale, maxScale);
+    tx = Math.round((stage.clientWidth  - sw*scale)/2);
+    ty = Math.round((stage.clientHeight - sh*scale)/2);
+    applyTransform();
+  }
+  function openViewer(target){
+    ensureOverlay();
+    if (!target) { alert('Tableau introuvable'); return; }
+    const p = target.parentNode;
+    originParent = p; originNext = target.nextSibling;
+    placeholder  = document.createComment('tv-placeholder');
+    p.insertBefore(placeholder, target);
+    canvas.appendChild(target);
+    movedNode = target;
+    overlay.style.display='block';
+    document.body.style.overflow='hidden';
+    scale=1; tx=0; ty=0; applyTransform();
+    requestAnimationFrame(fit);
+  }
+  function closeViewer(){
+    overlay.style.display='none';
+    document.body.style.overflow='';
+    if (movedNode && placeholder && originParent){
+      originParent.insertBefore(movedNode, originNext);
+      placeholder.remove();
+    }
+    movedNode=null; placeholder=null; originParent=null; originNext=null;
+  }
+  async function exportPNG(){
+    const node = (movedNode?.querySelector('table')) || movedNode;
+    if (!node) return;
+    if (!window.htmlToImage){
+      await new Promise((res,rej)=>{
+        const s=document.createElement('script');
+        s.src='https://cdn.jsdelivr.net/npm/html-to-image@1.11.11/dist/html-to-image.min.js';
+        s.onload=res; s.onerror=()=>rej(new Error('html-to-image introuvable'));
+        document.head.appendChild(s);
+      });
+    }
+    const prev = node.style.transform;
+    node.style.transform = 'none';
+    try{
+      const dataUrl = await htmlToImage.toPng(node, { pixelRatio: 2, cacheBust: true,
+        backgroundColor: getComputedStyle(document.body).backgroundColor || '#ffffff' });
+      const a = document.createElement('a');
+      a.href = dataUrl;
+      a.download = `tableau-trains-${new Date().toISOString().slice(0,19).replace(/[:T]/g,'-')}.png`;
+      document.body.appendChild(a); a.click(); a.remove();
+    }catch(err){
+      alert('Export PNG impossible.\n'+(err?.message||err));
+    }finally{
+      node.style.transform = prev;
+    }
+  }
+
+  // API globale
+  window.openTableViewer = function(){
+    const target = document.querySelector('#trainInfo .table-scroll');
+    openViewer(target);
+  };
+  window.attachZoomFab = function(){
+    const wrap = document.querySelector('#trainInfo .table-scroll');
+    if (!wrap || wrap.querySelector('.tv-fab')) return;
+    const btn = document.createElement('button');
+    btn.className='tv-fab'; btn.type='button'; btn.textContent='🔍 Zoom';
+    btn.addEventListener('click', ()=> openViewer(wrap));
+    wrap.style.position='relative';
+    wrap.appendChild(btn);
+  };
+  document.addEventListener('dblclick', (e)=>{
+    const box = e.target.closest('#trainInfo .table-scroll');
+    if (box) openViewer(box);
   });
 })();
 </script>
