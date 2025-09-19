@@ -4520,14 +4520,13 @@ async function chargerEtAfficherAlertes() {
 
   const ymd = `${selectedDate.getFullYear()}${String(selectedDate.getMonth()+1).padStart(2,'0')}${String(selectedDate.getDate()).padStart(2,'0')}`;
 
-try { await ensureGTFSLoaded(); } catch(e){ console.warn('GTFS non chargé pour alertes:', e); }
-ensureTransferIndexesBuilt();   // ← pour accélérer getStopsForTripQuick
-buildStationGroups();
+  try { await ensureGTFSLoaded(); } catch(e){ console.warn('GTFS non chargé pour alertes:', e); }
+  ensureTransferIndexesBuilt();   // accélère getStopsForTripQuick
+  buildStationGroups();
 
   // petit utilitaire local
   const stripHtml = (s) => (s || '').replace(/<[^>]*>?/gm, '');
-  }
-    
+
   function alertActiveForDate(alert, dateObj) {
     const startMs = (alert.active_period_start != null) ? alert.active_period_start * 1000 : -Infinity;
     const endMs   = (alert.active_period_end   != null) ? alert.active_period_end   * 1000 :  Infinity;
@@ -4550,32 +4549,29 @@ buildStationGroups();
       titreGeneral.className = 'alertes-header';
       container.appendChild(titreGeneral);
 
-      const trainsAffiches = getDisplayedTrainNumbers(); // ex: ["88753","88532",...]
-
-      // 1) Nouveau filtrage : ACTIF le jour choisi ET (vise un train affiché OU contient mot-clé)
+      // ⚙️ sets construits à partir des trains AFFICHÉS
       const sets = buildDisplayedFilters(ymd);
 
-let alertesFiltres = alertes.filter(a => {
-  const activeNow = alertActiveForDate(a, selectedDate);
-  if (!activeNow) return false;
+      // 1) Filtrage strict : actif + touche nos trips/routes/stops affichés
+      let alertesFiltres = alertes.filter(a => {
+        const activeNow = alertActiveForDate(a, selectedDate);
+        if (!activeNow) return false;
 
-  // 1) Priorité: match STRUCTURÉ sur nos trains/ligne affichés
-  if (alertTargetsDisplayed(a, sets)) return true;
+        // 1) entités structurées
+        if (alertTargetsDisplayed(a, sets)) return true;
 
-  // 2) Fallback STRICT (uniquement si pas d'entités structurées)
-  const ents = a.informed_entities || [];
-  if (ents.length === 0) {
-    const titre = a.header_text || '';
-    const desc  = stripHtml(a.description_text || '');
-    return keywordStrictCorridor(titre, desc);
-  }
+        // 2) fallback mots-clés strict SEULEMENT si pas d’entités
+        const ents = a.informed_entities || [];
+        if (ents.length === 0) {
+          const titre = a.header_text || '';
+          const desc  = stripHtml(a.description_text || '');
+          return keywordStrictCorridor(titre, desc);
+        }
 
-  // sinon on écarte
-  return false;
-});
+        return false;
+      });
 
-
-      // 2) Tri par priorité basée sur EFFECT (et plus "cause")
+      // 2) Tri par priorité (effect)
       alertesFiltres.sort((A, B) => {
         const pa = getStyleParCauseCode(A.effect).prio;
         const pb = getStyleParCauseCode(B.effect).prio;
@@ -4587,44 +4583,42 @@ let alertesFiltres = alertes.filter(a => {
         return;
       }
 
-      // 3) Rendu : titre SANS n° de train, sous-titre = trains concernés
+      // 3) Rendu : titre + “trains concernés” (uniquement nos trains affichés)
       alertesFiltres.forEach(alerte => {
         const effetCode = Number(alerte.effect);
         const styleMeta = getStyleParCauseCode(effetCode);
 
-        const titre = (alerte.header_text || styleMeta.label).trim(); // ← pas de n°
+        const titre = (alerte.header_text || styleMeta.label).trim();
         const description = stripHtml(alerte.description_text || '');
 
-        // Liste unique des trains concernés
         const trainsCibles = Array.from(new Set(
-  (alerte.informed_entities || []).map(ent => {
-    // 1) Si l'entité vise un trip de nos trains affichés → n° depuis le GTFS
-    const tripId = ent.trip_id || ent.vehicle_journey_id || null;
-    if (tripId && sets.tripIds.has(tripId)) {
-      const t = GTFS.tripById?.get(tripId);
-      const num = t?.trip_short_name ? extractTrainNumber(t.trip_short_name) : null;
-      if (num && sets.displayedNums.has(num)) return num;
-    }
-    // 2) Sinon, tente d’extraire un n° dans le texte et vérifie qu’il est affiché
-    const blob = [ent.name, ent.trip_id, ent.vehicle_journey_id, ent.route_id].filter(Boolean).join(' ');
-    const num2 = extractTrainNumber(blob);
-    return (num2 && sets.displayedNums.has(num2)) ? num2 : null;
-  }).filter(Boolean)
-));
+          (alerte.informed_entities || []).map(ent => {
+            // 1) trip structuré → on cherche le n° de train depuis GTFS
+            const tripId = ent.trip_id || ent.vehicle_journey_id || null;
+            if (tripId && sets.tripIds.has(tripId)) {
+              const t = GTFS.tripById?.get(tripId);
+              const num = t?.trip_short_name ? extractTrainNumber(t.trip_short_name) : null;
+              if (num && sets.displayedNums.has(num)) return num;
+            }
+            // 2) sinon on tente d’extraire un n° dans le texte
+            const blob = [ent.name, ent.trip_id, ent.vehicle_journey_id, ent.route_id].filter(Boolean).join(' ');
+            const num2 = extractTrainNumber(blob);
+            return (num2 && sets.displayedNums.has(num2)) ? num2 : null;
+          }).filter(Boolean)
+        ));
 
-        // si "service réduit" (effect=2), pose un hint visuel sur l’entête de colonne du train
+        // hint visuel “US” si effect=2 et si train affiché
         const targetsDisplayed = trainsCibles.filter(n => sets.displayedNums.has(n));
-if (effetCode === 2 && targetsDisplayed.length){
-  targetsDisplayed.forEach(numeroTrain => {
-    const header = document.querySelector(`th[data-train-number="${numeroTrain}"]`);
-    if (header) {
-      header.classList.add('us-train');
-      header.title = "Service réduit : réduction du nombre de places (UM ➜ US)";
-    }
-  });
-}
+        if (effetCode === 2 && targetsDisplayed.length){
+          targetsDisplayed.forEach(numeroTrain => {
+            const header = document.querySelector(`th[data-train-number="${numeroTrain}"]`);
+            if (header) {
+              header.classList.add('us-train');
+              header.title = "Service réduit : réduction du nombre de places (UM ➜ US)";
+            }
+          });
+        }
 
-        // couleur/icone via ta map existante
         let classeCouleur = 'alerte-box';
         if (styleMeta.prio === 1) classeCouleur += ' red';
         else if (styleMeta.prio === 2 || styleMeta.prio === 3) classeCouleur += ' orange';
@@ -4651,7 +4645,6 @@ if (effetCode === 2 && targetsDisplayed.length){
           ${trainsCibles.length ? `<p style="opacity:.9;">Trains concernés : <strong>${trainsCibles.join(', ')}</strong></p>` : ''}
         `;
 
-        // toggle d’ouverture si tu veux garder le comportement accordéon
         headerDiv.addEventListener('click', () => {
           div.classList.toggle('expanded');
         });
