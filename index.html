@@ -5331,216 +5331,185 @@ function startWeatherAutorefresh(intervalMs = 5 * 60 * 1000){
 })();
 </script>
 <script>
-/* ========= Zoom mobile = image PNG du tableau (sans liens) ========= */
-
+/* ========= Aperçu mobile plein écran = image du tableau (PC désactivé) ========= */
 (function(){
-  // Mobile only
-  const isTouch = () => (navigator.maxTouchPoints||0) > 0 && matchMedia('(pointer:coarse)').matches;
+  const isMobileTouch = () => (navigator.maxTouchPoints||0) > 0 && matchMedia('(pointer:coarse)').matches;
 
-  let overlay, canvas, img, scale=1, tx=0, ty=0;
-  let p1=null, p2=null, startDist=0, startScale=1, startTx=0, startTy=0, lastMid={x:0,y:0};
+  let overlay, sheet, img, scale=1, tx=0, ty=0;
+  let p1=null, p2=null, startDist=0, startScale=1, startTx=0, startTy=0;
 
   function ensureOverlay(){
     if (overlay) return;
+    // conteneur sombre plein écran
     overlay = document.createElement('div');
-    overlay.id = 'mzOverlay';
+    overlay.id = 'tableZoomOverlay';
     overlay.style.cssText = `
-      position:fixed; inset:0; background:rgba(0,0,0,.85); display:none; z-index:9999;
-      touch-action:none; overscroll-behavior:contain;
+      position:fixed; inset:0; z-index:9999; display:none;
+      background:rgba(0,0,0,.85); touch-action:none; overscroll-behavior:contain;
     `;
-    canvas = document.createElement('div');
-    canvas.id='mzCanvas';
-    canvas.style.cssText = `position:absolute; inset:0; overflow:hidden;`;
-    // L’image (PNG) du tableau
+    // feuille pour centrer l'image
+    sheet = document.createElement('div');
+    sheet.style.cssText = `position:absolute; inset:0; overflow:hidden;`;
+    // image (PNG) capturée
     img = document.createElement('img');
     img.alt = 'Aperçu du tableau';
     img.style.cssText = `
-      position:absolute; left:0; top:0; will-change:transform; transform-origin:0 0;
-      user-select:none; -webkit-user-drag:none; -webkit-touch-callout: default;
-      max-width:none; max-height:none;
+      position:absolute; left:0; top:0; max-width:none; max-height:none;
+      transform-origin:0 0; will-change:transform; user-select:none; -webkit-user-drag:none;
     `;
-    canvas.appendChild(img);
-    overlay.appendChild(canvas);
+    sheet.appendChild(img);
+    overlay.appendChild(sheet);
     document.body.appendChild(overlay);
 
-    // Fermer en tapant sur le fond (pas sur l’image)
+    // fermer si on tape le fond (pas l'image)
     overlay.addEventListener('pointerup', (e)=>{
-      if (e.pointerType!=='touch') return;
-      if (e.target === overlay) closeViewer();
+      if (e.pointerType==='touch' && e.target===overlay) closeOverlay();
     });
 
-    // Gestes (pinch & pan) — mobile
-    overlay.addEventListener('pointerdown', onPointerDown);
-    overlay.addEventListener('pointermove', onPointerMove);
-    overlay.addEventListener('pointerup', onPointerUp);
-    overlay.addEventListener('pointercancel', onPointerUp);
-
-    overlay._apply = ()=>{
-      img.style.transform = `translate(${tx}px, ${ty}px) scale(${scale})`;
-    };
+    // gestes pinch/pan (mobile)
+    overlay.addEventListener('pointerdown', onPD);
+    overlay.addEventListener('pointermove', onPM);
+    overlay.addEventListener('pointerup', onPU);
+    overlay.addEventListener('pointercancel', onPU);
   }
 
-  function openViewerWithImage(dataURL, naturalW, naturalH){
+  function openOverlay(dataURL, natW, natH){
     ensureOverlay();
-    img.src = dataURL;
     img.onload = ()=>{
       overlay.style.display='block';
       document.body.style.overflow='hidden';
-      // reset
-      scale = 1; tx=0; ty=0; overlay._apply();
-      // auto-fit au centre
-      const vw = canvas.clientWidth, vh = canvas.clientHeight;
-      const s = Math.min(vw/naturalW, vh/naturalH);
-      scale = Math.max(1, s); // on part au mieux plein écran (>=1)
-      tx = (vw - naturalW*scale)/2;
-      ty = (vh - naturalH*scale)/2;
-      overlay._apply();
+      // auto-fit
+      const vw = sheet.clientWidth, vh = sheet.clientHeight;
+      const s = Math.min(vw/natW, vh/natH);
+      scale = Math.max(1, s);
+      tx = (vw - natW*scale)/2;
+      ty = (vh - natH*scale)/2;
+      applyTransform();
     };
+    img.src = dataURL;
   }
-
-  function closeViewer(){
+  function closeOverlay(){
     overlay.style.display='none';
     document.body.style.overflow='';
     img.removeAttribute('src');
   }
+  function applyTransform(){ img.style.transform = `translate(${tx}px, ${ty}px) scale(${scale})`; }
 
-  // --- Gestes (pinch & pan) ---
-  function setPointer(e){
-    const r = canvas.getBoundingClientRect();
-    return { id:e.pointerId, x:e.clientX - r.left, y:e.clientY - r.top };
-  }
-  function mid(a,b){ return {x:(a.x+b.x)/2, y:(a.y+b.y)/2}; }
+  // gestes
+  function ptr(e){ const r = sheet.getBoundingClientRect(); return {id:e.pointerId,x:e.clientX-r.left,y:e.clientY-r.top}; }
   function dist(a,b){ const dx=a.x-b.x, dy=a.y-b.y; return Math.hypot(dx,dy); }
-
-  function onPointerDown(e){
+  function onPD(e){
     if (e.pointerType!=='touch') return;
-    overlay.setPointerCapture?.(e.pointerId);
-    const p = setPointer(e);
+    sheet.setPointerCapture?.(e.pointerId);
+    const p = ptr(e);
     if (!p1) p1 = p;
     else if (!p2) {
-      p2 = p;
-      startDist = dist(p1,p2);
-      startScale = scale;
-      startTx = tx; startTy = ty;
-      lastMid = mid(p1,p2);
+      p2 = p; startDist = dist(p1,p2);
+      startScale = scale; startTx = tx; startTy = ty;
     }
     e.preventDefault();
   }
-  function onPointerMove(e){
+  function onPM(e){
     if (e.pointerType!=='touch') return;
-    const p = setPointer(e);
+    const p = ptr(e);
     if (p1 && p1.id===e.pointerId) p1 = p;
     if (p2 && p2.id===e.pointerId) p2 = p;
 
     if (p1 && p2){
-      // Pinch
-      const m = mid(p1,p2);
-      const d = dist(p1,p2);
-      const fac = (d / Math.max(1, startDist));
-      let newScale = Math.min(4, Math.max(1, startScale * fac));
-
-      // zoom autour du milieu des doigts
-      const nx = (m.x - startTx)/startScale, ny = (m.y - startTy)/startScale;
-      tx = m.x - nx*newScale;
-      ty = m.y - ny*newScale;
-      scale = newScale;
-      overlay._apply();
-      lastMid = m;
+      // pinch autour du milieu
+      const midX=(p1.x+p2.x)/2, midY=(p1.y+p2.y)/2;
+      const k = dist(p1,p2) / Math.max(1, startDist);
+      const newScale = Math.min(4, Math.max(1, startScale*k));
+      const nx = (midX - startTx)/startScale, ny = (midY - startTy)/startScale;
+      tx = midX - nx*newScale; ty = midY - ny*newScale; scale = newScale;
+      applyTransform();
     } else if (p1 && !p2){
-      // Pan
-      tx += e.movementX;
-      ty += e.movementY;
-      overlay._apply();
+      // pan
+      tx += e.movementX; ty += e.movementY; applyTransform();
     }
     e.preventDefault();
   }
-  function onPointerUp(e){
+  function onPU(e){
     if (e.pointerType!=='touch') return;
-    if (p2 && p2.id===e.pointerId) p2 = null;
-    else if (p1 && p1.id===e.pointerId) { p1 = p2; p2 = null; }
+    if (p2 && p2.id===e.pointerId) p2=null;
+    else if (p1 && p1.id===e.pointerId) { p1=p2; p2=null; }
     e.preventDefault();
   }
 
-  // --- Sanitize & rendu image (sans liens) ---
-  async function renderPngFromTable(tableScrollEl){
-    // charge la lib si besoin
-    if(!window.htmlToImage){
-      await new Promise((res,rej)=>{
+  // capture PNG du tableau (styles inclus)
+  async function captureTablePng(scroller){
+    // charge html-to-image si absent
+    if (!window.htmlToImage){
+      await new Promise((ok,ko)=>{
         const s=document.createElement('script');
         s.src='https://cdn.jsdelivr.net/npm/html-to-image@1.11.11/dist/html-to-image.min.js';
-        s.onload=res; s.onerror=()=>rej(new Error('html-to-image non chargée'));
+        s.onload=ok; s.onerror=()=>ko(new Error('html-to-image introuvable'));
         document.head.appendChild(s);
       });
     }
     await (document.fonts?.ready || Promise.resolve());
 
-    // staging hors-écran (sous #trainInfo pour hériter des styles)
+    // on clone seulement le TABLE (pas le cadre scroll)
+    const sourceTable = scroller.querySelector('table');
+    if (!sourceTable) throw new Error('Tableau introuvable');
+
     const staging = document.createElement('div');
-    staging.id = 'trainInfo'; // pour matcher tes sélecteurs CSS existants
+    // important : pas d’ID en doublon pour ne rien perturber
     staging.style.cssText = 'position:fixed; left:-10000px; top:0; opacity:0; pointer-events:none; z-index:-1;';
-    const clone = tableScrollEl.cloneNode(true);
-
-    // Remplacer tous <a> par <span> en conservant le look
-    const aOrig = tableScrollEl.querySelectorAll('a');
-    const aClon = clone.querySelectorAll('a');
-    aClon.forEach((aEl, i) => {
-      const span = document.createElement('span');
-      span.className = (aEl.className || '') + ' link-as-text';
-      span.innerHTML = aEl.innerHTML;
-      // copie de styles principaux (depuis l’original)
-      const ref = aOrig[i];
-      if (ref){
-        const cs = getComputedStyle(ref);
-        const props = [
-          'color','fontWeight','textDecoration','backgroundColor','border','borderTop','borderRight','borderBottom','borderLeft',
-          'borderRadius','padding','margin','display','alignItems','gap','lineHeight','boxShadow','textShadow'
-        ];
-        props.forEach(p=>{ try{ span.style[p] = cs[p]; }catch{} });
-      } else {
-        span.style.textDecoration='none';
-      }
-      aEl.replaceWith(span);
-    });
-
-    staging.appendChild(clone);
+    const cloneTable = sourceTable.cloneNode(true);
+    staging.appendChild(cloneTable);
     document.body.appendChild(staging);
 
-    // cible = le TABLE (pour ne pas inclure le cadre scroll)
-    const node = clone.querySelector('table') || clone;
+    // dimensions naturelles
+    const natW = cloneTable.offsetWidth;
+    const natH = cloneTable.offsetHeight;
 
-    // calc dimensions naturelles
-    const natW = node.offsetWidth;
-    const natH = node.offsetHeight;
-
-    // rendu en PNG (pixelRatio 2 pour netteté)
-    const dataUrl = await htmlToImage.toPng(node, {
-      pixelRatio: 2,
-      cacheBust: true,
-      backgroundColor: getComputedStyle(document.body).backgroundColor || '#ffffff'
-    });
+    // rendu : pixelRatio 2 pour netteté
+    const bg = getComputedStyle(document.body).backgroundColor || '#ffffff';
+    const dataUrl = await htmlToImage.toPng(cloneTable, { pixelRatio: 2, cacheBust:true, backgroundColor: bg });
 
     staging.remove();
     return { dataUrl, natW, natH };
   }
 
-  // Hook : tap sur le tableau (mobile) => ouvrir overlay image
-  function attachMobileZoom(){
-    if (!isTouch()) return; // PC : désactivé
-    document.addEventListener('click', async (e)=>{
-      const scroller = e.target.closest('#trainInfo .table-scroll');
-      if (!scroller) return;
-      e.preventDefault();
-      try{
-        const { dataUrl, natW, natH } = await renderPngFromTable(scroller);
-        openViewerWithImage(dataUrl, natW, natH);
-      }catch(err){
-        console.warn('Capture PNG échouée:', err);
+  // détection “tap léger” pour ne pas gêner le scroll horizontal
+  function attachMobileTap(){
+    if (!isMobileTouch()) return;        // PC : rien
+    const scroller = document.querySelector('#trainInfo .table-scroll');
+    if (!scroller) return;
+
+    let sx=0, sy=0, t0=0, tapArmed=false;
+    scroller.addEventListener('touchstart', (e)=>{
+      if (e.touches.length!==1) { tapArmed=false; return; }
+      const t=e.touches[0]; sx=t.clientX; sy=t.clientY; t0=Date.now(); tapArmed=true;
+    }, {passive:true});
+
+    scroller.addEventListener('touchmove', (e)=>{
+      if (!tapArmed) return;
+      const t=e.touches[0];
+      const moved = Math.hypot(t.clientX-sx, t.clientY-sy);
+      if (moved>8) tapArmed=false; // l’utilisateur scrolle → pas d’aperçu
+    }, {passive:true});
+
+    scroller.addEventListener('touchend', async (e)=>{
+      if (!tapArmed) return;
+      tapArmed=false;
+      const dt = Date.now()-t0;
+      const t=e.changedTouches[0];
+      const moved = Math.hypot(t.clientX-sx, t.clientY-sy);
+      // “tap court” et pas sur un lien → on ouvre l’aperçu
+      const target = document.elementFromPoint(t.clientX, t.clientY);
+      if (dt<250 && moved<8 && !target.closest('a, button, [role="button"]')){
+        e.preventDefault(); // évite click fantôme
+        try{
+          const { dataUrl, natW, natH } = await captureTablePng(scroller);
+          openOverlay(dataUrl, natW, natH);
+        }catch(err){ console.warn('Capture PNG échouée:', err); }
       }
-    }, { passive:false });
+    }, {passive:false});
   }
 
-  // Init après charge
-  window.addEventListener('load', attachMobileZoom);
+  window.addEventListener('load', attachMobileTap);
 })();
 </script>
 </body>
