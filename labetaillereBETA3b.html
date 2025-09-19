@@ -8,6 +8,8 @@
 <script src="https://cdn.jsdelivr.net/npm/nouislider@15.7.1/dist/nouislider.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.2/Sortable.min.js"></script>
   <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
+
   <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700&display=swap" rel="stylesheet">
   <style>
   body {
@@ -668,12 +670,14 @@ table::before {
   border-color:transparent !important; 
   box-shadow:none !important;
 } 
-  .icon {
-    cursor: default;
-    font-size: 1.3em;
-    position: relative;
-    display: inline-block;
-  }
+  /* Compo inconnue : texte blanc, aucun fond */
+.train-header.no-compo-text{
+  color: #fff !important;     /* texte blanc uniquement */
+}
+
+.train-header.no-compo-text a.train-link{
+  color: inherit !important;  /* le lien reste blanc comme le texte */
+}
 
   .icon[title]:hover::after {
   content: attr(title);
@@ -2061,8 +2065,15 @@ label[for="trainNumbers"]{ display:none !important; }
   align-items: center;
   padding: 8px 0;
 }
-
-
+.filters-transfer .filter-item input[type="checkbox"] {
+  accent-color: #00ffff; /* TRON cyan */
+}
+.filters-transfer .filter-item input[type="number"] {
+  background:#0b1220; color:#bff; border:1px solid #00ffff66; border-radius:6px; padding:6px 8px;
+  box-shadow: inset 0 0 8px #00ffff22; outline:none;
+}
+.filters-transfer label span { color:#bff; }
+    
 </style>
 </head>
 <body>
@@ -2093,18 +2104,18 @@ label[for="trainNumbers"]{ display:none !important; }
   <div class="header-title">
     Info trafic<br>Nancy/Metz-Lux
   </div>
-
-  <!-- Vidéo -->
-  <div class="video-container">
-    <iframe 
-      src="https://www.youtube.com/embed/0semhd4TpYM?autoplay=1&mute=1&controls=1&rel=0&modestbranding=1" 
-      title="Bétail TER" 
-      frameborder="0" 
-      allow="autoplay; encrypted-media" 
-      allowfullscreen 
-      style="width: 100%; height: 100%;">
-    </iframe>
-  </div>
+  
+<!-- Vidéo -->
+<div class="video-container">
+  <iframe
+    src="https://www.youtube.com/embed/0semhd4TpYM?autoplay=1&mute=1&controls=1&rel=0&modestbranding=1&loop=1&playlist=0semhd4TpYM"
+    title="Bétail TER"
+    frameborder="0"
+    allow="autoplay; encrypted-media"
+    allowfullscreen
+    playsinline
+    style="width: 100%; height: 100%;"
+  ></iframe>
 </div>
     
   </div>
@@ -2163,9 +2174,28 @@ label[for="trainNumbers"]{ display:none !important; }
   </div>
 </div>
 
-<!-- Bouton Proposer (sous le slider ; centré en mobile) -->
+  <div class="filters-row filters-transfer">
+  <div class="filter-item" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+    <label for="allowTransfer" style="display:flex;align-items:center;gap:8px;">
+      <input id="allowTransfer" type="checkbox" checked>
+      <span>Autoriser correspondance</span>
+    </label>
+    <div style="display:flex;align-items:center;gap:6px;">
+      <label for="minTransfer" style="opacity:.9;">Min :</label>
+      <input id="minTransfer" type="number" value="5" min="1" step="1" style="width:4.5rem;">
+      <span>min</span>
+    </div>
+    <div style="display:flex;align-items:center;gap:6px;">
+  <label for="maxTransfer" style="opacity:.9;">Max :</label>
+  <input id="maxTransfer" type="number" value="25" min="1" step="1" style="width:4.5rem;">
+  <span>min</span>
+  </div>
+  </div>
+</div>
+
+<!-- Bouton Rechercher (sous le slider ; centré en mobile) -->
 <div class="actions-main">
-  <button id="btnProposer" class="mini-btn proposer-btn" type="button">Proposer</button>
+  <button id="btnProposer" class="mini-btn proposer-btn" type="button">Rechercher</button>
 </div>
 
 <div id="propositions" class="propositions"></div>
@@ -2274,7 +2304,7 @@ label[for="trainNumbers"]{ display:none !important; }
     <li><span style="color: #bf00ff; font-weight: bold;">Train en US</span> : Unité Simple 1 rame, Z24500</li>
     <li><span class="deleted">Texte barré en rouge</span> : arrêt supprimé ou train totalement supprimé (API SNCF)</li>
     <li><span class="delay-strike">Horaire barré</span> puis <span class="retard">horaire orange</span> : retard API SNCF</li>
-    <li><span style="background-color:#fff3cd; color:#856404; font-weight:bold; padding:2px 6px; border-radius:4px;">Retard GTFS-RT</span></li>
+    <li><span style="background-color:#fff3cd; color:#856404; font-weight:bold; padding:2px 6px; border-radius:4px;">+ X min</span> : Retard GTFS-RT</li>
     <li><span class="new-start">Texte bleu gras</span> : nouvelle gare de départ/terminus (suppression partielle)</li>
   </ul>
   <p style="margin-top: 0.5em;"><strong>Sources :</strong> API SNCF, GTFS & GTFS-RT</p>
@@ -2445,34 +2475,28 @@ $('#fermerBlague, #fondModal').click(function() {
   $('#fondModal').fadeOut();
 });
 
-// Racine correcte: '/Assistant-train/' si ta page est dedans, sinon '/'
-const ROOT = location.pathname.startsWith('/Assistant-train/') ? '/Assistant-train/' : '/';
-const rel  = (p) => String(p).startsWith('http') ? p : ROOT + String(p).replace(/^\//,'');
-
-async function headOk(u){
-  try { const r = await fetch(rel(u), { method:'HEAD', cache:'no-cache' }); return r.ok; }
-  catch { return false; }
-}   
-/* ---------- DONNÉES COMPO + GTFS-RT ---------- */
-let retardsGTFS = {};
-let compoData = {};
+// ===== Numéro de train : 5 ou 6 chiffres =====
+function extractTrainNumber(s){
+  const m = String(s||'').match(/\b\d{5,6}\b/);
+  return m ? m[0] : null;
+}
+    
+/* ---------- DONNÉES COMPO + GTFS-RT (unifiée) ---------- */
+if (typeof window.retardsGTFS === 'undefined') window.retardsGTFS = null;
+if (typeof window.retardsGTFS_SOURCE === 'undefined') window.retardsGTFS_SOURCE = null;
+if (typeof window.compoData === 'undefined') window.compoData = {};
 
 async function loadCompoData() {
   try {
-    // Essaie en même origine d'abord (racine OU /Assistant-train/)
-    let url =
-      (await headOk('Compotrains.json'))                 ? rel('Compotrains.json') :
-      (await headOk('Assistant-train/Compotrains.json')) ? rel('Assistant-train/Compotrains.json') :
-      // Fallback fiable
-      'https://raw.githubusercontent.com/TekMaTe-lux/Assistant-train/main/Compotrains.json';
-
-    const response = await fetch(url, { cache:'no-cache' });
-    if (!response.ok) throw new Error('HTTP '+response.status+' on '+url);
+    const response = await fetch(
+      'https://raw.githubusercontent.com/TekMaTe-lux/Assistant-train/main/Compotrains.json',
+      { cache: 'no-store' }
+    );
+    if (!response.ok) throw new Error('HTTP '+response.status);
     const json = await response.json();
-    compoData = { ...json.NancyMetzLux, ...json.LuxMetzNancy };
+    window.compoData = { ...(json.NancyMetzLux||{}), ...(json.LuxMetzNancy||{}) };
   } catch (error) {
     console.error("Erreur lors du chargement des compositions :", error);
-    compoData = {};
   }
 }
 
@@ -2760,290 +2784,629 @@ function getGareURL(nomGare) {
   return `https://www.garesetconnexions.sncf/fr/gares-services/${cleanName}/horaires`;
 }
 
-/* ---------- OUTILS TEMPS ---------- */
-const ft = t => t ? t.slice(0, 2) + ':' + t.slice(2, 4) : '-';
-const dl = (b, a) => (parseInt(a.slice(0, 2)) * 60 + parseInt(a.slice(2, 4))) - (parseInt(b.slice(0, 2)) * 60 + parseInt(b.slice(2, 4)));
-   /* ---------- HELPERS POUR PROPOSER ---------- */
-// HH:MM -> minutes
-function hhmmInputToMin(hhmm){
-  if(!hhmm || !/^\d{2}:\d{2}$/.test(hhmm)) return null;
-  const [h,m] = hhmm.split(':').map(Number);
-  return h*60+m;
+/************  CONFIG COURTE  ************/
+const FORCE_VIA_METZ = true;                // correspondances à Metz uniquement
+const KEEP_ONLY_EARLIEST_TRANSFER = true;   // n’afficher que la 1ʳᵉ correspondance la plus proche
+const STRICT_CALENDAR = false;              // 🔴 ne PAS filtrer avec calendar_dates seul
+
+/************  HELPERS TEMPS & TEXTE  ************/
+const ft = t => t ? t.slice(0,2)+':'+t.slice(2,4) : '-';
+function dl(b, a){
+  const toMin = s => (parseInt(s.slice(0,2))*60 + parseInt(s.slice(2,4)));
+  return toMin(a) - toMin(b);
+}
+function hhmmInputToMin(hhmm){ if(!hhmm||!/^\d{2}:\d{2}$/.test(hhmm)) return null; const [h,m]=hhmm.split(':').map(Number); return h*60+m; }
+function dateInputToYMD(str){ if(!str||!/^\d{4}-\d{2}-\d{2}$/.test(str)) return null; const [y,m,d]=str.split('-'); return `${y}${m}${d}`; }
+function extractTrainNumber(str){ const m = String(str||'').match(/(\d{5,6})/); return m ? m[1] : null; }
+function toSec(hms){ if(!hms) return null; const [H,M,S]=hms.split(':').map(Number); return H*3600+M*60+(S||0); }
+function toHHMM(sec){ const s=Math.max(0,sec|0); const h=Math.floor(s/3600)%24,m=Math.floor((s%3600)/60); return String(h).padStart(2,'0')+':'+String(m).padStart(2,'0'); }
+function uniqDirects(list){
+  const bestByKey = new Map(); // clé: num|dep
+  for (const t of list){
+    const key = `${t.numero}|${t.dep}`;
+    const prev = bestByKey.get(key);
+    // si on a deux entrées identiques, on garde celle avec une arrivée connue
+    if (!prev || (!prev.arr && t.arr)) bestByKey.set(key, t);
+  }
+  return Array.from(bestByKey.values());
 }
 
-// "YYYY-MM-DD" -> "YYYYMMDD"
-function dateInputToYMD(str){
-  if(!str || !/^\d{4}-\d{2}-\d{2}$/.test(str)) return null;
-  const [y,m,d] = str.split('-');
-  return `${y}${m}${d}`;
+function keepFirstTransferPerFirstLeg(list){
+  // garde une seule correspondance (la plus proche) par 1er train (num1|dep1)
+  const best = new Map();
+  for (const t of list){
+    const key = `${t.num1}|${t.dep1}`;
+    const prev = best.get(key);
+    if (!prev || t.dep2 < prev.dep2) best.set(key, t); // la 1ère dispo à Metz
+  }
+  return Array.from(best.values());
 }
 
-// Extrait un numéro de train (5-6 chiffres)
-function extractTrainNumber(str){
-  const m = String(str||'').match(/(\d{5,6})/);
-  return m ? m[1] : null;
+function uniqTransfers(list){
+  const map = new Map();
+  for (const t of list){
+    const key = `${t.num1}|${t.dep1}|${t.viaName}|${t.num2}|${t.dep2}|${t.arr2}`;
+    if (!map.has(key)) map.set(key, t);
+  }
+  return Array.from(map.values());
 }
 
-/* --- GTFS minimal (chargement statique) --- */
-let GTFS = { stops:null, stopTimes:null, trips:null, stopNameToId:null, tripById:null, allowedByDate:null };
+/************ CHARGEMENT GTFS (stops/stop_times/trips/calendar_dates only) ************/
+
+let GTFS = { 
+  stops:null, 
+  stopTimes:null, 
+  trips:null, 
+  tripById:null, 
+  stopNameToId:null, 
+  allowedByDate:null, 
+  removedByDate:null 
+};
 
 async function fetchText(url){
-  const u = rel(url);
-  const r = await fetch(u, { cache:'no-cache' });
-  if(!r.ok) throw new Error('HTTP '+r.status+' on '+u);
+  const r = await fetch(url, { cache: 'no-store' });
+  if(!r.ok) throw new Error('HTTP '+r.status+' on '+url);
   return await r.text();
 }
 
-// Lecture d'une entrée texte dans un ZIP (stop_times.zip)
-// Nécessite JSZip (ajoute dans le <head>: https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js)
-async function fetchZipEntryText(zipUrl, entryName){
-  if (typeof JSZip === 'undefined') throw new Error('JSZip non chargé');
-  const u = rel(zipUrl);
-  const res = await fetch(u, { cache:'no-cache' });
-  if(!res.ok) throw new Error(`HTTP ${res.status} on ${u}`);
-  const blob = await res.blob();
-  const zip = await JSZip.loadAsync(blob);
-  let file = zip.file(entryName);
-  if(!file){
-    // tolérant si le fichier est dans un sous-dossier
-    const candidates = zip.file(/stop_times\.txt$/i);
-    if (candidates && candidates.length) file = candidates[0];
+// Bases candidates (testées dans l’ordre)
+const GTFS_BASES = [
+  new URL('data/', location.href).href,                         // ex: https://www.labetaillere.fr/data/ (si tu as copié les .txt)
+  new URL('Assistant-train/data/', location.href).href,         // ex: https://www.labetaillere.fr/Assistant-train/data/
+  'https://raw.githubusercontent.com/TekMaTe-lux/Assistant-train/main/Assistant-train/data/',
+  'https://cdn.jsdelivr.net/gh/TekMaTe-lux/Assistant-train@main/Assistant-train/data/'
+];
+
+
+async function fetchGTFSFile(filename){
+  let lastErr;
+  for (const base of GTFS_BASES){
+    try {
+      const txt = await fetchText(base + filename);
+      window.GTFS_STATIC_SOURCE = base; // debug
+      return txt;
+    } catch(e){
+      lastErr = e;
+      // on essaie la base suivante
+    }
   }
-  if(!file) throw new Error(`Entrée manquante dans le ZIP: ${entryName}`);
-  return file.async('string');
+  throw lastErr || new Error('Impossible de charger '+filename);
 }
 
 function parseCSV(text){
-  const lines = text.trim().split(/\r?\n/);
-  let headerLine = lines.shift() ?? '';
-  headerLine = headerLine.replace(/^\uFEFF/, ''); // BOM éventuel
-  const headers = headerLine.split(',');
-
+  const lines=text.trim().split(/\r?\n/);
+  const headers=lines.shift().split(',');
   return lines.map(l=>{
-    const cols=[]; let cur='', inQ=false;
+    const cols=[]; 
+    let cur='',inQ=false;
     for(let i=0;i<l.length;i++){
       const c=l[i];
-      if(c==='"'){ if(inQ && l[i+1]==='"'){cur+='"'; i++;} else inQ=!inQ; }
-      else if(c===',' && !inQ){ cols.push(cur); cur=''; }
-      else cur+=c;
+      if(c==='"'){
+        if(inQ && l[i+1]==='"'){cur+='"'; i++;}
+        else inQ=!inQ;
+      } else if(c===',' && !inQ){
+        cols.push(cur); cur='';
+      } else cur+=c;
     }
     cols.push(cur);
-    const row={}; headers.forEach((h,idx)=>row[h]=cols[idx]??'');
+    const row={};
+    headers.forEach((h,idx)=>row[h]=cols[idx]??'');
     return row;
   });
 }
 
 async function ensureGTFSLoaded(){
-  if (GTFS.stops && GTFS.stopTimes && GTFS.trips && GTFS.stopNameToId && GTFS.tripById && GTFS.allowedByDate) return;
-
-  // Choisit automatiquement le bon dossier data (racine ou /Assistant-train/)
-  const DATA = (await headOk('data/stops.txt')) ? 'data/' : 'Assistant-train/data/';
-
-  const [stopsTxt, tripsTxt, calDatesTxt] = await Promise.all([
-    fetchText(DATA + 'stops.txt'),
-    fetchText(DATA + 'trips.txt'),
-    fetchText(DATA + 'calendar_dates.txt'),
+  if (GTFS.stops && GTFS.stopTimes && GTFS.trips && GTFS.tripById && GTFS.stopNameToId && GTFS.allowedByDate) return;
+  
+  const [stopsTxt, stopTimesTxt, tripsTxt, calDatesTxt] = await Promise.all([
+    fetchGTFSFile('stops.txt'),
+    fetchGTFSFile('stop_times.txt'),
+    fetchGTFSFile('trips.txt'),
+    fetchGTFSFile('calendar_dates.txt'),
   ]);
 
-  // stop_times via ZIP (3 Mo) puis fallback .txt
-  const STOP_TIMES_VER = '2025-09-18'; // incrémente à chaque MAJ pour casser le cache navigateur
-  let stopTimesTxt;
-  try {
-    stopTimesTxt = await fetchZipEntryText(`${DATA}stop_times.zip?v=${encodeURIComponent(STOP_TIMES_VER)}`, 'stop_times.txt');
-  } catch (e) {
-    console.warn('[GTFS] ZIP indisponible → fallback .txt', e?.message || e);
-    stopTimesTxt = await fetchText(`${DATA}stop_times.txt?v=${encodeURIComponent(STOP_TIMES_VER)}`);
-  }
-
-  const stops         = parseCSV(stopsTxt);
-  const stopTimes     = parseCSV(stopTimesTxt);
-  const trips         = parseCSV(tripsTxt);
+  const stops = parseCSV(stopsTxt);
+  const stopTimes = parseCSV(stopTimesTxt);
+  const trips = parseCSV(tripsTxt);
   const calendarDates = parseCSV(calDatesTxt);
 
   const stopNameToId = new Map();
-  stops.forEach(s => { if (s.stop_name && s.stop_id) stopNameToId.set(s.stop_name, s.stop_id); });
+  stops.forEach(s => {
+    if (s.stop_name && s.stop_id) 
+      if(!stopNameToId.has(s.stop_name)) stopNameToId.set(s.stop_name, s.stop_id);
+  });
 
   const tripById = new Map();
-  trips.forEach(t => { if (t.trip_id) tripById.set(t.trip_id, t); });
+  trips.forEach(t => {
+    if (t.trip_id) tripById.set(t.trip_id, t);
+  });
 
-  const allowedByDate = new Map(); // yyyymmdd -> Set(service_id)
+  // yyyymmdd -> Set(service_id) ajoutés ; et yyyymmdd -> Set(service_id) supprimés
+  const allowedByDate = new Map();
+  const removedByDate = new Map();
   calendarDates.forEach(row => {
-    const ymd = row.date;
-    const serviceId = row.service_id;
-    const exc = Number(row.exception_type);
+    const ymd = row.date, serviceId = row.service_id, exc = Number(row.exception_type);
     if (!ymd || !serviceId) return;
     if (exc === 1) {
       if (!allowedByDate.has(ymd)) allowedByDate.set(ymd, new Set());
       allowedByDate.get(ymd).add(serviceId);
+    } else if (exc === 2) {
+      if (!removedByDate.has(ymd)) removedByDate.set(ymd, new Set());
+      removedByDate.get(ymd).add(serviceId);
     }
   });
 
-  GTFS = { stops, stopTimes, trips, calendarDates, stopNameToId, tripById, allowedByDate };
+  GTFS = { 
+    stops, 
+    stopTimes, 
+    trips, 
+    calendarDates, 
+    tripById, 
+    stopNameToId, 
+    allowedByDate, 
+    removedByDate 
+  };
+}
+   
+/************  GROUPES DE STOPS PAR GARE (stop_name/parent_station)  ************/
+function buildStationGroups(){
+  if (GTFS.nameToIds && GTFS.idToName) return;
+  // Protection anti-null si ça n'a pas fini de charger
+  if (!Array.isArray(GTFS.stops)) return;
+
+  const idToStop = new Map(GTFS.stops.map(s => [s.stop_id, s]));
+  const nameToIds = new Map();
+  const parentToIds = new Map();
+  const idToName = new Map();
+
+  for (const s of GTFS.stops){
+    const name=(s.stop_name||'').trim(); if(!name) continue;
+    if(!nameToIds.has(name)) nameToIds.set(name,new Set());
+    nameToIds.get(name).add(s.stop_id);
+    idToName.set(s.stop_id, name);
+    if (s.parent_station){
+      if(!parentToIds.has(s.parent_station)) parentToIds.set(s.parent_station,new Set());
+      parentToIds.get(s.parent_station).add(s.stop_id);
+    }
+  }
+
+  const nameToIdsMerged = new Map();
+  for (const [name, ids] of nameToIds.entries()){
+    const anyId=[...ids][0]; const parent=idToStop.get(anyId)?.parent_station;
+    if (parent && parentToIds.has(parent)) nameToIdsMerged.set(name, new Set(parentToIds.get(parent)));
+    else nameToIdsMerged.set(name, ids);
+  }
+
+  GTFS.nameToIds = nameToIdsMerged;
+  GTFS.idToName  = idToName;
+  GTFS.idToStop  = idToStop;
 }
 
-/* ---------- RECHERCHE & RENDU PROPOSITIONS ---------- */
+function getIdsForName(name){
+  buildStationGroups();
+  const ids = GTFS.nameToIds?.get(name);
+  if (ids && ids.size) return ids;
+  const lone = GTFS.stopNameToId?.get(name);
+  return lone ? new Set([lone]) : new Set();
+}
+
+/************  INDEXES POUR RECHERCHE DE CORRESPONDANCES  ************/
+function ensureTransferIndexesBuilt(){
+  if (GTFS._stopTimesByTripSec && GTFS._depsByStop) return;
+  if (!Array.isArray(GTFS.stopTimes)) return; // protection
+
+  const byTripSec = new Map();
+  for (const st of GTFS.stopTimes){
+    if(!byTripSec.has(st.trip_id)) byTripSec.set(st.trip_id, []);
+    byTripSec.get(st.trip_id).push({
+      stop_id: st.stop_id,
+      arrS: toSec(st.arrival_time),
+      depS: toSec(st.departure_time),
+      seq: Number(st.stop_sequence)
+    });
+  }
+  for (const arr of byTripSec.values()) arr.sort((a,b)=>a.seq-b.seq);
+
+  const depsByStop = new Map();
+  byTripSec.forEach((sts, trip_id)=>{
+    for (const r of sts){
+      if (r.depS==null) continue;
+      if (!depsByStop.has(r.stop_id)) depsByStop.set(r.stop_id, []);
+      depsByStop.get(r.stop_id).push({ trip_id, depS: r.depS, seq: r.seq });
+    }
+  });
+  for (const list of depsByStop.values()) list.sort((a,b)=>a.depS-b.depS);
+
+  GTFS._stopTimesByTripSec = byTripSec;
+  GTFS._depsByStop = depsByStop;
+  GTFS._tripById = GTFS.tripById;
+}
+
+function mergeDeparturesForIds(idsSet){
+  const arr=[]; idsSet.forEach(id=>{ const l=GTFS._depsByStop.get(id); if(l&&l.length) arr.push(...l); });
+  arr.sort((a,b)=>a.depS-b.depS); return arr;
+}
+
+/************  CALENDRIER (calendar_dates)  ************/
+function serviceActiveForDate(trip_id, ymd){
+  if (!trip_id || !ymd) return false; // exige une date
+  const t = GTFS.tripById?.get(trip_id); if(!t) return false;
+  const svc = t.service_id; if(!svc) return false;
+
+  // Si on a des données de dates : on est STRICT
+  if (GTFS.allowedByDate && GTFS.allowedByDate.size > 0) {
+    const allowedSet = GTFS.allowedByDate.get(ymd);
+    if (allowedSet) return allowedSet.has(svc); // présent ce jour
+    return false; // pas listé ce jour => on N'AFFICHE PAS
+  }
+
+  // Fallback ultra-rare si calendar_dates est vide: on laisse passer pour ne pas tout cacher
+  return true;
+}
+    
+/************  RECHERCHE ITINÉRAIRES 1 CORRESPONDANCE (jamais dans le même train)  ************/
+function findOneTransferItineraries({
+  originIds, destIds,
+  t0Min, t1Min,
+  minTransferMin = 5,
+  maxTransferMin = 45,
+  ymd,
+  allowedInterchanges = null,
+  maxResults = 40
+}){
+  ensureTransferIndexesBuilt(); buildStationGroups();
+
+  const depStart = t0Min * 60;
+  const depEnd   = t1Min * 60;
+  const minWait  = minTransferMin * 60;
+  const maxWait  = Math.max(minTransferMin, maxTransferMin) * 60; // borne haute
+  const out = [];
+
+  // si on force une gare d’échange (ex: Metz)
+  let interIds = allowedInterchanges;
+  if (!interIds && FORCE_VIA_METZ){
+    interIds = getIdsForName('Metz');
+  }
+  const depsFromInter = (interIds && interIds.size)
+    ? dedupTripSeq(mergeDeparturesForIds(interIds))
+    : null;
+
+  const depList = dedupTripSeq(mergeDeparturesForIds(originIds));
+
+  // binaire: 1er départ >= fenêtre
+  let lo=0, hi=depList.length-1, startIdx=depList.length;
+  while (lo<=hi){
+    const mid=(lo+hi)>>1;
+    if (depList[mid].depS >= depStart){ startIdx=mid; hi=mid-1; }
+    else lo=mid+1;
+  }
+
+  const processedFirstLeg = new Set(); // une seule correspondance par premier train
+
+  for (let i=startIdx; i<depList.length; i++){
+    const d1 = depList[i];
+    if (d1.depS > depEnd) break;
+
+    const trip1 = d1.trip_id;
+    if (!serviceActiveForDate(trip1, ymd)) continue;
+
+    const st1 = GTFS._stopTimesByTripSec.get(trip1); if (!st1) continue;
+    const idxOrigin = st1.findIndex(r => r.seq === d1.seq); if (idxOrigin < 0) continue;
+
+    const dep1S = st1[idxOrigin].depS;
+    if (dep1S < depStart || dep1S > depEnd) continue;
+
+    // 🚫 0) Si ce premier train va déjà jusqu'à la destination -> pas de correspondance
+    const reachesDestDirect = st1.slice(idxOrigin+1).some(r => destIds.has(r.stop_id));
+    if (reachesDestDirect) continue;
+
+    const firstKey = `${trip1}|${dep1S}`;
+    if (processedFirstLeg.has(firstKey)) continue;
+
+    // numéro lisible du 1er train
+    const num1 = extractTrainNumber(GTFS._tripById.get(trip1)?.trip_short_name) || extractTrainNumber(trip1) || '—';
+
+    let best = null;
+
+    if (depsFromInter && interIds && interIds.size){
+      // 1) on cherche une arrivée à l’inter (ex: Metz)
+      let inter = null;
+      for (let j = idxOrigin+1; j < st1.length; j++){
+        const r = st1[j];
+        if (interIds.has(r.stop_id) && r.arrS != null){ inter = r; break; }
+      }
+      if (!inter) continue;
+
+      const earliest = inter.arrS + minWait;
+      const latest   = inter.arrS + maxWait;
+
+      // binaire: 2e départ >= earliest
+      let lo2=0, hi2=depsFromInter.length-1, start2=depsFromInter.length;
+      while (lo2<=hi2){
+        const mid=(lo2+hi2)>>1;
+        if (depsFromInter[mid].depS >= earliest){ start2=mid; hi2=mid-1; }
+        else lo2=mid+1;
+      }
+
+      for (let k = start2; k < depsFromInter.length; k++){
+        const d2 = depsFromInter[k];
+        if (d2.depS > latest) break;               // ❗ respecte délai max
+
+        const trip2 = d2.trip_id;
+
+        // 🚫 1) pas de correspondance sur le même voyage (trip_id)
+        if (trip2 === trip1) continue;
+        if (!serviceActiveForDate(trip2, ymd)) continue;
+
+        const st2 = GTFS._stopTimesByTripSec.get(trip2); if (!st2) continue;
+        const idxInter2 = st2.findIndex(r => r.seq === d2.seq); if (idxInter2 < 0) continue;
+
+        const toDest = st2.slice(idxInter2+1).find(r => destIds.has(r.stop_id));
+        if (!toDest) continue;
+
+        // 🚫 2) pas le même numéro commercial
+        const num2 = extractTrainNumber(GTFS._tripById.get(trip2)?.trip_short_name) || extractTrainNumber(trip2) || '—';
+        if (num1 && num2 && num1 === num2) continue;
+
+        best = {
+          viaId:   inter.stop_id,
+          viaName: GTFS.idToName.get(inter.stop_id) || 'Metz',
+          num1, num2,
+          dep1:    toHHMM(dep1S),
+          arr1:    toHHMM(inter.arrS),
+          dep2:    toHHMM(st2[idxInter2].depS),
+          arr2:    toHHMM(toDest.arrS),
+          waitMin: Math.max(0, Math.round((st2[idxInter2].depS - inter.arrS)/60)),
+          durMin:  Math.max(0, Math.round((toDest.arrS - dep1S)/60))
+        };
+        break; // on ne garde que la plus proche
+      }
+    } else {
+      // 2) fallback "toutes gares" (mêmes garde-fous + fenêtre min/max)
+      for (let j=idxOrigin+1; j<st1.length && !best; j++){
+        const interJ = st1[j]; if (interJ.arrS == null) continue;
+
+        const interGroup = getIdsForName(GTFS.idToName.get(interJ.stop_id) || '');
+        const deps2 = dedupTripSeq(mergeDeparturesForIds(interGroup));
+
+        const earliest = interJ.arrS + minWait;
+        const latest   = interJ.arrS + maxWait;
+
+        // binaire: départ2 >= earliest
+        let lo2=0, hi2=deps2.length-1, start2=deps2.length;
+        while (lo2<=hi2){
+          const mid=(lo2+hi2)>>1;
+          if (deps2[mid].depS >= earliest){ start2=mid; hi2=mid-1; }
+          else lo2=mid+1;
+        }
+
+        for (let k=start2; k<deps2.length; k++){
+          const d2 = deps2[k];
+          if (d2.depS > latest) break;             // ❗ respecte délai max
+
+          const trip2 = d2.trip_id;
+
+          // 🚫 pas le même voyage
+          if (trip2 === trip1) continue;
+          if (!serviceActiveForDate(trip2, ymd)) continue;
+
+          const st2 = GTFS._stopTimesByTripSec.get(trip2); if (!st2) continue;
+          const idxInter2 = st2.findIndex(r => r.seq === d2.seq); if (idxInter2 < 0) continue;
+
+          const toDest = st2.slice(idxInter2+1).find(r => destIds.has(r.stop_id));
+          if (!toDest) continue;
+
+          // 🚫 pas le même numéro commercial
+          const num2 = extractTrainNumber(GTFS._tripById.get(trip2)?.trip_short_name) || extractTrainNumber(trip2) || '—';
+          if (num1 && num2 && num1 === num2) continue;
+
+          best = {
+            viaId:   interJ.stop_id,
+            viaName: GTFS.idToName.get(interJ.stop_id) || '',
+            num1, num2,
+            dep1:    toHHMM(dep1S),
+            arr1:    toHHMM(interJ.arrS),
+            dep2:    toHHMM(st2[idxInter2].depS),
+            arr2:    toHHMM(toDest.arrS),
+            waitMin: Math.max(0, Math.round((st2[idxInter2].depS - interJ.arrS)/60)),
+            durMin:  Math.max(0, Math.round((toDest.arrS - dep1S)/60))
+          };
+          break;
+        }
+      }
+    }
+
+    if (best){
+      processedFirstLeg.add(firstKey);
+      out.push(best);
+      if (out.length >= maxResults) break;
+    }
+  }
+
+  // dédoublonnage final + tri
+  const cleaned = uniqTransfers(out);
+  cleaned.sort((a,b)=> a.arr2.localeCompare(b.arr2) || (a.durMin - b.durMin));
+  return cleaned;
+}
+
+
+/************  RENDU DES CARTES (DIRECTS + TRANSFERS)  ************/
+function renderTransferCards(transfers, startName, endName){
+  if (!transfers || !transfers.length) return '';
+  transfers = transfers.filter(t => t.num1 && t.num2 && t.num1 !== t.num2);
+  if (!transfers.length) return '';
+  return `
+  <div class="chips-panel" style="margin-top:12px">
+    <div class="chips-header">
+      <div style="font-weight:700">Itinéraires avec 1 correspondance</div>
+      <div class="chips-count">${transfers.length}</div>
+    </div>
+    <div class="chips-wrap">
+      ${transfers.map(t=>`
+        <div class="chip transfer" data-num1="${t.num1}" data-num2="${t.num2}">
+          <div style="display:flex;flex-direction:column;gap:2px">
+            <div><b>${startName}</b> ${t.dep1} → <b>${t.viaName}</b> ${t.arr1} — Train ${t.num1}</div>
+            <div>Attente: ${t.waitMin} min</div>
+            <div><b>${t.viaName}</b> ${t.dep2} → <b>${endName}</b> ${t.arr2} — Train ${t.num2}</div>
+            <div style="opacity:.8">Durée totale: ${t.durMin} min</div>
+          </div>
+        </div>
+      `).join('')}
+    </div>
+    <div class="chips-footer">
+      <small>Astuce : cliquer une carte “correspondance” ajoute/retire ses 2 trains à la sélection.</small>
+    </div>
+  </div>`;
+}
+
+/************  RECHERCHE OD (DIRECTS + CORRESPONDANCES)  ************/
 async function proposerTrainsOD(){
   const cont = document.getElementById('propositions');
   if (cont) cont.innerHTML = 'Recherche…';
 
-  // ✅ vide la sélection manuelle à chaque recherche
-  $('#trainNumbers').val('');
-
-  // On repasse en mode "propositions" (les cartes peuvent s'afficher)
-  mainTableRendered = false;
-  document.getElementById('trainInfo')?.replaceChildren();
-
-  // reset du dédoublonnage
+  // reset sélection visuelle (mais garde ton Set global si tu veux cumuler)
+  if (typeof selectedTrains !== 'undefined') { selectedTrains.clear(); updateSelectionUI?.(); }
   proposerTrainsOD._seen = new Set();
 
   const startName = $('#startStation').val() || '';
   const endName   = $('#endStation').val() || '';
   const tFromMin  = hhmmInputToMin($('#timeFrom').val());
   const tToMin    = hhmmInputToMin($('#timeTo').val());
-
   if(!startName || !endName){ cont.innerHTML = '<div class="chips-panel">Choisis <b>De</b> et <b>À</b>.</div>'; return; }
   if(tFromMin==null || tToMin==null){ cont.innerHTML = '<div class="chips-panel">Plage horaire invalide.</div>'; return; }
 
   try{ await ensureGTFSLoaded(); }catch(e){ console.error(e); cont.innerHTML='<div class="chips-panel">Erreur GTFS.</div>'; return; }
 
-  const sid = GTFS.stopNameToId.get(startName);
-  const eid = GTFS.stopNameToId.get(endName);
-  if(!sid || !eid){ cont.innerHTML = '<div class="chips-panel">Gares introuvables.</div>'; return; }
+  buildStationGroups();
+  const originIds = getIdsForName(startName);
+  const destIds   = getIdsForName(endName);
 
-  // Calendrier (calendar_dates)
-  const ymd = dateInputToYMD($('#trainDate').val());
-  let allowed = null;
-  if (ymd && GTFS.allowedByDate && GTFS.allowedByDate.size>0){
-    allowed = GTFS.allowedByDate.get(ymd) || new Set();
-  }
+  // calendrier
+  const ymd = dateInputToYMD($('#trainDate').val()) || todayYMDLux().replace(/-/g,'');
 
-  // stop_times par trip triés
+  // index stop_times par trip (directs)
   const byTrip = new Map();
   for(const st of GTFS.stopTimes){
     if(!byTrip.has(st.trip_id)) byTrip.set(st.trip_id, []);
     byTrip.get(st.trip_id).push(st);
   }
-  for(const arr of byTrip.values()){
-    arr.sort((a,b)=>Number(a.stop_sequence)-Number(b.stop_sequence));
+  for(const arr of byTrip.values()) arr.sort((a,b)=>Number(a.stop_sequence)-Number(b.stop_sequence));
+
+  // DIRECTS
+const directs = [];
+byTrip.forEach((sts, trip_id)=>{
+  if (!serviceActiveForDate(trip_id, ymd)) return;
+
+  const trow = GTFS.tripById ? GTFS.tripById.get(trip_id) : null;
+
+  let iS=-1,iE=-1,dep=null,arr=null;
+  for(let i=0;i<sts.length;i++){
+    if(originIds.has(sts[i].stop_id)){ iS=i; dep=sts[i].departure_time; }
+    if(destIds.has(sts[i].stop_id))  { iE=i; arr=sts[i].arrival_time; }
   }
+  if(iS===-1 || iE===-1 || iE<=iS || !dep) return;
 
-  const found = [];
-  byTrip.forEach((sts, trip_id)=>{
-    const trow = GTFS.tripById ? GTFS.tripById.get(trip_id) : null;
+  const depMin = Number(dep.slice(0,2))*60 + Number(dep.slice(3,5));
+  if (depMin<tFromMin || depMin>tToMin) return;
 
-    if (allowed){
-      const svc = trow ? trow.service_id : null;
-      if (!svc || !allowed.has(svc)) return; // pas actif ce jour
-    }
+  let numero = trow?.trip_short_name ? extractTrainNumber(trow.trip_short_name) : null;
+  if (!numero) numero = extractTrainNumber(trip_id);
+  if (!numero) return;
 
-    let iS=-1,iE=-1,dep=null,arr=null;
-    for(let i=0;i<sts.length;i++){
-      if(sts[i].stop_id===sid){ iS=i; dep=sts[i].departure_time; }
-      if(sts[i].stop_id===eid){ iE=i; arr=sts[i].arrival_time; }
-    }
-    if(iS===-1 || iE===-1 || iE<=iS || !dep) return;
+  const key = `${numero}|${dep.slice(0,5)}`;
+  if (proposerTrainsOD._seen.has(key)) return;
+  proposerTrainsOD._seen.add(key);
 
-    const [H,M] = dep.slice(0,5).split(':').map(Number);
-    const depMin = H*60+M;
-    if (depMin<tFromMin || depMin>tToMin) return;
+  directs.push({ numero, dep:dep.slice(0,5), arr: arr ? arr.slice(0,5) : null });
+});
 
-    // numéro de train
-    let numero = trow && trow.trip_short_name ? extractTrainNumber(trow.trip_short_name) : null;
-    if (!numero) numero = extractTrainNumber(trip_id);
-    if (!numero) return;
+// dédup finale des directs
+const directsUniqList = uniqDirects(directs);
 
-    const key = `${numero}|${dep.slice(0,5)}|${arr ? arr.slice(0,5) : ''}`;
-    if (proposerTrainsOD._seen.has(key)) return;
-    proposerTrainsOD._seen.add(key);
+  // CORRESPONDANCES (si checkbox cochée)
+let transfers = [];
+const allowTransfers = (document.getElementById('allowTransfer')?.checked ?? true);
+if (allowTransfers){
+  const minTransferMin = Math.max(1, Number(document.getElementById('minTransfer')?.value || 5));
+  const maxTransferMin = Math.max(minTransferMin, Number(document.getElementById('maxTransfer')?.value || 45)); // <= nouveau
 
-    found.push({ numero, dep:dep.slice(0,5), arr: arr ? arr.slice(0,5) : null });
+  const allowedSet = getIdsForName('Metz'); // on force Metz
+
+  const raw = findOneTransferItineraries({
+    originIds,
+    destIds,
+    t0Min: tFromMin,
+    t1Min: tToMin,
+    minTransferMin,
+    maxTransferMin,                      // <= nouveau
+    ymd,
+    allowedInterchanges: allowedSet,
+    maxResults: 200
   });
 
-  // ✅ Rendu cartes
-  renderChips(found, startName, endName);
+  transfers = uniqTransfers(keepFirstTransferPerFirstLeg(raw));
 }
 
-function renderChips(found, startName, endName){
+  // RENDU
   const host = document.getElementById('propositions');
-  if (mainTableRendered) {
-    host?.replaceChildren();
-    return;
-  }
-  const trains = (found||[]).slice().sort((a,b)=>a.dep.localeCompare(b.dep));
+  if (!host) return;
 
-  if (!trains.length){
-    host.innerHTML = `<div class="chips-panel"><p>Aucun train ${startName} → ${endName} dans cette plage.</p></div>`;
-    return;
-  }
+  const directsHTML = (function(){
+    const trains = (directsUniqList||[]).slice().sort((a,b)=>a.dep.localeCompare(b.dep));
+    if (!trains.length) {
+      return `<div class="chips-panel"><p>Aucun train direct ${startName} → ${endName} dans cette plage.</p></div>`;
+    }
+    return `
+      <div class="chips-panel">
+        <div class="chips-header">
+          <div style="font-weight:700">Propositions directes ${startName} → ${endName}</div>
+          <div class="chips-count"><span id="chipsCount">0</span> sélection(s)</div>
+        </div>
+        <div class="chips-wrap">
+          ${trains.map(t => `
+            <div class="chip" data-num="${t.numero}">
+              <span class="t-num">Train ${t.numero}</span>
+              <span class="t-time">(${startName} ${t.dep} → ${endName} ${t.arr || '?'})</span>
+            </div>`).join('')}
+        </div>
+      </div>`;
+  })();
 
-  host.innerHTML = `
-  <div class="chips-panel">
-    <div class="chips-header">
-      <div style="font-weight:700">Propositions ${startName} → ${endName}</div>
-      <div class="chips-count"><span id="chipsCount">0</span> sélection(s)</div>
-    </div>
+  const transfersHTML = renderTransferCards(transfers, startName, endName);
+  host.innerHTML = directsHTML + transfersHTML;
 
-    <div class="chips-actions">
-      <button class="btn" id="chipsClear">Vider</button>
-      <button class="btn" id="chipsAM">Pointe du matin</button>
-      <button class="btn" id="chipsPM">Pointe du soir</button>
-    </div>
+  // Force le texte affiché à utiliser exactement le data-num (aucune troncature possible)
+document.querySelectorAll('#propositions .chip').forEach(chip => {
+  const n = chip.dataset.num;                 // "123456" si 6 chiffres
+  const t = chip.querySelector('.t-num');
+  if (t) t.textContent = 'Train ' + n;
+});
 
-    <div class="chips-wrap">
-      ${trains.map(t => `
-        <div class="chip" data-num="${t.numero}">
-          <span class="t-num">Train ${t.numero}</span>
-          <span class="t-time">(${startName} ${t.dep} → ${endName} ${t.arr || '?'})</span>
-        </div>`).join('')}
-    </div>
-
-    <div class="chips-footer">
-      <button class="btn primary" id="chipsGo">Afficher ▶</button>
-    </div>
-  </div>`;
-
-  // clic carte = toggle + MAJ sélection en live
-  host.querySelectorAll('.chip').forEach(chip=>{
+  // Clic cartes “directs”
+  host.querySelectorAll('.chip[data-num]').forEach((chip)=>{
     chip.addEventListener('click', ()=>{
-      const num = chip.dataset.num;
-      if (!num) return;
+      const num = chip.dataset.num; if (!num) return;
       const willSelect = !chip.classList.contains('is-selected');
       chip.classList.toggle('is-selected', willSelect);
-      if (willSelect) selectedTrains.add(num); else selectedTrains.delete(num);
-      chipsUpdateCount();
-      updateSelectionUI();
+      if (willSelect) selectedTrains?.add(num); else selectedTrains?.delete(num);
+      chipsUpdateCount?.(); updateSelectionUI?.();
     });
   });
 
-  // Vider = tout clean
-  host.querySelector('#chipsClear')?.addEventListener('click', ()=>{
-    selectedTrains.clear();
-    document.getElementById('trainNumbers').value = '';
-    host.querySelectorAll('.chip.is-selected').forEach(c=>c.classList.remove('is-selected'));
-    chipsUpdateCount();
-    updateSelectionUI();
+  // Clic cartes “correspondances” (ajoute/retire les 2 trains)
+  host.querySelectorAll('.chip.transfer').forEach((chip)=>{
+    chip.addEventListener('click', ()=>{
+      const n1=chip.dataset.num1, n2=chip.dataset.num2;
+      const isOn = chip.classList.contains('is-selected');
+      chip.classList.toggle('is-selected', !isOn);
+      if (!isOn){ selectedTrains?.add(n1); selectedTrains?.add(n2); }
+      else { selectedTrains?.delete(n1); selectedTrains?.delete(n2); }
+      host.querySelectorAll(`.chip[data-num="${n1}"], .chip[data-num="${n2}"]`).forEach(c=> c.classList.toggle('is-selected', selectedTrains?.has(c.dataset.num)));
+      chipsUpdateCount?.(); updateSelectionUI?.();
+    });
   });
 
-  // Presets
-  host.querySelector('#chipsAM')?.addEventListener('click', ()=>{
-    setDirectionForPreset('AM');
-    chipsSetSelection(PRESET_AM);
-  });
-  host.querySelector('#chipsPM')?.addEventListener('click', ()=>{
-    setDirectionForPreset('PM');
-    chipsSetSelection(PRESET_PM);
-  });
-
-  // Afficher = déclenche ton tableau
-  host.querySelector('#chipsGo')?.addEventListener('click', ()=>{
-    if (!document.getElementById('trainNumbers').value.trim()){
-      updateSelectionUI();
-    }
-    $('#loadTrains').trigger('click');
-  });
-
-  chipsUpdateCount();
-  updateSelectionUI();
+  chipsUpdateCount?.();
 }
 
 /* ====================== PRESETS (listes) ====================== */
@@ -3052,6 +3415,46 @@ const PRESET_PM = "88741,88743,88745,88747,88530,88749,88751,88753,88532,88755,8
 
 /* ====================== ÉTAT CENTRAL ====================== */
 const selectedTrains = new Set();
+
+/* ====================== HELPERS GÉNÉRAUX ====================== */
+// HH:MM -> "minutes depuis 00:00"
+function hhmmInputToMin(hhmm){
+  if(!hhmm || !/^\d{2}:\d{2}$/.test(hhmm)) return null;
+  const [h,m] = hhmm.split(':').map(Number);
+  return h*60+m;
+}
+// "YYYY-MM-DD" -> "YYYYMMDD"
+function dateInputToYMD(str){
+  if(!str || !/^\d{4}-\d{2}-\d{2}$/.test(str)) return null;
+  const [y,m,d] = str.split('-');
+  return `${y}${m}${d}`;
+}
+function ymdBetween(ymd, start, end){ return ymd >= start && ymd <= end; }
+function weekdayStrFromYMD(ymd){
+  // 0=Sun..6=Sat -> 'sunday'..'saturday'
+  const y = +ymd.slice(0,4), m = +ymd.slice(4,6)-1, d = +ymd.slice(6,8);
+  const dt = new Date(Date.UTC(y,m,d));
+  return ['sunday','monday','tuesday','wednesday','thursday','friday','saturday'][dt.getUTCDay()];
+} 
+    // Déduplique des listes de départs (même voyage: trip_id + stop_sequence)
+function dedupTripSeq(list){
+  const seen = new Set(), out = [];
+  for (const d of list){
+    const k = `${d.trip_id}|${d.seq}`;
+    if (!seen.has(k)) { seen.add(k); out.push(d); }
+  }
+  return out;
+}
+
+// Déduplique les cartes correspondance (mêmes 2 trains et mêmes heures)
+function uniqTransfers(list){
+  const map = new Map();
+  for (const t of list){
+    const key = `${t.num1}|${t.dep1}|${t.viaName}|${t.num2}|${t.dep2}|${t.arr2}`;
+    if (!map.has(key)) map.set(key, t);
+  }
+  return Array.from(map.values());
+}
 
 /* ====================== UI SÉLECTION (input + tags) ====================== */
 function chipsUpdateCount(){
@@ -3069,12 +3472,14 @@ function updateSelectionUI(){
   // 2) rendu des chips sélection
   const zone = document.getElementById('selectionChips');
   if (zone){
+    // (ré)génère le HTML des chips
     zone.innerHTML = arr.map(num => `
       <span class="chip-tag" data-num="${num}" role="button" tabindex="0" title="Retirer ${num}">
         <span class="t-num">#${num}</span>
       </span>
     `).join('');
 
+    // remove au clic / clavier (désactivé si on est en train de drag)
     zone.querySelectorAll('.chip-tag').forEach(tag=>{
       const remove = () => {
         const num = tag.dataset.num;
@@ -3087,15 +3492,21 @@ function updateSelectionUI(){
       };
       tag.addEventListener('click', ()=>{
         const t = Number(zone.dataset.justDroppedAt || 0);
-        if (t && Date.now() - t < 250) return; // ignore juste après drag
-        remove();
-      });
+  if (t && Date.now() - t < 250) return;
+
+  remove();
+});
       tag.addEventListener('keydown', (e)=>{
         if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); remove(); }
       });
     });
 
-    // drag & drop (si Sortable est chargé)
+    // rail visible uniquement si on a des chips (sauf si #selectionBlock gère l’affichage)
+    if (!document.getElementById('selectionBlock')) {
+      zone.hidden = (arr.length === 0);
+    }
+
+    // (ré)initialise le DnD APRÈS insertion DOM
     requestAnimationFrame(()=>{
       if (window.Sortable) {
         initSelectionSortable();
@@ -3133,8 +3544,8 @@ function toggleSelectionActions(){
 function afterSelectionRender(){
   toggleSelectionActions();
 }
-
-/* Applique une sélection complète aux cartes visibles + met à jour l'état global */
+    
+/* Applique une sélection complète aux cartes visibles (si présentes) + met à jour l'état global */
 function chipsSetSelection(list){
   selectedTrains.clear();
   list.forEach(n => selectedTrains.add(n));
@@ -3144,9 +3555,10 @@ function chipsSetSelection(list){
   chipsUpdateCount();
   updateSelectionUI();
 }
-
-/* === SortableJS pour #selectionChips (rail horizontal) === */
+      
+// === SortableJS pour #selectionChips (rail horizontal) ===
 let selectionSortable = null;
+
 function initSelectionSortable(){
   const zone = document.getElementById('selectionChips');
   if (!zone || !window.Sortable) return;
@@ -3166,12 +3578,15 @@ function initSelectionSortable(){
     ghostClass: 'sortable-ghost',
     chosenClass: 'sortable-chosen',
     dragClass: 'sortable-drag',
+
     onStart(){ zone.dataset.dragging = '1'; },
     onEnd(){
-      zone.dataset.justDroppedAt = String(Date.now());
-      delete zone.dataset.dragging;
-    },
+  zone.dataset.justDroppedAt = String(Date.now());
+  delete zone.dataset.dragging;
+},
+
     onSort(){
+      // MAJ ordre -> Set + input (sans re-render complet)
       const order = Array.from(zone.querySelectorAll('.chip-tag')).map(el => el.dataset.num);
       selectedTrains.clear();
       order.forEach(n => selectedTrains.add(n));
@@ -3182,179 +3597,6 @@ function initSelectionSortable(){
   });
 }
     
-/* ====================== RENDU DES CARTES ====================== */
-function renderChips(found, startName, endName){
-  const host = document.getElementById('propositions');
-  if (mainTableRendered) {
-    host?.replaceChildren();
-    return;
-  }
-
-  const trains = (found || []).slice().sort((a,b)=>a.dep.localeCompare(b.dep));
-
-  if (!trains.length){
-    host.innerHTML = `<div class="chips-panel"><p>Aucun train ${startName} → ${endName} dans cette plage.</p></div>`;
-    return;
-  }
-
-  // Panneau : entête + actions (Vider/AM/PM) + grille + bouton Afficher
-  host.innerHTML = `
-    <div class="chips-panel">
-      <div class="chips-header">
-        <div style="font-weight:700">Propositions ${startName} → ${endName}</div>
-        <div class="chips-count"><span id="chipsCount">0</span> sélection(s)</div>
-      </div>
-
-      <div class="chips-actions">
-        <button class="btn" id="chipsClear" type="button">Vider</button>
-        <button class="btn" id="chipsAM"    type="button">Pointe du matin</button>
-        <button class="btn" id="chipsPM"    type="button">Pointe du soir</button>
-      </div>
-
-      <div class="chips-wrap">
-        ${trains.map(t => `
-          <div class="chip" data-num="${t.numero}">
-            <span class="t-num">Train ${t.numero}</span>
-            <span class="t-time">(${startName} ${t.dep} → ${endName} ${t.arr || '?'})</span>
-          </div>`).join('')}
-      </div>
-
-      <div class="chips-footer centered">
-        <button class="btn primary" id="chipsGo" type="button">Afficher ▶</button>
-      </div>
-    </div>`;
-
-  // Clic carte = toggle + MAJ live (sélection + zone chips + compteur)
-  host.querySelectorAll('.chip').forEach((chip) => {
-    chip.addEventListener('click', () => {
-      const num = chip.dataset.num;
-      if (!num) return;
-      const willSelect = !chip.classList.contains('is-selected');
-      chip.classList.toggle('is-selected', willSelect);
-      if (willSelect) selectedTrains.add(num); else selectedTrains.delete(num);
-      if (typeof chipsUpdateCount === 'function') chipsUpdateCount();
-      updateSelectionUI();
-    });
-  });
-
-  // Actions panneau : Vider / AM / PM / Afficher
-  host.querySelector('#chipsClear')?.addEventListener('click', ()=>{
-    selectedTrains.clear();
-    host.querySelectorAll('.chip.is-selected').forEach(c=>c.classList.remove('is-selected'));
-    if (typeof chipsUpdateCount === 'function') chipsUpdateCount();
-    updateSelectionUI();
-  });
-
-  host.querySelector('#chipsAM')?.addEventListener('click', ()=>{
-    // force De/À en AM puis coche les cartes correspondantes
-    setDirectionForPreset('AM');
-    chipsSetSelection(PRESET_AM);
-  });
-
-  host.querySelector('#chipsPM')?.addEventListener('click', ()=>{
-    // force De/À en PM puis coche les cartes correspondantes
-    setDirectionForPreset('PM');
-    chipsSetSelection(PRESET_PM);
-  });
-
-  host.querySelector('#chipsGo')?.addEventListener('click', ()=>{
-    // s’assure que l’input CSV reflète la sélection courante
-    updateSelectionUI();
-    $('#loadTrains').trigger('click');
-  });
-
-  if (typeof chipsUpdateCount === 'function') chipsUpdateCount(); // compteur initial
-}
-
-/* ====================== RECHERCHE (GTFS) ====================== */
-async function proposerTrainsOD(){
-  const cont = document.getElementById('propositions');
-  if (cont) cont.innerHTML = 'Recherche…';
-
-  // On repasse en mode "propositions" (les cartes peuvent s'afficher)
-  mainTableRendered = false;
-  // (optionnel) on retire un tableau déjà présent pour éviter la double vue
-  document.getElementById('trainInfo')?.replaceChildren();
-
-  // reset complet sélection (input + tags + état) -> cache la zone
-  selectedTrains.clear();
-  updateSelectionUI();
-
-  // reset du dédoublonnage
-  proposerTrainsOD._seen = new Set();
-
-  const startName = $('#startStation').val() || '';
-  const endName   = $('#endStation').val() || '';
-  const tFromMin  = hhmmInputToMin($('#timeFrom').val());
-  const tToMin    = hhmmInputToMin($('#timeTo').val());
-
-  if(!startName || !endName){ cont.innerHTML = '<div class="chips-panel">Choisis <b>De</b> et <b>À</b>.</div>'; return; }
-  if(tFromMin==null || tToMin==null){ cont.innerHTML = '<div class="chips-panel">Plage horaire invalide.</div>'; return; }
-
-  try{
-    await ensureGTFSLoaded(); // 👉 utilise les chemins RELATIFS définis dans le bloc précédent
-  }catch(e){
-    console.error(e);
-    cont.innerHTML='<div class="chips-panel">Erreur GTFS.</div>';
-    return;
-  }
-
-  const sid = GTFS.stopNameToId.get(startName);
-  const eid = GTFS.stopNameToId.get(endName);
-  if(!sid || !eid){ cont.innerHTML = '<div class="chips-panel">Gares introuvables.</div>'; return; }
-
-  // Filtre calendrier (calendar_dates)
-  const ymd = dateInputToYMD($('#trainDate').val());
-  let allowed = null;
-  if (ymd && GTFS.allowedByDate && GTFS.allowedByDate.size>0){
-    allowed = GTFS.allowedByDate.get(ymd) || new Set();
-  }
-
-  // Index stop_times par trip, triés
-  const byTrip = new Map();
-  for(const st of GTFS.stopTimes){
-    if(!byTrip.has(st.trip_id)) byTrip.set(st.trip_id, []);
-    byTrip.get(st.trip_id).push(st);
-  }
-  for(const arr of byTrip.values()){
-    arr.sort((a,b)=>Number(a.stop_sequence)-Number(b.stop_sequence));
-  }
-
-  const found = [];
-  byTrip.forEach((sts, trip_id)=>{
-    const trow = GTFS.tripById ? GTFS.tripById.get(trip_id) : null;
-
-    // calendrier actif ce jour
-    if (allowed){
-      const svc = trow ? trow.service_id : null;
-      if (!svc || !allowed.has(svc)) return;
-    }
-
-    let iS=-1,iE=-1,dep=null,arr=null;
-    for(let i=0;i<sts.length;i++){
-      if(sts[i].stop_id===sid){ iS=i; dep=sts[i].departure_time; }
-      if(sts[i].stop_id===eid){ iE=i; arr=sts[i].arrival_time; }
-    }
-    if(iS===-1 || iE===-1 || iE<=iS || !dep) return;
-
-    const [H,M] = dep.slice(0,5).split(':').map(Number);
-    const depMin = H*60+M;
-    if (depMin<tFromMin || depMin>tToMin) return;
-
-    let numero = trow && trow.trip_short_name ? extractTrainNumber(trow.trip_short_name) : null;
-    if (!numero) numero = extractTrainNumber(trip_id);
-    if (!numero) return;
-
-    const key = `${numero}|${dep.slice(0,5)}|${arr ? arr.slice(0,5) : ''}`;
-    if (proposerTrainsOD._seen.has(key)) return;
-    proposerTrainsOD._seen.add(key);
-
-    found.push({ numero, dep:dep.slice(0,5), arr: arr ? arr.slice(0,5) : null });
-  });
-
-  renderChips(found, startName, endName);
-}
-
 /* ====================== DOC READY ====================== */
 $(function () {
   // Date par défaut + menus
@@ -3391,95 +3633,111 @@ $(function () {
     if (typeof chipsUpdateCount === 'function') chipsUpdateCount();
   }
 
-  // Raccourcis Matin/Soir (header principal)
+  // Raccourcis Matin/Soir
   $('#btnMatin').off('click').on('click', ()=> usePresetEverywhere(PRESET_AM, 'AM'));
   $('#btnSoir').off('click').on('click',  ()=> usePresetEverywhere(PRESET_PM, 'PM'));
 
   (function($){
-    // utilitaires slider
-    function hhmmToMin(v){ if(!v) return 0; const [h,m]=v.split(':').map(Number); return h*60 + m; }
-    function minToHHMM(n){
-      const m=((Math.round(n)%1440)+1440)%1440, h=Math.floor(m/60), mi=m%60;
-      return String(h).padStart(2,'0')+':'+String(mi).padStart(2,'0');
+  // utils
+  function hhmmToMin(v){ if(!v) return 0; const [h,m]=v.split(':').map(Number); return h*60+m; }
+  function minToHHMM(n){
+    const m=((Math.round(n)%1440)+1440)%1440, h=Math.floor(m/60), mi=m%60;
+    return String(h).padStart(2,'0')+':'+String(mi).padStart(2,'0');
+  }
+  function luxNowMinutes(){
+    const txt = new Intl.DateTimeFormat('fr-FR',{
+      timeZone:'Europe/Luxembourg', hour:'2-digit', minute:'2-digit', hour12:false
+    }).format(new Date()); // "HH:MM"
+    const [h,m] = txt.split(':').map(Number);
+    return h*60+m;
+  }
+  function roundUpToStep(v, step){ return Math.min(1439, Math.ceil(v/step)*step); }
+
+  const initFrom = $('#timeFrom').val() || '06:00';
+  const initTo   = $('#timeTo').val()   || '10:00';
+
+  const sliderEl = document.getElementById('timeSlider');
+  if (!sliderEl || typeof noUiSlider === 'undefined') {
+    console.warn('noUiSlider non chargé ou #timeSlider introuvable.');
+    return;
+  }
+
+  // Range inchangé: 00:00 → 23:59
+  noUiSlider.create(sliderEl, {
+    start: [ hhmmToMin(initFrom), hhmmToMin(initTo) ],
+    connect: true,
+    step: 5,
+    range: { min: 0, max: 1439 },
+    tooltips: [{ to: v => minToHHMM(v) }, { to: v => minToHHMM(v) }],
+  });
+
+  // Sync labels + inputs
+  sliderEl.noUiSlider.on('update', function(values){
+    const a = minToHHMM(values[0]), b = minToHHMM(values[1]);
+    $('#timeFromLabel').text(a); $('#timeToLabel').text(b);
+    $('#timeFrom').val(a);       $('#timeTo').val(b);
+  });
+
+  // Fenêtre par défaut: aujourd’hui => maintenant → +3h ; sinon => tes valeurs init
+  function setDefaultWindow(){
+    const isToday = (typeof isSelectedDateToday === 'function') ? isSelectedDateToday() : true;
+    if (isToday){
+      const now = roundUpToStep(luxNowMinutes(), 5);
+      const end = Math.min(1439, now + 180); // +3h
+      sliderEl.noUiSlider.set([now, end]);
+    } else {
+      sliderEl.noUiSlider.set([hhmmToMin(initFrom), hhmmToMin(initTo)]);
     }
+  }
 
-    const initFrom = $('#timeFrom').val() || '06:00';
-    const initTo   = $('#timeTo').val()   || '10:00';
+  // au chargement
+  setDefaultWindow();
+  // si on change la date, on recalcule la fenêtre par défaut
+  $('#trainDate').off('change._defaultWindow').on('change._defaultWindow', setDefaultWindow);
+})(jQuery);
 
-    const sliderEl = document.getElementById('timeSlider');
-    if (!sliderEl || typeof noUiSlider === 'undefined') {
-      console.warn('noUiSlider non chargé ou #timeSlider introuvable.');
-      return;
-    }
-
-    noUiSlider.create(sliderEl, {
-      start: [ hhmmToMin(initFrom), hhmmToMin(initTo) ],
-      connect: true,
-      step: 5,
-      range: { min: 0, max: 1439 },
-      tooltips: [
-        { to: v => minToHHMM(v) },
-        { to: v => minToHHMM(v) }
-      ],
-    });
-
-    sliderEl.noUiSlider.on('update', function(values){
-      const a = minToHHMM(values[0]), b = minToHHMM(values[1]);
-      $('#timeFromLabel').text(a);
-      $('#timeToLabel').text(b);
-      $('#timeFrom').val(a);
-      $('#timeTo').val(b);
-    });
-
-    $('#btnMatin').off('click._slider').on('click._slider', function(){
-      sliderEl.noUiSlider.set([ hhmmToMin('06:00'), hhmmToMin('10:00') ]);
-    });
-    $('#btnSoir').off('click._slider').on('click._slider', function(){
-      sliderEl.noUiSlider.set([ hhmmToMin('16:00'), hhmmToMin('20:00') ]);
-    });
-  })(jQuery);
-
-  // Bouton “Vider” (sous la sélection globale)
+  // Bouton “Vider” (sous la sélection)
   $('#btnClearSelection').off('click').on('click', ()=>{
     selectedTrains.clear();
+    // décocher visuellement les cartes si visibles
     document.querySelectorAll('#propositions .chip.is-selected').forEach(c=>c.classList.remove('is-selected'));
     if (typeof chipsUpdateCount === 'function') chipsUpdateCount();
-    updateSelectionUI();
+    updateSelectionUI(); // -> masque la zone et les boutons
   });
 
   // Saisie manuelle (si tu gardes l’input CSV masqué pour compat)
-  $('#trainNumbers').off('input').on('input', ()=>{
-    const vals = $('#trainNumbers').val().split(',').map(s=>s.trim()).filter(Boolean);
-    selectedTrains.clear();
-    vals.forEach(v => selectedTrains.add(v));
-    document.querySelectorAll('#propositions .chip').forEach(c=>{
-      c.classList.toggle('is-selected', selectedTrains.has(c.dataset.num));
-    });
-    if (typeof chipsUpdateCount === 'function') chipsUpdateCount();
-    updateSelectionUI();
+  $('#trainNumbers').off('input').on('input', () => {
+  const raw = $('#trainNumbers').val();
+  const tokens = String(raw || '')
+    .split(/[,\s]+/)
+    .map(s => (String(s).match(/\b\d{5,6}\b/) || [])[0])
+    .filter(Boolean);
+  selectedTrains.clear();
+  tokens.forEach(num => selectedTrains.add(num));
+  document.querySelectorAll('#propositions .chip').forEach(c=>{
+    c.classList.toggle('is-selected', selectedTrains.has(c.dataset.num));
   });
-
-  function addManualTrain(){
-    const $inp = $('#manualTrainInput');
-    if (!$inp.length) return;
-    const raw = ($inp.val() || '').trim();
-    const m = raw.match(/(\d{5,6})/);
-    const num = m ? m[1] : null;
-    if (!num){
-      $inp.addClass('input-error');
-      setTimeout(()=> $inp.removeClass('input-error'), 400);
-      return;
-    }
-    selectedTrains.add(num);
-    updateSelectionUI();
-    const card = document.querySelector(`#propositions .chip[data-num="${num}"]`);
-    if (card) card.classList.add('is-selected');
-    $inp.val('');
+  if (typeof chipsUpdateCount === 'function') chipsUpdateCount();
+  updateSelectionUI();
+});
+function addManualTrain(){
+  const $inp = $('#manualTrainInput');
+  const raw = String($inp.val() || '').trim();
+  const num = (raw.match(/\b\d{5,6}\b/) || [])[0];
+  if (!num){
+    $inp.addClass('input-error'); setTimeout(()=> $inp.removeClass('input-error'), 400);
+    return;
   }
+  selectedTrains.add(num);
+  updateSelectionUI();
+  const card = document.querySelector(`#propositions .chip[data-num="${num}"]`);
+  if (card) card.classList.add('is-selected');
+  $inp.val('');
+}
   $(document).on('click', '#btnAddTrain', addManualTrain);
   $(document).on('keydown', '#manualTrainInput', function(e){
     if (e.key === 'Enter') addManualTrain();
-  });
+  }); 
 
   // Bouton “Générer le tableau”
   $('#loadTrains').off('click').on('click', async function () {
@@ -3505,12 +3763,12 @@ $(function () {
 
     /* ===== Helper compo (US / UM / UM3) ===== */
     function getCompoClass(comp){
-      const c = (comp || '').toString().trim().toUpperCase().replace(/\s+/g,'');
-      if (c === 'US') return 'us-train';
-      if (c === 'UM3' || c === 'UMX3' || c === 'UM-3') return 'um3-train';
-      if (c.startsWith('UM')) return 'um-train'; // fallback UM/UM2
-      return '';
-    }
+  const c = String(comp || '').trim().toUpperCase().replace(/\s+/g,'');
+  if (c === 'US') return 'us-train';
+  if (c === 'UM3' || c === 'UMX3' || c === 'UM-3') return 'um3-train';
+  if (c.startsWith('UM')) return 'um-train';
+  return 'no-compo-text'; // compo inconnue -> texte blanc uniquement
+}
 
     /* On va (re)générer un tableau */
     mainTableRendered = true;
@@ -3595,17 +3853,17 @@ $(function () {
     const mergedStops = mergedStopsOrdered.concat(extrasNotInFixed);
 
     /* Filtre De/À pour l’affichage */
-    const startName2 = $('#startStation').val() || '';
-    const endName2   = $('#endStation').val() || '';
-    const displayStops = filterByOD(mergedStops, startName2, endName2);
+    const startName = $('#startStation').val() || '';
+    const endName   = $('#endStation').val() || '';
+    const displayStops = filterByOD(mergedStops, startName, endName);
 
     /* 4) Construction du tableau */
     let html = '<table><thead><tr><th>Gare</th>';
     numbers.forEach(num => {
-      const composition = (typeof compoData !== 'undefined' && compoData) ? compoData[num] : '';
-      const compClass   = getCompoClass(composition); // us-train / um-train / um3-train / ''
-      html += `<th class="train-header ${compClass}" data-train-number="${num}">${num}</th>`;
-    });
+  const composition = (typeof compoData !== 'undefined' && compoData) ? compoData[num] : '';
+  const compClass   = getCompoClass(composition, true); // ← force blanc si inconnu
+  html += `<th class="train-header ${compClass}" data-train-number="${num}">${num}</th>`;
+});
     html += '</tr><tr><th></th>';
 
     /* Ligne d’icônes (statut) */
@@ -3648,13 +3906,13 @@ $(function () {
 
     html += '</tr></thead><tbody>';
 
-    /* 5) Lignes (gares) */
+/* 5) Lignes (gares) */
     for (const stopName of displayStops) {
       html += `<tr data-gare="${stopName}">
-        <td>
-          <span class="gare-label">${stopName}</span>
-          <span class="wx" aria-live="polite"></span>
-        </td>`;
+  <td>
+    <span class="gare-label">${stopName}</span>
+    <span class="wx" aria-live="polite"></span>
+  </td>`;
 
       for (const num of numbers) {
         const result = results[num];
@@ -3942,19 +4200,19 @@ $('#refreshButton').off('click').on('click', async function () {
 
 /* ---------- GTFS-RT : loader centralisé + auto-apply ---------- */
 const SAME_ORIGIN_JSON = (()=>{
-  // /Assistant-train/labetaillereBETA3.html -> /Assistant-train/retards_nancymetzlux.json
+  // /labetaillere.html -> /retards_nancymetzlux.json (si tu le seras un jour en local)
   const base = location.origin + location.pathname.replace(/\/[^\/]*$/, '/');
   return base + 'retards_nancymetzlux.json';
 })();
 
+// Ordre : même origine (si jamais tu le copies localement) -> RAW GitHub -> jsDelivr -> API GitHub
 const GTFS_RT_CANDIDATES = [
-  SAME_ORIGIN_JSON, // ← prioritaire si le fichier est servi par GitHub Pages
-  'https://tekmate-lux.github.io/Assistant-train/retards_nancymetzlux.json',
-  'https://raw.githubusercontent.com/tekmate-lux/Assistant-train/main/Assistant-train/retards_nancymetzlux.json',
-  'https://cdn.jsdelivr.net/gh/tekmate-lux/Assistant-train@main/Assistant-train/retards_nancymetzlux.json'
+  SAME_ORIGIN_JSON,
+  'https://raw.githubusercontent.com/TekMaTe-lux/Assistant-train/main/Assistant-train/retards_nancymetzlux.json',
+  'https://cdn.jsdelivr.net/gh/TekMaTe-lux/Assistant-train@main/Assistant-train/retards_nancymetzlux.json'
 ];
+// NB: on enlève volontairement l’URL GitHub Pages (tekmate-lux.github.io) qui cause des 301 sans CORS.
 
-// garde-fou global (pas de redeclaration)
 if (typeof window.retardsGTFS === 'undefined') window.retardsGTFS = null;
 
 async function fetchWithTimeoutNoHeaders(url, ms = 8000) {
@@ -3963,8 +4221,7 @@ async function fetchWithTimeoutNoHeaders(url, ms = 8000) {
   try {
     const res = await fetch(url, {
       cache: 'no-store',
-      // surtout pas de headers custom -> évite le préflight CORS
-      // pas de mode:'no-cors' (sinon opaque et illisible)
+      // pas de headers custom pour éviter le préflight CORS
       signal: ctrl.signal
     });
     return res;
@@ -3973,18 +4230,55 @@ async function fetchWithTimeoutNoHeaders(url, ms = 8000) {
   }
 }
 
+async function fetchFromGitHubAPI() {
+  // Dernier fallback : API GitHub Contents (CORS OK), on décode le Base64
+  const apiUrls = [
+    'https://api.github.com/repos/TekMaTe-lux/Assistant-train/contents/Assistant-train/retards_nancymetzlux.json',
+    'https://api.github.com/repos/TekMaTe-lux/Assistant-train/contents/retards_nancymetzlux.json'
+  ];
+  for (const apiUrl of apiUrls) {
+    try {
+      const r = await fetch(apiUrl, {
+        cache: 'no-store',
+        headers: { 'Accept': 'application/vnd.github+json' }
+      });
+      if (!r.ok) continue;
+      const meta = await r.json();
+      if (meta && meta.content) {
+        const text = atob(String(meta.content).replace(/\n/g, ''));
+        return JSON.parse(text);
+      }
+    } catch {}
+  }
+  throw new Error('GitHub API fallback indisponible.');
+}
+
 async function loadGtfsRetards({ forceFresh = false } = {}) {
   const withBuster = (u) => u + (u.includes('?') ? '&' : '?') + 't=' + (forceFresh ? Date.now() : 'soft');
 
   let lastErr = null;
+
+  // 1) Essais directs (same-origin/raw/jsDelivr)
   for (const base of GTFS_RT_CANDIDATES) {
     const url = withBuster(base);
     try {
       console.log('[GTFS-RT] tentative:', url);
       const res = await fetchWithTimeoutNoHeaders(url, 8000);
       if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText}`);
-      const data = await res.json(); // si CORS OK et JSON correct
+
+      // Certains CDN peuvent renvoyer text/plain : on lit le texte puis JSON.parse au besoin
+      const ct = (res.headers.get('content-type') || '').toLowerCase();
+      let data;
+      if (ct.includes('application/json')) {
+        data = await res.json();
+      } else {
+        const txt = await res.text();
+        data = JSON.parse(txt);
+      }
+
       window.retardsGTFS = data;
+      window.retardsGTFS_SOURCE = base;
+window.dispatchEvent(new CustomEvent('gtfsrt:loaded', { detail: { source: base, data } }));
       console.log('✅ GTFS-RT chargé via', base, 'à', new Date().toISOString());
       tryApplyGtfsToCurrentTable();
       return;
@@ -3993,12 +4287,29 @@ async function loadGtfsRetards({ forceFresh = false } = {}) {
       lastErr = e;
     }
   }
+
+  // 2) Fallback via API GitHub (CORS OK)
+  try {
+    const data = await fetchFromGitHubAPI();
+    window.retardsGTFS = data;
+    window.retardsGTFS_SOURCE = 'GitHub API';
+window.dispatchEvent(new CustomEvent('gtfsrt:loaded', { detail: { source: 'GitHub API', data } }));
+    console.log('✅ GTFS-RT chargé via GitHub API à', new Date().toISOString());
+    tryApplyGtfsToCurrentTable();
+    return;
+  } catch (e) {
+    lastErr = e;
+  }
+  
+window.dispatchEvent(new CustomEvent('gtfsrt:error', { detail: { error: String(lastErr) } }));
   throw lastErr || new Error('Impossible de charger GTFS-RT depuis les miroirs.');
 }
 
 // 1er chargement au load (frais)
 window.addEventListener('load', () => {
-  loadGtfsRetards({ forceFresh: true }).catch(err => console.error("Erreur GTFS-RT au load:", err));
+  loadCompoData(); // ← optionnel : charge Compotrains.json au démarrage
+  loadGtfsRetards({ forceFresh: true })
+    .catch(err => console.error("Erreur GTFS-RT au load:", err));
 });
 
 // applique si tableau présent + date = aujourd’hui
@@ -4010,11 +4321,6 @@ function tryApplyGtfsToCurrentTable() {
   table.querySelectorAll('.gtfs-retard').forEach(n => n.remove());
   if (typeof applyRetardsFromGTFS === 'function') applyRetardsFromGTFS(window.retardsGTFS);
 }
-
-// Charger GTFS-RT frais quand la page est prête (1ère fois)
-window.addEventListener('load', () => {
-  loadGtfsRetards({ forceFresh: true }).catch(err => console.error("Erreur GTFS-RT au load:", err));
-});
 
 /* ---------- TIMESTAMP ---------- */
 function setLastUpdated() {
@@ -4058,7 +4364,7 @@ function isSelectedDateToday(){
 }
 
 /* ---------- APPLICATION DES RETARDS GTFS-RT DANS LE TABLEAU ---------- */
-function applyRetardsFromGTFS(retardsGTFS) {
+function applyRetardsFromGTFS(data) {
   const table = document.querySelector("#trainInfo table");
   if (!table) { console.log("⛔ Le tableau n'est pas encore généré !"); return; }
 
@@ -4076,12 +4382,10 @@ function applyRetardsFromGTFS(retardsGTFS) {
       const trainHeader = document.querySelectorAll("#trainInfo table tr th")[colIndex];
       const trainNumber = trainHeader?.dataset.trainNumber?.trim();
 
-      if (trainNumber && retardsGTFS[trainNumber]) {
-        const retardMinutes = retardsGTFS[trainNumber][gare];
+      if (trainNumber && data[trainNumber]) {
+        const retardMinutes = data[trainNumber][gare];
 
-        // Ne pas écraser une case déjà marquée comme suppression/retard API
         const hasSuppression = cell.querySelector('.deleted, .delay-strike, .strike, .cancelled');
-
         if (retardMinutes && retardMinutes > 0 && !hasSuppression) {
           if (!cell.querySelector(".gtfs-retard")) {
             const div = document.createElement("div");
@@ -4094,9 +4398,13 @@ function applyRetardsFromGTFS(retardsGTFS) {
     });
   }
 }
+
 /* ---------- ALERTES ---------- */
 const urlAlertes = 'https://raw.githubusercontent.com/tekmate-lux/Assistant-train/main/Assistant-train/alertes_sncftoutes.json';
-const motsCles = ['Luxembourg', 'Metz', 'Thionville'];
+const motsCles = Array.from(new Set([
+  ...garesParLigne.map(g => g.nom),
+  'CFL','Moselle','Meurthe-et-Moselle','Luxembourg'
+]));
 
 const causesMap = {
   1: {prio: 1, couleur: '#dc3545', icone: '❌', label: 'Suppression (NO_SERVICE)'},
@@ -4121,22 +4429,83 @@ function formatDate(d) {
   const pad = n => n.toString().padStart(2, '0');
   return `${pad(d.getDate())}/${pad(d.getMonth() + 1)}/${d.getFullYear()} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
-function extraireNumeroTrainDepuisTripId(tripId) {
-  const match = tripId.match(/\d{5}/);
-  return match ? match[0] : null;
-}
-function nettoyerNumeroTrain(numero) {
-  const match = numero.match(/\d{5}/);
-  return match ? match[0] : null;
-}
+function extraireNumeroTrainDepuisTripId(tripId){ return extractTrainNumber(tripId); }
+function nettoyerNumeroTrain(numero){ return extractTrainNumber(numero); }
 function getDisplayedTrainNumbers() {
   const headers = document.querySelectorAll("table tr th[data-train-number]");
   return Array.from(headers)
     .map(th => nettoyerNumeroTrain(th.dataset.trainNumber.trim()))
     .filter(n => n !== null);
 }
+/* ====== Filtres DYNAMIQUES basés sur les trains affichés ====== */
 
-function chargerEtAfficherAlertes() {
+// Récupère vite les arrêts d'un trip
+function getStopsForTripQuick(trip_id){
+  if (GTFS._stopTimesByTripSec && GTFS._stopTimesByTripSec.get(trip_id)) {
+    return GTFS._stopTimesByTripSec.get(trip_id).map(r=>r.stop_id);
+  }
+  // fallback si l'index n'est pas prêt
+  return GTFS.stopTimes.filter(st=>st.trip_id===trip_id).map(st=>st.stop_id);
+}
+
+// Construit les sets à partir des colonnes du tableau (trains affichés)
+function buildDisplayedFilters(ymd){
+  const displayedNums = new Set(getDisplayedTrainNumbers()); // ex: ["88753","88532",...]
+  const tripIds = new Set();
+  const routeIds = new Set();
+  const stopIds = new Set();
+
+  for (const t of GTFS.trips){
+    if (!serviceActiveForDate(t.trip_id, ymd)) continue;
+    const n = extractTrainNumber(t.trip_short_name || '');
+    if (!n || !displayedNums.has(n)) continue;
+
+    tripIds.add(t.trip_id);
+    if (t.route_id) routeIds.add(t.route_id);
+    for (const sid of getStopsForTripQuick(t.trip_id)) stopIds.add(sid);
+  }
+  return { displayedNums, tripIds, routeIds, stopIds };
+}
+
+// Une entité touche nos trains/ligne affichés ?
+function entityTargetsDisplayed(ent, sets){
+  // trip direct
+  const entTrip = ent.trip_id || ent.vehicle_journey_id || null;
+  if (entTrip && sets.tripIds.has(entTrip)) return true;
+
+  // route de nos trains
+  if (ent.route_id && sets.routeIds.has(ent.route_id)) return true;
+
+  // arrêt parcouru par nos trains
+  if (ent.stop_id && sets.stopIds.has(ent.stop_id)) return true;
+
+  // n° de train dans le texte libre de l'entité
+  const blob = [ent.name, ent.trip_id, ent.vehicle_journey_id, ent.route_id].filter(Boolean).join(' ');
+  const num = extractTrainNumber(blob);
+  if (num && sets.displayedNums.has(num)) return true;
+
+  return false;
+}
+
+// Une alerte touche nos trains/ligne affichés ?
+function alertTargetsDisplayed(alert, sets){
+  const ents = alert.informed_entities || [];
+  if (ents.length === 0) return false;
+  return ents.some(ent => entityTargetsDisplayed(ent, sets));
+}
+
+// Fallback mots-clés (uniquement si AUCUNE entité structurée)
+function keywordStrictCorridor(text, desc){
+  const s = (text||'') + ' ' + (desc||'');
+  const sl = s.toLowerCase();
+  const hasMetzOrNancy = /(?:\b|_)(metz|nancy)(?:\b|_)/.test(sl);
+  const hasNorth = /(?:\b|_)(thionville|luxembourg|bettembourg|hettange|rodange|esch|dudelange|volmerange)(?:\b|_)/.test(sl);
+  const hasOurStations = garesParLigne.some(g => sl.includes(g.nom.toLowerCase()));
+  // on exige au moins un pôle sud (Metz/Nancy) ET un pôle nord (Thionville/Lux/etc.) ET une gare de la ligne
+  return hasMetzOrNancy && hasNorth && hasOurStations;
+}
+
+async function chargerEtAfficherAlertes() {
   const container = document.getElementById('alertes');
   if (!container) return;
 
@@ -4150,19 +4519,15 @@ function chargerEtAfficherAlertes() {
     selectedDate.setHours(12, 0, 0, 0);
   }
 
+  const ymd = `${selectedDate.getFullYear()}${String(selectedDate.getMonth()+1).padStart(2,'0')}${String(selectedDate.getDate()).padStart(2,'0')}`;
+
+  try { await ensureGTFSLoaded(); } catch(e){ console.warn('GTFS non chargé pour alertes:', e); }
+  ensureTransferIndexesBuilt();   // accélère getStopsForTripQuick
+  buildStationGroups();
+
   // petit utilitaire local
   const stripHtml = (s) => (s || '').replace(/<[^>]*>?/gm, '');
 
-  // détecte si une entité d'alerte cible un train affiché
-  function entityTargetsDisplayedTrain(ent, trains) {
-    const blob = [ent.trip_id, ent.vehicle_journey_id, ent.route_id, ent.name]
-      .filter(Boolean).join(' ');
-    const num = extraireNumeroTrainDepuisTripId(blob) || nettoyerNumeroTrain(blob);
-    return num && trains.includes(num);
-  }
-  function alertTargetsDisplayedTrains(alert, trains) {
-    return (alert.informed_entities || []).some(ent => entityTargetsDisplayedTrain(ent, trains));
-  }
   function alertActiveForDate(alert, dateObj) {
     const startMs = (alert.active_period_start != null) ? alert.active_period_start * 1000 : -Infinity;
     const endMs   = (alert.active_period_end   != null) ? alert.active_period_end   * 1000 :  Infinity;
@@ -4185,19 +4550,29 @@ function chargerEtAfficherAlertes() {
       titreGeneral.className = 'alertes-header';
       container.appendChild(titreGeneral);
 
-      const trainsAffiches = getDisplayedTrainNumbers(); // ex: ["88753","88532",...]
+      // ⚙️ sets construits à partir des trains AFFICHÉS
+      const sets = buildDisplayedFilters(ymd);
 
-      // 1) Nouveau filtrage : ACTIF le jour choisi ET (vise un train affiché OU contient mot-clé)
+      // 1) Filtrage strict : actif + touche nos trips/routes/stops affichés
       let alertesFiltres = alertes.filter(a => {
-        const titre = a.header_text || '';
-        const desc  = stripHtml(a.description_text || '');
-        const hasKeyword = contientMotCle(titre, motsCles) || contientMotCle(desc, motsCles);
-        const hitsTrain  = alertTargetsDisplayedTrains(a, trainsAffiches);
-        const activeNow  = alertActiveForDate(a, selectedDate);
-        return activeNow && (hasKeyword || hitsTrain);
+        const activeNow = alertActiveForDate(a, selectedDate);
+        if (!activeNow) return false;
+
+        // 1) entités structurées
+        if (alertTargetsDisplayed(a, sets)) return true;
+
+        // 2) fallback mots-clés strict SEULEMENT si pas d’entités
+        const ents = a.informed_entities || [];
+        if (ents.length === 0) {
+          const titre = a.header_text || '';
+          const desc  = stripHtml(a.description_text || '');
+          return keywordStrictCorridor(titre, desc);
+        }
+
+        return false;
       });
 
-      // 2) Tri par priorité basée sur EFFECT (et plus "cause")
+      // 2) Tri par priorité (effect)
       alertesFiltres.sort((A, B) => {
         const pa = getStyleParCauseCode(A.effect).prio;
         const pb = getStyleParCauseCode(B.effect).prio;
@@ -4209,27 +4584,34 @@ function chargerEtAfficherAlertes() {
         return;
       }
 
-      // 3) Rendu : titre SANS n° de train, sous-titre = trains concernés
+      // 3) Rendu : titre + “trains concernés” (uniquement nos trains affichés)
       alertesFiltres.forEach(alerte => {
         const effetCode = Number(alerte.effect);
         const styleMeta = getStyleParCauseCode(effetCode);
 
-        const titre = (alerte.header_text || styleMeta.label).trim(); // ← pas de n°
+        const titre = (alerte.header_text || styleMeta.label).trim();
         const description = stripHtml(alerte.description_text || '');
 
-        // Liste unique des trains concernés
         const trainsCibles = Array.from(new Set(
-          (alerte.informed_entities || [])
-            .map(ent => {
-              const blob = [ent.trip_id, ent.vehicle_journey_id, ent.route_id, ent.name].filter(Boolean).join(' ');
-              return extraireNumeroTrainDepuisTripId(blob) || nettoyerNumeroTrain(blob);
-            })
-            .filter(Boolean)
+          (alerte.informed_entities || []).map(ent => {
+            // 1) trip structuré → on cherche le n° de train depuis GTFS
+            const tripId = ent.trip_id || ent.vehicle_journey_id || null;
+            if (tripId && sets.tripIds.has(tripId)) {
+              const t = GTFS.tripById?.get(tripId);
+              const num = t?.trip_short_name ? extractTrainNumber(t.trip_short_name) : null;
+              if (num && sets.displayedNums.has(num)) return num;
+            }
+            // 2) sinon on tente d’extraire un n° dans le texte
+            const blob = [ent.name, ent.trip_id, ent.vehicle_journey_id, ent.route_id].filter(Boolean).join(' ');
+            const num2 = extractTrainNumber(blob);
+            return (num2 && sets.displayedNums.has(num2)) ? num2 : null;
+          }).filter(Boolean)
         ));
 
-        // si "service réduit" (effect=2), pose un hint visuel sur l’entête de colonne du train
-        if (effetCode === 2 && trainsCibles.length) {
-          trainsCibles.forEach(numeroTrain => {
+        // hint visuel “US” si effect=2 et si train affiché
+        const targetsDisplayed = trainsCibles.filter(n => sets.displayedNums.has(n));
+        if (effetCode === 2 && targetsDisplayed.length){
+          targetsDisplayed.forEach(numeroTrain => {
             const header = document.querySelector(`th[data-train-number="${numeroTrain}"]`);
             if (header) {
               header.classList.add('us-train');
@@ -4238,7 +4620,6 @@ function chargerEtAfficherAlertes() {
           });
         }
 
-        // couleur/icone via ta map existante
         let classeCouleur = 'alerte-box';
         if (styleMeta.prio === 1) classeCouleur += ' red';
         else if (styleMeta.prio === 2 || styleMeta.prio === 3) classeCouleur += ' orange';
@@ -4265,7 +4646,6 @@ function chargerEtAfficherAlertes() {
           ${trainsCibles.length ? `<p style="opacity:.9;">Trains concernés : <strong>${trainsCibles.join(', ')}</strong></p>` : ''}
         `;
 
-        // toggle d’ouverture si tu veux garder le comportement accordéon
         headerDiv.addEventListener('click', () => {
           div.classList.toggle('expanded');
         });
@@ -4596,8 +4976,8 @@ betaInput.addEventListener("keyup", (e) => {
 });
 </script>
   
-   <script>
-// --------- COORDS (à compléter si besoin) ----------
+  <script>
+// --------- COORDS connues + cache dynamique (rempli via GTFS si besoin) ----------
 const GARE_COORDS = {
   "Luxembourg":        { lat: 49.598, lon: 6.134 },
   "Bettembourg":       { lat: 49.518, lon: 6.105 },
@@ -4612,11 +4992,47 @@ const GARE_COORDS = {
   "Pagny-sur-Moselle": { lat: 48.984, lon: 6.026 },
   "Pont-à-Mousson":    { lat: 48.907, lon: 6.063 },
   "Nancy":             { lat: 48.692, lon: 6.184 }
-  // ajoute les autres gares si tu en as
 };
+const WX_COORDS_CACHE = new Map(); // alimenté dynamiquement depuis le GTFS
 
+// --------- Résolution de coordonnées par nom de gare (priorité: manuel -> cache -> GTFS) ----------
+async function resolveCoordsByName(name){
+  if (!name) return null;
+  if (GARE_COORDS[name]) return GARE_COORDS[name];
+  if (WX_COORDS_CACHE.has(name)) return WX_COORDS_CACHE.get(name);
+
+  // Besoin des helpers déjà présents dans ton script principal
+  if (typeof ensureGTFSLoaded !== 'function' || typeof getIdsForName !== 'function') return null;
+
+  try {
+    await ensureGTFSLoaded();
+    if (typeof buildStationGroups === 'function') buildStationGroups();
+
+    const ids = getIdsForName(name); // Set de stop_id pour la gare (regroupé par parent_station)
+    if (!ids || !ids.size) return null;
+
+    let sumLat = 0, sumLon = 0, n = 0;
+    ids.forEach(id => {
+      const st = GTFS.idToStop?.get(id);
+      const la = parseFloat(st?.stop_lat);
+      const lo = parseFloat(st?.stop_lon);
+      if (Number.isFinite(la) && Number.isFinite(lo)) { sumLat += la; sumLon += lo; n++; }
+    });
+    if (!n) return null;
+
+    const c = { lat: +(sumLat/n).toFixed(5), lon: +(sumLon/n).toFixed(5) };
+    WX_COORDS_CACHE.set(name, c);
+    // optionnel : on hydrate aussi l’objet statique pour les prochains appels synchrones
+    GARE_COORDS[name] = c;
+    return c;
+  } catch {
+    return null;
+  }
+}
+
+// --------- Lien Windy pour une gare (utilise manuel, cache ou GTFS) ----------
 function buildWeatherLinkByName(name, zoom = 10){
-  const c = GARE_COORDS[name];
+  const c = GARE_COORDS[name] || WX_COORDS_CACHE.get(name);
   if (!c) return null;
   const lat = Number(c.lat).toFixed(3);
   const lon = Number(c.lon).toFixed(3);
@@ -4625,57 +5041,44 @@ function buildWeatherLinkByName(name, zoom = 10){
 
 // --------- WMO -> icône + libellé ----------
 function wmoToIcon(code, isDay = true){
-  // 0 = ciel clair
   if (code === 0) return { ico: isDay ? "☀️" : "🌙", label: "Ciel clair" };
-
-  // 1 = peu nuageux, 2 = partiellement nuageux, 3 = couvert
   if (code === 1) return { ico: isDay ? "🌤️" : "☁️", label: "Peu nuageux" };
   if (code === 2) return { ico: "⛅", label: "Partiellement nuageux" };
   if (code === 3) return { ico: "☁️", label: "Couvert" };
-
   if ([45,48].includes(code)) return { ico: "🌫️", label: "Brouillard" };
-
   if ([51,53,55].includes(code)) return { ico: "🌦️", label: "Bruine" };
   if ([56,57].includes(code)) return { ico: "🌧️", label: "Bruine verglaçante" };
-
   if ([61,63].includes(code)) return { ico: "🌧️", label: "Pluie" };
   if (code === 65) return { ico: "🌧️", label: "Pluie forte" };
   if ([66,67].includes(code)) return { ico: "🌧️", label: "Pluie verglaçante" };
-
   if ([71,73].includes(code)) return { ico: "🌨️", label: "Neige" };
   if (code === 75) return { ico: "❄️", label: "Neige forte" };
   if (code === 77) return { ico: "🌨️", label: "Grains de neige" };
-
   if ([80,81].includes(code)) return { ico: "🌦️", label: "Averses" };
   if (code === 82) return { ico: "🌧️", label: "Averses fortes" };
-
   if (code === 85) return { ico: "🌨️", label: "Averses de neige" };
   if (code === 86) return { ico: "❄️", label: "Averses de neige fortes" };
-
   if (code === 95) return { ico: "⛈️", label: "Orage" };
   if ([96,99].includes(code)) return { ico: "⛈️", label: "Orage (grêle)" };
-
   return { ico: "❔", label: `Code ${code}` };
 }
 
-// --------- Fetch météo pour N gares en un appel (robuste) ----------
+// --------- Fetch météo pour N gares (utilise GTFS pour compléter les coords manquantes) ----------
 async function fetchWeatherForStations(stationNames){
-  // Dédoublonne et garde seulement les gares avec lat/lon valides
   const seen = new Set();
   const coords = [];
   for (const name of stationNames || []) {
     if (!name || seen.has(name)) continue;
     seen.add(name);
-    const c = (GARE_COORDS && GARE_COORDS[name]) || null;
-    if (c && Number.isFinite(c.lat) && Number.isFinite(c.lon)) {
+
+    const c = GARE_COORDS[name] || await resolveCoordsByName(name);
+    if (c && Number.isFinite(+c.lat) && Number.isFinite(+c.lon)) {
       coords.push({ name, lat: +c.lat, lon: +c.lon });
     }
   }
 
-  // Rien à interroger
   if (!coords.length) return new Map();
 
-  // Construit l’URL de manière sûre
   const latList = coords.map(c => c.lat).join(',');
   const lonList = coords.map(c => c.lon).join(',');
   const qs = new URLSearchParams({
@@ -4686,7 +5089,6 @@ async function fetchWeatherForStations(stationNames){
   });
   const url = `https://api.open-meteo.com/v1/forecast?${qs.toString()}`;
 
-  // Timeout (7s) pour éviter de bloquer l’UI
   const ctrl = new AbortController();
   const to = setTimeout(() => ctrl.abort(), 7000);
 
@@ -4697,15 +5099,12 @@ async function fetchWeatherForStations(stationNames){
     if (!res.ok) throw new Error('HTTP ' + res.status);
     json = await res.json();
   } catch (e) {
-    // On remonte une Map vide : le caller décidera quoi afficher
     console.warn('Météo indisponible:', e?.message || e);
     return new Map();
   }
 
-  // Open-Meteo renvoie un objet (1 point) ou un tableau (N points).
   const list = Array.isArray(json) ? json : [json];
 
-  // Map gare -> données
   const out = new Map();
   for (let i = 0; i < coords.length; i++) {
     const name = coords[i].name;
@@ -4723,12 +5122,10 @@ async function fetchWeatherForStations(stationNames){
 
 // --------- Remplissage des <span class="wx"> (affiche uniquement pour AUJOURD'HUI) ----------
 async function updateWeatherBadges(){
-  // Fonction locale : est-ce bien la date du jour (Europe/Luxembourg) ?
   const isSelectedDateTodayLocal = () => {
     try {
       const inp = document.getElementById('trainDate');
       const v = inp?.value || '';
-      // Si pas de date → on considère "aujourd'hui"
       if (!/^\d{4}-\d{2}-\d{2}$/.test(v)) return true;
       const fmt = new Intl.DateTimeFormat('en-CA', {
         timeZone: 'Europe/Luxembourg',
@@ -4743,7 +5140,6 @@ async function updateWeatherBadges(){
   const rows = Array.from(document.querySelectorAll('#trainInfo tr[data-gare]'));
   if (!rows.length) return;
 
-  // Si la date n'est pas aujourd'hui → on nettoie et on sort
   if (!isSelectedDateTodayLocal()){
     rows.forEach(r => {
       const wx = r.querySelector('.wx');
@@ -4752,13 +5148,9 @@ async function updateWeatherBadges(){
     return;
   }
 
-  // Noms uniques des gares visibles
   const names = [...new Set(rows.map(r => r.dataset.gare).filter(Boolean))];
-
-  // Récupère les données
   const data = await fetchWeatherForStations(names);
 
-  // Injecte/Nettoie pour chaque ligne
   rows.forEach(r => {
     const name = r.dataset.gare;
     const wx = r.querySelector('.wx');
@@ -4794,7 +5186,6 @@ async function updateWeatherBadges(){
 let wxTimer = null;
 function startWeatherAutorefresh(intervalMs = 5 * 60 * 1000){
   clearInterval(wxTimer);
-  // Lance le timer seulement si la date affichée est "aujourd'hui"
   const dateInput = document.getElementById('trainDate');
   const getIsToday = () => {
     try {
@@ -4813,108 +5204,6 @@ function startWeatherAutorefresh(intervalMs = 5 * 60 * 1000){
   if (!getIsToday()) return;
   wxTimer = setInterval(updateWeatherBadges, intervalMs);
 }
-     </script>
-     
-  <script>
-(function(){
-  const modal      = document.getElementById('tableModal');
-  const modalInner = document.getElementById('tableModalInner');
-  const closeBtn   = document.getElementById('closeTableModal');
-
-  function openTableModalFit(){
-    const srcTable = document.querySelector('#trainInfo table');
-    if(!srcTable) return;
-
-    // clone propre (liens fonctionnels)
-    const clone = srcTable.cloneNode(true);
-    modalInner.innerHTML = '';
-    modalInner.appendChild(clone);
-
-    // on affiche d'abord pour mesurer
-    modal.style.display = 'flex';
-
-    // mesures du tableau cloné (non réduit)
-    const tblRect = clone.getBoundingClientRect();
-
-    // surface disponible à l'intérieur de la modale
-    const content = document.querySelector('.table-modal-content');
-    const availW  = content.clientWidth  - 16; // marge interne approx
-    const availH  = content.clientHeight - 48; // moins la barre d'actions
-
-    // facteur d'échelle pour que TOUT le tableau tienne
-    const sx = availW / tblRect.width;
-    const sy = availH / tblRect.height;
-    const scale = Math.min(1, sx, sy); // jamais >1 (pas d’agrandissement)
-
-    // applique l'échelle
-    modalInner.style.transform = `scale(${scale})`;
-
-    // pour éviter des barres vides, on “réserve” l’espace d’origine
-    modalInner.style.width  = tblRect.width + 'px';
-    modalInner.style.height = tblRect.height + 'px';
-
-    // stocke l’état (pour double-tap toggle)
-    modalInner.dataset.scaleFit = scale.toString();
-    modalInner.dataset.mode = 'fit';
-  }
-
-  function openTableModal100(){
-    modalInner.style.transform = 'scale(1)';
-    modalInner.dataset.mode = 'full';
-  }
-
-  function closeTableModal(){
-    modal.style.display = 'none';
-  }
-
-  // Ouvre la modale quand on clique/tape sur le tableau (mobile ET desktop)
-  document.addEventListener('click', function(e){
-    const table = e.target.closest('#trainInfo table');
-    if (table){
-      // vérifie si on est sur mobile (largeur < 768px)
-      if (window.matchMedia("(max-width: 768px)").matches) {
-        openTableModalFit();
-      }
-    }
-  });
-
-  // Fermer via bouton / clic fond / ESC
-  closeBtn.addEventListener('click', closeTableModal);
-  modal.addEventListener('click', (e)=>{ if(e.target === modal) closeTableModal(); });
-  document.addEventListener('keydown', (e)=>{ if(e.key==='Escape') closeTableModal(); });
-
-  // Double-tap / double-click dans la modale -> Fit ↔ 100%
-  let lastTap = 0;
-  modalInner.addEventListener('click', function(e){
-    const now = Date.now();
-    if (now - lastTap < 300){
-      // toggle
-      if (modalInner.dataset.mode === 'fit'){
-        openTableModal100();
-      } else {
-        openTableModalFit();
-      }
-      e.preventDefault();
-      e.stopPropagation();
-    }
-    lastTap = now;
-  });
-
-  // Si on tourne le téléphone, on recalcule le “fit”
-  window.addEventListener('orientationchange', ()=>{
-    if (modal.style.display === 'flex'){
-      // petit délai pour laisser le layout se recalculer
-      setTimeout(openTableModalFit, 250);
-    }
-  });
-
-  // Si la fenêtre change (clavier mobile, split view…), on recalcule
-  window.addEventListener('resize', ()=>{
-    if (modal.style.display === 'flex' && modalInner.dataset.mode === 'fit'){
-      openTableModalFit();
-    }
-  });
-})();
 </script>
 </body>
 </html>
