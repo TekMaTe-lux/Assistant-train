@@ -2075,28 +2075,17 @@ label[for="trainNumbers"]{ display:none !important; }
 .filters-transfer label span { color:#bff; }
 
 <style id="mobile-zoom-css">
-  .mz-overlay{position:fixed; inset:0; z-index:9999; background:rgba(0,0,0,.75); display:none;}
-  .mz-stage{position:absolute; inset:0; overflow:hidden; touch-action:none; cursor:grab;}
-  .mz-canvas{position:absolute; left:0; top:0; transform-origin:0 0; will-change:transform;}
-  .mz-hint{position:absolute; left:12px; bottom:12px; color:#ddd; font:500 12px/1.2 system-ui; opacity:.9; pointer-events:none;}
-
-  /* Copie des styles liens pour l’overlay (même rendu que le tableau) */
-  .mz-overlay a.gare-link{ color:#00ffff; font-weight:600; text-decoration:none; transition:all .2s; border-bottom:1px dashed transparent; }
-  .mz-overlay a.gare-link:hover{ color:#ff00cc; border-bottom:1px dashed #ff00cc; text-shadow:0 0 4px #ff00cc; }
-  .mz-overlay a.train-link{ color:inherit; text-decoration:none; font-weight:inherit; cursor:pointer; }
-  .mz-overlay .wx a.wx-link{
-    color:inherit; text-decoration:none; display:inline-flex; align-items:center; gap:.35rem;
-    padding:.15rem .45rem; border-radius:9999px; background:rgba(0,0,0,.04); border:1px solid rgba(0,0,0,.06); line-height:1.1;
-  }
-  .mz-overlay .wx .wx-ico{ line-height:1; }
-  .mz-overlay .wx .wx-t{ font-variant-numeric:tabular-nums; opacity:.9; }
-  .mz-overlay .wx a.wx-link:hover{ background:rgba(0,0,0,.06); border-color:rgba(0,0,0,.1); }
-  .mz-overlay .wx a.wx-link:focus{ outline:none; box-shadow:0 0 0 2px rgba(0,128,255,.15); background:rgba(0,0,0,.06); }
-  .mz-overlay .wx a.wx-link:visited{ color:inherit; }
-  @media (prefers-color-scheme: dark){
-    .mz-overlay .wx a.wx-link{ background:rgba(255,255,255,.06); border-color:rgba(255,255,255,.08); }
-    .mz-overlay .wx a.wx-link:hover{ background:rgba(255,255,255,.08); border-color:rgba(255,255,255,.14); }
-  }
+/* Bouton loupe (mobile only) */
+.table-zoom-btn{
+  position:absolute; right:8px; bottom:8px;
+  width:40px; height:40px; border-radius:50%;
+  border:none; background:rgba(0,0,0,.35);
+  color:#fff; font-size:18px; line-height:40px;
+  backdrop-filter: blur(4px);
+}
+@media (min-width: 769px){
+  .table-zoom-btn{ display:none; } /* pas de bouton sur desktop */
+}
 </style>
 </head>
 <body>
@@ -4036,7 +4025,9 @@ function addManualTrain(){
       '<div class="table-scroll">' + html + '</div>' +
       '<div id="lastUpdated" class="last-updated" aria-live="polite"></div>'
     );
-    
+
+    attachZoomFab(); // ajoute le bouton “🔍 Zoom” sur le tableau
+  
     // Météo pour les gares affichées
     updateWeatherBadges();
     startWeatherAutorefresh(); // toutes les 5 min
@@ -4044,10 +4035,9 @@ function addManualTrain(){
     // Active le menu “Aller à une gare”
     hookGareDropdownBehavior();
 
-    // (MOBILE) Ré-attache le pinch-to-zoom pour ce nouveau tableau
-if (typeof window.attachPinchToOpen === 'function') {
-  // petit délai pour laisser le layout se stabiliser
-  setTimeout(window.attachPinchToOpen, 0);
+    // 👉 installe l’aperçu image (mobile)
+if (typeof window.installTableImagePreview === 'function') {
+  setTimeout(window.installTableImagePreview, 0);
 }
     // Alertes / retards / perturbations (ton code d’origine)
     await chargerEtAfficherAlertes();
@@ -5234,13 +5224,11 @@ function startWeatherAutorefresh(intervalMs = 5 * 60 * 1000){
 }
 </script>
 <script>
-/* ========== Aperçu mobile plein écran en image (pinch uniquement) ========== */
+/* === Aperçu image plein écran au clic (mobile) ============================ */
 (function(){
   const isMobileTouch = () => (navigator.maxTouchPoints||0) > 0 && matchMedia('(pointer:coarse)').matches;
 
-  let overlay, sheet, img, scale=1, tx=0, ty=0;
-  let p1=null, p2=null, startDist=0, startScale=1, startTx=0, startTy=0;
-  let opening = false; // évite multiples ouvertures
+  let overlay, sheet, img, opening = false;
 
   function ensureOverlay(){
     if (overlay) return;
@@ -5248,93 +5236,41 @@ function startWeatherAutorefresh(intervalMs = 5 * 60 * 1000){
     overlay.id = 'tableZoomOverlay';
     overlay.style.cssText = `
       position:fixed; inset:0; z-index:9999; display:none;
-      background:rgba(0,0,0,.85); touch-action:none; overscroll-behavior:contain;
+      background:rgba(0,0,0,.85);
+      touch-action:none; overscroll-behavior:contain;
     `;
     sheet = document.createElement('div');
-    sheet.style.cssText = `position:absolute; inset:0; overflow:hidden;`;
+    sheet.style.cssText = `position:absolute; inset:0; overflow:auto; display:flex; align-items:center; justify-content:center;`;
     img = document.createElement('img');
     img.alt = 'Aperçu du tableau';
     img.style.cssText = `
-      position:absolute; left:0; top:0; max-width:none; max-height:none;
-      transform-origin:0 0; will-change:transform; user-select:none; -webkit-user-drag:none;
+      max-width: 100%;
+      max-height: 100%;
+      user-select:none;
+      -webkit-user-drag:none;
+      box-shadow: 0 8px 40px rgba(0,0,0,.5);
     `;
     sheet.appendChild(img);
     overlay.appendChild(sheet);
     document.body.appendChild(overlay);
 
     // fermer si on tape le fond (pas l'image)
-    overlay.addEventListener('pointerup', (e)=>{
-      if (e.pointerType==='touch' && e.target===overlay) closeOverlay();
+    overlay.addEventListener('click', (e)=>{
+      if (e.target === overlay) closeOverlay();
     });
-
-    // gestes (pinch/pan) dans l’overlay
-    overlay.addEventListener('pointerdown', onPD);
-    overlay.addEventListener('pointermove', onPM);
-    overlay.addEventListener('pointerup', onPU);
-    overlay.addEventListener('pointercancel', onPU);
   }
 
-  function openOverlay(dataURL, natW, natH){
+  function openOverlay(dataURL){
     ensureOverlay();
-    img.onload = ()=>{
-      overlay.style.display='block';
-      document.body.style.overflow='hidden';
-      // auto-fit centré
-      const vw = sheet.clientWidth, vh = sheet.clientHeight;
-      const s = Math.min(vw/natW, vh/natH);
-      scale = Math.max(1, s);
-      tx = (vw - natW*scale)/2;
-      ty = (vh - natH*scale)/2;
-      applyTransform();
-      opening = false;
-    };
     img.src = dataURL;
+    overlay.style.display = 'block';
+    document.body.style.overflow = 'hidden';
   }
+
   function closeOverlay(){
-    overlay.style.display='none';
-    document.body.style.overflow='';
+    overlay.style.display = 'none';
+    document.body.style.overflow = '';
     img.removeAttribute('src');
-    p1=p2=null;
-  }
-  function applyTransform(){ img.style.transform = `translate(${tx}px, ${ty}px) scale(${scale})`; }
-
-  // pointeurs (pour l’overlay)
-  function ptr(e){ const r = sheet.getBoundingClientRect(); return {id:e.pointerId,x:e.clientX-r.left,y:e.clientY-r.top}; }
-  function dist(a,b){ const dx=a.x-b.x, dy=a.y-b.y; return Math.hypot(dx,dy); }
-  function onPD(e){
-    if (e.pointerType!=='touch') return;
-    sheet.setPointerCapture?.(e.pointerId);
-    const p = ptr(e);
-    if (!p1) p1 = p;
-    else if (!p2) {
-      p2 = p; startDist = dist(p1,p2);
-      startScale = scale; startTx = tx; startTy = ty;
-    }
-    e.preventDefault();
-  }
-  function onPM(e){
-    if (e.pointerType!=='touch') return;
-    const p = ptr(e);
-    if (p1 && p1.id===e.pointerId) p1 = p;
-    if (p2 && p2.id===e.pointerId) p2 = p;
-
-    if (p1 && p2){
-      const midX=(p1.x+p2.x)/2, midY=(p1.y+p2.y)/2;
-      const k = dist(p1,p2) / Math.max(1, startDist);
-      const newScale = Math.min(4, Math.max(1, startScale*k));
-      const nx = (midX - startTx)/startScale, ny = (midY - startTy)/startScale;
-      tx = midX - nx*newScale; ty = midY - ny*newScale; scale = newScale;
-      applyTransform();
-    } else if (p1 && !p2){
-      tx += e.movementX; ty += e.movementY; applyTransform();
-    }
-    e.preventDefault();
-  }
-  function onPU(e){
-    if (e.pointerType!=='touch') return;
-    if (p2 && p2.id===e.pointerId) p2=null;
-    else if (p1 && p1.id===e.pointerId) { p1=p2; p2=null; }
-    e.preventDefault();
   }
 
   // capture PNG du tableau (styles inclus) via html-to-image (lazy-load)
@@ -5349,84 +5285,74 @@ function startWeatherAutorefresh(intervalMs = 5 * 60 * 1000){
     }
     await (document.fonts?.ready || Promise.resolve());
 
-    // on clone seulement le TABLE, pas le cadre scrollable
     const sourceTable = scroller.querySelector('table');
     if (!sourceTable) throw new Error('Tableau introuvable');
 
+    // on clone le TABLE dans une zone offscreen pour un rendu propre
     const staging = document.createElement('div');
     staging.style.cssText = 'position:fixed; left:-10000px; top:0; opacity:0; pointer-events:none; z-index:-1;';
     const cloneTable = sourceTable.cloneNode(true);
     staging.appendChild(cloneTable);
     document.body.appendChild(staging);
 
-    const natW = cloneTable.offsetWidth;
-    const natH = cloneTable.offsetHeight;
-
     const bg = getComputedStyle(document.body).backgroundColor || '#ffffff';
     const dataUrl = await htmlToImage.toPng(cloneTable, { pixelRatio: 2, cacheBust:true, backgroundColor: bg });
 
     staging.remove();
-    return { dataUrl, natW, natH };
+    return dataUrl;
   }
 
-  // Déclenchement : **pinch-out** uniquement (mobile)
-  function attachPinchToOpen(){
-  if (!isMobileTouch()) return; // PC: off
-  const scroller = document.querySelector('#trainInfo .table-scroll');
-  if (!scroller) return;
+  function installTableImagePreview(){
+    if (!isMobileTouch()) return; // Désactivé sur desktop
 
-  // évite d'attacher plusieurs fois si le tableau est régénéré
-  if (scroller.dataset.pinchBound === '1') return;
-  scroller.dataset.pinchBound = '1';
+    const scroller = document.querySelector('#trainInfo .table-scroll');
+    if (!scroller) return;
 
-  let pinchArmed = false, startD = 0, openedOnce = false;
+    // évite les doublons si on régénère le tableau
+    scroller.classList.add('table-preview-ready');
+    scroller.querySelectorAll('.table-zoom-btn').forEach(b => b.remove());
 
-  scroller.addEventListener('touchstart', (e)=>{
-    if (e.touches.length >= 2){
-      const [a,b] = e.touches;
-      startD = Math.hypot(a.clientX-b.clientX, a.clientY-b.clientY);
-      pinchArmed = true;
-      openedOnce = false;
-    } else {
-      pinchArmed = false;
-    }
-  }, {passive:true});
-
-  scroller.addEventListener('touchmove', async (e)=>{
-    if (!pinchArmed || opening || openedOnce) return;
-    if (e.touches.length < 2) { pinchArmed=false; return; }
-
-    const [a,b] = e.touches;
-    const d = Math.hypot(a.clientX-b.clientX, a.clientY-b.clientY);
-    if (d > startD * 1.08){
-      e.preventDefault();
+    // 1) Ouvrir l’aperçu AU CLIC (mais pas si on clique un lien)
+    scroller.addEventListener('click', async (e)=>{
+      const a = e.target.closest('a');
+      if (a) return; // laisser le lien fonctionner
+      if (opening) return;
       opening = true;
-      try{
-        const { dataUrl, natW, natH } = await captureTablePng(scroller);
-        openOverlay(dataUrl, natW, natH);
-        openedOnce = true;
+      try {
+        const dataUrl = await captureTablePng(scroller);
+        openOverlay(dataUrl);
       } catch(err){
         console.warn('Capture PNG échouée:', err);
       } finally {
         opening = false;
       }
-    }
-  }, {passive:false});
+    }, { passive: true });
 
-  scroller.addEventListener('touchend', ()=>{ pinchArmed = false; }, {passive:true});
-  scroller.addEventListener('touchcancel', ()=>{ pinchArmed = false; }, {passive:true});
-}
-  window.addEventListener('load', () => {
-  // tente une 1re fois (si le tableau est déjà là)
-  attachPinchToOpen();
+    // 2) (Optionnel) petite icône loupe en bas à droite
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'table-zoom-btn';
+    btn.setAttribute('aria-label','Voir le tableau en plein écran');
+    btn.innerHTML = '🔍';
+    btn.addEventListener('click', async (e)=>{
+      e.stopPropagation();
+      if (opening) return;
+      opening = true;
+      try{
+        const dataUrl = await captureTablePng(scroller);
+        openOverlay(dataUrl);
+      } catch(err){
+        console.warn(err);
+      } finally {
+        opening = false;
+      }
+    });
+    scroller.style.position = 'relative';
+    scroller.appendChild(btn);
+  }
 
-  // puis observe #trainInfo : dès que .table-scroll est (re)créé, on se rebranche
-  const host = document.getElementById('trainInfo') || document.body;
-  const mo = new MutationObserver(() => attachPinchToOpen());
-  mo.observe(host, { childList: true, subtree: true });
-});
-// (optionnel) exposer une API si tu veux appeler à la main après ta génération
-window.attachPinchToOpen = attachPinchToOpen;
+  // expose pour pouvoir le rappeler après la génération du tableau
+  window.installTableImagePreview = installTableImagePreview;
 })();
 </script>
 </body>
