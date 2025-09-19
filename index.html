@@ -5366,55 +5366,63 @@ function startWeatherAutorefresh(intervalMs = 5 * 60 * 1000){
 
   // Déclenchement : **pinch-out** uniquement (mobile)
   function attachPinchToOpen(){
-    if (!isMobileTouch()) return; // PC: off
-    const scroller = document.querySelector('#trainInfo .table-scroll');
-    if (!scroller) return;
+  if (!isMobileTouch()) return; // PC: off
+  const scroller = document.querySelector('#trainInfo .table-scroll');
+  if (!scroller) return;
 
-    let pinchArmed = false, startD = 0, openedOnce=false;
+  // évite d'attacher plusieurs fois si le tableau est régénéré
+  if (scroller.dataset.pinchBound === '1') return;
+  scroller.dataset.pinchBound = '1';
 
-    scroller.addEventListener('touchstart', (e)=>{
-      if (e.touches.length >= 2){
-        // on arme un pinch si 2 doigts posés
-        const [a,b] = e.touches;
-        startD = Math.hypot(a.clientX-b.clientX, a.clientY-b.clientY);
-        pinchArmed = true;
-        openedOnce = false;
-      } else {
-        pinchArmed = false;
-      }
-    }, {passive:true});
+  let pinchArmed = false, startD = 0, openedOnce = false;
 
-    scroller.addEventListener('touchmove', async (e)=>{
-      if (!pinchArmed || opening || openedOnce) return;
-      if (e.touches.length < 2) { pinchArmed=false; return; }
-
+  scroller.addEventListener('touchstart', (e)=>{
+    if (e.touches.length >= 2){
       const [a,b] = e.touches;
-      const d = Math.hypot(a.clientX-b.clientX, a.clientY-b.clientY);
-      // seuil léger pour un vrai pinch-out
-      if (d > startD * 1.08){
-        // On ouvre → on bloque le zoom de page
-        e.preventDefault();
-        opening = true;
-        try{
-          const { dataUrl, natW, natH } = await captureTablePng(scroller);
-          openOverlay(dataUrl, natW, natH);
-          openedOnce = true;
-        } catch(err){
-          console.warn('Capture PNG échouée:', err);
-        } finally {
-          opening = false;
-        }
-      }
-    }, {passive:false});
-
-    scroller.addEventListener('touchend', ()=>{
-      // si l’utilisateur relâche avant d’atteindre le seuil → rien
+      startD = Math.hypot(a.clientX-b.clientX, a.clientY-b.clientY);
+      pinchArmed = true;
+      openedOnce = false;
+    } else {
       pinchArmed = false;
-    }, {passive:true});
-    scroller.addEventListener('touchcancel', ()=>{ pinchArmed=false; }, {passive:true});
-  }
+    }
+  }, {passive:true});
 
-  window.addEventListener('load', attachPinchToOpen);
+  scroller.addEventListener('touchmove', async (e)=>{
+    if (!pinchArmed || opening || openedOnce) return;
+    if (e.touches.length < 2) { pinchArmed=false; return; }
+
+    const [a,b] = e.touches;
+    const d = Math.hypot(a.clientX-b.clientX, a.clientY-b.clientY);
+    if (d > startD * 1.08){
+      e.preventDefault();
+      opening = true;
+      try{
+        const { dataUrl, natW, natH } = await captureTablePng(scroller);
+        openOverlay(dataUrl, natW, natH);
+        openedOnce = true;
+      } catch(err){
+        console.warn('Capture PNG échouée:', err);
+      } finally {
+        opening = false;
+      }
+    }
+  }, {passive:false});
+
+  scroller.addEventListener('touchend', ()=>{ pinchArmed = false; }, {passive:true});
+  scroller.addEventListener('touchcancel', ()=>{ pinchArmed = false; }, {passive:true});
+}
+  window.addEventListener('load', () => {
+  // tente une 1re fois (si le tableau est déjà là)
+  attachPinchToOpen();
+
+  // puis observe #trainInfo : dès que .table-scroll est (re)créé, on se rebranche
+  const host = document.getElementById('trainInfo') || document.body;
+  const mo = new MutationObserver(() => attachPinchToOpen());
+  mo.observe(host, { childList: true, subtree: true });
+});
+
+// (optionnel) exposer une API si tu veux appeler à la main après ta génération
+window.attachPinchToOpen = attachPinchToOpen;
 })();
 </script>
 </body>
