@@ -4433,60 +4433,77 @@ function getDisplayedTrainNumbers() {
     .map(th => nettoyerNumeroTrain(th.dataset.trainNumber.trim()))
     .filter(n => n !== null);
 }
-/* ====== Filtres “corridor” pour les alertes (évite Lyon/Valence/Avignon & co) ====== */
-let CORRIDOR = { stopIds: null, routeIds: null, tripTouchesCache: new Map() };
+/* ====== Filtres DYNAMIQUES basés sur les trains affichés ====== */
 
-function buildCorridorFilters(){
-  if (CORRIDOR.stopIds) return;
-  // stop_ids de toutes les gares de la ligne (en tenant compte des parent_station)
-  const stopIds = new Set();
-  garesParLigne.forEach(g => getIdsForName(g.nom).forEach(id => stopIds.add(id)));
+// Sélecteur n° de train dans une chaîne
+function extractTrainNumber(s){ const m = String(s||'').match(/\d{5}/); return m ? m[0] : null; }
 
-  // route_ids qui passent par au moins une gare du corridor
+// Récupère vite les arrêts d'un trip
+function getStopsForTripQuick(trip_id){
+  if (GTFS._stopTimesByTripSec && GTFS._stopTimesByTripSec.get(trip_id)) {
+    return GTFS._stopTimesByTripSec.get(trip_id).map(r=>r.stop_id);
+  }
+  // fallback si l'index n'est pas prêt
+  return GTFS.stopTimes.filter(st=>st.trip_id===trip_id).map(st=>st.stop_id);
+}
+
+// Construit les sets à partir des colonnes du tableau (trains affichés)
+function buildDisplayedFilters(ymd){
+  const displayedNums = new Set(getDisplayedTrainNumbers()); // ex: ["88753","88532",...]
+  const tripIds = new Set();
   const routeIds = new Set();
-  const tripById = GTFS.tripById || new Map();
-  GTFS.stopTimes.forEach(st => {
-    if (stopIds.has(st.stop_id)) {
-      const trip = tripById.get(st.trip_id);
-      if (trip && trip.route_id) routeIds.add(trip.route_id);
-    }
-  });
+  const stopIds = new Set();
 
-  CORRIDOR = { stopIds, routeIds, tripTouchesCache: new Map() };
-}
+  for (const t of GTFS.trips){
+    if (!serviceActiveForDate(t.trip_id, ymd)) continue;
+    const n = extractTrainNumber(t.trip_short_name || '');
+    if (!n || !displayedNums.has(n)) continue;
 
-function tripTouchesCorridor(trip_id){
-  const cache = CORRIDOR.tripTouchesCache;
-  if (cache.has(trip_id)) return cache.get(trip_id);
-
-  const list = (GTFS._stopTimesByTripSec && GTFS._stopTimesByTripSec.get(trip_id))
-    || GTFS.stopTimes.filter(st => st.trip_id === trip_id).map(st => ({ stop_id: st.stop_id }));
-
-  const touches = list.some(r => CORRIDOR.stopIds.has(r.stop_id));
-  cache.set(trip_id, touches);
-  return touches;
-}
-
-function entityTouchesCorridor(ent, ymd){
-  // stop ciblé ?
-  if (ent.stop_id && CORRIDOR.stopIds.has(ent.stop_id)) return true;
-  // route ciblée ?
-  if (ent.route_id && CORRIDOR.routeIds.has(ent.route_id)) return true;
-  // trip ciblé et actif ce jour + qui passe par le corridor ?
-  const tripId = ent.trip_id || ent.vehicle_journey_id || null;
-  if (tripId && GTFS.tripById?.has(tripId) && serviceActiveForDate(tripId, ymd) && tripTouchesCorridor(tripId)) {
-    return true;
+    tripIds.add(t.trip_id);
+    if (t.route_id) routeIds.add(t.route_id);
+    for (const sid of getStopsForTripQuick(t.trip_id)) stopIds.add(sid);
   }
+  return { displayedNums, tripIds, routeIds, stopIds };
+}
+
+// Une entité touche nos trains/ligne affichés ?
+function entityTargetsDisplayed(ent, sets){
+  // trip direct
+  const entTrip = ent.trip_id || ent.vehicle_journey_id || null;
+  if (entTrip && sets.tripIds.has(entTrip)) return true;
+
+  // route de nos trains
+  if (ent.route_id && sets.routeIds.has(ent.route_id)) return true;
+
+  // arrêt parcouru par nos trains
+  if (ent.stop_id && sets.stopIds.has(ent.stop_id)) return true;
+
+  // n° de train dans le texte libre de l'entité
+  const blob = [ent.name, ent.trip_id, ent.vehicle_journey_id, ent.route_id].filter(Boolean).join(' ');
+  const num = extractTrainNumber(blob);
+  if (num && sets.displayedNums.has(num)) return true;
+
   return false;
 }
 
-function alertTargetsOurCorridor(alert, ymd){
+// Une alerte touche nos trains/ligne affichés ?
+function alertTargetsDisplayed(alert, sets){
   const ents = alert.informed_entities || [];
-  for (const ent of ents){
-    if (entityTouchesCorridor(ent, ymd)) return true;
-  }
-  return false;
-} 
+  if (ents.length === 0) return false;
+  return ents.some(ent => entityTargetsDisplayed(ent, sets));
+}
+
+// Fallback mots-clés (uniquement si AUCUNE entité structurée)
+function keywordStrictCorridor(text, desc){
+  const s = (text||'') + ' ' + (desc||'');
+  const sl = s.toLowerCase();
+  const hasMetzOrNancy = /(?:\b|_)(metz|nancy)(?:\b|_)/.test(sl);
+  const hasNorth = /(?:\b|_)(thionville|luxembourg|bettembourg|hettange|rodange|esch|dudelange|volmerange)(?:\b|_)/.test(sl);
+  const hasOurStations = garesParLigne.some(g => sl.includes(g.nom.toLowerCase()));
+  // on exige au moins un pôle sud (Metz/Nancy) ET un pôle nord (Thionville/Lux/etc.) ET une gare de la ligne
+  return hasMetzOrNancy && hasNorth && hasOurStations;
+}
+
 async function chargerEtAfficherAlertes() {
   const container = document.getElementById('alertes');
   if (!container) return;
@@ -4504,22 +4521,13 @@ async function chargerEtAfficherAlertes() {
   const ymd = `${selectedDate.getFullYear()}${String(selectedDate.getMonth()+1).padStart(2,'0')}${String(selectedDate.getDate()).padStart(2,'0')}`;
 
 try { await ensureGTFSLoaded(); } catch(e){ console.warn('GTFS non chargé pour alertes:', e); }
+ensureTransferIndexesBuilt();   // ← pour accélérer getStopsForTripQuick
 buildStationGroups();
-buildCorridorFilters();
 
   // petit utilitaire local
   const stripHtml = (s) => (s || '').replace(/<[^>]*>?/gm, '');
-
-  // détecte si une entité d'alerte cible un train affiché
-  function entityTargetsDisplayedTrain(ent, trains) {
-    const blob = [ent.trip_id, ent.vehicle_journey_id, ent.route_id, ent.name]
-      .filter(Boolean).join(' ');
-    const num = extraireNumeroTrainDepuisTripId(blob) || nettoyerNumeroTrain(blob);
-    return num && trains.includes(num);
   }
-  function alertTargetsDisplayedTrains(alert, trains) {
-    return (alert.informed_entities || []).some(ent => entityTargetsDisplayedTrain(ent, trains));
-  }
+    
   function alertActiveForDate(alert, dateObj) {
     const startMs = (alert.active_period_start != null) ? alert.active_period_start * 1000 : -Infinity;
     const endMs   = (alert.active_period_end   != null) ? alert.active_period_end   * 1000 :  Infinity;
@@ -4545,14 +4553,27 @@ buildCorridorFilters();
       const trainsAffiches = getDisplayedTrainNumbers(); // ex: ["88753","88532",...]
 
       // 1) Nouveau filtrage : ACTIF le jour choisi ET (vise un train affiché OU contient mot-clé)
-      let alertesFiltres = alertes.filter(a => {
-        const titre = a.header_text || '';
-        const desc  = stripHtml(a.description_text || '');
-        const hasKeyword   = contientMotCle(titre, motsCles) || contientMotCle(desc, motsCles);
-const hitsCorridor = alertTargetsOurCorridor(a, ymd); // ✅ plus robuste que “numéro qui ressemble”
-const activeNow    = alertActiveForDate(a, selectedDate);
-return activeNow && (hasKeyword || hitsCorridor);
-      });
+      const sets = buildDisplayedFilters(ymd);
+
+let alertesFiltres = alertes.filter(a => {
+  const activeNow = alertActiveForDate(a, selectedDate);
+  if (!activeNow) return false;
+
+  // 1) Priorité: match STRUCTURÉ sur nos trains/ligne affichés
+  if (alertTargetsDisplayed(a, sets)) return true;
+
+  // 2) Fallback STRICT (uniquement si pas d'entités structurées)
+  const ents = a.informed_entities || [];
+  if (ents.length === 0) {
+    const titre = a.header_text || '';
+    const desc  = stripHtml(a.description_text || '');
+    return keywordStrictCorridor(titre, desc);
+  }
+
+  // sinon on écarte
+  return false;
+});
+
 
       // 2) Tri par priorité basée sur EFFECT (et plus "cause")
       alertesFiltres.sort((A, B) => {
@@ -4576,19 +4597,23 @@ return activeNow && (hasKeyword || hitsCorridor);
 
         // Liste unique des trains concernés
         const trainsCibles = Array.from(new Set(
-  (alerte.informed_entities || [])
-    .filter(ent => entityTouchesCorridor(ent, ymd))
-    .map(ent => {
-      const tripId = ent.trip_id || ent.vehicle_journey_id || null;
-      const t = tripId ? GTFS.tripById?.get(tripId) : null;
+  (alerte.informed_entities || []).map(ent => {
+    // 1) Si l'entité vise un trip de nos trains affichés → n° depuis le GTFS
+    const tripId = ent.trip_id || ent.vehicle_journey_id || null;
+    if (tripId && sets.tripIds.has(tripId)) {
+      const t = GTFS.tripById?.get(tripId);
       const num = t?.trip_short_name ? extractTrainNumber(t.trip_short_name) : null;
-      return num;
-    })
-    .filter(Boolean)
+      if (num && sets.displayedNums.has(num)) return num;
+    }
+    // 2) Sinon, tente d’extraire un n° dans le texte et vérifie qu’il est affiché
+    const blob = [ent.name, ent.trip_id, ent.vehicle_journey_id, ent.route_id].filter(Boolean).join(' ');
+    const num2 = extractTrainNumber(blob);
+    return (num2 && sets.displayedNums.has(num2)) ? num2 : null;
+  }).filter(Boolean)
 ));
 
         // si "service réduit" (effect=2), pose un hint visuel sur l’entête de colonne du train
-        const targetsDisplayed = trainsCibles.filter(n => trainsAffiches.includes(n));
+        const targetsDisplayed = trainsCibles.filter(n => sets.displayedNums.has(n));
 if (effetCode === 2 && targetsDisplayed.length){
   targetsDisplayed.forEach(numeroTrain => {
     const header = document.querySelector(`th[data-train-number="${numeroTrain}"]`);
