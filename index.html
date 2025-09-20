@@ -4007,22 +4007,65 @@ function addManualTrain(){
 
     html += '</tbody></table>';
 
-    // 6) Injection + hooks + liens
-    $('#trainInfo').html(
-      '<div class="scroll-hint">← glisser →</div>' +
-      '<div class="table-scroll">' + html + '</div>' +
-      '<div id="lastUpdated" class="last-updated" aria-live="polite"></div>'
-    );
+    // 6) Injection + hooks + liens (NOUVEL ORDRE)
+$('#trainInfo').html(
+  '<div class="scroll-hint">← glisser →</div>' +
+  '<div class="table-scroll">' + html + '</div>' +
+  '<div id="lastUpdated" class="last-updated" aria-live="polite"></div>'
+);
 
-    // Météo pour les gares affichées
-    updateWeatherBadges();
-    startWeatherAutorefresh(); // toutes les 5 min
+// 6.1 — Liens immédiats (zéro réseau, donc instantané)
+(function linkifyGaresAndTrains(){
+  // nettoie tooltips
+  document.querySelectorAll('th[data-train-number]').forEach(h => h.removeAttribute('title'));
 
-    // Active le menu “Aller à une gare”
-    hookGareDropdownBehavior();
-    
-    // Alertes / retards / perturbations (ton code d’origine)
-    await chargerEtAfficherAlertes();
+  // liens gares (colonne 1) — préserve .wx
+  document.querySelectorAll('#trainInfo table tr td:first-child').forEach(td => {
+    const label = td.querySelector('.gare-label');
+    if (!label) return;
+    const nomGare = label.textContent.trim();
+    const url = getGareURL(nomGare);
+    if (url && url !== nomGare) {
+      label.innerHTML = `<a href="${url}" target="_blank" class="gare-link">${nomGare}</a>`;
+    }
+  });
+
+  // liens vers fiches trains SNCF
+  const dateCirculation = $('#trainDate').val();
+  document.querySelectorAll('#trainInfo th[data-train-number]').forEach(th => {
+    const numero = th.dataset.trainNumber;
+    const url = `https://www.sncf-voyageurs.com/fr/voyagez-avec-nous/horaires-et-itineraires/recherche-de-train/detail-train/?numeroCirculation=${numero}&dateCirculation=${dateCirculation}`;
+    th.innerHTML = `<a href="${url}" target="_blank" class="train-link">${numero}</a>`;
+  });
+})();
+
+// horodatage visible sans attendre
+setLastUpdated();
+
+// afficher le bouton refresh tout de suite
+$('#refreshContainer').show();
+
+// 6.2 — Laisser le rendu respirer, puis lancer les tâches lourdes en parallèle
+requestAnimationFrame(() => {
+  // GTFS-RT (petit délai pour éviter un “coup de massue”)
+  setTimeout(() => {
+    if (window.retardsGTFS && (typeof isSelectedDateToday !== 'function' || isSelectedDateToday())) {
+      const table = document.querySelector('#trainInfo table');
+      if (table) table.querySelectorAll('.gtfs-retard').forEach(n => n.remove());
+      if (typeof applyRetardsFromGTFS === 'function') applyRetardsFromGTFS(window.retardsGTFS);
+    }
+  }, 0);
+
+  // météo (asynchrone, non bloquante)
+  updateWeatherBadges();
+  if (window.__IS_IOS__) startWeatherAutorefresh(10 * 60 * 1000); else startWeatherAutorefresh();
+
+  // menu “Aller à une gare”
+  hookGareDropdownBehavior();
+
+  // alertes (asynchrone : surtout ne pas "await")
+  setTimeout(() => { try { chargerEtAfficherAlertes(); } catch(e){ console.warn('alertes:', e); } }, 0);
+});
 
     function extractTrainNumber(name) {
       if (!name) return '';
