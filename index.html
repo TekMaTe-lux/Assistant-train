@@ -5272,5 +5272,64 @@ function startWeatherAutorefresh(intervalMs = 5 * 60 * 1000){
   });
 })();
 </script>
+  <script>
+// --- Détection iOS & param debug ---
+const IS_IOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || 
+               (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+const DEBUG_ON = /[?&]debug=1\b/.test(location.search);
+
+// --- Capture console + erreurs ---
+(function(){
+  const logs = [];
+  const orig = { log:console.log, warn:console.warn, error:console.error };
+  ['log','warn','error'].forEach(k=>{
+    console[k] = (...args)=>{ try{ logs.push({t:Date.now(), level:k, msg:args.map(a=>String(a)).join(' ')});}catch(_){}; orig[k](...args); };
+  });
+  window.addEventListener('error', e=>{
+    logs.push({t:Date.now(), level:'error', msg:`${e.message} at ${e.filename}:${e.lineno}:${e.colno}`, stack: e.error && e.error.stack});
+  });
+  window.addEventListener('unhandledrejection', e=>{
+    logs.push({t:Date.now(), level:'error', msg:`Promise rejetée: ${e.reason}`, stack: e.reason && e.reason.stack});
+  });
+
+  function makePanel(){
+    const panel = document.createElement('div');
+    panel.id = 'ios-debug-panel';
+    panel.style.cssText = 'position:fixed;left:0;right:0;bottom:0;background:#111;color:#fff;font:12px/1.4 monospace;max-height:45vh;overflow:auto;z-index:999999;padding:8px;border-top:2px solid #444';
+    panel.innerHTML = `
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+        <strong>Debug iOS</strong>
+        <button id="dbg-copy" style="padding:6px 10px;border:0;border-radius:6px;background:#2d6cdf;color:#fff;cursor:pointer">Copier les logs</button>
+        <button id="dbg-hide" style="padding:6px 10px;border:0;border-radius:6px;background:#444;color:#fff;cursor:pointer">Masquer</button>
+        <span style="opacity:.7">UA: ${navigator.userAgent}</span>
+      </div>
+      <pre id="dbg-pre" style="white-space:pre-wrap;margin-top:6px"></pre>
+    `;
+    document.body.appendChild(panel);
+    const pre = panel.querySelector('#dbg-pre');
+    function render(){ pre.textContent = logs.map(l=>`[${new Date(l.t).toLocaleTimeString()}][${l.level}] ${l.msg || ''}${l.stack?'\n'+l.stack:''}`).join('\n'); }
+    render();
+    const mo = new MutationObserver(render);
+    const interval = setInterval(render, 1000); // refresh simple
+    panel.querySelector('#dbg-copy').onclick = async ()=>{
+      const text = pre.textContent;
+      try { await navigator.clipboard.writeText(text); alert('Logs copiés. Envoie-les-moi.'); }
+      catch { alert('Copie échouée. Sélectionne le texte manuellement.'); }
+    };
+    panel.querySelector('#dbg-hide').onclick = ()=>{ panel.remove(); clearInterval(interval); mo.disconnect(); };
+    // Expose pour pousser un message manuel: window._dbg(msg)
+    window._dbg = (m)=>{ logs.push({t:Date.now(), level:'log', msg:String(m)}); render(); };
+  }
+
+  // Afficher auto si iOS ET debug=1, ou afficher seulement en cas d'erreur iOS
+  if ((IS_IOS && DEBUG_ON)) {
+    window.addEventListener('load', makePanel, {once:true});
+  } else if (IS_IOS) {
+    window.addEventListener('error', ()=>{ if(!document.getElementById('ios-debug-panel')) makePanel(); }, {once:true});
+    window.addEventListener('unhandledrejection', ()=>{ if(!document.getElementById('ios-debug-panel')) makePanel(); }, {once:true});
+  }
+
+})();
+</script>
 </body>
 </html>
