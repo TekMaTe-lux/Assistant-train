@@ -2680,12 +2680,6 @@ function setDirectionForPreset(kind){
     }
   }
 }
-    // Détection iOS (y compris iPadOS "Desktop mode")
-if (typeof window.__IS_IOS__ === 'undefined') {
-  window.__IS_IOS__ =
-    /iP(ad|hone|od)/.test(navigator.userAgent) ||
-    (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
-}
 // Filtre la portion entre la gare de départ et d’arrivée
 function filterByOD(orderedStops, startName, endName) {
   if (!startName && !endName) return orderedStops;
@@ -2830,6 +2824,7 @@ function dl(b, a){
 }
 function hhmmInputToMin(hhmm){ if(!hhmm||!/^\d{2}:\d{2}$/.test(hhmm)) return null; const [h,m]=hhmm.split(':').map(Number); return h*60+m; }
 function dateInputToYMD(str){ if(!str||!/^\d{4}-\d{2}-\d{2}$/.test(str)) return null; const [y,m,d]=str.split('-'); return `${y}${m}${d}`; }
+function extractTrainNumber(str){ const m = String(str||'').match(/(\d{5,6})/); return m ? m[1] : null; }
 function toSec(hms){ if(!hms) return null; const [H,M,S]=hms.split(':').map(Number); return H*3600+M*60+(S||0); }
 function toHHMM(sec){ const s=Math.max(0,sec|0); const h=Math.floor(s/3600)%24,m=Math.floor((s%3600)/60); return String(h).padStart(2,'0')+':'+String(m).padStart(2,'0'); }
 function uniqDirects(list){
@@ -3541,7 +3536,18 @@ const PRESET_PM = "88741,88743,88745,88747,88530,88749,88751,88753,88532,88755,8
 const selectedTrains = new Set();
 
 /* ====================== HELPERS GÉNÉRAUX ====================== */
-
+// HH:MM -> "minutes depuis 00:00"
+function hhmmInputToMin(hhmm){
+  if(!hhmm || !/^\d{2}:\d{2}$/.test(hhmm)) return null;
+  const [h,m] = hhmm.split(':').map(Number);
+  return h*60+m;
+}
+// "YYYY-MM-DD" -> "YYYYMMDD"
+function dateInputToYMD(str){
+  if(!str || !/^\d{4}-\d{2}-\d{2}$/.test(str)) return null;
+  const [y,m,d] = str.split('-');
+  return `${y}${m}${d}`;
+}
 function ymdBetween(ymd, start, end){ return ymd >= start && ymd <= end; }
 function weekdayStrFromYMD(ymd){
   // 0=Sun..6=Sat -> 'sunday'..'saturday'
@@ -3559,6 +3565,15 @@ function dedupTripSeq(list){
   return out;
 }
 
+// Déduplique les cartes correspondance (mêmes 2 trains et mêmes heures)
+function uniqTransfers(list){
+  const map = new Map();
+  for (const t of list){
+    const key = `${t.num1}|${t.dep1}|${t.viaName}|${t.num2}|${t.dep2}|${t.arr2}`;
+    if (!map.has(key)) map.set(key, t);
+  }
+  return Array.from(map.values());
+}
 
 /* ====================== UI SÉLECTION (input + tags) ====================== */
 function chipsUpdateCount(){
@@ -3842,6 +3857,11 @@ function addManualTrain(){
   $(document).on('keydown', '#manualTrainInput', function(e){
     if (e.key === 'Enter') addManualTrain();
   }); 
+
+/* Rendu progressif d’un tableau HTML: parse en mémoire, clone THEAD, insère TBODY par lots */
+function injectTableChunkedIntoTrainInfo(html, {chunk=200} = {}){
+  const host = document.getElementById('trainInfo');
+  if (!host) return;
 
   // parse hors DOM
   const tmp = document.createElement('div');
@@ -4172,7 +4192,7 @@ function addManualTrain(){
     const nomGare = label.textContent.trim();
     const url = getGareURL(nomGare);
     if (url && url !== nomGare) {
-      label.innerHTML = `<a href="${url}" target="_blank" rel="noopener noreferrer" class="gare-link">${nomGare}</a>`;
+      label.innerHTML = `<a href="${url}" target="_blank" class="gare-link">${nomGare}</a>`;
     }
   });
 
@@ -4181,7 +4201,7 @@ function addManualTrain(){
   document.querySelectorAll('#trainInfo th[data-train-number]').forEach(th => {
     const numero = th.dataset.trainNumber;
     const url = `https://www.sncf-voyageurs.com/fr/voyagez-avec-nous/horaires-et-itineraires/recherche-de-train/detail-train/?numeroCirculation=${numero}&dateCirculation=${dateCirculation}`;
-    th.innerHTML    = `<a href="${url}" target="_blank" rel="noopener noreferrer" class="train-link">${numero}</a>`;
+    th.innerHTML = `<a href="${url}" target="_blank" class="train-link">${numero}</a>`;
   });
 })();
 
@@ -4331,7 +4351,7 @@ requestAnimationFrame(() => {
       const nomGare = label.textContent.trim();
       const url = getGareURL(nomGare);
       if (url && url !== nomGare) {
-        label.innerHTML = `<a href="${url}" target="_blank" rel="noopener noreferrer" class="gare-link">${nomGare}</a>`;
+        label.innerHTML = `<a href="${url}" target="_blank" class="gare-link">${nomGare}</a>`;
       }
     });
 
@@ -4340,7 +4360,7 @@ requestAnimationFrame(() => {
     document.querySelectorAll('#trainInfo th[data-train-number]').forEach(th => {
       const numero = th.dataset.trainNumber;
       const url = `https://www.sncf-voyageurs.com/fr/voyagez-avec-nous/horaires-et-itineraires/recherche-de-train/detail-train/?numeroCirculation=${numero}&dateCirculation=${dateCirculation}`;
-      th.innerHTML    = `<a href="${url}" target="_blank" rel="noopener noreferrer" class="train-link">${numero}</a>`;;
+      th.innerHTML = `<a href="${url}" target="_blank" class="train-link">${numero}</a>`;
     });
 
     // Bouton Actualiser
