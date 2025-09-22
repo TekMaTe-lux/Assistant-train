@@ -3086,21 +3086,19 @@ function findOneTransferItineraries({
   maxTransferMin = 45,
   ymd,
   allowedInterchanges = null,
-  maxResults = 40
+  maxResults = 40,
+  allowAnyInterchange = false // 👈 nouveau
 }){
   ensureTransferIndexesBuilt(); buildStationGroups();
 
   const depStart = t0Min * 60;
   const depEnd   = t1Min * 60;
   const minWait  = minTransferMin * 60;
-  const maxWait  = Math.max(minTransferMin, maxTransferMin) * 60; // borne haute
+  const maxWait  = Math.max(minTransferMin, maxTransferMin) * 60;
   const out = [];
 
-  // si on force une gare d’échange (ex: Metz)
   let interIds = allowedInterchanges;
-  if (!interIds && FORCE_VIA_METZ){
-    interIds = getIdsForName('Metz');
-  }
+  // ⚠️ on ignore FORCE_VIA_METZ ici, car tu gères le choix dans proposerTrainsOD()
   const depsFromInter = (interIds && interIds.size)
     ? dedupTripSeq(mergeDeparturesForIds(interIds))
     : null;
@@ -3304,7 +3302,6 @@ function isStationBetween(startName, endName, midName){
   const iM = ordered.indexOf(midName);
   const iE = ordered.indexOf(endName);
   if (iS === -1 || iM === -1 || iE === -1) return false;
-  // On veut : start -> ... -> mid -> ... -> end (sans retour en arrière)
   return iS < iM && iM < iE;
 }
 async function proposerTrainsOD(){
@@ -3370,20 +3367,17 @@ byTrip.forEach((sts, trip_id)=>{
 // dédup finale des directs
 const directsUniqList = uniqDirects(directs);
 
-// CORRESPONDANCES (si checkbox cochée) — mais UNIQUEMENT via Metz si Metz est “entre” De et À
+// CORRESPONDANCES (si case cochée) — UNIQUEMENT via Metz si Metz est entre De et À
 let transfers = [];
 (function(){
   const el = document.getElementById('allowTransfer');
-  // défaut: case décochée = false
-  window.__allowTransfers = el ? !!el.checked : false;
+  window.__allowTransfers = el ? !!el.checked : false; // défaut décoché
 })();
 const allowTransfersUI = window.__allowTransfers;
 
-// Autoriser les correspondances via Metz uniquement si Metz est *entre* De et À
+// Autoriser Metz seulement si elle est “entre”
 const allowViaMetzForOD = isStationBetween(startName, endName, 'Metz');
 
-// ⚠️ NE PAS redéclarer FORCE_VIA_METZ ici si tu l'as déjà globalement.
-// On force Metz via allowedInterchanges seulement quand la condition est vraie.
 if (allowTransfersUI && allowViaMetzForOD) {
   (function(){
     const elMin = document.getElementById('minTransfer');
@@ -3391,6 +3385,7 @@ if (allowTransfersUI && allowViaMetzForOD) {
     window.__minTransferMin = Math.max(1, Number(elMin && elMin.value ? elMin.value : 5));
     window.__maxTransferMin = Math.max(window.__minTransferMin, Number(elMax && elMax.value ? elMax.value : 45));
   })();
+
   const minTransferMin = window.__minTransferMin;
   const maxTransferMin = window.__maxTransferMin;
 
@@ -3405,15 +3400,15 @@ if (allowTransfersUI && allowViaMetzForOD) {
     maxTransferMin,
     ymd,
     allowedInterchanges: allowedSet,
-    maxResults: 200
+    // 🔒 bloque explicitement tout fallback “autres gares”
+    allowAnyInterchange: false
   });
 
   transfers = uniqTransfers(keepFirstTransferPerFirstLeg(raw));
 } else {
-  // Pas de correspondance proposée (ex: Thionville -> Luxembourg)
+  // Ex: Thionville → Luxembourg (Metz n’est PAS entre) => pas de correspondances
   transfers = [];
 }
-
 
   // RENDU
   const host = document.getElementById('propositions');
