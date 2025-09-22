@@ -2775,6 +2775,13 @@ if (!document.getElementById('css-row-focus')) {
   else { const st=document.createElement('style'); st.id='css-dnd-chips'; st.textContent=css; document.head.appendChild(st); }
 })();
 
+// Détection iOS (y compris iPadOS "Desktop mode")
+if (typeof window.__IS_IOS__ === 'undefined') {
+  window.__IS_IOS__ =
+    /iP(ad|hone|od)/.test(navigator.userAgent) ||
+    (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+}
+    
 /* ---------- LIENS GARES ---------- */
 const gareLiensLux = {
   "Luxembourg": "https://www.cfl.lu/fr-fr/network/station/gare-de-luxembourg#nextDeparture",
@@ -2812,9 +2819,12 @@ function getGareURL(nomGare) {
 }
 
 /************  CONFIG COURTE  ************/
-const FORCE_VIA_METZ = true;                // correspondances à Metz uniquement
+const FORCE_VIA_METZ = false;                // correspondances à Metz uniquement
 const KEEP_ONLY_EARLIEST_TRANSFER = true;   // n’afficher que la 1ʳᵉ correspondance la plus proche
 const STRICT_CALENDAR = false;              // 🔴 ne PAS filtrer avec calendar_dates seul
+
+    const $allow = $('#allowTransfer');
+if ($allow.length) $allow.prop('checked', false);
 
 /************  HELPERS TEMPS & TEXTE  ************/
 const ft = t => t ? t.slice(0,2)+':'+t.slice(2,4) : '-';
@@ -3444,18 +3454,7 @@ const PRESET_PM = "88741,88743,88745,88747,88530,88749,88751,88753,88532,88755,8
 const selectedTrains = new Set();
 
 /* ====================== HELPERS GÉNÉRAUX ====================== */
-// HH:MM -> "minutes depuis 00:00"
-function hhmmInputToMin(hhmm){
-  if(!hhmm || !/^\d{2}:\d{2}$/.test(hhmm)) return null;
-  const [h,m] = hhmm.split(':').map(Number);
-  return h*60+m;
-}
-// "YYYY-MM-DD" -> "YYYYMMDD"
-function dateInputToYMD(str){
-  if(!str || !/^\d{4}-\d{2}-\d{2}$/.test(str)) return null;
-  const [y,m,d] = str.split('-');
-  return `${y}${m}${d}`;
-}
+
 function ymdBetween(ymd, start, end){ return ymd >= start && ymd <= end; }
 function weekdayStrFromYMD(ymd){
   // 0=Sun..6=Sat -> 'sunday'..'saturday'
@@ -3471,16 +3470,6 @@ function dedupTripSeq(list){
     if (!seen.has(k)) { seen.add(k); out.push(d); }
   }
   return out;
-}
-
-// Déduplique les cartes correspondance (mêmes 2 trains et mêmes heures)
-function uniqTransfers(list){
-  const map = new Map();
-  for (const t of list){
-    const key = `${t.num1}|${t.dep1}|${t.viaName}|${t.num2}|${t.dep2}|${t.arr2}`;
-    if (!map.has(key)) map.set(key, t);
-  }
-  return Array.from(map.values());
 }
 
 /* ====================== UI SÉLECTION (input + tags) ====================== */
@@ -5275,6 +5264,130 @@ function startWeatherAutorefresh(intervalMs = 5 * 60 * 1000){
   wxTimer = setInterval(updateWeatherBadges, intervalMs);
 }
   
+</script>
+  <script>
+/* ===== Météo light – drop-in override =====
+   - Remplace updateWeatherBadges + startWeatherAutorefresh (mêmes signatures)
+   - Mémo 10 min pour éviter les fetchs répétés
+   - Pause auto-refresh quand l’onglet est caché
+================================================= */
+
+// --- caches rapides ---
+const __coordsMemo = new Map(); // name -> Promise<{lat,lon}>
+const __meteoMemo  = new Map(); // "name|name|…|YYYY-MM-DDTHH:MM" -> Promise<Map>
+
+// wrappers (utilisent tes fonctions existantes si elles sont là)
+const _resolveCoordsByName = typeof resolveCoordsByName === 'function' ? resolveCoordsByName : async ()=>null;
+const _fetchWeatherForStations = typeof fetchWeatherForStations === 'function' ? fetchWeatherForStations : async ()=>new Map();
+const _wmoToIcon = typeof wmoToIcon === 'function' ? wmoToIcon : (code,day)=>({ico:'❔',label:`Code ${code}`});
+const _buildWeatherLinkByName = typeof buildWeatherLinkByName === 'function' ? buildWeatherLinkByName : ()=>null;
+
+function bucket10min(d=new Date()){
+  const x = new Date(d);
+  x.setMilliseconds(0); x.setSeconds(0);
+  x.setMinutes(Math.floor(x.getMinutes()/10)*10);
+  return x.toISOString().slice(0,16); // YYYY-MM-DDTHH:MM
+}
+
+async function resolveCoordsByNameMemo(name){
+  if (!name) return null;
+  if (__coordsMemo.has(name)) return __coordsMemo.get(name);
+  const p = _resolveCoordsByName(name).catch(()=>null);
+  __coordsMemo.set(name, p);
+  return p;
+}
+
+async function fetchWeatherForStationsMemo(names){
+  const uniq = [...new Set((names||[]).filter(Boolean))].sort();
+  if (!uniq.length) return new Map();
+  const key = uniq.join('|') + '|' + bucket10min();
+  if (__meteoMemo.has(key)) return __meteoMemo.get(key);
+  const p = _fetchWeatherForStations(uniq).catch(()=>new Map());
+  __meteoMemo.set(key, p);
+  return p;
+}
+
+// --- helpers date "aujourd'hui ?" en Europe/Luxembourg, comme ton code
+function isSelectedDateTodayLocal(){
+  try{
+    const v = document.getElementById('trainDate')?.value || '';
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(v)) return true;
+    const fmt = new Intl.DateTimeFormat('en-CA', {
+      timeZone:'Europe/Luxembourg', year:'numeric', month:'2-digit', day:'2-digit'
+    });
+    const parts = Object.fromEntries(fmt.formatToParts(new Date()).map(p => [p.type, p.value]));
+    const today = `${parts.year}-${parts.month}-${parts.day}`;
+    return v === today;
+  }catch{ return true; }
+}
+
+/* ====== REMPLACE ta fonction : updateWeatherBadges() ====== */
+async function updateWeatherBadges(){
+  const rows = Array.from(document.querySelectorAll('#trainInfo tr[data-gare]'));
+  if (!rows.length) return;
+
+  if (!isSelectedDateTodayLocal()){
+    rows.forEach(r => { const wx=r.querySelector('.wx'); if(wx){ wx.textContent=''; wx.removeAttribute('title'); } });
+    return;
+  }
+
+  const names = [...new Set(rows.map(r => r.dataset.gare).filter(Boolean))];
+  // on déclenche la mémo (et on “réchauffe” aussi les coords pour la 1re fois)
+  await Promise.all(names.map(resolveCoordsByNameMemo));
+  const data = await fetchWeatherForStationsMemo(names);
+
+  rows.forEach(r => {
+    const name = r.dataset.gare;
+    const wx = r.querySelector('.wx'); if (!wx) return;
+
+    const d = data.get(name);
+    if (!d || d.code == null) { wx.textContent=''; wx.removeAttribute('title'); return; }
+
+    const { ico, label } = _wmoToIcon(d.code, !!d.isDay);
+    const t = (typeof d.temp === 'number') ? Math.round(d.temp)+'°' : '';
+    const url = _buildWeatherLinkByName(name);
+
+    if (url) {
+      wx.innerHTML = `<a class="wx-link" href="${url}" target="_blank" rel="noopener" title="${label}${t?' • '+t:''}">
+        <span class="wx-ico">${ico}</span><span class="wx-t">${t}</span>
+      </a>`;
+    } else {
+      wx.textContent = `${ico}${t ? ' ' + t : ''}`;
+      wx.title = `${label}${t ? ' • ' + t : ''}`;
+    }
+  });
+}
+
+/* ====== REMPLACE ta fonction : startWeatherAutorefresh(intervalMs?) ======
+   - même signature, même global wxTimer
+   - pause quand document.hidden, reprise à la visibilité
+========================================================================== */
+let wxTimer = null;
+function startWeatherAutorefresh(intervalMs = 5 * 60 * 1000){
+  // coupe tout ancien timer
+  if (typeof wxTimer !== 'undefined' && wxTimer) {
+    clearInterval(wxTimer);
+    wxTimer = null;
+  }
+  // ne lance un timer QUE si on est sur “aujourd’hui”
+  if (!isSelectedDateTodayLocal()) return;
+
+  // armement + pause si onglet caché
+  const arm = () => {
+    if (wxTimer) { clearInterval(wxTimer); wxTimer = null; }
+    if (document.hidden) return;           // pas de timer quand onglet caché
+    wxTimer = setInterval(updateWeatherBadges, intervalMs);
+  };
+
+  // 1er tir immédiat (puis armement)
+  updateWeatherBadges();
+  arm();
+
+  // écoute visibilité (on réarme proprement sans multiplier les timers)
+  document.removeEventListener('visibilitychange', startWeatherAutorefresh.__vcHandler || (()=>{}));
+  startWeatherAutorefresh.__vcHandler = () => arm();
+  document.addEventListener('visibilitychange', startWeatherAutorefresh.__vcHandler, { passive:true });
+}
 </script>
 </body>
 </html>
