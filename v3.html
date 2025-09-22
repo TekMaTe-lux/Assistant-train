@@ -2819,7 +2819,7 @@ function getGareURL(nomGare) {
 }
 
 /************  CONFIG COURTE  ************/
-const FORCE_VIA_METZ = false;                // correspondances à Metz uniquement (true pour forcer)
+const FORCE_VIA_METZ = true;                // correspondances à Metz uniquement (true pour forcer)
 const KEEP_ONLY_EARLIEST_TRANSFER = true;   // n’afficher que la 1ʳᵉ correspondance la plus proche
 const STRICT_CALENDAR = false;              // 🔴 ne PAS filtrer avec calendar_dates seul
 
@@ -3012,41 +3012,59 @@ function dedupTripSeq(list){
 
 /************  CALENDRIER (calendar_dates)  ************/
 function serviceActiveForDate(trip_id, ymd){
-  if (!trip_id || !ymd) return false; // exige une date
+  if (!trip_id || !ymd) return false;
   const t = GTFS.tripById?.get(trip_id); if(!t) return false;
   const svc = t.service_id; if(!svc) return false;
 
+  // Si on a calendar_dates :
   if (GTFS.allowedByDate && GTFS.allowedByDate.size > 0) {
-    const allowedSet = GTFS.allowedByDate.get(ymd);
-    if (allowedSet) return allowedSet.has(svc); // présent ce jour
-    return false; // pas listé ce jour => on N'AFFICHE PAS
+    const allowedSet = GTFS.allowedByDate.get(ymd);   // services explicitement ajoutés ce jour-là
+    const removedSet = GTFS.removedByDate?.get(ymd);  // services explicitement retirés ce jour-là
+
+    // Si la date existe dans calendar_dates : on respecte strictement
+    if (allowedSet || removedSet){
+      if (removedSet && removedSet.has(svc)) return false;
+      if (allowedSet) return allowedSet.has(svc);
+      return true; // listé comme retiré pour d'autres services mais pas pour celui-ci
+    }
+
+    // ⚠️ Si la date n'est PAS listée : en "non strict" on laisse passer
+    // (ton flag STRICT_CALENDAR existe déjà, on le respecte)
+    if (typeof STRICT_CALENDAR !== 'undefined' && STRICT_CALENDAR === true) return false;
+    return true;
   }
-  return true; // fallback si calendar_dates vide
+
+  // Fallback si calendar_dates vide
+  return true;
 }
 
 /************  GARDE-FOU CORRIDOR (anti marche arrière)  ************/
-// Utilise l’ordre EXACT de la ligne déclaré dans garesParLigne
+// On reprend l’ordre EXACT déclaré dans garesParLigne
 const __CORRIDOR_ORDER__ = garesParLigne.map(g => g.nom);
 const __CORRIDOR_INDEX__ = (()=>{ const m=new Map(); __CORRIDOR_ORDER__.forEach((n,i)=>m.set(n,i)); return m; })();
 function __idx(n){ return __CORRIDOR_INDEX__.has(n) ? __CORRIDOR_INDEX__.get(n) : null; }
-/** via strictement "entre" start et end dans le même sens ; hors-corridor = toléré */
+
+/** via doit être strictement "entre" start et end, dans le même sens.
+ *  - start < via < end    (sens croissant)
+ *  - start > via > end    (sens décroissant)
+ *  Les gares hors de la liste sont tolérées (retourne true). */
 function viaRespectsDirection(startName, viaName, endName){
   const is = __idx(startName), iv = __idx(viaName), ie = __idx(endName);
-  if (is==null || iv==null || ie==null) return true; // mets false ici si tu veux bloquer hors corridor
-  if (is < ie) return (is < iv && iv < ie);  // sens croissant (ex. Nancy -> Lux si ta liste est Sud->Nord)
-  if (is > ie) return (is > iv && iv > ie);  // sens décroissant (ex. Lux -> Nancy)
+  if (is==null || iv==null || ie==null) return true; // passe à false ici si tu veux bloquer hors corridor
+  if (is < ie) return (is < iv && iv < ie);
+  if (is > ie) return (is > iv && iv > ie);
   return false;
 }
-
+   
 /************  RECHERCHE ITINÉRAIRES 1 CORRESPONDANCE (jamais dans le même train)  ************/
 function findOneTransferItineraries({
   originIds, destIds,
-  startName, endName,                 // 👈 ajoutés
   t0Min, t1Min,
   minTransferMin = 5,
   maxTransferMin = 45,
   ymd,
   allowedInterchanges = null,
+  startName, endName,             // 👈 important
   maxResults = 40
 }){
   ensureTransferIndexesBuilt(); buildStationGroups();
@@ -3057,17 +3075,23 @@ function findOneTransferItineraries({
   const maxWait  = Math.max(minTransferMin, maxTransferMin) * 60;
   const out = [];
 
+  // si on force une gare d’échange (ex: Metz)
   let interIds = allowedInterchanges;
-  if (!interIds && FORCE_VIA_METZ) interIds = getIdsForName('Metz');
+  if (!interIds && FORCE_VIA_METZ){
+    interIds = getIdsForName('Metz');
+  }
+  const depsFromInter = (interIds && interIds.size)
+    ? dedupTripSeq(mergeDeparturesForIds(interIds))
+    : null;
 
-  const depsFromInter = (interIds && interIds.size) ? dedupTripSeq(mergeDeparturesForIds(interIds)) : null;
   const depList = dedupTripSeq(mergeDeparturesForIds(originIds));
 
   // binaire: 1er départ >= fenêtre
   let lo=0, hi=depList.length-1, startIdx=depList.length;
   while (lo<=hi){
     const mid=(lo+hi)>>1;
-    if (depList[mid].depS >= depStart){ startIdx=mid; hi=mid-1; } else lo=mid+1;
+    if (depList[mid].depS >= depStart){ startIdx=mid; hi=mid-1; }
+    else lo=mid+1;
   }
 
   const processedFirstLeg = new Set();
@@ -3085,14 +3109,14 @@ function findOneTransferItineraries({
     const dep1S = st1[idxOrigin].depS;
     if (dep1S < depStart || dep1S > depEnd) continue;
 
-    // 0) si ce premier train va déjà jusqu’à la destination -> pas de correspondance
+    // si ce train atteint déjà la destination -> pas de correspondance
     const reachesDestDirect = st1.slice(idxOrigin+1).some(r => destIds.has(r.stop_id));
     if (reachesDestDirect) continue;
 
     const firstKey = `${trip1}|${dep1S}`;
     if (processedFirstLeg.has(firstKey)) continue;
 
-    // ⚠️ on réutilise TON extractTrainNumber défini au début de ton fichier
+    // ⚠️ on utilise TON extractTrainNumber (global au début du fichier)
     const num1 = extractTrainNumber(GTFS._tripById.get(trip1)?.trip_short_name) || extractTrainNumber(trip1) || '—';
     let best = null;
 
@@ -3115,7 +3139,8 @@ function findOneTransferItineraries({
       let lo2=0, hi2=depsFromInter.length-1, start2=depsFromInter.length;
       while (lo2<=hi2){
         const mid=(lo2+hi2)>>1;
-        if (depsFromInter[mid].depS >= earliest){ start2=mid; hi2=mid-1; } else lo2=mid+1;
+        if (depsFromInter[mid].depS >= earliest){ start2=mid; hi2=mid-1; }
+        else lo2=mid+1;
       }
 
       for (let k = start2; k < depsFromInter.length; k++){
@@ -3146,7 +3171,7 @@ function findOneTransferItineraries({
           waitMin: Math.max(0, Math.round((st2[idxInter2].depS - inter.arrS)/60)),
           durMin:  Math.max(0, Math.round((toDest.arrS - dep1S)/60))
         };
-        break; // on garde la plus proche
+        break;
       }
     } else {
       // via libre (toutes gares)
@@ -3166,7 +3191,8 @@ function findOneTransferItineraries({
         let lo2=0, hi2=deps2.length-1, start2=deps2.length;
         while (lo2<=hi2){
           const mid=(lo2+hi2)>>1;
-          if (deps2[mid].depS >= earliest){ start2=mid; hi2=mid-1; } else lo2=mid+1;
+          if (deps2[mid].depS >= earliest){ start2=mid; hi2=mid-1; }
+          else lo2=mid+1;
         }
 
         for (let k=start2; k<deps2.length; k++){
@@ -3209,7 +3235,6 @@ function findOneTransferItineraries({
     }
   }
 
-  // dédoublonnage final + tri
   let cleaned = uniqTransfers(out);
   if (KEEP_ONLY_EARLIEST_TRANSFER) cleaned = keepFirstTransferPerFirstLeg(cleaned);
   cleaned.sort((a,b)=> a.arr2.localeCompare(b.arr2) || (a.durMin - b.durMin));
@@ -3309,30 +3334,33 @@ async function proposerTrainsOD(){
 
   const directsUniqList = uniqDirects(directs);
 
-  // CORRESPONDANCES (case décochée par défaut)
-  let transfers = [];
-  const allowTransfers = (document.getElementById('allowTransfer')?.checked ?? false); // 👈 défaut = false
-  if (allowTransfers){
-    const minTransferMin = Math.max(1, Number(document.getElementById('minTransfer')?.value || 5));
-    const maxTransferMin = Math.max(minTransferMin, Number(document.getElementById('maxTransfer')?.value || 45));
+// CORRESPONDANCES (décoché par défaut)
+let transfers = [];
+const allowTransfers = (document.getElementById('allowTransfer')?.checked ?? false); // défaut = false
+if (allowTransfers){
+  const minTransferMin = Math.max(1, Number(document.getElementById('minTransfer')?.value || 5));
+  const maxTransferMin = Math.max(minTransferMin, Number(document.getElementById('maxTransfer')?.value || 45));
 
-    const allowedSet = getIdsForName('Metz'); // on force Metz ; passe `null` si tu veux toutes gares
+  // 👉 Only if you want to force Metz, set FORCE_VIA_METZ=true
+  const allowedSet = (typeof FORCE_VIA_METZ !== 'undefined' && FORCE_VIA_METZ)
+    ? getIdsForName('Metz')
+    : null;
 
-    const raw = findOneTransferItineraries({
-      originIds,
-      destIds,
-      startName, endName,                 // 👈 nécessaire pour le garde-fou
-      t0Min: tFromMin,
-      t1Min: tToMin,
-      minTransferMin,
-      maxTransferMin,
-      ymd,
-      allowedInterchanges: allowedSet,
-      maxResults: 200
-    });
+  const raw = findOneTransferItineraries({
+    originIds,
+    destIds,
+    t0Min: tFromMin,
+    t1Min: tToMin,
+    minTransferMin,
+    maxTransferMin,
+    ymd,
+    allowedInterchanges: allowedSet,
+    startName, endName,             // 👈 passe les noms pour le garde-fou
+    maxResults: 200
+  });
 
-    transfers = uniqTransfers(KEEP_ONLY_EARLIEST_TRANSFER ? keepFirstTransferPerFirstLeg(raw) : raw);
-  }
+  transfers = uniqTransfers(KEEP_ONLY_EARLIEST_TRANSFER ? keepFirstTransferPerFirstLeg(raw) : raw);
+}
 
   // RENDU
   const host = document.getElementById('propositions');
@@ -3407,7 +3435,6 @@ $(function () {
   const $allow = $('#allowTransfer');
   if ($allow.length) $allow.prop('checked', false);
 });
-
 
 /* ====================== PRESETS (listes) ====================== */
 const PRESET_AM = "88704,88706,88708,88710,88802,88712,88501,88804,88714,88503,88806,88716,88505,88718,88571,88722".split(',');
