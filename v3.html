@@ -2917,11 +2917,83 @@ function parseCSV(text){
     }
     cols.push(cur);
     const row={};
-    headers.forEach((h,idx)=>row[h]=cols[idx]??'');
+    headers.forEach((h,idx)=>{ row[h] = (cols[idx] != null ? cols[idx] : ''); });
     return row;
   });
 }
 
+/* ===== Libération mémoire GTFS ===== */
+function freeGTFSIndexesOnly(){
+  try{
+    if (window.GTFS){
+      GTFS._stopTimesByTripSec = null;
+      GTFS._depsByStop = null;
+    }
+  }catch(_){}
+}
+function freeHeavyGTFS(){
+  try{
+    if (window.GTFS){
+      GTFS.stopTimes = null;
+      GTFS.trips = null;
+      GTFS.tripById = null;
+      GTFS._stopTimesByTripSec = null;
+      GTFS._depsByStop = null;
+    }
+  }catch(_){}
+}
+
+/* ===== Rendu progressif d’un grand tableau (iOS-friendly) ===== */
+function injectTableChunkedIntoTrainInfo(html, {chunk=200} = {}){
+  const host = document.getElementById('trainInfo');
+  if (!host) return;
+
+  // parse hors DOM
+  const tmp = document.createElement('div');
+  tmp.innerHTML = html;
+  const tableSrc = tmp.querySelector('table');
+  if (!tableSrc) { host.innerHTML = html; return; }
+
+  const theadSrc = tableSrc.querySelector('thead');
+  const tbodySrc = tableSrc.querySelector('tbody');
+  const rows = Array.from(tbodySrc ? tbodySrc.rows : []);
+
+  // squelette live
+  const scrollHint = '<div class="scroll-hint">← glisser →</div>';
+  const wrapper = document.createElement('div');
+  wrapper.className = 'table-scroll';
+
+  const tableLive = document.createElement('table');
+  const theadLive = document.createElement('thead');
+  if (theadSrc) theadLive.innerHTML = theadSrc.innerHTML;
+  const tbodyLive = document.createElement('tbody');
+
+  tableLive.appendChild(theadLive);
+  tableLive.appendChild(tbodyLive);
+  wrapper.appendChild(tableLive);
+
+  const lastUpdated = '<div id="lastUpdated" class="last-updated" aria-live="polite"></div>';
+
+  // vide proprement et injecte le squelette
+  host.textContent = '';
+  host.insertAdjacentHTML('afterbegin', scrollHint);
+  host.appendChild(wrapper);
+  host.insertAdjacentHTML('beforeend', lastUpdated);
+
+  // insertion par lots
+  let i = 0;
+  (function step(){
+    const frag = document.createDocumentFragment();
+    for (let c=0; c<chunk && i<rows.length; c++, i++){
+      frag.appendChild(rows[i].cloneNode(true));
+    }
+    tbodyLive.appendChild(frag);
+    if (i < rows.length) requestAnimationFrame(step);
+  })();
+
+  return { table: tableLive, tbody: tbodyLive };
+}
+  
 async function ensureGTFSLoaded(){
   if (GTFS.stops && GTFS.stopTimes && GTFS.trips && GTFS.tripById && GTFS.stopNameToId && GTFS.allowedByDate) return;
   
@@ -3292,7 +3364,10 @@ async function proposerTrainsOD(){
   if (cont) cont.innerHTML = 'Recherche…';
 
   // reset sélection visuelle (mais garde ton Set global si tu veux cumuler)
-  if (typeof selectedTrains !== 'undefined') { selectedTrains.clear(); updateSelectionUI?.(); }
+  if (typeof selectedTrains !== 'undefined') {
+  selectedTrains.clear();
+  if (typeof updateSelectionUI === 'function') updateSelectionUI();
+}
   proposerTrainsOD._seen = new Set();
 
   const startName = $('#startStation').val() || '';
@@ -3352,11 +3427,21 @@ const directsUniqList = uniqDirects(directs);
 
   // CORRESPONDANCES (si checkbox cochée)
 let transfers = [];
-const allowTransfers = (document.getElementById('allowTransfer')?.checked ?? true);
+(function(){
+   const el = document.getElementById('allowTransfer');
+   var allowTransfers = el ? !!el.checked : true;
+   window.__allowTransfers = allowTransfers; // dispo plus bas
+ })();
+ const allowTransfers = window.__allowTransfers;
 if (allowTransfers){
-  const minTransferMin = Math.max(1, Number(document.getElementById('minTransfer')?.value || 5));
-  const maxTransferMin = Math.max(minTransferMin, Number(document.getElementById('maxTransfer')?.value || 45)); // <= nouveau
-
+  (function(){
+   const elMin = document.getElementById('minTransfer');
+   const elMax = document.getElementById('maxTransfer');
+   window.__minTransferMin = Math.max(1, Number(elMin && elMin.value ? elMin.value : 5));
+   window.__maxTransferMin = Math.max(window.__minTransferMin, Number(elMax && elMax.value ? elMax.value : 45));
+ })();
+ const minTransferMin = window.__minTransferMin;
+ const maxTransferMin = window.__maxTransferMin;
   const allowedSet = getIdsForName('Metz'); // on force Metz
 
   const raw = findOneTransferItineraries({
@@ -3415,8 +3500,9 @@ document.querySelectorAll('#propositions .chip').forEach(chip => {
       const num = chip.dataset.num; if (!num) return;
       const willSelect = !chip.classList.contains('is-selected');
       chip.classList.toggle('is-selected', willSelect);
-      if (willSelect) selectedTrains?.add(num); else selectedTrains?.delete(num);
-      chipsUpdateCount?.(); updateSelectionUI?.();
+      if (willSelect) { if (window.selectedTrains) selectedTrains.add(num); } else { if (window.selectedTrains) selectedTrains.delete(num); }
+ if (typeof chipsUpdateCount === 'function') chipsUpdateCount();
+ if (typeof updateSelectionUI === 'function') updateSelectionUI();
     });
   });
 
@@ -3426,14 +3512,20 @@ document.querySelectorAll('#propositions .chip').forEach(chip => {
       const n1=chip.dataset.num1, n2=chip.dataset.num2;
       const isOn = chip.classList.contains('is-selected');
       chip.classList.toggle('is-selected', !isOn);
-      if (!isOn){ selectedTrains?.add(n1); selectedTrains?.add(n2); }
-      else { selectedTrains?.delete(n1); selectedTrains?.delete(n2); }
+      if (!isOn){ if(window.selectedTrains){ selectedTrains.add(n1); selectedTrains.add(n2); } }
+      else { if(window.selectedTrains){ selectedTrains.delete(n1); selectedTrains.delete(n2); } }
       host.querySelectorAll(`.chip[data-num="${n1}"], .chip[data-num="${n2}"]`).forEach(c=> c.classList.toggle('is-selected', selectedTrains?.has(c.dataset.num)));
-      chipsUpdateCount?.(); updateSelectionUI?.();
+      if (typeof chipsUpdateCount === 'function') chipsUpdateCount();
+      if (typeof updateSelectionUI === 'function') updateSelectionUI();
     });
   });
 
   chipsUpdateCount?.();
+
+  // iOS : relâcher les index lourds après rendu des cartes
+if (window.__IS_IOS__) {
+  setTimeout(freeGTFSIndexesOnly, 800);
+}
 }
 
 /* ====================== PRESETS (listes) ====================== */
@@ -3766,10 +3858,61 @@ function addManualTrain(){
     if (e.key === 'Enter') addManualTrain();
   }); 
 
+/* Rendu progressif d’un tableau HTML: parse en mémoire, clone THEAD, insère TBODY par lots */
+function injectTableChunkedIntoTrainInfo(html, {chunk=200} = {}){
+  const host = document.getElementById('trainInfo');
+  if (!host) return;
+
+  // parse hors DOM
+  const tmp = document.createElement('div');
+  tmp.innerHTML = html;
+  const tableSrc = tmp.querySelector('table');
+  if (!tableSrc) { host.innerHTML = html; return; }
+
+  const theadSrc = tableSrc.querySelector('thead');
+  const tbodySrc = tableSrc.querySelector('tbody');
+  const rows = Array.from(tbodySrc ? tbodySrc.rows : []);
+
+  // squelette live
+  const scrollHint = '<div class="scroll-hint">← glisser →</div>';
+  const wrapper = document.createElement('div');
+  wrapper.className = 'table-scroll';
+
+  const tableLive = document.createElement('table');
+  const theadLive = document.createElement('thead');
+  if (theadSrc) theadLive.innerHTML = theadSrc.innerHTML;
+  const tbodyLive = document.createElement('tbody');
+
+  tableLive.appendChild(theadLive);
+  tableLive.appendChild(tbodyLive);
+  wrapper.appendChild(tableLive);
+
+  const lastUpdated = '<div id="lastUpdated" class="last-updated" aria-live="polite"></div>';
+
+  // vide proprement et injecte le squelette
+  host.textContent = '';
+  host.insertAdjacentHTML('afterbegin', scrollHint);
+  host.appendChild(wrapper);
+  host.insertAdjacentHTML('beforeend', lastUpdated);
+
+  // insertion par lots
+  let i = 0;
+  (function step(){
+    const frag = document.createDocumentFragment();
+    for (let c=0; c<chunk && i<rows.length; c++, i++){
+      frag.appendChild(rows[i].cloneNode(true));
+    }
+    tbodyLive.appendChild(frag);
+    if (i < rows.length) requestAnimationFrame(step);
+  })();
+
+  return { table: tableLive, tbody: tbodyLive };
+}
+
   // Bouton “Générer le tableau”
   $('#loadTrains').off('click').on('click', async function () {
     mainTableRendered = true;
-    document.getElementById('propositions')?.replaceChildren();
+    (function(el){ if(el){ while(el.firstChild) el.removeChild(el.firstChild); } })(document.getElementById('propositions'));
     await loadCompoData();
 
     // s’assure que l’input CSV reflète la sélection courante
@@ -3800,7 +3943,7 @@ function addManualTrain(){
     /* On va (re)générer un tableau */
     mainTableRendered = true;
     /* On supprime totalement le panneau de propositions */
-    document.getElementById('propositions')?.replaceChildren();
+    (function(el){ if(el){ while(el.firstChild) el.removeChild(el.firstChild); } })(document.getElementById('propositions'));
 
     const results = {};
 
@@ -4034,12 +4177,8 @@ function addManualTrain(){
 
     html += '</tbody></table>';
 
-    // 6) Injection + hooks + liens (NOUVEL ORDRE)
-$('#trainInfo').html(
-  '<div class="scroll-hint">← glisser →</div>' +
-  '<div class="table-scroll">' + html + '</div>' +
-  '<div id="lastUpdated" class="last-updated" aria-live="polite"></div>'
-);
+    // 6) Injection progressive (iOS-safe)
+ const injected = injectTableChunkedIntoTrainInfo(html, {chunk: 220});
 
 // 6.1 — Liens immédiats (zéro réseau, donc instantané)
 (function linkifyGaresAndTrains(){
@@ -4250,6 +4389,15 @@ requestAnimationFrame(() => {
   // *** Appliquer GTFS-RT juste après l'injection (sécurisé DOM) ***
     setTimeout(tryApplyGtfsToCurrentTable, 0);
     // ===== FIN handler "#loadTrains"
+
+    // iOS : petite purge mémoire après le gros rendu
+if (window.__IS_IOS__) {
+  // 1) Purge légère : index (reconstruits vite si besoin)
+  setTimeout(freeGTFSIndexesOnly, 1200);
+
+  // 2) (Optionnel) Purge agressive plus tard si l’onglet rame
+  // setTimeout(freeHeavyGTFS, 4000);
+}
   });
 
   // Bouton "Actualiser les données" : refetch FRESH puis régénère
