@@ -2819,15 +2819,19 @@ function getGareURL(nomGare) {
 }
 
 /************  CONFIG COURTE  ************/
-const FORCE_VIA_METZ = false;                // correspondances à Metz uniquement (true pour forcer)
+const FORCE_VIA_METZ = false;                // correspondances à Metz uniquement
 const KEEP_ONLY_EARLIEST_TRANSFER = true;   // n’afficher que la 1ʳᵉ correspondance la plus proche
 const STRICT_CALENDAR = false;              // 🔴 ne PAS filtrer avec calendar_dates seul
 
 /************  HELPERS TEMPS & TEXTE  ************/
 const ft = t => t ? t.slice(0,2)+':'+t.slice(2,4) : '-';
-function dl(b, a){ const toMin = s => (parseInt(s.slice(0,2))*60 + parseInt(s.slice(2,4))); return toMin(a) - toMin(b); }
+function dl(b, a){
+  const toMin = s => (parseInt(s.slice(0,2))*60 + parseInt(s.slice(2,4)));
+  return toMin(a) - toMin(b);
+}
 function hhmmInputToMin(hhmm){ if(!hhmm||!/^\d{2}:\d{2}$/.test(hhmm)) return null; const [h,m]=hhmm.split(':').map(Number); return h*60+m; }
 function dateInputToYMD(str){ if(!str||!/^\d{4}-\d{2}-\d{2}$/.test(str)) return null; const [y,m,d]=str.split('-'); return `${y}${m}${d}`; }
+function extractTrainNumber(str){ const m = String(str||'').match(/(\d{5,6})/); return m ? m[1] : null; }
 function toSec(hms){ if(!hms) return null; const [H,M,S]=hms.split(':').map(Number); return H*3600+M*60+(S||0); }
 function toHHMM(sec){ const s=Math.max(0,sec|0); const h=Math.floor(s/3600)%24,m=Math.floor((s%3600)/60); return String(h).padStart(2,'0')+':'+String(m).padStart(2,'0'); }
 function uniqDirects(list){
@@ -2835,19 +2839,23 @@ function uniqDirects(list){
   for (const t of list){
     const key = `${t.numero}|${t.dep}`;
     const prev = bestByKey.get(key);
+    // si on a deux entrées identiques, on garde celle avec une arrivée connue
     if (!prev || (!prev.arr && t.arr)) bestByKey.set(key, t);
   }
   return Array.from(bestByKey.values());
 }
+
 function keepFirstTransferPerFirstLeg(list){
-  const best = new Map(); // une seule correspondance (la plus proche) par 1er train (num1|dep1)
+  // garde une seule correspondance (la plus proche) par 1er train (num1|dep1)
+  const best = new Map();
   for (const t of list){
     const key = `${t.num1}|${t.dep1}`;
     const prev = best.get(key);
-    if (!prev || t.dep2 < prev.dep2) best.set(key, t);
+    if (!prev || t.dep2 < prev.dep2) best.set(key, t); // la 1ère dispo à Metz
   }
   return Array.from(best.values());
 }
+
 function uniqTransfers(list){
   const map = new Map();
   for (const t of list){
@@ -2858,9 +2866,15 @@ function uniqTransfers(list){
 }
 
 /************ CHARGEMENT GTFS (stops/stop_times/trips/calendar_dates only) ************/
+
 let GTFS = { 
-  stops:null, stopTimes:null, trips:null, tripById:null,
-  stopNameToId:null, allowedByDate:null, removedByDate:null 
+  stops:null, 
+  stopTimes:null, 
+  trips:null, 
+  tripById:null, 
+  stopNameToId:null, 
+  allowedByDate:null, 
+  removedByDate:null 
 };
 
 async function fetchText(url){
@@ -2868,66 +2882,110 @@ async function fetchText(url){
   if(!r.ok) throw new Error('HTTP '+r.status+' on '+url);
   return await r.text();
 }
+
+// Bases candidates (testées dans l’ordre)
 const GTFS_BASES = [
-  new URL('data/', location.href).href,
-  new URL('Assistant-train/data/', location.href).href,
+  new URL('data/', location.href).href,                         // ex: https://www.labetaillere.fr/data/ (si tu as copié les .txt)
+  new URL('Assistant-train/data/', location.href).href,         // ex: https://www.labetaillere.fr/Assistant-train/data/
   'https://raw.githubusercontent.com/TekMaTe-lux/Assistant-train/main/Assistant-train/data/',
   'https://cdn.jsdelivr.net/gh/TekMaTe-lux/Assistant-train@main/Assistant-train/data/'
 ];
+
+
 async function fetchGTFSFile(filename){
   let lastErr;
   for (const base of GTFS_BASES){
-    try { const txt = await fetchText(base + filename); window.GTFS_STATIC_SOURCE = base; return txt; }
-    catch(e){ lastErr = e; }
+    try {
+      const txt = await fetchText(base + filename);
+      window.GTFS_STATIC_SOURCE = base; // debug
+      return txt;
+    } catch(e){
+      lastErr = e;
+      // on essaie la base suivante
+    }
   }
   throw lastErr || new Error('Impossible de charger '+filename);
 }
+
 function parseCSV(text){
-  const lines=text.trim().split(/\r?\n/); const headers=lines.shift().split(',');
+  const lines=text.trim().split(/\r?\n/);
+  const headers=lines.shift().split(',');
   return lines.map(l=>{
-    const cols=[]; let cur='',inQ=false;
+    const cols=[]; 
+    let cur='',inQ=false;
     for(let i=0;i<l.length;i++){
       const c=l[i];
-      if(c==='"'){ if(inQ && l[i+1]==='"'){cur+='"'; i++;} else inQ=!inQ; }
-      else if(c===',' && !inQ){ cols.push(cur); cur=''; }
-      else cur+=c;
+      if(c==='"'){
+        if(inQ && l[i+1]==='"'){cur+='"'; i++;}
+        else inQ=!inQ;
+      } else if(c===',' && !inQ){
+        cols.push(cur); cur='';
+      } else cur+=c;
     }
     cols.push(cur);
-    const row={}; headers.forEach((h,idx)=>row[h]=cols[idx]??''); return row;
+    const row={};
+    headers.forEach((h,idx)=>row[h]=cols[idx]??'');
+    return row;
   });
 }
+
 async function ensureGTFSLoaded(){
   if (GTFS.stops && GTFS.stopTimes && GTFS.trips && GTFS.tripById && GTFS.stopNameToId && GTFS.allowedByDate) return;
+  
   const [stopsTxt, stopTimesTxt, tripsTxt, calDatesTxt] = await Promise.all([
     fetchGTFSFile('stops.txt'),
     fetchGTFSFile('stop_times.txt'),
     fetchGTFSFile('trips.txt'),
     fetchGTFSFile('calendar_dates.txt'),
   ]);
+
   const stops = parseCSV(stopsTxt);
   const stopTimes = parseCSV(stopTimesTxt);
   const trips = parseCSV(tripsTxt);
   const calendarDates = parseCSV(calDatesTxt);
 
   const stopNameToId = new Map();
-  stops.forEach(s => { if (s.stop_name && s.stop_id) if(!stopNameToId.has(s.stop_name)) stopNameToId.set(s.stop_name, s.stop_id); });
+  stops.forEach(s => {
+    if (s.stop_name && s.stop_id) 
+      if(!stopNameToId.has(s.stop_name)) stopNameToId.set(s.stop_name, s.stop_id);
+  });
 
-  const tripById = new Map(); trips.forEach(t => { if (t.trip_id) tripById.set(t.trip_id, t); });
+  const tripById = new Map();
+  trips.forEach(t => {
+    if (t.trip_id) tripById.set(t.trip_id, t);
+  });
 
-  const allowedByDate = new Map(); const removedByDate = new Map();
+  // yyyymmdd -> Set(service_id) ajoutés ; et yyyymmdd -> Set(service_id) supprimés
+  const allowedByDate = new Map();
+  const removedByDate = new Map();
   calendarDates.forEach(row => {
     const ymd = row.date, serviceId = row.service_id, exc = Number(row.exception_type);
     if (!ymd || !serviceId) return;
-    if (exc === 1) { if (!allowedByDate.has(ymd)) allowedByDate.set(ymd, new Set()); allowedByDate.get(ymd).add(serviceId); }
-    else if (exc === 2) { if (!removedByDate.has(ymd)) removedByDate.set(ymd, new Set()); removedByDate.get(ymd).add(serviceId); }
+    if (exc === 1) {
+      if (!allowedByDate.has(ymd)) allowedByDate.set(ymd, new Set());
+      allowedByDate.get(ymd).add(serviceId);
+    } else if (exc === 2) {
+      if (!removedByDate.has(ymd)) removedByDate.set(ymd, new Set());
+      removedByDate.get(ymd).add(serviceId);
+    }
   });
 
-  GTFS = { stops, stopTimes, trips, calendarDates, tripById, stopNameToId, allowedByDate, removedByDate };
+  GTFS = { 
+    stops, 
+    stopTimes, 
+    trips, 
+    calendarDates, 
+    tripById, 
+    stopNameToId, 
+    allowedByDate, 
+    removedByDate 
+  };
 }
-
+   
 /************  GROUPES DE STOPS PAR GARE (stop_name/parent_station)  ************/
 function buildStationGroups(){
   if (GTFS.nameToIds && GTFS.idToName) return;
+  // Protection anti-null si ça n'a pas fini de charger
   if (!Array.isArray(GTFS.stops)) return;
 
   const idToStop = new Map(GTFS.stops.map(s => [s.stop_id, s]));
@@ -2957,6 +3015,7 @@ function buildStationGroups(){
   GTFS.idToName  = idToName;
   GTFS.idToStop  = idToStop;
 }
+
 function getIdsForName(name){
   buildStationGroups();
   const ids = GTFS.nameToIds?.get(name);
@@ -2968,7 +3027,7 @@ function getIdsForName(name){
 /************  INDEXES POUR RECHERCHE DE CORRESPONDANCES  ************/
 function ensureTransferIndexesBuilt(){
   if (GTFS._stopTimesByTripSec && GTFS._depsByStop) return;
-  if (!Array.isArray(GTFS.stopTimes)) return;
+  if (!Array.isArray(GTFS.stopTimes)) return; // protection
 
   const byTripSec = new Map();
   for (const st of GTFS.stopTimes){
@@ -2996,18 +3055,10 @@ function ensureTransferIndexesBuilt(){
   GTFS._depsByStop = depsByStop;
   GTFS._tripById = GTFS.tripById;
 }
+
 function mergeDeparturesForIds(idsSet){
   const arr=[]; idsSet.forEach(id=>{ const l=GTFS._depsByStop.get(id); if(l&&l.length) arr.push(...l); });
   arr.sort((a,b)=>a.depS-b.depS); return arr;
-}
-// Déduplique des listes de départs (même voyage: trip_id + stop_sequence)
-function dedupTripSeq(list){
-  const seen = new Set(), out = [];
-  for (const d of list){
-    const k = `${d.trip_id}|${d.seq}`;
-    if (!seen.has(k)) { seen.add(k); out.push(d); }
-  }
-  return out;
 }
 
 /************  CALENDRIER (calendar_dates)  ************/
@@ -3016,32 +3067,20 @@ function serviceActiveForDate(trip_id, ymd){
   const t = GTFS.tripById?.get(trip_id); if(!t) return false;
   const svc = t.service_id; if(!svc) return false;
 
+  // Si on a des données de dates : on est STRICT
   if (GTFS.allowedByDate && GTFS.allowedByDate.size > 0) {
     const allowedSet = GTFS.allowedByDate.get(ymd);
     if (allowedSet) return allowedSet.has(svc); // présent ce jour
     return false; // pas listé ce jour => on N'AFFICHE PAS
   }
-  return true; // fallback si calendar_dates vide
-}
 
-/************  GARDE-FOU CORRIDOR (anti marche arrière)  ************/
-// Utilise l’ordre EXACT de la ligne déclaré dans garesParLigne
-const __CORRIDOR_ORDER__ = garesParLigne.map(g => g.nom);
-const __CORRIDOR_INDEX__ = (()=>{ const m=new Map(); __CORRIDOR_ORDER__.forEach((n,i)=>m.set(n,i)); return m; })();
-function __idx(n){ return __CORRIDOR_INDEX__.has(n) ? __CORRIDOR_INDEX__.get(n) : null; }
-/** via strictement "entre" start et end dans le même sens ; hors-corridor = toléré */
-function viaRespectsDirection(startName, viaName, endName){
-  const is = __idx(startName), iv = __idx(viaName), ie = __idx(endName);
-  if (is==null || iv==null || ie==null) return true; // mets false ici si tu veux bloquer hors corridor
-  if (is < ie) return (is < iv && iv < ie);  // sens croissant (ex. Nancy -> Lux si ta liste est Sud->Nord)
-  if (is > ie) return (is > iv && iv > ie);  // sens décroissant (ex. Lux -> Nancy)
-  return false;
+  // Fallback ultra-rare si calendar_dates est vide: on laisse passer pour ne pas tout cacher
+  return true;
 }
-
+    
 /************  RECHERCHE ITINÉRAIRES 1 CORRESPONDANCE (jamais dans le même train)  ************/
 function findOneTransferItineraries({
   originIds, destIds,
-  startName, endName,                 // 👈 ajoutés
   t0Min, t1Min,
   minTransferMin = 5,
   maxTransferMin = 45,
@@ -3054,23 +3093,29 @@ function findOneTransferItineraries({
   const depStart = t0Min * 60;
   const depEnd   = t1Min * 60;
   const minWait  = minTransferMin * 60;
-  const maxWait  = Math.max(minTransferMin, maxTransferMin) * 60;
+  const maxWait  = Math.max(minTransferMin, maxTransferMin) * 60; // borne haute
   const out = [];
 
+  // si on force une gare d’échange (ex: Metz)
   let interIds = allowedInterchanges;
-  if (!interIds && FORCE_VIA_METZ) interIds = getIdsForName('Metz');
+  if (!interIds && FORCE_VIA_METZ){
+    interIds = getIdsForName('Metz');
+  }
+  const depsFromInter = (interIds && interIds.size)
+    ? dedupTripSeq(mergeDeparturesForIds(interIds))
+    : null;
 
-  const depsFromInter = (interIds && interIds.size) ? dedupTripSeq(mergeDeparturesForIds(interIds)) : null;
   const depList = dedupTripSeq(mergeDeparturesForIds(originIds));
 
   // binaire: 1er départ >= fenêtre
   let lo=0, hi=depList.length-1, startIdx=depList.length;
   while (lo<=hi){
     const mid=(lo+hi)>>1;
-    if (depList[mid].depS >= depStart){ startIdx=mid; hi=mid-1; } else lo=mid+1;
+    if (depList[mid].depS >= depStart){ startIdx=mid; hi=mid-1; }
+    else lo=mid+1;
   }
 
-  const processedFirstLeg = new Set();
+  const processedFirstLeg = new Set(); // une seule correspondance par premier train
 
   for (let i=startIdx; i<depList.length; i++){
     const d1 = depList[i];
@@ -3085,28 +3130,26 @@ function findOneTransferItineraries({
     const dep1S = st1[idxOrigin].depS;
     if (dep1S < depStart || dep1S > depEnd) continue;
 
-    // 0) si ce premier train va déjà jusqu’à la destination -> pas de correspondance
+    // 🚫 0) Si ce premier train va déjà jusqu'à la destination -> pas de correspondance
     const reachesDestDirect = st1.slice(idxOrigin+1).some(r => destIds.has(r.stop_id));
     if (reachesDestDirect) continue;
 
     const firstKey = `${trip1}|${dep1S}`;
     if (processedFirstLeg.has(firstKey)) continue;
 
-    // ⚠️ on réutilise TON extractTrainNumber défini au début de ton fichier
+    // numéro lisible du 1er train
     const num1 = extractTrainNumber(GTFS._tripById.get(trip1)?.trip_short_name) || extractTrainNumber(trip1) || '—';
+
     let best = null;
 
     if (depsFromInter && interIds && interIds.size){
-      // via imposée (ex. Metz)
+      // 1) on cherche une arrivée à l’inter (ex: Metz)
       let inter = null;
       for (let j = idxOrigin+1; j < st1.length; j++){
         const r = st1[j];
         if (interIds.has(r.stop_id) && r.arrS != null){ inter = r; break; }
       }
       if (!inter) continue;
-
-      const viaNameCheck = GTFS.idToName.get(inter.stop_id) || 'Metz';
-      if (!viaRespectsDirection(startName, viaNameCheck, endName)) continue;
 
       const earliest = inter.arrS + minWait;
       const latest   = inter.arrS + maxWait;
@@ -3115,14 +3158,17 @@ function findOneTransferItineraries({
       let lo2=0, hi2=depsFromInter.length-1, start2=depsFromInter.length;
       while (lo2<=hi2){
         const mid=(lo2+hi2)>>1;
-        if (depsFromInter[mid].depS >= earliest){ start2=mid; hi2=mid-1; } else lo2=mid+1;
+        if (depsFromInter[mid].depS >= earliest){ start2=mid; hi2=mid-1; }
+        else lo2=mid+1;
       }
 
       for (let k = start2; k < depsFromInter.length; k++){
         const d2 = depsFromInter[k];
-        if (d2.depS > latest) break;
+        if (d2.depS > latest) break;               // ❗ respecte délai max
 
         const trip2 = d2.trip_id;
+
+        // 🚫 1) pas de correspondance sur le même voyage (trip_id)
         if (trip2 === trip1) continue;
         if (!serviceActiveForDate(trip2, ymd)) continue;
 
@@ -3132,12 +3178,13 @@ function findOneTransferItineraries({
         const toDest = st2.slice(idxInter2+1).find(r => destIds.has(r.stop_id));
         if (!toDest) continue;
 
+        // 🚫 2) pas le même numéro commercial
         const num2 = extractTrainNumber(GTFS._tripById.get(trip2)?.trip_short_name) || extractTrainNumber(trip2) || '—';
         if (num1 && num2 && num1 === num2) continue;
 
         best = {
           viaId:   inter.stop_id,
-          viaName: viaNameCheck,
+          viaName: GTFS.idToName.get(inter.stop_id) || 'Metz',
           num1, num2,
           dep1:    toHHMM(dep1S),
           arr1:    toHHMM(inter.arrS),
@@ -3146,17 +3193,14 @@ function findOneTransferItineraries({
           waitMin: Math.max(0, Math.round((st2[idxInter2].depS - inter.arrS)/60)),
           durMin:  Math.max(0, Math.round((toDest.arrS - dep1S)/60))
         };
-        break; // on garde la plus proche
+        break; // on ne garde que la plus proche
       }
     } else {
-      // via libre (toutes gares)
+      // 2) fallback "toutes gares" (mêmes garde-fous + fenêtre min/max)
       for (let j=idxOrigin+1; j<st1.length && !best; j++){
         const interJ = st1[j]; if (interJ.arrS == null) continue;
 
-        const viaNameCheck = GTFS.idToName.get(interJ.stop_id) || '';
-        if (viaNameCheck && !viaRespectsDirection(startName, viaNameCheck, endName)) continue;
-
-        const interGroup = getIdsForName(viaNameCheck);
+        const interGroup = getIdsForName(GTFS.idToName.get(interJ.stop_id) || '');
         const deps2 = dedupTripSeq(mergeDeparturesForIds(interGroup));
 
         const earliest = interJ.arrS + minWait;
@@ -3166,14 +3210,17 @@ function findOneTransferItineraries({
         let lo2=0, hi2=deps2.length-1, start2=deps2.length;
         while (lo2<=hi2){
           const mid=(lo2+hi2)>>1;
-          if (deps2[mid].depS >= earliest){ start2=mid; hi2=mid-1; } else lo2=mid+1;
+          if (deps2[mid].depS >= earliest){ start2=mid; hi2=mid-1; }
+          else lo2=mid+1;
         }
 
         for (let k=start2; k<deps2.length; k++){
           const d2 = deps2[k];
-          if (d2.depS > latest) break;
+          if (d2.depS > latest) break;             // ❗ respecte délai max
 
           const trip2 = d2.trip_id;
+
+          // 🚫 pas le même voyage
           if (trip2 === trip1) continue;
           if (!serviceActiveForDate(trip2, ymd)) continue;
 
@@ -3183,12 +3230,13 @@ function findOneTransferItineraries({
           const toDest = st2.slice(idxInter2+1).find(r => destIds.has(r.stop_id));
           if (!toDest) continue;
 
+          // 🚫 pas le même numéro commercial
           const num2 = extractTrainNumber(GTFS._tripById.get(trip2)?.trip_short_name) || extractTrainNumber(trip2) || '—';
           if (num1 && num2 && num1 === num2) continue;
 
           best = {
             viaId:   interJ.stop_id,
-            viaName: viaNameCheck,
+            viaName: GTFS.idToName.get(interJ.stop_id) || '',
             num1, num2,
             dep1:    toHHMM(dep1S),
             arr1:    toHHMM(interJ.arrS),
@@ -3210,11 +3258,11 @@ function findOneTransferItineraries({
   }
 
   // dédoublonnage final + tri
-  let cleaned = uniqTransfers(out);
-  if (KEEP_ONLY_EARLIEST_TRANSFER) cleaned = keepFirstTransferPerFirstLeg(cleaned);
+  const cleaned = uniqTransfers(out);
   cleaned.sort((a,b)=> a.arr2.localeCompare(b.arr2) || (a.durMin - b.durMin));
   return cleaned;
 }
+
 
 /************  RENDU DES CARTES (DIRECTS + TRANSFERS)  ************/
 function renderTransferCards(transfers, startName, endName){
@@ -3268,7 +3316,7 @@ async function proposerTrainsOD(){
   const destIds   = getIdsForName(endName);
 
   // calendrier
-  const ymd = dateInputToYMD($('#trainDate').val()) || (new Date()).toISOString().slice(0,10).replace(/-/g,'');
+  const ymd = dateInputToYMD($('#trainDate').val()) || todayYMDLux().replace(/-/g,'');
 
   // index stop_times par trip (directs)
   const byTrip = new Map();
@@ -3279,60 +3327,59 @@ async function proposerTrainsOD(){
   for(const arr of byTrip.values()) arr.sort((a,b)=>Number(a.stop_sequence)-Number(b.stop_sequence));
 
   // DIRECTS
-  const directs = [];
-  byTrip.forEach((sts, trip_id)=>{
-    if (!serviceActiveForDate(trip_id, ymd)) return;
+const directs = [];
+byTrip.forEach((sts, trip_id)=>{
+  if (!serviceActiveForDate(trip_id, ymd)) return;
 
-    const trow = GTFS.tripById ? GTFS.tripById.get(trip_id) : null;
+  const trow = GTFS.tripById ? GTFS.tripById.get(trip_id) : null;
 
-    let iS=-1,iE=-1,dep=null,arr=null;
-    for(let i=0;i<sts.length;i++){
-      if(originIds.has(sts[i].stop_id)){ iS=i; dep=sts[i].departure_time; }
-      if(destIds.has(sts[i].stop_id))  { iE=i; arr=sts[i].arrival_time; }
-    }
-    if(iS===-1 || iE===-1 || iE<=iS || !dep) return;
+  let iS=-1,iE=-1,dep=null,arr=null;
+  for(let i=0;i<sts.length;i++){
+    if(originIds.has(sts[i].stop_id)){ iS=i; dep=sts[i].departure_time; }
+    if(destIds.has(sts[i].stop_id))  { iE=i; arr=sts[i].arrival_time; }
+  }
+  if(iS===-1 || iE===-1 || iE<=iS || !dep) return;
 
-    const depMin = Number(dep.slice(0,2))*60 + Number(dep.slice(3,5));
-    if (depMin<tFromMin || depMin>tToMin) return;
+  const depMin = Number(dep.slice(0,2))*60 + Number(dep.slice(3,5));
+  if (depMin<tFromMin || depMin>tToMin) return;
 
-    // ⚠️ on utilise ton extractTrainNumber global
-    let numero = trow?.trip_short_name ? extractTrainNumber(trow.trip_short_name) : null;
-    if (!numero) numero = extractTrainNumber(trip_id);
-    if (!numero) return;
+  let numero = trow?.trip_short_name ? extractTrainNumber(trow.trip_short_name) : null;
+  if (!numero) numero = extractTrainNumber(trip_id);
+  if (!numero) return;
 
-    const key = `${numero}|${dep.slice(0,5)}`;
-    if (proposerTrainsOD._seen.has(key)) return;
-    proposerTrainsOD._seen.add(key);
+  const key = `${numero}|${dep.slice(0,5)}`;
+  if (proposerTrainsOD._seen.has(key)) return;
+  proposerTrainsOD._seen.add(key);
 
-    directs.push({ numero, dep:dep.slice(0,5), arr: arr ? arr.slice(0,5) : null });
+  directs.push({ numero, dep:dep.slice(0,5), arr: arr ? arr.slice(0,5) : null });
+});
+
+// dédup finale des directs
+const directsUniqList = uniqDirects(directs);
+
+  // CORRESPONDANCES (si checkbox cochée)
+let transfers = [];
+const allowTransfers = (document.getElementById('allowTransfer')?.checked ?? true);
+if (allowTransfers){
+  const minTransferMin = Math.max(1, Number(document.getElementById('minTransfer')?.value || 5));
+  const maxTransferMin = Math.max(minTransferMin, Number(document.getElementById('maxTransfer')?.value || 45)); // <= nouveau
+
+  const allowedSet = getIdsForName('Metz'); // on force Metz
+
+  const raw = findOneTransferItineraries({
+    originIds,
+    destIds,
+    t0Min: tFromMin,
+    t1Min: tToMin,
+    minTransferMin,
+    maxTransferMin,                      // <= nouveau
+    ymd,
+    allowedInterchanges: allowedSet,
+    maxResults: 200
   });
 
-  const directsUniqList = uniqDirects(directs);
-
-  // CORRESPONDANCES (case décochée par défaut)
-  let transfers = [];
-  const allowTransfers = (document.getElementById('allowTransfer')?.checked ?? false); // 👈 défaut = false
-  if (allowTransfers){
-    const minTransferMin = Math.max(1, Number(document.getElementById('minTransfer')?.value || 5));
-    const maxTransferMin = Math.max(minTransferMin, Number(document.getElementById('maxTransfer')?.value || 45));
-
-    const allowedSet = getIdsForName('Metz'); // on force Metz ; passe `null` si tu veux toutes gares
-
-    const raw = findOneTransferItineraries({
-      originIds,
-      destIds,
-      startName, endName,                 // 👈 nécessaire pour le garde-fou
-      t0Min: tFromMin,
-      t1Min: tToMin,
-      minTransferMin,
-      maxTransferMin,
-      ymd,
-      allowedInterchanges: allowedSet,
-      maxResults: 200
-    });
-
-    transfers = uniqTransfers(KEEP_ONLY_EARLIEST_TRANSFER ? keepFirstTransferPerFirstLeg(raw) : raw);
-  }
+  transfers = uniqTransfers(keepFirstTransferPerFirstLeg(raw));
+}
 
   // RENDU
   const host = document.getElementById('propositions');
@@ -3363,11 +3410,11 @@ async function proposerTrainsOD(){
   host.innerHTML = directsHTML + transfersHTML;
 
   // Force le texte affiché à utiliser exactement le data-num (aucune troncature possible)
-  document.querySelectorAll('#propositions .chip').forEach(chip => {
-    const n = chip.dataset.num;
-    const t = chip.querySelector('.t-num');
-    if (t && n) t.textContent = 'Train ' + n;
-  });
+document.querySelectorAll('#propositions .chip').forEach(chip => {
+  const n = chip.dataset.num;                 // "123456" si 6 chiffres
+  const t = chip.querySelector('.t-num');
+  if (t) t.textContent = 'Train ' + n;
+});
 
   // Clic cartes “directs”
   host.querySelectorAll('.chip[data-num]').forEach((chip)=>{
@@ -3380,7 +3427,7 @@ async function proposerTrainsOD(){
     });
   });
 
-  // Clic cartes “correspondances”
+  // Clic cartes “correspondances” (ajoute/retire les 2 trains)
   host.querySelectorAll('.chip.transfer').forEach((chip)=>{
     chip.addEventListener('click', ()=>{
       const n1=chip.dataset.num1, n2=chip.dataset.num2;
@@ -3395,19 +3442,6 @@ async function proposerTrainsOD(){
 
   chipsUpdateCount?.();
 }
-
-/* ====================== UI SÉLECTION (input + tags) ====================== */
-function chipsUpdateCount(){
-  const el = document.querySelector('#propositions #chipsCount');
-  if (el) el.textContent = selectedTrains.size;
-}
-
-/* ====================== DOC READY : décocher "correspondances" par défaut ====================== */
-$(function () {
-  const $allow = $('#allowTransfer');
-  if ($allow.length) $allow.prop('checked', false);
-});
-
 
 /* ====================== PRESETS (listes) ====================== */
 const PRESET_AM = "88704,88706,88708,88710,88802,88712,88501,88804,88714,88503,88806,88716,88505,88718,88571,88722".split(',');
