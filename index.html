@@ -4610,41 +4610,74 @@ function isSelectedDateToday(){
 }
 
 /* ---------- APPLICATION DES RETARDS GTFS-RT DANS LE TABLEAU ---------- */
+/* ---------- APPLICATION DES RETARDS GTFS-RT DANS LE TABLEAU (robuste iOS) ---------- */
 function applyRetardsFromGTFS(data) {
   const table = document.querySelector("#trainInfo table");
   if (!table) { console.log("⛔ Le tableau n'est pas encore généré !"); return; }
 
-  const allRows = Array.from(table.querySelectorAll("tr"));
-  const headerCount = allRows.findIndex(row => row.querySelector("td") !== null);
+  // 1) Récupérer les numéros de train depuis la 1ʳᵉ ligne d’en-tête (<thead> tr:first-child)
+  const headRow = table.querySelector('thead tr:first-child');
+  if (!headRow) { console.log("[GTFS-RT] Pas d'en-tête."); return; }
 
-  for (let i = headerCount; i < allRows.length; i++) {
-    const row = allRows[i];
-    const gare = row.cells[0]?.textContent.trim();
+  const headerThs = Array.from(headRow.querySelectorAll('th[data-train-number]'));
+  if (!headerThs.length) { console.log("[GTFS-RT] Aucun th[data-train-number]."); return; }
+
+  // Tableau des numéros de train (dans l’ordre des colonnes du body)
+  const headerNumbers = headerThs.map(th => (th.dataset.trainNumber || '').trim()).filter(Boolean);
+
+  // 2) Récupérer les lignes du corps
+  const tbody = table.tBodies && table.tBodies[0];
+  const bodyRows = tbody ? Array.from(tbody.rows) : Array.from(table.querySelectorAll('tbody tr'));
+  if (!bodyRows.length) { 
+    console.log("[GTFS-RT] Aucun body row — rien à appliquer."); 
+    return; 
+  }
+
+  // 3) Parcourir chaque ligne gare
+  for (const row of bodyRows) {
+    if (!row) continue;
+
+    // Nom de gare (robuste)
+    const gare =
+      row.dataset.gare ||
+      row.querySelector('.gare-label')?.textContent?.trim() ||
+      row.cells?.[0]?.textContent?.trim() ||
+      '';
+
     if (!gare) continue;
 
-    Array.from(row.cells).forEach((cell, colIndex) => {
-      if (colIndex === 0) return;
+    // 4) Appliquer pour chaque colonne train (offset +1 : la col 0 = gare)
+    for (let i = 0; i < headerNumbers.length; i++) {
+      const trainNumber = headerNumbers[i];
+      const cell = row.cells?.[i + 1]; // +1 car 1ʳᵉ colonne = gare
+      if (!trainNumber || !cell) continue;
 
-      const trainHeader = document.querySelectorAll("#trainInfo table tr th")[colIndex];
-      const trainNumber = trainHeader?.dataset.trainNumber?.trim();
-
-      if (trainNumber && data[trainNumber]) {
-        const retardMinutes = data[trainNumber][gare];
-
-        const hasSuppression = cell.querySelector('.deleted, .delay-strike, .strike, .cancelled');
-        if (retardMinutes && retardMinutes > 0 && !hasSuppression) {
-          if (!cell.querySelector(".gtfs-retard")) {
-            const div = document.createElement("div");
-            div.className = "gtfs-retard";
-            div.textContent = `+${retardMinutes} min`;
-            cell.appendChild(div);
-          }
-        }
+      const perTrain = data?.[trainNumber];
+      if (!perTrain) {
+        // Si pas de data pour ce train, on nettoie un éventuel badge existant
+        const old = cell.querySelector('.gtfs-retard');
+        if (old) old.remove();
+        continue;
       }
-    });
+
+      const retardMinutes = perTrain[gare];
+
+      // Pas d'étiquette de retard si suppression/strike déjà visible
+      const hasSuppression = cell.querySelector('.deleted, .delay-strike, .strike, .cancelled');
+
+      if (retardMinutes && retardMinutes > 0 && !hasSuppression) {
+        const badge = cell.querySelector('.gtfs-retard') || document.createElement('div');
+        badge.className = 'gtfs-retard';
+        badge.textContent = `+${retardMinutes} min`;
+        if (!badge.parentNode) cell.appendChild(badge);
+      } else {
+        // Nettoyage si plus de retard
+        const old = cell.querySelector('.gtfs-retard');
+        if (old) old.remove();
+      }
+    }
   }
 }
-
 /* ---------- ALERTES ---------- */
 const urlAlertes = 'https://raw.githubusercontent.com/tekmate-lux/Assistant-train/main/Assistant-train/alertes_sncftoutes.json';
 const motsCles = Array.from(new Set([
