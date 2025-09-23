@@ -4217,29 +4217,67 @@ function addManualTrain(){
     // 6) Injection + hooks + liens (NOUVEL ORDRE)
 injectTableChunkedIntoTrainInfo(html, { chunk: 180 });
 
-// 6.1 — Liens immédiats (zéro réseau, donc instantané)
-(function linkifyGaresAndTrains(){
-  // nettoie tooltips
-  document.querySelectorAll('th[data-train-number]').forEach(h => h.removeAttribute('title'));
+// 6.1 — Liens (idempotent, compatible injection par paquets)
+function linkifyGaresAndTrains(root){
+  const scope = root || document;
 
-  // liens gares (colonne 1) — préserve .wx
-  document.querySelectorAll('#trainInfo table tr td:first-child').forEach(td => {
-    const label = td.querySelector('.gare-label');
-    if (!label) return;
-    const nomGare = label.textContent.trim();
+  // Nettoie les title parasites sur th
+  scope.querySelectorAll('th[data-train-number]').forEach(h => h.removeAttribute('title'));
+
+  // Liens colonnes gares (préserve .wx car on ne modifie QUE .gare-label)
+  scope.querySelectorAll('#trainInfo table tbody tr td:first-child .gare-label').forEach(label => {
+    if (!label || label.querySelector('a.gare-link')) return; // déjà fait
+    const nomGare = (label.textContent || '').trim();
+    if (!nomGare) return;
     const url = getGareURL(nomGare);
-    if (url && url !== nomGare) {
-      label.innerHTML = `<a href="${url}" target="_blank" class="gare-link">${nomGare}</a>`;
+    if (url) {
+      label.innerHTML = `<a href="${url}" target="_blank" rel="noopener" class="gare-link">${nomGare}</a>`;
     }
   });
 
-  // liens vers fiches trains SNCF
+  // Liens entêtes trains (une seule fois suffit, mais idempotent)
   const dateCirculation = $('#trainDate').val();
-  document.querySelectorAll('#trainInfo th[data-train-number]').forEach(th => {
+  scope.querySelectorAll('#trainInfo th[data-train-number]').forEach(th => {
     const numero = th.dataset.trainNumber;
+    if (!numero) return;
+    const already = th.querySelector('a.train-link');
     const url = `https://www.sncf-voyageurs.com/fr/voyagez-avec-nous/horaires-et-itineraires/recherche-de-train/detail-train/?numeroCirculation=${numero}&dateCirculation=${dateCirculation}`;
-    th.innerHTML = `<a href="${url}" target="_blank" class="train-link">${numero}</a>`;
+    if (already) { already.href = url; already.textContent = numero; }
+    else { th.innerHTML = `<a href="${url}" target="_blank" rel="noopener" class="train-link">${numero}</a>`; }
   });
+}
+
+// ➜ 1) premier passage immédiat (agit sur les lignes déjà injectées)
+linkifyGaresAndTrains(document);
+
+// ➜ 2) observe les paquets qui arrivent puis s’auto-désactive après inactivité
+(function observeChunkedRowsOnce(){
+  const tbody = document.querySelector('#trainInfo table tbody');
+  if (!tbody) return;
+
+  let lastChange = Date.now();
+  const obs = new MutationObserver(muts => {
+    muts.forEach(m => {
+      m.addedNodes.forEach(n => {
+        if (n.nodeType === 1) { // élément
+          // on linkifie seulement ce qui vient d’arriver
+          if (n.matches && n.matches('tr')) linkifyGaresAndTrains(n);
+          else linkifyGaresAndTrains(n);
+        }
+      });
+    });
+    lastChange = Date.now();
+  });
+
+  obs.observe(tbody, { childList: true, subtree: true });
+
+  // petit “kill switch” pour iOS : coupe l’observer après 600 ms sans nouvelles lignes
+  const killer = setInterval(() => {
+    if (Date.now() - lastChange > 600) {
+      clearInterval(killer);
+      obs.disconnect();
+    }
+  }, 250);
 })();
 
 // horodatage visible sans attendre
