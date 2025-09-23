@@ -2773,6 +2773,62 @@ function buildStationSelects() {
   fill(startSel, 'Toute la ligne');
   fill(endSel,   'Toute la ligne');
 }
+/* Rendu progressif d’un tableau HTML: parse en mémoire, clone THEAD, insère TBODY par lots */
+function injectTableChunkedIntoTrainInfo(html, {chunk=200} = {}){
+  const host = document.getElementById('trainInfo');
+  if (!host) return;
+
+  // parse hors DOM
+  const tmp = document.createElement('div');
+  tmp.innerHTML = html;
+  const tableSrc = tmp.querySelector('table');
+  if (!tableSrc) { host.innerHTML = html; return; }
+
+  // conteneur scrollable + horodatage
+  host.innerHTML = '<div class="scroll-hint">← glisser →</div><div class="table-scroll"></div><div id="lastUpdated" class="last-updated" aria-live="polite"></div>';
+  const scroller = host.querySelector('.table-scroll');
+
+  // table cible
+  const tableDst = document.createElement('table');
+
+  // clone THEAD immédiatement
+  const thead = tableSrc.querySelector('thead');
+  if (thead) tableDst.appendChild(thead.cloneNode(true));
+  scroller.appendChild(tableDst);
+
+  const srcBody = tableSrc.querySelector('tbody');
+  if (!srcBody){ setLastUpdated?.(); return; }
+
+  const rows = Array.from(srcBody.children);
+  const dstBody = document.createElement('tbody');
+  tableDst.appendChild(dstBody);
+
+  let idx = 0;
+  function pump(){
+    const end = Math.min(idx + chunk, rows.length);
+    for (; idx < end; idx++){
+      dstBody.appendChild(rows[idx].cloneNode(true));
+    }
+    if (idx < rows.length){
+      requestAnimationFrame(pump);
+    } else {
+      // fin : hooks post-rendu
+      setLastUpdated?.();
+      // GTFS-RT (non bloquant)
+      setTimeout(()=> {
+        if (window.retardsGTFS && (typeof isSelectedDateToday !== 'function' || isSelectedDateToday())){
+          tryApplyGtfsToCurrentTable?.();
+        }
+      }, 0);
+      // météo & dropdown & alertes
+      updateWeatherBadges?.();
+      if (window.__IS_IOS__) startWeatherAutorefresh?.(10 * 60 * 1000); else startWeatherAutorefresh?.();
+      hookGareDropdownBehavior?.();
+      setTimeout(()=> { try { chargerEtAfficherAlertes?.(); } catch(e){} }, 0);
+    }
+  }
+  requestAnimationFrame(pump);
+}   
 // — Helper: fixe le sens d’affichage ET force toujours De/À pour AM/PM
 function setDirectionForPreset(kind){
   // AM = France → Luxembourg ; PM = Luxembourg → France
@@ -4158,11 +4214,7 @@ function addManualTrain(){
     html += '</tbody></table>';
 
     // 6) Injection + hooks + liens (NOUVEL ORDRE)
-$('#trainInfo').html(
-  '<div class="scroll-hint">← glisser →</div>' +
-  '<div class="table-scroll">' + html + '</div>' +
-  '<div id="lastUpdated" class="last-updated" aria-live="polite"></div>'
-);
+injectTableChunkedIntoTrainInfo(html, { chunk: 180 });
 
 // 6.1 — Liens immédiats (zéro réseau, donc instantané)
 (function linkifyGaresAndTrains(){
@@ -4854,63 +4906,36 @@ async function chargerEtAfficherAlertes() {
     });
 }
 
-// Attente du tableau avant chargement des alertes (F5, etc.)
-function waitForTableAndLoadAlerts() {
-  const observer = new MutationObserver((mutations, obs) => {
-    const table = document.querySelector('table');
-    if (table) {
-      obs.disconnect();
-      chargerEtAfficherAlertes();
-    }
-  });
-  observer.observe(document.body, {childList: true, subtree: true});
-  const table = document.querySelector('table');
-  if (table) {
-    observer.disconnect();
-    chargerEtAfficherAlertes();
-  }
-}
 window.addEventListener('load', () => {
-  // charge les alertes dès que le tableau est dispo
-  waitForTableAndLoadAlerts();
-
-  // clic sur "Générer le tableau"
-  const boutonAfficher = document.getElementById('loadTrains');
-  if (boutonAfficher) {
-    boutonAfficher.addEventListener('click', () => {
-      waitForTableAndLoadAlerts();
-      // le rendu du tableau appelle déjà updateWeatherBadges() + startWeatherAutorefresh()
-      // (si tu as inséré ces appels juste après l'injection du HTML)
-    });
+  // 1) Si un tableau existe déjà (cas rare : restauration d'état), charge immédiatement les alertes
+  if (document.querySelector('#trainInfo table')) {
+    try { chargerEtAfficherAlertes(); } catch (e) { console.warn('[alertes] init:', e); }
   }
 
-  // changement de date : n'afficher la météo que pour "aujourd'hui"
+  // 2) Si tu n'utilises PAS l'injection progressive (injectTableChunkedIntoTrainInfo),
+  //    alors AJOUTE manuellement `chargerEtAfficherAlertes();`
+  //    juste après l'injection du tableau dans TON handler "#loadTrains".
+  //    Si tu utilises l'injection progressive, ne fais rien ici : elle appelle déjà chargerEtAfficherAlertes() en fin de rendu.
+
+  // 3) Changement de date → Météo + (re)filtrage alertes si un tableau est présent
   const dateInput = document.getElementById('trainDate');
   if (dateInput) {
     const onDateChange = () => {
-      // coupe le rafraîchissement auto météo
-      if (typeof wxTimer !== 'undefined' && wxTimer) {
-        clearInterval(wxTimer);
-        wxTimer = null;
-      }
-      // met à jour/efface les pastilles selon la date sélectionnée
+      if (window.wxTimer) { clearInterval(window.wxTimer); window.wxTimer = null; }
       if (typeof updateWeatherBadges === 'function') updateWeatherBadges();
-      // relance le timer uniquement si la date est aujourd'hui
       if (typeof startWeatherAutorefresh === 'function') startWeatherAutorefresh();
 
-      // recharge/filtre les alertes pour la nouvelle date
-      waitForTableAndLoadAlerts();
+      if (document.querySelector('#trainInfo table')) {
+        try { chargerEtAfficherAlertes(); } catch (e) { console.warn('[alertes] date change:', e); }
+      }
     };
 
     dateInput.addEventListener('change', onDateChange);
-    // (optionnel) réagir en direct pendant la saisie
-    // dateInput.addEventListener('input', onDateChange);
+    // (optionnel) dateInput.addEventListener('input', onDateChange);
   }
 });
 
 </script>
-
-
   <script>
 // Gestion du bouton Jeu
 document.getElementById("btnJeu").addEventListener("click", function() {
@@ -5400,15 +5425,15 @@ function startWeatherAutorefresh(intervalMs = 5 * 60 * 1000){
   
 </script>
   <script>
+<script>
 /* ===== Météo light – drop-in override =====
-   - Remplace updateWeatherBadges + startWeatherAutorefresh (mêmes signatures)
-   - Mémo 10 min pour éviter les fetchs répétés
-   - Pause auto-refresh quand l’onglet est caché
+   (remplace updateWeatherBadges + startWeatherAutorefresh)
+   ⚠️ Version iOS-safe : pas de redeclaration let wxTimer
 ================================================= */
 
 // --- caches rapides ---
-const __coordsMemo = new Map(); // name -> Promise<{lat,lon}>
-const __meteoMemo  = new Map(); // "name|name|…|YYYY-MM-DDTHH:MM" -> Promise<Map>
+const __coordsMemo = window.__coordsMemo || new Map(); // idempotent
+const __meteoMemo  = window.__meteoMemo  || new Map();
 
 // wrappers (utilisent tes fonctions existantes si elles sont là)
 const _resolveCoordsByName = typeof resolveCoordsByName === 'function' ? resolveCoordsByName : async ()=>null;
@@ -5441,7 +5466,7 @@ async function fetchWeatherForStationsMemo(names){
   return p;
 }
 
-// --- helpers date "aujourd'hui ?" en Europe/Luxembourg, comme ton code
+// --- helpers date "aujourd'hui ?" Europe/Luxembourg
 function isSelectedDateTodayLocal(){
   try{
     const v = document.getElementById('trainDate')?.value || '';
@@ -5455,7 +5480,7 @@ function isSelectedDateTodayLocal(){
   }catch{ return true; }
 }
 
-/* ====== REMPLACE ta fonction : updateWeatherBadges() ====== */
+/* ====== Remplace : updateWeatherBadges() ====== */
 async function updateWeatherBadges(){
   const rows = Array.from(document.querySelectorAll('#trainInfo tr[data-gare]'));
   if (!rows.length) return;
@@ -5466,7 +5491,6 @@ async function updateWeatherBadges(){
   }
 
   const names = [...new Set(rows.map(r => r.dataset.gare).filter(Boolean))];
-  // on déclenche la mémo (et on “réchauffe” aussi les coords pour la 1re fois)
   await Promise.all(names.map(resolveCoordsByNameMemo));
   const data = await fetchWeatherForStationsMemo(names);
 
@@ -5492,32 +5516,24 @@ async function updateWeatherBadges(){
   });
 }
 
-/* ====== REMPLACE ta fonction : startWeatherAutorefresh(intervalMs?) ======
-   - même signature, même global wxTimer
-   - pause quand document.hidden, reprise à la visibilité
-========================================================================== */
-let wxTimer = null;
+/* ====== Remplace : startWeatherAutorefresh(intervalMs?) ======
+   Utilise window.wxTimer au lieu d'un let redeclaré
+================================================================ */
+window.wxTimer = window.wxTimer || null;
+
 function startWeatherAutorefresh(intervalMs = 5 * 60 * 1000){
-  // coupe tout ancien timer
-  if (typeof wxTimer !== 'undefined' && wxTimer) {
-    clearInterval(wxTimer);
-    wxTimer = null;
-  }
-  // ne lance un timer QUE si on est sur “aujourd’hui”
+  if (window.wxTimer) { clearInterval(window.wxTimer); window.wxTimer = null; }
   if (!isSelectedDateTodayLocal()) return;
 
-  // armement + pause si onglet caché
   const arm = () => {
-    if (wxTimer) { clearInterval(wxTimer); wxTimer = null; }
-    if (document.hidden) return;           // pas de timer quand onglet caché
-    wxTimer = setInterval(updateWeatherBadges, intervalMs);
+    if (window.wxTimer) { clearInterval(window.wxTimer); window.wxTimer = null; }
+    if (document.hidden) return;
+    window.wxTimer = setInterval(updateWeatherBadges, intervalMs);
   };
 
-  // 1er tir immédiat (puis armement)
   updateWeatherBadges();
   arm();
 
-  // écoute visibilité (on réarme proprement sans multiplier les timers)
   document.removeEventListener('visibilitychange', startWeatherAutorefresh.__vcHandler || (()=>{}));
   startWeatherAutorefresh.__vcHandler = () => arm();
   document.addEventListener('visibilitychange', startWeatherAutorefresh.__vcHandler, { passive:true });
