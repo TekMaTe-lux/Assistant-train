@@ -4297,9 +4297,8 @@ requestAnimationFrame(() => {
     }
   }, 0);
 
-  // météo (asynchrone, non bloquante)
-  updateWeatherBadges();
-  if (window.__IS_IOS__) startWeatherAutorefresh(10 * 60 * 1000); else startWeatherAutorefresh();
+// météo (iOS-safe, observe le tableau puis démarre tout seul)
+scheduleWeatherAfterTableSettled();
 
   // menu “Aller à une gare”
   hookGareDropdownBehavior();
@@ -5268,16 +5267,10 @@ betaInput.addEventListener("keyup", (e) => {
   
   <script>
 /* ===== METEO – Bloc unique iOS-safe (remplace tout l'ancien bloc) =====
-   - Conserve tes API: GARE_COORDS, WX_COORDS_CACHE, resolveCoordsByName,
-     buildWeatherLinkByName, wmoToIcon, fetchWeatherForStations,
-     updateWeatherBadges, startWeatherAutorefresh
-   - Ajoute: cancelWeatherFetch() + single-flight + AbortController
-   - Timer unique, alias compatible avec 'wxTimer' (ancien code)
-========================================================================= */
 
 /* ---- Etat global météo ---- */
-window.__WX__ = window.__WX__ || { timer: null, runId: 0, abort: null };
-function __wxSetTimer(id){ window.__WX__.timer = id; window.wxTimer = id; } // alias compat
+window.__WX__ = window.__WX__ || { timer: null, runId: 0, abort: null, firstRun: true };
+function __wxSetTimer(id){ window.__WX__.timer = id; window.wxTimer = id; } // alias compat historique
 
 /* ---- COORDS connues + cache GTFS ---- */
 const GARE_COORDS = {
@@ -5297,6 +5290,28 @@ const GARE_COORDS = {
 };
 const WX_COORDS_CACHE = new Map();
 
+/* ---- Helpers ---- */
+function __isSelectedDateToday(){
+  try{
+    const v = document.getElementById('trainDate')?.value || '';
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(v)) return true;
+    const fmt = new Intl.DateTimeFormat('en-CA', {
+      timeZone:'Europe/Luxembourg', year:'numeric', month:'2-digit', day:'2-digit'
+    });
+    const p = Object.fromEntries(fmt.formatToParts(new Date()).map(x => [x.type, x.value]));
+    return v === `${p.year}-${p.month}-${p.day}`;
+  }catch{ return true; }
+}
+
+/* ---- Annuler proprement la météo en cours (à appeler avant toute régénération) ---- */
+function cancelWeatherFetch(){
+  window.__WX__.runId++;                                  // invalide les rendus en vol
+  try { window.__WX__.abort?.abort(); } catch{}           // abort fetch courant
+  window.__WX__.abort = null;
+  if (window.__WX__.timer){ clearInterval(window.__WX__.timer); __wxSetTimer(null); } // coupe timer
+}
+
+/* ---- Résolution coords : manuel -> cache -> GTFS ---- */
 async function resolveCoordsByName(name){
   if (!name) return null;
   if (GARE_COORDS[name]) return GARE_COORDS[name];
@@ -5322,11 +5337,12 @@ async function resolveCoordsByName(name){
 
     const c = { lat: +(sumLat/n).toFixed(5), lon: +(sumLon/n).toFixed(5) };
     WX_COORDS_CACHE.set(name, c);
-    GARE_COORDS[name] = c;
+    GARE_COORDS[name] = c; // hydrate pour appels suivants synchro
     return c;
   } catch { return null; }
 }
 
+/* ---- Lien Windy ---- */
 function buildWeatherLinkByName(name, zoom = 10){
   const c = GARE_COORDS[name] || WX_COORDS_CACHE.get(name);
   if (!c) return null;
@@ -5335,6 +5351,7 @@ function buildWeatherLinkByName(name, zoom = 10){
   return `https://www.windy.com/${lat}/${lon}?temp,${lat},${lon},${zoom},d:picker`;
 }
 
+/* ---- WMO -> icône + libellé ---- */
 function wmoToIcon(code, isDay = true){
   if (code === 0) return { ico: isDay ? "☀️" : "🌙", label: "Ciel clair" };
   if (code === 1) return { ico: isDay ? "🌤️" : "☁️", label: "Peu nuageux" };
@@ -5358,50 +5375,13 @@ function wmoToIcon(code, isDay = true){
   return { ico: "❔", label: `Code ${code}` };
 }
 
-/* ---- Utils ---- */
-function __isSelectedDateToday(){
-  try{
-    const v = document.getElementById('trainDate')?.value || '';
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(v)) return true;
-    const fmt = new Intl.DateTimeFormat('en-CA', {
-      timeZone:'Europe/Luxembourg', year:'numeric', month:'2-digit', day:'2-digit'
-    });
-    const parts = Object.fromEntries(fmt.formatToParts(new Date()).map(p => [p.type, p.value]));
-    const today = `${parts.year}-${parts.month}-${parts.day}`;
-    return v === today;
-  }catch{ return true; }
-}
-
-/* ---- Annuler proprement la météo en cours (à appeler avant régénération) ---- */
-function cancelWeatherFetch(){
-  // invalide les mises à jour en cours
-  window.__WX__.runId++;
-  // abort fetch s'il y en a un
-  try { if (window.__WX__.abort) window.__WX__.abort.abort(); } catch {}
-  window.__WX__.abort = null;
-  // coupe le timer
-  if (window.__WX__.timer) { clearInterval(window.__WX__.timer); __wxSetTimer(null); }
-}
-
-/* ---- Fetch météo Open-Meteo (multi-coord) avec Abort optionnel ---- */
-async function fetchWeatherForStations(stationNames, opt = {}){
+/* ---- Fetch Open-Meteo en chunks (iOS=4, autres=8) ---- */
+async function __fetchOpenMeteoChunk(coordsSlice, opt = {}){
   const { signal, timeoutMs = 7000 } = opt || {};
-  const seen = new Set();
-  const coords = [];
+  if (!coordsSlice.length) return new Map();
 
-  for (const name of stationNames || []) {
-    if (!name || seen.has(name)) continue;
-    seen.add(name);
-    const c = GARE_COORDS[name] || WX_COORDS_CACHE.get(name) || await resolveCoordsByName(name);
-    if (c && Number.isFinite(+c.lat) && Number.isFinite(+c.lon)) {
-      coords.push({ name, lat:+c.lat, lon:+c.lon });
-    }
-  }
-
-  if (!coords.length) return new Map();
-
-  const latList = coords.map(c => c.lat).join(',');
-  const lonList = coords.map(c => c.lon).join(',');
+  const latList = coordsSlice.map(c => c.lat).join(',');
+  const lonList = coordsSlice.map(c => c.lon).join(',');
   const qs = new URLSearchParams({
     latitude: latList,
     longitude: lonList,
@@ -5409,12 +5389,11 @@ async function fetchWeatherForStations(stationNames, opt = {}){
     timezone: 'Europe/Luxembourg'
   }).toString();
 
-  // Fusionne un AbortController local avec celui optionnel
   const ctrl = new AbortController();
-  const relayer = () => ctrl.abort();
-  if (signal) {
+  const relay = () => ctrl.abort();
+  if (signal){
     if (signal.aborted) ctrl.abort();
-    else signal.addEventListener('abort', relayer, { once:true });
+    else signal.addEventListener('abort', relay, { once:true });
   }
   const to = setTimeout(()=>ctrl.abort(), timeoutMs);
 
@@ -5424,14 +5403,14 @@ async function fetchWeatherForStations(stationNames, opt = {}){
     const json = ct.includes('application/json') ? await res.json() : JSON.parse(await res.text());
 
     let list;
-    if (Array.isArray(json)) list = json;
+    if (Array.isArray(json)) list = json;                  // improbable mais safe
     else if (Array.isArray(json?.results)) list = json.results;
     else if (json && json.current) list = [json];
     else list = [];
 
     const out = new Map();
-    for (let i=0; i<coords.length; i++){
-      const name = coords[i].name;
+    for (let i=0; i<coordsSlice.length; i++){
+      const name = coordsSlice[i].name;
       const curr = (list[i] && list[i].current) || {};
       out.set(name, {
         temp: (typeof curr.temperature_2m === 'number') ? curr.temperature_2m : null,
@@ -5442,11 +5421,39 @@ async function fetchWeatherForStations(stationNames, opt = {}){
     }
     return out;
   } catch(e){
-    console.warn('Météo indisponible:', e?.message || e);
+    console.warn('[WX] chunk fail:', e?.message || e);
     return new Map();
   } finally {
     clearTimeout(to);
   }
+}
+
+/* ---- API: fetchWeatherForStations(names[, {signal, timeoutMs}]) ---- */
+async function fetchWeatherForStations(stationNames, opt = {}){
+  const { signal, timeoutMs = 7000 } = opt || {};
+  const seen = new Set();
+  const coords = [];
+  for (const name of stationNames || []) {
+    if (!name || seen.has(name)) continue;
+    seen.add(name);
+    const c = GARE_COORDS[name] || WX_COORDS_CACHE.get(name) || await resolveCoordsByName(name);
+    if (c && Number.isFinite(+c.lat) && Number.isFinite(+c.lon)) {
+      coords.push({ name, lat:+c.lat, lon:+c.lon });
+    }
+  }
+  if (!coords.length) return new Map();
+
+  const CHUNK = window.__IS_IOS__ ? 4 : 8;
+  const merged = new Map();
+
+  for (let i=0; i<coords.length; i += CHUNK){
+    const slice = coords.slice(i, i+CHUNK);
+    const part = await __fetchOpenMeteoChunk(slice, { signal, timeoutMs });
+    part.forEach((v,k) => merged.set(k, v));
+    // petite respiration iOS
+    if (window.__IS_IOS__) await new Promise(r => setTimeout(r, 0));
+  }
+  return merged;
 }
 
 /* ---- Met à jour les pastilles météo dans le tableau ---- */
@@ -5466,12 +5473,12 @@ async function updateWeatherBadges(){
 
     const names = [...new Set(rows.map(r => r.dataset.gare).filter(Boolean))];
 
-    // Résoudre coord manquantes (GTFS) si nécessaire
+    // Résoudre coord manquantes (via GTFS) si besoin
     const missing = names.filter(n => !(GARE_COORDS[n]) && !(WX_COORDS_CACHE.get(n)));
     if (missing.length) await Promise.all(missing.map(n => resolveCoordsByName(n).catch(()=>null)));
 
-    // Abort l'ancien fetch et crée un nouveau contrôleur
-    try { if (window.__WX__.abort) window.__WX__.abort.abort(); } catch {}
+    // Abort l'ancien fetch et crée un nouveau contrôleur partagé
+    try { window.__WX__.abort?.abort(); } catch{}
     window.__WX__.abort = new AbortController();
 
     const data = await fetchWeatherForStations(names, { signal: window.__WX__.abort.signal });
@@ -5524,6 +5531,74 @@ function startWeatherAutorefresh(intervalMs = 5 * 60 * 1000){
   document.removeEventListener('visibilitychange', startWeatherAutorefresh.__vcHandler || (()=>{}));
   startWeatherAutorefresh.__vcHandler = () => arm();
   document.addEventListener('visibilitychange', startWeatherAutorefresh.__vcHandler, { passive:true });
+}
+
+/* ---- Warmup iOS sur quelques gares, puis passe complète ---- */
+async function __wxWarmupFewStations(){
+  try{
+    const rows = Array.from(document.querySelectorAll('#trainInfo tr[data-gare]'));
+    const first = rows.slice(0, 6).map(r => r.dataset.gare).filter(Boolean);
+    if (!first.length) return;
+    const data = await fetchWeatherForStations(first);
+    rows.forEach(r => {
+      const name = r.dataset.gare;
+      if (!first.includes(name)) return;
+      const wx = r.querySelector('.wx'); if (!wx) return;
+      const d = data.get(name);
+      if (!d || d.code == null) { wx.textContent=''; wx.removeAttribute('title'); return; }
+      const meta = wmoToIcon(d.code, !!d.isDay);
+      const t = (typeof d.temp === 'number') ? Math.round(d.temp)+'°' : '';
+      const url = buildWeatherLinkByName(name);
+      if (url) {
+        wx.innerHTML = `<a class="wx-link" href="${url}" target="_blank" rel="noopener" title="${meta.label}${t?' • '+t:''}">
+          <span class="wx-ico">${meta.ico}</span><span class="wx-t">${t}</span>
+        </a>`;
+      } else {
+        wx.textContent = `${meta.ico}${t ? ' ' + t : ''}`;
+        wx.title = `${meta.label}${t ? ' • ' + t : ''}`;
+      }
+    });
+  }catch(e){ console.warn('[WX warmup]', e?.message || e); }
+}
+
+/* ---- Déclenchement météo après stabilisation du tableau ---- */
+function scheduleWeatherAfterTableSettled(){
+  const tbody = document.querySelector('#trainInfo table tbody');
+  if (!tbody) return;
+
+  // coupe toute requête en vol (regen)
+  cancelWeatherFetch();
+
+  let idleTimer = null;
+
+  const runFull = () => {
+    const period = window.__IS_IOS__ ? 10 * 60 * 1000 : 5 * 60 * 1000;
+    updateWeatherBadges().then(() => startWeatherAutorefresh(period));
+  };
+
+  const kick = () => {
+    if (idleTimer) { clearTimeout(idleTimer); idleTimer = null; }
+    if (window.__IS_IOS__ && window.__WX__.firstRun) {
+      window.__WX__.firstRun = false;
+      __wxWarmupFewStations();
+      setTimeout(runFull, 500); // laisse iOS respirer
+    } else {
+      runFull();
+    }
+  };
+
+  const obs = new MutationObserver(() => {
+    if (idleTimer) clearTimeout(idleTimer);
+    idleTimer = setTimeout(() => { try{obs.disconnect();}catch{} kick(); }, 700);
+  });
+
+  obs.observe(tbody, { childList: true, subtree: true });
+
+  // si déjà stable, déclenche vite
+  idleTimer = setTimeout(() => { try{obs.disconnect();}catch{} kick(); }, 700);
+
+  // kill-switch sécurité
+  setTimeout(() => { try{obs.disconnect();}catch{} }, 4000);
 }
 </script>
 </body>
