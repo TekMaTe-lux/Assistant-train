@@ -5,11 +5,12 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Comparatif Trains SNCF</title>
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/nouislider@15.7.1/dist/nouislider.min.css">
-<script src="https://cdn.jsdelivr.net/npm/nouislider@15.7.1/dist/nouislider.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/nouislider@15.7.1/dist/nouislider.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.2/Sortable.min.js"></script>
   <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
-
+  <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
+  
   <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700&display=swap" rel="stylesheet">
   <style>
   body {
@@ -985,6 +986,51 @@ table::before {
   min-width: 760px; /* ajuste si tu veux */
 }
 
+.table-toolbar{
+  display:flex;
+  align-items:center;
+  justify-content:flex-end;
+  gap:8px;
+  margin:6px 0 2px;
+}
+
+.table-toolbar .snapshot-btn{
+  display:inline-flex;
+  align-items:center;
+  gap:6px;
+  padding:6px 12px;
+  border-radius:999px;
+  background:linear-gradient(135deg, rgba(0,255,255,.85), rgba(0,170,255,.85));
+  border:1px solid rgba(0,255,255,.65);
+  color:#00111a;
+  font-family:'Orbitron', sans-serif;
+  font-size:.85rem;
+  font-weight:700;
+  letter-spacing:.02em;
+  cursor:pointer;
+  box-shadow:0 0 12px rgba(0,255,255,.35), inset 0 0 18px rgba(0,255,255,.25);
+  transition:transform .2s ease, box-shadow .2s ease, background .2s ease;
+}
+
+.table-toolbar .snapshot-btn:hover:not([disabled]){
+  transform:translateY(-1px) scale(1.02);
+  box-shadow:0 0 18px rgba(0,255,255,.55), inset 0 0 20px rgba(0,255,255,.35);
+}
+
+.table-toolbar .snapshot-btn:active:not([disabled]){
+  transform:translateY(0) scale(.99);
+}
+
+.table-toolbar .snapshot-btn[disabled]{
+  cursor:wait;
+  opacity:.65;
+  box-shadow:none;
+}
+
+.table-toolbar .snapshot-btn[data-loading]{
+  background:linear-gradient(135deg, rgba(0,255,255,.45), rgba(0,170,255,.45));
+}
+   
 /* Hint "glisser" en mobile uniquement */
 @media (max-width: 600px) {
   .scroll-hint {
@@ -1617,7 +1663,7 @@ table::before {
   overflow:auto; padding:8px; position:relative;
 }
 .table-modal-actions{
-  position:sticky; top:0; display:flex; justify-content:flex-end; gap:8px;
+  position:sticky; top:0; display:flex; justify-content:space-between; align-items:center; gap:12px;
   background:linear-gradient(180deg, #0b0f1a 0%, #0b0f1a 70%, transparent 100%);
   padding:6px 0 4px; z-index:1;
 }
@@ -1626,7 +1672,30 @@ table::before {
   padding:6px 10px; border-radius:6px; cursor:pointer;
 }
 .modal-btn.close{ background:#f66; }
+.table-modal-status{
+  font-size:.8rem;
+  color:#bfefff;
+  font-style:italic;
+  padding-left:6px;
+}
 
+#tableModalInner img{
+  width:100%;
+  height:auto;
+  display:block;
+  border-radius:6px;
+  box-shadow:0 0 14px rgba(0,255,255,.25);
+}
+
+#tableModalInner .table-modal-error{
+  background:rgba(255,82,82,.12);
+  border:1px solid rgba(255,82,82,.5);
+  padding:12px;
+  border-radius:8px;
+  color:#ff9b9b;
+  text-align:center;
+  font-size:.95rem;
+}  
 /* Conteneur “fit” : on applique une échelle pour voir 100% du tableau */
 #tableModalInner{
   transform-origin: top left;   /* important pour le fit */
@@ -2688,11 +2757,14 @@ function renderRowsChunked(htmlRows, tbody, chunk=200){
 <div id="tableModal" class="table-modal" aria-hidden="true">
   <div class="table-modal-content">
     <div class="table-modal-actions">
+      <div id="tableModalStatus" class="table-modal-status" role="status" aria-live="polite"></div>
       <button id="closeTableModal" class="modal-btn close" aria-label="Fermer">✕</button>
     </div>
     <!-- le tableau cloné sera injecté ici -->
+    <!-- la capture du tableau sera injectée ici -->
     <div id="tableModalInner">
       <!-- clone du tableau -->
+      <!-- contenu généré dynamiquement -->
     </div>
   </div>
 </div>
@@ -2924,8 +2996,9 @@ function injectTableChunkedIntoTrainInfo(html, {chunk=200} = {}){
   if (!tableSrc) { host.innerHTML = html; return; }
 
   // conteneur scrollable + horodatage
-  host.innerHTML = '<div class="scroll-hint">← glisser →</div><div class="table-scroll"></div><div id="lastUpdated" class="last-updated" aria-live="polite"></div>';
+  host.innerHTML = '<div class="table-toolbar"><button type="button" id="btnTableSnapshot" class="snapshot-btn" disabled title="Afficher une capture plein écran du tableau">🔍 Vue globale</button></div><div class="scroll-hint">← glisser →</div><div class="table-scroll"></div><div id="lastUpdated" class="last-updated" aria-live="polite"></div>';
   const scroller = host.querySelector('.table-scroll');
+  const snapshotBtn = host.querySelector('#btnTableSnapshot');
 
   // table cible
   const tableDst = document.createElement('table');
@@ -2942,6 +3015,15 @@ function injectTableChunkedIntoTrainInfo(html, {chunk=200} = {}){
   const dstBody = document.createElement('tbody');
   tableDst.appendChild(dstBody);
 
+    if (snapshotBtn) {
+    snapshotBtn.addEventListener('click', () => {
+      const table = host.querySelector('.table-scroll table');
+      if (!table) return;
+      snapshotBtn.blur();
+      window.__openTrainTableSnapshot?.(table, snapshotBtn);
+    });
+  }
+
   let idx = 0;
   function pump(){
     const end = Math.min(idx + chunk, rows.length);
@@ -2953,6 +3035,7 @@ function injectTableChunkedIntoTrainInfo(html, {chunk=200} = {}){
     } else {
       // fin : hooks post-rendu
       setLastUpdated?.();
+      if (snapshotBtn) snapshotBtn.disabled = false;      
       // GTFS-RT (non bloquant)
       setTimeout(()=> {
         if (window.retardsGTFS && (typeof isSelectedDateToday !== 'function' || isSelectedDateToday())){
@@ -3104,6 +3187,84 @@ if (!document.getElementById('css-row-focus')) {
   else { const st=document.createElement('style'); st.id='css-dnd-chips'; st.textContent=css; document.head.appendChild(st); }
 })();
 
+// Gestion de la modale "vue globale" du tableau
+(function(){
+  const modal = document.getElementById('tableModal');
+  const modalInner = document.getElementById('tableModalInner');
+  const status = document.getElementById('tableModalStatus');
+  const closeBtn = document.getElementById('closeTableModal');
+  if (!modal || !modalInner || !status || !closeBtn) return;
+
+  const closeModal = () => {
+    modal.style.display = 'none';
+    modal.setAttribute('aria-hidden', 'true');
+    status.textContent = '';
+    modalInner.innerHTML = '';
+  };
+
+  closeBtn.addEventListener('click', closeModal);
+  modal.addEventListener('click', evt => { if (evt.target === modal) closeModal(); });
+  document.addEventListener('keydown', evt => { if (evt.key === 'Escape' && modal.getAttribute('aria-hidden') === 'false') closeModal(); });
+
+  window.__openTrainTableSnapshot = async (table, trigger) => {
+    if (!table) return;
+
+    if (modal.getAttribute('aria-hidden') === 'false') closeModal();
+
+    const btn = (trigger instanceof HTMLElement) ? trigger : null;
+    const original = btn ? btn.innerHTML : null;
+
+    if (btn) {
+      btn.disabled = true;
+      btn.dataset.loading = 'true';
+      btn.innerHTML = '⏳ Capture…';
+    }
+
+    status.textContent = 'Préparation de la capture…';
+
+    try {
+      if (typeof html2canvas !== 'function') {
+        throw new Error('html2canvas indisponible');
+      }
+
+      const tableRect = table.getBoundingClientRect();
+      const scale = Math.min(2, Math.max(1, window.devicePixelRatio || 1));
+      const canvas = await html2canvas(table, {
+        backgroundColor: '#0b0f1a',
+        scale,
+        scrollX: -window.scrollX,
+        scrollY: -window.scrollY,
+        windowWidth: Math.max(document.documentElement.clientWidth, Math.ceil(tableRect.width + tableRect.left + 16)),
+        windowHeight: Math.max(document.documentElement.clientHeight, Math.ceil(tableRect.height + tableRect.top + 16)),
+        useCORS: true
+      });
+
+      const dataUrl = canvas.toDataURL('image/png', 0.92);
+      const img = document.createElement('img');
+      img.src = dataUrl;
+      img.alt = 'Capture du tableau des trains';
+
+      modalInner.innerHTML = '';
+      modalInner.appendChild(img);
+      status.textContent = 'Capture générée – pincez pour zoomer';
+    } catch (error) {
+      console.error('[table snapshot]', error);
+      modalInner.innerHTML = '<p class="table-modal-error">Impossible de créer la capture automatiquement. Réessayez plus tard ou effectuez une capture d’écran manuelle.</p>';
+      status.textContent = 'Erreur de capture';
+    } finally {
+      if (btn) {
+        btn.disabled = false;
+        btn.removeAttribute('data-loading');
+        if (original != null) btn.innerHTML = original;
+      }
+      modal.style.display = 'flex';
+      modal.setAttribute('aria-hidden', 'false');
+    }
+  };
+
+  window.__closeTrainTableModal = closeModal;
+})();
+ 
 // Détection iOS (y compris iPadOS "Desktop mode")
 if (typeof window.__IS_IOS__ === 'undefined') {
   window.__IS_IOS__ =
