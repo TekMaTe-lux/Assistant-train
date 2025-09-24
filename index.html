@@ -3058,175 +3058,127 @@ function uniqTransfers(list){
   return Array.from(map.values());
 }
 
-<!-- === PATCH START : GTFS léger + recherche streaming === -->
-
 /************ CHARGEMENT GTFS (stops/stop_times/trips/calendar_dates only) ************/
-
-// ⚠️ Objectif : NE PLUS charger stop_times.txt en entier.
-// On ne garde en mémoire que stops/trips/calendar_dates (petits).
-// stop_times.txt sera lu EN STREAMING et filtré à l’entrée au moment de la recherche.
 
 let GTFS = { 
   stops:null, 
+  stopTimes:null, 
   trips:null, 
-  calendarDates:null,
   tripById:null, 
   stopNameToId:null, 
   allowedByDate:null, 
   removedByDate:null 
 };
 
+async function fetchText(url){
+  const r = await fetch(url, { cache: 'no-store' });
+  if(!r.ok) throw new Error('HTTP '+r.status+' on '+url);
+  return await r.text();
+}
+
 // Bases candidates (testées dans l’ordre)
 const GTFS_BASES = [
-  new URL('data/', location.href).href,                         // ex: https://www.labetaillere.fr/data/
+  new URL('data/', location.href).href,                         // ex: https://www.labetaillere.fr/data/ (si tu as copié les .txt)
   new URL('Assistant-train/data/', location.href).href,         // ex: https://www.labetaillere.fr/Assistant-train/data/
   'https://raw.githubusercontent.com/TekMaTe-lux/Assistant-train/main/Assistant-train/data/',
   'https://cdn.jsdelivr.net/gh/TekMaTe-lux/Assistant-train@main/Assistant-train/data/'
 ];
 
-/* ---------- Helpers streaming ultra-légers ---------- */
 
-// Lecture ligne par ligne (évite la giga-string en RAM)
-async function streamLines(url, onLine){
-  const resp = await fetch(url, { cache: window.__IS_IOS__ ? 'force-cache' : 'no-store' });
-  if (!resp.ok) throw new Error('HTTP '+resp.status+' on '+url);
-  const reader = resp.body.getReader();
-  const decoder = new TextDecoder('utf-8');
-  let { value, done } = await reader.read();
-  let buffer = value ? decoder.decode(value, {stream:true}) : '';
-  let last = 0;
-  while (!done) {
-    let nl = buffer.indexOf('\n', last);
-    while (nl !== -1) {
-      const line = buffer.slice(last, nl).replace(/\r$/, '');
-      if (line) await onLine(line);
-      last = nl + 1;
-      nl = buffer.indexOf('\n', last);
+async function fetchGTFSFile(filename){
+  let lastErr;
+  for (const base of GTFS_BASES){
+    try {
+      const txt = await fetchText(base + filename);
+      window.GTFS_STATIC_SOURCE = base; // debug
+      return txt;
+    } catch(e){
+      lastErr = e;
+      // on essaie la base suivante
     }
-    ({ value, done } = await reader.read());
-    buffer = (last < buffer.length ? buffer.slice(last) : '') + (value ? decoder.decode(value, {stream:true}) : '');
-    last = 0;
-    if (window.__IS_IOS__) await new Promise(r=>requestAnimationFrame(r)); // laisse respirer WebKit
   }
-  if (last < buffer.length) await onLine(buffer.slice(last).replace(/\r$/, ''));
+  throw lastErr || new Error('Impossible de charger '+filename);
 }
 
-// Parse CSV d'une ligne -> tableau de colonnes
-function parseCSVLine(line){
-  const cols=[]; let cur='', inQ=false;
-  for (let i=0;i<line.length;i++){
-    const c=line[i];
-    if (c === '"'){
-      if (inQ && line[i+1] === '"'){ cur+='"'; i++; }
-      else inQ = !inQ;
-    } else if (c === ',' && !inQ){
-      cols.push(cur); cur='';
-    } else cur += c;
-  }
-  cols.push(cur);
-  return cols;
+function parseCSV(text){
+  const lines=text.trim().split(/\r?\n/);
+  const headers=lines.shift().split(',');
+  return lines.map(l=>{
+    const cols=[]; 
+    let cur='',inQ=false;
+    for(let i=0;i<l.length;i++){
+      const c=l[i];
+      if(c==='"'){
+        if(inQ && l[i+1]==='"'){cur+='"'; i++;}
+        else inQ=!inQ;
+      } else if(c===',' && !inQ){
+        cols.push(cur); cur='';
+      } else cur+=c;
+    }
+    cols.push(cur);
+    const row={};
+    headers.forEach((h,idx)=>row[h]=cols[idx]??'');
+    return row;
+  });
 }
-
-// Helpers temps (si déjà présents plus haut, ceux-ci les remplaceront sans changer le comportement)
-function toSec(hms){ if(!hms) return null; const [H,M,S='0']=hms.split(':').map(Number); return H*3600+M*60+Number(S); }
-function toHHMM(sec){ const s=Math.max(0,sec|0); const h=Math.floor(s/3600)%24,m=Math.floor((s%3600)/60); return String(h).padStart(2,'0')+':'+String(m).padStart(2,'0'); }
-
-/* ---------- Chargement minimal : stops/trips/calendar_dates UNIQUEMENT ---------- */
 
 async function ensureGTFSLoaded(){
-  if (GTFS.stops && GTFS.trips && GTFS.tripById && GTFS.stopNameToId && GTFS.allowedByDate) return;
-
-  async function fetchSmall(filename){
-    for (const base of GTFS_BASES){
-      try {
-        const url = base + filename;
-        const r = await fetch(url, { cache: window.__IS_IOS__ ? 'force-cache' : 'no-store' });
-        if (!r.ok) continue;
-        window.GTFS_STATIC_SOURCE = base;
-        return await r.text();
-      } catch(_){}
-    }
-    throw new Error('Impossible de charger '+filename);
-  }
-
-  const [stopsTxt, tripsTxt, calDatesTxt] = await Promise.all([
-    fetchSmall('stops.txt'),
-    fetchSmall('trips.txt'),
-    fetchSmall('calendar_dates.txt'),
+  if (GTFS.stops && GTFS.stopTimes && GTFS.trips && GTFS.tripById && GTFS.stopNameToId && GTFS.allowedByDate) return;
+  
+  const [stopsTxt, stopTimesTxt, tripsTxt, calDatesTxt] = await Promise.all([
+    fetchGTFSFile('stops.txt'),
+    fetchGTFSFile('stop_times.txt'),
+    fetchGTFSFile('trips.txt'),
+    fetchGTFSFile('calendar_dates.txt'),
   ]);
 
-  // stops.txt -> stop_id, stop_name
-  const stops = [];
-  {
-    const lines = stopsTxt.trim().split(/\r?\n/);
-    const headers = lines.shift().split(',');
-    const iId = headers.indexOf('stop_id');
-    const iNm = headers.indexOf('stop_name');
-    for (const l of lines){
-      const c = parseCSVLine(l);
-      const stop_id = c[iId]||''; const stop_name = c[iNm]||'';
-      if (stop_id && stop_name) stops.push({ stop_id, stop_name });
-    }
-  }
-
-  // trips.txt -> trip_id, service_id, trip_short_name
-  const trips = [];
-  {
-    const lines = tripsTxt.trim().split(/\r?\n/);
-    const headers = lines.shift().split(',');
-    const iTrip = headers.indexOf('trip_id');
-    const iSvc  = headers.indexOf('service_id');
-    const iShort= headers.indexOf('trip_short_name');
-    for (const l of lines){
-      const c = parseCSVLine(l);
-      const trip_id=c[iTrip]||''; if(!trip_id) continue;
-      trips.push({ trip_id, service_id: c[iSvc]||'', trip_short_name: c[iShort]||'' });
-    }
-  }
-
-  // calendar_dates.txt -> table des services actifs / supprimés par date
-  const allowedByDate = new Map(), removedByDate = new Map(), calendarDates=[];
-  {
-    const lines = calDatesTxt.trim().split(/\r?\n/);
-    const headers = lines.shift().split(',');
-    const iSvc = headers.indexOf('service_id');
-    const iDat = headers.indexOf('date');
-    const iExc = headers.indexOf('exception_type');
-    for (const l of lines){
-      const c = parseCSVLine(l);
-      const row = { service_id: c[iSvc]||'', date: c[iDat]||'', exception_type: Number(c[iExc]||0) };
-      calendarDates.push(row);
-      if (!row.date || !row.service_id) continue;
-      if (row.exception_type === 1){
-        if (!allowedByDate.has(row.date)) allowedByDate.set(row.date, new Set());
-        allowedByDate.get(row.date).add(row.service_id);
-      } else if (row.exception_type === 2){
-        if (!removedByDate.has(row.date)) removedByDate.set(row.date, new Set());
-        removedByDate.get(row.date).add(row.service_id);
-      }
-    }
-  }
+  const stops = parseCSV(stopsTxt);
+  const stopTimes = parseCSV(stopTimesTxt);
+  const trips = parseCSV(tripsTxt);
+  const calendarDates = parseCSV(calDatesTxt);
 
   const stopNameToId = new Map();
-  for (const s of stops) if(!stopNameToId.has(s.stop_name)) stopNameToId.set(s.stop_name, s.stop_id);
+  stops.forEach(s => {
+    if (s.stop_name && s.stop_id) 
+      if(!stopNameToId.has(s.stop_name)) stopNameToId.set(s.stop_name, s.stop_id);
+  });
 
   const tripById = new Map();
-  for (const t of trips) tripById.set(t.trip_id, t);
+  trips.forEach(t => {
+    if (t.trip_id) tripById.set(t.trip_id, t);
+  });
 
-  GTFS.stops = stops;
-  GTFS.trips = trips;
-  GTFS.calendarDates = calendarDates;
-  GTFS.tripById = tripById;
-  GTFS.stopNameToId = stopNameToId;
-  GTFS.allowedByDate = allowedByDate;
-  GTFS.removedByDate = removedByDate;
+  // yyyymmdd -> Set(service_id) ajoutés ; et yyyymmdd -> Set(service_id) supprimés
+  const allowedByDate = new Map();
+  const removedByDate = new Map();
+  calendarDates.forEach(row => {
+    const ymd = row.date, serviceId = row.service_id, exc = Number(row.exception_type);
+    if (!ymd || !serviceId) return;
+    if (exc === 1) {
+      if (!allowedByDate.has(ymd)) allowedByDate.set(ymd, new Set());
+      allowedByDate.get(ymd).add(serviceId);
+    } else if (exc === 2) {
+      if (!removedByDate.has(ymd)) removedByDate.set(ymd, new Set());
+      removedByDate.get(ymd).add(serviceId);
+    }
+  });
 
-  buildStationGroups(); // groupes parent_station
+  GTFS = { 
+    stops, 
+    stopTimes, 
+    trips, 
+    calendarDates, 
+    tripById, 
+    stopNameToId, 
+    allowedByDate, 
+    removedByDate 
+  };
 }
-
+   
 /************  GROUPES DE STOPS PAR GARE (stop_name/parent_station)  ************/
 function buildStationGroups(){
   if (GTFS.nameToIds && GTFS.idToName) return;
+  // Protection anti-null si ça n'a pas fini de charger
   if (!Array.isArray(GTFS.stops)) return;
 
   const idToStop = new Map(GTFS.stops.map(s => [s.stop_id, s]));
@@ -3265,208 +3217,245 @@ function getIdsForName(name){
   return lone ? new Set([lone]) : new Set();
 }
 
-/************  CALENDRIER (calendar_dates)  ************/
-/************  CALENDRIER (calendar_dates)  ************/
-function serviceActiveForDate(trip_id, ymd){
-  if (!trip_id || !ymd) return false;
-  const t = GTFS.tripById?.get(trip_id); if (!t) return false;
-  const svc = t.service_id; if (!svc) return false;
+/************  INDEXES POUR RECHERCHE DE CORRESPONDANCES  ************/
+function ensureTransferIndexesBuilt(){
+  if (GTFS._stopTimesByTripSec && GTFS._depsByStop) return;
+  if (!Array.isArray(GTFS.stopTimes)) return; // protection
 
-  // Si on n'a pas d'exceptions connues -> laisser passer (calendrier "permissif")
-  const hasAllowed = GTFS.allowedByDate && GTFS.allowedByDate.size > 0;
-  const hasRemoved = GTFS.removedByDate && GTFS.removedByDate.size > 0;
-
-  // 1) Coupures explicites priment
-  if (hasRemoved) {
-    const cut = GTFS.removedByDate.get(ymd);
-    if (cut && cut.has(svc)) return false; // explicitement supprimé
+  const byTripSec = new Map();
+  for (const st of GTFS.stopTimes){
+    if(!byTripSec.has(st.trip_id)) byTripSec.set(st.trip_id, []);
+    byTripSec.get(st.trip_id).push({
+      stop_id: st.stop_id,
+      arrS: toSec(st.arrival_time),
+      depS: toSec(st.departure_time),
+      seq: Number(st.stop_sequence)
+    });
   }
+  for (const arr of byTripSec.values()) arr.sort((a,b)=>a.seq-b.seq);
 
-  // 2) Si la date a des "ajouts" explicites, on respecte la liste
-  if (hasAllowed) {
-    const add = GTFS.allowedByDate.get(ymd);
-    if (add) return add.has(svc); // listé ce jour => actif, sinon inactif
-    // 3) Pas d'entrée allowed pour ce jour :
-    //    => on considère actif par défaut (calendrier de base supposé actif)
-    return true;
-  }
-
-  // 4) Pas d'infos calendar_dates -> on laisse passer
-  return true;
-}
-
-/************  RECHERCHE LÉGÈRE : directs + 1 correspondance via pivot (streaming)  ************/
-async function findDirectsAndTransfersLite({ originIds, destIds, tFromMin, tToMin, ymd, pivotName='Metz', minTransferMin=5, maxTransferMin=45, maxTransfers=200 }){
-  // Prépare colonnes pour stop_times
-  let headers = null;
-  const idx = { trip_id:-1, stop_id:-1, arr:-1, dep:-1, seq:-1 };
-
-  // Index temporaires compacts
-  const byOrig = [];                 // [tripId, depS, seq]
-  const bestDest = new Map();        // tripId -> [arrS, seq]
-  const pivotIds = getIdsForName(pivotName);
-  const pivotDeps = [];              // [tripId, depS, seq]
-
-  const depStart = tFromMin*60, depEnd=tToMin*60;
-
-  const base = (window.GTFS_STATIC_SOURCE||GTFS_BASES[0]);
-  const stUrl = base + 'stop_times.txt';
-
-  // 1ère passe : collecte ciblée (origine, destination, pivot)
-  await streamLines(stUrl, async (line)=>{
-    if (!headers){
-      headers = parseCSVLine(line);
-      idx.trip_id = headers.indexOf('trip_id');
-      idx.stop_id = headers.indexOf('stop_id');
-      idx.arr     = headers.indexOf('arrival_time');
-      idx.dep     = headers.indexOf('departure_time');
-      idx.seq     = headers.indexOf('stop_sequence');
-      return;
-    }
-    const c = parseCSVLine(line);
-    const trip_id = c[idx.trip_id]; if (!trip_id) return;
-    const stop_id = c[idx.stop_id]; if (!stop_id) return;
-
-    if (originIds.has(stop_id)){
-      const depS = toSec(c[idx.dep]); const seq = Number(c[idx.seq]||0);
-      if (depS!=null && depS>=depStart && depS<=depEnd) byOrig.push([trip_id, depS, seq]);
-    }
-    if (destIds.has(stop_id)){
-      const arrS = toSec(c[idx.arr]); const seq = Number(c[idx.seq]||0);
-      if (arrS!=null){
-        const prev = bestDest.get(trip_id);
-        if (!prev || arrS < prev[0]) bestDest.set(trip_id, [arrS, seq]);
-      }
-    }
-    if (pivotIds.has(stop_id)){
-      const depS = toSec(c[idx.dep]); const seq = Number(c[idx.seq]||0);
-      if (depS!=null) pivotDeps.push([trip_id, depS, seq]);
+  const depsByStop = new Map();
+  byTripSec.forEach((sts, trip_id)=>{
+    for (const r of sts){
+      if (r.depS==null) continue;
+      if (!depsByStop.has(r.stop_id)) depsByStop.set(r.stop_id, []);
+      depsByStop.get(r.stop_id).push({ trip_id, depS: r.depS, seq: r.seq });
     }
   });
+  for (const list of depsByStop.values()) list.sort((a,b)=>a.depS-b.depS);
 
-  byOrig.sort((a,b)=>a[1]-b[1]);
-  pivotDeps.sort((a,b)=>a[1]-b[1]);
+  GTFS._stopTimesByTripSec = byTripSec;
+  GTFS._depsByStop = depsByStop;
+  GTFS._tripById = GTFS.tripById;
+}
 
-  // DIRECTS
-  const directs = [];
-  for (const [tripId, depS, seqO] of byOrig){
-    const d = bestDest.get(tripId); if (!d) continue;
-    const [arrS, seqD] = d;
-    if (arrS >= depS && seqO < seqD && serviceActiveForDate(tripId, ymd)){
-      const trow = GTFS.tripById.get(tripId);
-      const numero = (trow?.trip_short_name||'').match(/\b\d{5,6}\b/)?.[0] || tripId.match(/\b\d{5,6}\b/)?.[0];
-      if (numero) directs.push({ numero, dep: toHHMM(depS), arr: toHHMM(arrS) });
-    }
-  }
-  // dédup (numéro + départ)
-  const seenDir = new Set(); const directsUniq=[];
-  for (const d of directs){ const k=d.numero+'|'+d.dep; if(!seenDir.has(k)){ seenDir.add(k); directsUniq.push(d); } }
-  directsUniq.sort((a,b)=>a.dep.localeCompare(b.dep));
+function mergeDeparturesForIds(idsSet){
+  const arr=[]; idsSet.forEach(id=>{ const l=GTFS._depsByStop.get(id); if(l&&l.length) arr.push(...l); });
+  arr.sort((a,b)=>a.depS-b.depS); return arr;
+}
 
-  // 2e passe ciblée par trip (mémo) pour vérifier pivot/destination
-  const memoTripSeq = new Map(); // tripId -> [{stop_id, arrS, depS, seq}] trié
-  async function loadTripSeq(tripId){
-    if (memoTripSeq.has(tripId)) return memoTripSeq.get(tripId);
-    const out=[];
-    let head=null, j={trip_id:-1, stop_id:-1, arr:-1, dep:-1, seq:-1};
-    await streamLines(stUrl, async (line)=>{
-      if (!head){
-        head = parseCSVLine(line);
-        j.trip_id=head.indexOf('trip_id'); j.stop_id=head.indexOf('stop_id');
-        j.arr=head.indexOf('arrival_time'); j.dep=head.indexOf('departure_time'); j.seq=head.indexOf('stop_sequence');
-        return;
-      }
-      const c = parseCSVLine(line);
-      if (c[j.trip_id] !== tripId) return;
-      out.push({ stop_id:c[j.stop_id], arrS:toSec(c[j.arr]), depS:toSec(c[j.dep]), seq:Number(c[j.seq]||0) });
-    });
-    out.sort((a,b)=>a.seq-b.seq);
-    memoTripSeq.set(tripId, out);
-    return out;
-  }
-  function bsearchFirstDepGE(list, t){
-    let lo=0, hi=list.length-1, ans=list.length;
-    while (lo<=hi){ const m=(lo+hi)>>1; if (list[m][1] >= t){ ans=m; hi=m-1; } else lo=m+1; }
-    return ans;
+/************  CALENDRIER (calendar_dates)  ************/
+function serviceActiveForDate(trip_id, ymd){
+  if (!trip_id || !ymd) return false; // exige une date
+  const t = GTFS.tripById?.get(trip_id); if(!t) return false;
+  const svc = t.service_id; if(!svc) return false;
+
+  // Si on a des données de dates : on est STRICT
+  if (GTFS.allowedByDate && GTFS.allowedByDate.size > 0) {
+    const allowedSet = GTFS.allowedByDate.get(ymd);
+    if (allowedSet) return allowedSet.has(svc); // présent ce jour
+    return false; // pas listé ce jour => on N'AFFICHE PAS
   }
 
-  // TRANSFERS via pivot
-  const minWait=minTransferMin*60, maxWait=Math.max(minTransferMin,maxTransferMin)*60;
-  const transfers=[];
-  const processedFirstLeg=new Set();
-  for (const [trip1, dep1S, seqO] of byOrig){
+  // Fallback ultra-rare si calendar_dates est vide: on laisse passer pour ne pas tout cacher
+  return true;
+}
+    
+/************  RECHERCHE ITINÉRAIRES 1 CORRESPONDANCE (jamais dans le même train)  ************/
+function findOneTransferItineraries({
+  originIds, destIds,
+  t0Min, t1Min,
+  minTransferMin = 5,
+  maxTransferMin = 45,
+  ymd,
+  allowedInterchanges = null,
+  maxResults = 40
+}){
+  ensureTransferIndexesBuilt(); buildStationGroups();
+
+  const depStart = t0Min * 60;
+  const depEnd   = t1Min * 60;
+  const minWait  = minTransferMin * 60;
+  const maxWait  = Math.max(minTransferMin, maxTransferMin) * 60; // borne haute
+  const out = [];
+
+  // si on force une gare d’échange (ex: Metz)
+  let interIds = allowedInterchanges;
+  if (!interIds && FORCE_VIA_METZ){
+    interIds = getIdsForName('Metz');
+  }
+  const depsFromInter = (interIds && interIds.size)
+    ? dedupTripSeq(mergeDeparturesForIds(interIds))
+    : null;
+
+  const depList = dedupTripSeq(mergeDeparturesForIds(originIds));
+
+  // binaire: 1er départ >= fenêtre
+  let lo=0, hi=depList.length-1, startIdx=depList.length;
+  while (lo<=hi){
+    const mid=(lo+hi)>>1;
+    if (depList[mid].depS >= depStart){ startIdx=mid; hi=mid-1; }
+    else lo=mid+1;
+  }
+
+  const processedFirstLeg = new Set(); // une seule correspondance par premier train
+
+  for (let i=startIdx; i<depList.length; i++){
+    const d1 = depList[i];
+    if (d1.depS > depEnd) break;
+
+    const trip1 = d1.trip_id;
     if (!serviceActiveForDate(trip1, ymd)) continue;
-    const seqs1 = await loadTripSeq(trip1);
-    let idxO = seqs1.findIndex(r=>r.seq===seqO); if (idxO<0) continue;
 
-    // déjà direct jusqu'à destination ? -> skip
-    let reachesDest=false;
-    for (let j=idxO+1;j<seqs1.length;j++){ if (destIds.has(seqs1[j].stop_id)){ reachesDest=true; break; } }
-    if (reachesDest) continue;
+    const st1 = GTFS._stopTimesByTripSec.get(trip1); if (!st1) continue;
+    const idxOrigin = st1.findIndex(r => r.seq === d1.seq); if (idxOrigin < 0) continue;
 
-    // trouve 1ère arrivée au pivot après l'origine
-    let inter=null;
-    for (let j=idxO+1;j<seqs1.length;j++){ if (pivotIds.has(seqs1[j].stop_id) && seqs1[j].arrS!=null){ inter=seqs1[j]; break; } }
-    if (!inter) continue;
+    const dep1S = st1[idxOrigin].depS;
+    if (dep1S < depStart || dep1S > depEnd) continue;
 
-    const firstKey = trip1+'|'+dep1S;
+    // 🚫 0) Si ce premier train va déjà jusqu'à la destination -> pas de correspondance
+    const reachesDestDirect = st1.slice(idxOrigin+1).some(r => destIds.has(r.stop_id));
+    if (reachesDestDirect) continue;
+
+    const firstKey = `${trip1}|${dep1S}`;
     if (processedFirstLeg.has(firstKey)) continue;
 
-    const earliest = inter.arrS + minWait;
-    const latest   = inter.arrS + maxWait;
+    // numéro lisible du 1er train
+    const num1 = extractTrainNumber(GTFS._tripById.get(trip1)?.trip_short_name) || extractTrainNumber(trip1) || '—';
 
-    const start2 = bsearchFirstDepGE(pivotDeps, earliest);
-    let found=null;
-    for (let k=start2;k<pivotDeps.length;k++){
-      const [trip2, dep2S, seqP] = pivotDeps[k];
-      if (dep2S > latest) break;
-      if (trip2 === trip1) continue;
-      if (!serviceActiveForDate(trip2, ymd)) continue;
+    let best = null;
 
-      const seqs2 = await loadTripSeq(trip2);
-      const idxP = seqs2.findIndex(r=>r.seq===seqP); if (idxP<0) continue;
+    if (depsFromInter && interIds && interIds.size){
+      // 1) on cherche une arrivée à l’inter (ex: Metz)
+      let inter = null;
+      for (let j = idxOrigin+1; j < st1.length; j++){
+        const r = st1[j];
+        if (interIds.has(r.stop_id) && r.arrS != null){ inter = r; break; }
+      }
+      if (!inter) continue;
 
-      // destination après pivot ?
-      let toDest=null;
-      for (let j=idxP+1;j<seqs2.length;j++){ if (destIds.has(seqs2[j].stop_id)){ toDest=seqs2[j]; break; } }
-      if (!toDest) continue;
+      const earliest = inter.arrS + minWait;
+      const latest   = inter.arrS + maxWait;
 
-      const n1 = (GTFS.tripById.get(trip1)?.trip_short_name||'').match(/\b\d{5,6}\b/);
-      const n2 = (GTFS.tripById.get(trip2)?.trip_short_name||'').match(/\b\d{5,6}\b/);
-      const num1 = (n1&&n1[0]) || (trip1.match(/\b\d{5,6}\b/)||[])[0] || '—';
-      const num2 = (n2&&n2[0]) || (trip2.match(/\b\d{5,6}\b/)||[])[0] || '—';
-      if (num1 && num2 && num1 === num2) continue;
+      // binaire: 2e départ >= earliest
+      let lo2=0, hi2=depsFromInter.length-1, start2=depsFromInter.length;
+      while (lo2<=hi2){
+        const mid=(lo2+hi2)>>1;
+        if (depsFromInter[mid].depS >= earliest){ start2=mid; hi2=mid-1; }
+        else lo2=mid+1;
+      }
 
-      found = {
-        viaName: pivotName,
-        num1, num2,
-        dep1: toHHMM(dep1S),
-        arr1: toHHMM(inter.arrS),
-        dep2: toHHMM(dep2S),
-        arr2: toHHMM(toDest.arrS),
-        waitMin: Math.max(0, Math.round((dep2S - inter.arrS)/60)),
-        durMin:  Math.max(0, Math.round((toDest.arrS - dep1S)/60))
-      };
-      break;
+      for (let k = start2; k < depsFromInter.length; k++){
+        const d2 = depsFromInter[k];
+        if (d2.depS > latest) break;               // ❗ respecte délai max
+
+        const trip2 = d2.trip_id;
+
+        // 🚫 1) pas de correspondance sur le même voyage (trip_id)
+        if (trip2 === trip1) continue;
+        if (!serviceActiveForDate(trip2, ymd)) continue;
+
+        const st2 = GTFS._stopTimesByTripSec.get(trip2); if (!st2) continue;
+        const idxInter2 = st2.findIndex(r => r.seq === d2.seq); if (idxInter2 < 0) continue;
+
+        const toDest = st2.slice(idxInter2+1).find(r => destIds.has(r.stop_id));
+        if (!toDest) continue;
+
+        // 🚫 2) pas le même numéro commercial
+        const num2 = extractTrainNumber(GTFS._tripById.get(trip2)?.trip_short_name) || extractTrainNumber(trip2) || '—';
+        if (num1 && num2 && num1 === num2) continue;
+
+        best = {
+          viaId:   inter.stop_id,
+          viaName: GTFS.idToName.get(inter.stop_id) || 'Metz',
+          num1, num2,
+          dep1:    toHHMM(dep1S),
+          arr1:    toHHMM(inter.arrS),
+          dep2:    toHHMM(st2[idxInter2].depS),
+          arr2:    toHHMM(toDest.arrS),
+          waitMin: Math.max(0, Math.round((st2[idxInter2].depS - inter.arrS)/60)),
+          durMin:  Math.max(0, Math.round((toDest.arrS - dep1S)/60))
+        };
+        break; // on ne garde que la plus proche
+      }
+    } else {
+      // 2) fallback "toutes gares" (mêmes garde-fous + fenêtre min/max)
+      for (let j=idxOrigin+1; j<st1.length && !best; j++){
+        const interJ = st1[j]; if (interJ.arrS == null) continue;
+
+        const interGroup = getIdsForName(GTFS.idToName.get(interJ.stop_id) || '');
+        const deps2 = dedupTripSeq(mergeDeparturesForIds(interGroup));
+
+        const earliest = interJ.arrS + minWait;
+        const latest   = interJ.arrS + maxWait;
+
+        // binaire: départ2 >= earliest
+        let lo2=0, hi2=deps2.length-1, start2=deps2.length;
+        while (lo2<=hi2){
+          const mid=(lo2+hi2)>>1;
+          if (deps2[mid].depS >= earliest){ start2=mid; hi2=mid-1; }
+          else lo2=mid+1;
+        }
+
+        for (let k=start2; k<deps2.length; k++){
+          const d2 = deps2[k];
+          if (d2.depS > latest) break;             // ❗ respecte délai max
+
+          const trip2 = d2.trip_id;
+
+          // 🚫 pas le même voyage
+          if (trip2 === trip1) continue;
+          if (!serviceActiveForDate(trip2, ymd)) continue;
+
+          const st2 = GTFS._stopTimesByTripSec.get(trip2); if (!st2) continue;
+          const idxInter2 = st2.findIndex(r => r.seq === d2.seq); if (idxInter2 < 0) continue;
+
+          const toDest = st2.slice(idxInter2+1).find(r => destIds.has(r.stop_id));
+          if (!toDest) continue;
+
+          // 🚫 pas le même numéro commercial
+          const num2 = extractTrainNumber(GTFS._tripById.get(trip2)?.trip_short_name) || extractTrainNumber(trip2) || '—';
+          if (num1 && num2 && num1 === num2) continue;
+
+          best = {
+            viaId:   interJ.stop_id,
+            viaName: GTFS.idToName.get(interJ.stop_id) || '',
+            num1, num2,
+            dep1:    toHHMM(dep1S),
+            arr1:    toHHMM(interJ.arrS),
+            dep2:    toHHMM(st2[idxInter2].depS),
+            arr2:    toHHMM(toDest.arrS),
+            waitMin: Math.max(0, Math.round((st2[idxInter2].depS - interJ.arrS)/60)),
+            durMin:  Math.max(0, Math.round((toDest.arrS - dep1S)/60))
+          };
+          break;
+        }
+      }
     }
 
-    if (found){
+    if (best){
       processedFirstLeg.add(firstKey);
-      transfers.push(found);
-      if (transfers.length >= maxTransfers) break;
+      out.push(best);
+      if (out.length >= maxResults) break;
     }
   }
 
-  // dédup + tri transferts
-  const seenT=new Set(), outT=[];
-  for (const t of transfers){
-    const k=`${t.num1}|${t.dep1}|${t.num2}|${t.dep2}|${t.arr2}`;
-    if (!seenT.has(k)){ seenT.add(k); outT.push(t); }
-  }
-  outT.sort((a,b)=> a.arr2.localeCompare(b.arr2) || (a.durMin - b.durMin));
-
-  return { directs: directsUniq, transfers: outT };
+  // dédoublonnage final + tri
+  const cleaned = uniqTransfers(out);
+  cleaned.sort((a,b)=> a.arr2.localeCompare(b.arr2) || (a.durMin - b.durMin));
+  return cleaned;
 }
+
 
 /************  RENDU DES CARTES (DIRECTS + TRANSFERS)  ************/
 function renderTransferCards(transfers, startName, endName){
@@ -3502,6 +3491,7 @@ async function proposerTrainsOD(){
   const cont = document.getElementById('propositions');
   if (cont) cont.innerHTML = 'Recherche…';
 
+  // reset sélection visuelle (mais garde ton Set global si tu veux cumuler)
   if (typeof selectedTrains !== 'undefined') { selectedTrains.clear(); updateSelectionUI?.(); }
   proposerTrainsOD._seen = new Set();
 
@@ -3518,29 +3508,78 @@ async function proposerTrainsOD(){
   const originIds = getIdsForName(startName);
   const destIds   = getIdsForName(endName);
 
+  // calendrier
   const ymd = dateInputToYMD($('#trainDate').val()) || todayYMDLux().replace(/-/g,'');
 
-  const allowTransfers = (document.getElementById('allowTransfer')?.checked ?? true);
-  const minTransferMin = Math.max(1, Number(document.getElementById('minTransfer')?.value || 5));
-  const maxTransferMin = Math.max(minTransferMin, Number(document.getElementById('maxTransfer')?.value || 45));
+  // index stop_times par trip (directs)
+  const byTrip = new Map();
+  for(const st of GTFS.stopTimes){
+    if(!byTrip.has(st.trip_id)) byTrip.set(st.trip_id, []);
+    byTrip.get(st.trip_id).push(st);
+  }
+  for(const arr of byTrip.values()) arr.sort((a,b)=>Number(a.stop_sequence)-Number(b.stop_sequence));
 
-  // 🔹 NOUVEAU : directs + transferts en streaming (ne charge pas stop_times en entier)
-  const { directs, transfers } = await findDirectsAndTransfersLite({
+  // DIRECTS
+const directs = [];
+byTrip.forEach((sts, trip_id)=>{
+  if (!serviceActiveForDate(trip_id, ymd)) return;
+
+  const trow = GTFS.tripById ? GTFS.tripById.get(trip_id) : null;
+
+  let iS=-1,iE=-1,dep=null,arr=null;
+  for(let i=0;i<sts.length;i++){
+    if(originIds.has(sts[i].stop_id)){ iS=i; dep=sts[i].departure_time; }
+    if(destIds.has(sts[i].stop_id))  { iE=i; arr=sts[i].arrival_time; }
+  }
+  if(iS===-1 || iE===-1 || iE<=iS || !dep) return;
+
+  const depMin = Number(dep.slice(0,2))*60 + Number(dep.slice(3,5));
+  if (depMin<tFromMin || depMin>tToMin) return;
+
+  let numero = trow?.trip_short_name ? extractTrainNumber(trow.trip_short_name) : null;
+  if (!numero) numero = extractTrainNumber(trip_id);
+  if (!numero) return;
+
+  const key = `${numero}|${dep.slice(0,5)}`;
+  if (proposerTrainsOD._seen.has(key)) return;
+  proposerTrainsOD._seen.add(key);
+
+  directs.push({ numero, dep:dep.slice(0,5), arr: arr ? arr.slice(0,5) : null });
+});
+
+// dédup finale des directs
+const directsUniqList = uniqDirects(directs);
+
+  // CORRESPONDANCES (si checkbox cochée)
+let transfers = [];
+const allowTransfers = (document.getElementById('allowTransfer')?.checked ?? true);
+if (allowTransfers){
+  const minTransferMin = Math.max(1, Number(document.getElementById('minTransfer')?.value || 5));
+  const maxTransferMin = Math.max(minTransferMin, Number(document.getElementById('maxTransfer')?.value || 45)); // <= nouveau
+
+  const allowedSet = getIdsForName('Metz'); // on force Metz
+
+  const raw = findOneTransferItineraries({
     originIds,
     destIds,
-    tFromMin, tToMin,
+    t0Min: tFromMin,
+    t1Min: tToMin,
+    minTransferMin,
+    maxTransferMin,                      // <= nouveau
     ymd,
-    pivotName: 'Metz',
-    minTransferMin, maxTransferMin,
-    maxTransfers: 200
+    allowedInterchanges: allowedSet,
+    maxResults: 200
   });
+
+  transfers = uniqTransfers(keepFirstTransferPerFirstLeg(raw));
+}
 
   // RENDU
   const host = document.getElementById('propositions');
   if (!host) return;
 
   const directsHTML = (function(){
-    const trains = (directs||[]).slice().sort((a,b)=>a.dep.localeCompare(b.dep));
+    const trains = (directsUniqList||[]).slice().sort((a,b)=>a.dep.localeCompare(b.dep));
     if (!trains.length) {
       return `<div class="chips-panel"><p>Aucun train direct ${startName} → ${endName} dans cette plage.</p></div>`;
     }
@@ -3560,15 +3599,15 @@ async function proposerTrainsOD(){
       </div>`;
   })();
 
-  const transfersHTML = allowTransfers ? renderTransferCards(transfers, startName, endName) : '';
+  const transfersHTML = renderTransferCards(transfers, startName, endName);
   host.innerHTML = directsHTML + transfersHTML;
 
   // Force le texte affiché à utiliser exactement le data-num (aucune troncature possible)
-  document.querySelectorAll('#propositions .chip').forEach(chip => {
-    const n = chip.dataset.num;
-    const t = chip.querySelector('.t-num');
-    if (t && n) t.textContent = 'Train ' + n;
-  });
+document.querySelectorAll('#propositions .chip').forEach(chip => {
+  const n = chip.dataset.num;                 // "123456" si 6 chiffres
+  const t = chip.querySelector('.t-num');
+  if (t) t.textContent = 'Train ' + n;
+});
 
   // Clic cartes “directs”
   host.querySelectorAll('.chip[data-num]').forEach((chip)=>{
@@ -3597,8 +3636,6 @@ async function proposerTrainsOD(){
   chipsUpdateCount?.();
 }
 
-<!-- === PATCH END : GTFS léger + recherche streaming === -->
-    
 /* ====================== PRESETS (listes) ====================== */
 const PRESET_AM = "88704,88706,88708,88710,88802,88712,88501,88804,88714,88503,88806,88716,88505,88718,88571,88722".split(',');
 const PRESET_PM = "88741,88743,88745,88747,88530,88749,88751,88753,88532,88755,88813,88759,88761,88815,88534,88763,88765,88767,88769".split(',');
