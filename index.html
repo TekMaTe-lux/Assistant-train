@@ -2773,62 +2773,86 @@ function buildStationSelects() {
   fill(startSel, 'Toute la ligne');
   fill(endSel,   'Toute la ligne');
 }
-/* Rendu progressif d’un tableau HTML: parse en mémoire, clone THEAD, insère TBODY par lots */
-function injectTableChunkedIntoTrainInfo(html, {chunk=200} = {}){
+/* Rendu progressif d’un tableau HTML (iOS-safe):
+   - Parse head/rows par regex (pas de gros DOM temporaire)
+   - Injecte <thead> direct, et <tbody> par paquets (rowsBatch)
+*/
+function injectTableChunkedIntoTrainInfo(html, { chunk = 160 } = {}) {
   const host = document.getElementById('trainInfo');
   if (!host) return;
 
-  // parse hors DOM
-  const tmp = document.createElement('div');
-  tmp.innerHTML = html;
-  const tableSrc = tmp.querySelector('table');
-  if (!tableSrc) { host.innerHTML = html; return; }
-
-  // conteneur scrollable + horodatage
+  // 1) Prépare le conteneur (scroll + horodatage)
   host.innerHTML = '<div class="scroll-hint">← glisser →</div><div class="table-scroll"></div><div id="lastUpdated" class="last-updated" aria-live="polite"></div>';
   const scroller = host.querySelector('.table-scroll');
 
-  // table cible
+  // 2) Isole <thead> et le contenu de <tbody> en texte
+  //    (évite un énorme DOM temporaire dans iOS)
+  const theadMatch = html.match(/<thead[\s\S]*?<\/thead>/i);
+  const tbodyMatch = html.match(/<tbody[^>]*>([\s\S]*?)<\/tbody>/i);
+
+  const theadHTML = theadMatch ? theadMatch[0] : '';
+  const rowsHTML  = tbodyMatch ? tbodyMatch[1] : ''; // contenu interne de <tbody>
+
+  // Si pas de table valide : on affiche tel quel (fallback)
+  if (!theadHTML && !rowsHTML) { scroller.innerHTML = html; setLastUpdated?.(); return; }
+
+  // 3) Crée la table cible, injecte tout de suite le THEAD
   const tableDst = document.createElement('table');
-
-  // clone THEAD immédiatement
-  const thead = tableSrc.querySelector('thead');
-  if (thead) tableDst.appendChild(thead.cloneNode(true));
-  scroller.appendChild(tableDst);
-
-  const srcBody = tableSrc.querySelector('tbody');
-  if (!srcBody){ setLastUpdated?.(); return; }
-
-  const rows = Array.from(srcBody.children);
+  if (theadHTML) {
+    const theadEl = document.createElement('thead');
+    theadEl.innerHTML = theadHTML.replace(/^<thead[^>]*>|<\/thead>$/gi, '');
+    tableDst.appendChild(theadEl);
+  }
   const dstBody = document.createElement('tbody');
   tableDst.appendChild(dstBody);
+  scroller.appendChild(tableDst);
 
+  // 4) Découpe le <tbody> en lignes sans les créer une à une au départ
+  //    -> split robuste sur </tr> puis on réajoute le tag pour l’injection
+  const rawRows = rowsHTML.split(/<\/tr>/i).map(s => s.trim()).filter(Boolean).map(s => s + '</tr>');
   let idx = 0;
-  function pump(){
-    const end = Math.min(idx + chunk, rows.length);
-    for (; idx < end; idx++){
-      dstBody.appendChild(rows[idx].cloneNode(true));
+
+  function pump() {
+    // paquet de lignes
+    const end = Math.min(idx + chunk, rawRows.length);
+
+    // Crée un batch dans un wrapper pour minimiser les mutations
+    if (idx < end) {
+      const frag = document.createDocumentFragment();
+      const wrap = document.createElement('tbody'); // wrapper jetable
+      // N.B. on n’insère pas <tbody>…</tbody> dans le DOM final, on utilise son innerHTML
+      wrap.innerHTML = rawRows.slice(idx, end).join('');
+      // on transfère ses <tr> dans le vrai dstBody
+      // (on évite d’append une string directement pour ne pas recréer un énorme innerHTML)
+      while (wrap.firstChild) frag.appendChild(wrap.firstChild);
+      dstBody.appendChild(frag);
+      idx = end;
     }
-    if (idx < rows.length){
-      requestAnimationFrame(pump);
+
+    if (idx < rawRows.length) {
+      // Laisse respirer iOS entre les paquets
+      requestAnimationFrame(() => setTimeout(pump, 0));
     } else {
-      // fin : hooks post-rendu
-      setLastUpdated?.();
-      // GTFS-RT (non bloquant)
-      setTimeout(()=> {
-        if (window.retardsGTFS && (typeof isSelectedDateToday !== 'function' || isSelectedDateToday())){
-          tryApplyGtfsToCurrentTable?.();
-        }
+      // Fin : hooks postfixe
+      try { setLastUpdated?.(); } catch {}
+      setTimeout(() => {
+        try {
+          if (window.retardsGTFS && (typeof isSelectedDateToday !== 'function' || isSelectedDateToday())) {
+            tryApplyGtfsToCurrentTable?.();
+          }
+        } catch {}
       }, 0);
-      // météo & dropdown & alertes
-      updateWeatherBadges?.();
-      if (window.__IS_IOS__) startWeatherAutorefresh?.(10 * 60 * 1000); else startWeatherAutorefresh?.();
-      hookGareDropdownBehavior?.();
-      setTimeout(()=> { try { chargerEtAfficherAlertes?.(); } catch(e){} }, 0);
+      try { updateWeatherBadges?.(); } catch {}
+      try { if (window.__IS_IOS__) startWeatherAutorefresh?.(10 * 60 * 1000); else startWeatherAutorefresh?.(); } catch {}
+      try { hookGareDropdownBehavior?.(); } catch {}
+      setTimeout(() => { try { chargerEtAfficherAlertes?.(); } catch {} }, 0);
     }
   }
+
+  // Démarre l’injection par paquets
   requestAnimationFrame(pump);
-}   
+}
+
 // — Helper: fixe le sens d’affichage ET force toujours De/À pour AM/PM
 function setDirectionForPreset(kind){
   // AM = France → Luxembourg ; PM = Luxembourg → France
@@ -3024,7 +3048,6 @@ function dl(b, a){
 }
 function hhmmInputToMin(hhmm){ if(!hhmm||!/^\d{2}:\d{2}$/.test(hhmm)) return null; const [h,m]=hhmm.split(':').map(Number); return h*60+m; }
 function dateInputToYMD(str){ if(!str||!/^\d{4}-\d{2}-\d{2}$/.test(str)) return null; const [y,m,d]=str.split('-'); return `${y}${m}${d}`; }
-function extractTrainNumber(str){ const m = String(str||'').match(/(\d{5,6})/); return m ? m[1] : null; }
 function toSec(hms){ if(!hms) return null; const [H,M,S]=hms.split(':').map(Number); return H*3600+M*60+(S||0); }
 function toHHMM(sec){ const s=Math.max(0,sec|0); const h=Math.floor(s/3600)%24,m=Math.floor((s%3600)/60); return String(h).padStart(2,'0')+':'+String(m).padStart(2,'0'); }
 function uniqDirects(list){
@@ -3453,6 +3476,7 @@ function findOneTransferItineraries({
   // dédoublonnage final + tri
   const cleaned = uniqTransfers(out);
   cleaned.sort((a,b)=> a.arr2.localeCompare(b.arr2) || (a.durMin - b.durMin));
+  return cleaned.slice(0, 60);
   return cleaned;
 }
 
@@ -3769,6 +3793,7 @@ function initSelectionSortable(){
   const zone = document.getElementById('selectionChips');
   if (!zone || !window.Sortable) return;
 
+  if (selectionSortable && selectionSortable.el === zone) return; // déjà prêt sur le bon élément
   if (selectionSortable) { selectionSortable.destroy(); selectionSortable = null; }
 
   selectionSortable = Sortable.create(zone, {
@@ -4217,7 +4242,7 @@ function addManualTrain(){
     // 6) Injection + hooks + liens (NOUVEL ORDRE)
 injectTableChunkedIntoTrainInfo(html, { chunk: 180 });
 
-// 6.1 — Liens (idempotent, compatible injection par paquets)
+// 6.1 — Liens (idempotent, compatible injection par paquets) — iOS-safe
 function linkifyGaresAndTrains(root){
   const scope = root || document;
 
@@ -4226,54 +4251,55 @@ function linkifyGaresAndTrains(root){
 
   // Liens colonnes gares (préserve .wx car on ne modifie QUE .gare-label)
   scope.querySelectorAll('#trainInfo table tbody tr td:first-child .gare-label').forEach(label => {
-    if (!label || label.querySelector('a.gare-link')) return; // déjà fait
+    if (!label || label.querySelector('a.gare-link')) return;
     const nomGare = (label.textContent || '').trim();
     if (!nomGare) return;
     const url = getGareURL(nomGare);
     if (url) {
-      label.innerHTML = `<a href="${url}" target="_blank" rel="noopener" class="gare-link">${nomGare}</a>`;
+      // innerText → évite une re-parse lourde si déjà un texte simple
+      const a = document.createElement('a');
+      a.href = url; a.target = '_blank'; a.rel = 'noopener'; a.className = 'gare-link';
+      a.textContent = nomGare;
+      label.replaceChildren(a);
     }
   });
 
-  // Liens entêtes trains (une seule fois suffit, mais idempotent)
+  // Liens entêtes trains
   const dateCirculation = $('#trainDate').val();
   scope.querySelectorAll('#trainInfo th[data-train-number]').forEach(th => {
     const numero = th.dataset.trainNumber;
     if (!numero) return;
-    const already = th.querySelector('a.train-link');
     const url = `https://www.sncf-voyageurs.com/fr/voyagez-avec-nous/horaires-et-itineraires/recherche-de-train/detail-train/?numeroCirculation=${numero}&dateCirculation=${dateCirculation}`;
-    if (already) { already.href = url; already.textContent = numero; }
-    else { th.innerHTML = `<a href="${url}" target="_blank" rel="noopener" class="train-link">${numero}</a>`; }
+    const a = th.querySelector('a.train-link') || document.createElement('a');
+    a.href = url; a.target = '_blank'; a.rel = 'noopener'; a.className = 'train-link';
+    a.textContent = numero;
+    if (!a.parentNode) th.replaceChildren(a);
   });
 }
 
-// ➜ 1) premier passage immédiat (agit sur les lignes déjà injectées)
+// ➜ 1) passage immédiat
 linkifyGaresAndTrains(document);
 
-// ➜ 2) observe les paquets qui arrivent puis s’auto-désactive après inactivité
+// ➜ 2) observe les nouvelles lignes quelques instants, puis s’arrête vite (iOS-friendly)
 (function observeChunkedRowsOnce(){
   const tbody = document.querySelector('#trainInfo table tbody');
   if (!tbody) return;
 
   let lastChange = Date.now();
   const obs = new MutationObserver(muts => {
-    muts.forEach(m => {
-      m.addedNodes.forEach(n => {
-        if (n.nodeType === 1) { // élément
-          // on linkifie seulement ce qui vient d’arriver
-          if (n.matches && n.matches('tr')) linkifyGaresAndTrains(n);
-          else linkifyGaresAndTrains(n);
-        }
-      });
-    });
+    for (const m of muts) {
+      for (const n of m.addedNodes) {
+        if (n.nodeType === 1) linkifyGaresAndTrains(n);
+      }
+    }
     lastChange = Date.now();
   });
 
   obs.observe(tbody, { childList: true, subtree: true });
 
-  // petit “kill switch” pour iOS : coupe l’observer après 600 ms sans nouvelles lignes
+  // Stoppe l’observer rapidement quand l’injection est finie
   const killer = setInterval(() => {
-    if (Date.now() - lastChange > 600) {
+    if (Date.now() - lastChange > 500) {
       clearInterval(killer);
       obs.disconnect();
     }
