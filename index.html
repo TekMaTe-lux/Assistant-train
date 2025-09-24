@@ -3255,25 +3255,19 @@ function mergeDeparturesForIds(idsSet){
 }
 
 /************  CALENDRIER (calendar_dates)  ************/
-/************  CALENDRIER (calendar_dates)  ************/
 function serviceActiveForDate(trip_id, ymd){
-  if (!trip_id || !ymd) return false;
+  if (!trip_id || !ymd) return false; // exige une date
   const t = GTFS.tripById?.get(trip_id); if(!t) return false;
   const svc = t.service_id; if(!svc) return false;
 
-  // 1) suppressions explicites ?
-  if (GTFS.removedByDate && GTFS.removedByDate.size){
-    const cut = GTFS.removedByDate.get(ymd);
-    if (cut && cut.has(svc)) return false;
+  // Si on a des données de dates : on est STRICT
+  if (GTFS.allowedByDate && GTFS.allowedByDate.size > 0) {
+    const allowedSet = GTFS.allowedByDate.get(ymd);
+    if (allowedSet) return allowedSet.has(svc); // présent ce jour
+    return false; // pas listé ce jour => on N'AFFICHE PAS
   }
 
-  // 2) ajouts explicites pour ce jour ?
-  if (GTFS.allowedByDate && GTFS.allowedByDate.size){
-    const add = GTFS.allowedByDate.get(ymd);
-    if (add) return add.has(svc); // si le jour est listé, on respecte strictement
-  }
-
-  // 3) jour non listé dans calendar_dates => actif par défaut
+  // Fallback ultra-rare si calendar_dates est vide: on laisse passer pour ne pas tout cacher
   return true;
 }
     
@@ -3528,8 +3522,11 @@ async function proposerTrainsOD(){
   // DIRECTS
 const directs = [];
 byTrip.forEach((sts, trip_id)=>{
-  // --- calcul origin/dest dans le bon sens
-  let iS=-1, iE=-1, dep=null, arr=null;
+  if (!serviceActiveForDate(trip_id, ymd)) return;
+
+  const trow = GTFS.tripById ? GTFS.tripById.get(trip_id) : null;
+
+  let iS=-1,iE=-1,dep=null,arr=null;
   for(let i=0;i<sts.length;i++){
     if(originIds.has(sts[i].stop_id)){ iS=i; dep=sts[i].departure_time; }
     if(destIds.has(sts[i].stop_id))  { iE=i; arr=sts[i].arrival_time; }
@@ -3539,11 +3536,6 @@ byTrip.forEach((sts, trip_id)=>{
   const depMin = Number(dep.slice(0,2))*60 + Number(dep.slice(3,5));
   if (depMin<tFromMin || depMin>tToMin) return;
 
-  // --- filtre calendrier (permissif corrigé)
-  if (!serviceActiveForDate(trip_id, ymd)) return;
-
-  // --- numéro commercial
-  const trow = GTFS.tripById ? GTFS.tripById.get(trip_id) : null;
   let numero = trow?.trip_short_name ? extractTrainNumber(trow.trip_short_name) : null;
   if (!numero) numero = extractTrainNumber(trip_id);
   if (!numero) return;
@@ -3555,27 +3547,31 @@ byTrip.forEach((sts, trip_id)=>{
   directs.push({ numero, dep:dep.slice(0,5), arr: arr ? arr.slice(0,5) : null });
 });
 
-// 🔁 Fallback de sécurité : si aucun direct trouvé, on réessaie SANS filtrage calendrier
-if (!directs.length){
-  console.warn('[calendar fallback] Aucun direct avec calendar_dates; on tente sans filtre calendrier…');
-  byTrip.forEach((sts, trip_id)=>{
-    let iS=-1, iE=-1, dep=null, arr=null;
-    for(let i=0;i<sts.length;i++){
-      if(originIds.has(sts[i].stop_id)){ iS=i; dep=sts[i].departure_time; }
-      if(destIds.has(sts[i].stop_id))  { iE=i; arr=sts[i].arrival_time; }
-    }
-    if(iS===-1 || iE===-1 || iE<=iS || !dep) return;
-    const depMin = Number(dep.slice(0,2))*60 + Number(dep.slice(3,5));
-    if (depMin<tFromMin || depMin>tToMin) return;
-    const trow = GTFS.tripById ? GTFS.tripById.get(trip_id) : null;
-    let numero = trow?.trip_short_name ? extractTrainNumber(trow.trip_short_name) : null;
-    if (!numero) numero = extractTrainNumber(trip_id);
-    if (!numero) return;
-    const key = `${numero}|${dep.slice(0,5)}`;
-    if (proposerTrainsOD._seen.has(key)) return;
-    proposerTrainsOD._seen.add(key);
-    directs.push({ numero, dep:dep.slice(0,5), arr: arr ? arr.slice(0,5) : null });
+// dédup finale des directs
+const directsUniqList = uniqDirects(directs);
+
+  // CORRESPONDANCES (si checkbox cochée)
+let transfers = [];
+const allowTransfers = (document.getElementById('allowTransfer')?.checked ?? true);
+if (allowTransfers){
+  const minTransferMin = Math.max(1, Number(document.getElementById('minTransfer')?.value || 5));
+  const maxTransferMin = Math.max(minTransferMin, Number(document.getElementById('maxTransfer')?.value || 45)); // <= nouveau
+
+  const allowedSet = getIdsForName('Metz'); // on force Metz
+
+  const raw = findOneTransferItineraries({
+    originIds,
+    destIds,
+    t0Min: tFromMin,
+    t1Min: tToMin,
+    minTransferMin,
+    maxTransferMin,                      // <= nouveau
+    ymd,
+    allowedInterchanges: allowedSet,
+    maxResults: 200
   });
+
+  transfers = uniqTransfers(keepFirstTransferPerFirstLeg(raw));
 }
 
   // RENDU
