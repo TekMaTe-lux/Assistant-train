@@ -9,6 +9,8 @@
   <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.2/Sortable.min.js"></script>
   <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
+
 
   <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700&display=swap" rel="stylesheet">
   <style>
@@ -3088,49 +3090,65 @@ const GTFS_BASES = [
 async function fetchGTFSFile(filename){
   let lastErr;
   for (const base of GTFS_BASES){
+    const url = base + filename;
     try {
-      const txt = await fetchText(base + filename);
-      window.GTFS_STATIC_SOURCE = base; // debug
-      return txt;
+      // On tente un stream via PapaParse (download:true) pour lisser le parsing
+      const data = await new Promise((resolve, reject) => {
+        Papa.parse(url, {
+          header: true,
+          skipEmptyLines: true,
+          dynamicTyping: false,
+          fastMode: true,
+          worker: true,
+          download: true,        // Papa gère le fetch + parse
+          error: err => reject(err),
+          complete: res => {
+            if (res.errors && res.errors.length) {
+              console.warn('[PapaParse] erreurs:', res.errors.slice(0,3));
+            }
+            resolve(res.data || []);
+          }
+        });
+      });
+      window.GTFS_STATIC_SOURCE = base;
+      return data; // ⚠️ retourne directement les lignes déjà parsées
     } catch(e){
       lastErr = e;
-      // on essaie la base suivante
     }
   }
   throw lastErr || new Error('Impossible de charger '+filename);
 }
 
+// --- Parsing CSV robuste via PapaParse (iOS-safe) ---
 function parseCSV(text){
-  const lines=text.trim().split(/\r?\n/);
-  const headers=lines.shift().split(',');
-  return lines.map(l=>{
-    const cols=[]; 
-    let cur='',inQ=false;
-    for(let i=0;i<l.length;i++){
-      const c=l[i];
-      if(c==='"'){
-        if(inQ && l[i+1]==='"'){cur+='"'; i++;}
-        else inQ=!inQ;
-      } else if(c===',' && !inQ){
-        cols.push(cur); cur='';
-      } else cur+=c;
-    }
-    cols.push(cur);
-    const row={};
-    headers.forEach((h,idx)=>row[h]=cols[idx]??'');
-    return row;
-  });
+  // Papa.parse est sync sur string, mais on le garde Promise-friendly si besoin
+  // (et on active le worker quand c'est possible)
+  const cfg = {
+    header: true,              // on lit des objets {col:val}
+    skipEmptyLines: true,
+    dynamicTyping: false,      // on garde les strings tels quels (GTFS attendu en string)
+    fastMode: true,            // boost si possible
+    worker: true,              // thread séparé quand supporté → plus fluide sur iOS
+    transformHeader: h => String(h || '').trim(),
+    transform: v => (v == null ? '' : String(v).trim())
+  };
+  const res = Papa.parse(text, cfg);
+  if (res.errors && res.errors.length) {
+    console.warn('[PapaParse] erreurs:', res.errors.slice(0,3));
+  }
+  return res.data || [];
 }
 
 async function ensureGTFSLoaded(){
   if (GTFS.stops && GTFS.stopTimes && GTFS.trips && GTFS.tripById && GTFS.stopNameToId && GTFS.allowedByDate) return;
   
-  const [stopsTxt, stopTimesTxt, tripsTxt, calDatesTxt] = await Promise.all([
-    fetchGTFSFile('stops.txt'),
-    fetchGTFSFile('stop_times.txt'),
-    fetchGTFSFile('trips.txt'),
-    fetchGTFSFile('calendar_dates.txt'),
-  ]);
+// Variante "stream URL": fetchGTFSFile renvoie déjà des tableaux parsés
+const [stops, stopTimes, trips, calendarDates] = await Promise.all([
+  fetchGTFSFile('stops.txt'),
+  fetchGTFSFile('stop_times.txt'),
+  fetchGTFSFile('trips.txt'),
+  fetchGTFSFile('calendar_dates.txt'),
+]);
 
   const stops = parseCSV(stopsTxt);
   const stopTimes = parseCSV(stopTimesTxt);
