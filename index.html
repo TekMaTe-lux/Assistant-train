@@ -3135,18 +3135,6 @@ async function ensureGTFSLoaded(){
   const stops = parseCSV(stopsTxt);
   const stopTimes = parseCSV(stopTimesTxt);
   const trips = parseCSV(tripsTxt);
-  // ⚠️ pas de "const tripById" ici (déjà existant ailleurs) : on utilise un nom différent
-const tripByIdMap = new Map();
-trips.forEach(t => {
-  if (!t.trip_id) return;
-  t.trip_short_name = t.trip_short_name || '';
-  t.trip_headsign   = t.trip_headsign   || '';   // <- NUMÉRO public (ex: 105342)
-  t.service_id      = t.service_id      || '';
-  tripByIdMap.set(t.trip_id, t);
-});
-
-GTFS.trips    = trips;
-GTFS.tripById = tripByIdMap;
   const calendarDates = parseCSV(calDatesTxt);
 
   const stopNameToId = new Map();
@@ -3268,23 +3256,18 @@ function mergeDeparturesForIds(idsSet){
 
 /************  CALENDRIER (calendar_dates)  ************/
 function serviceActiveForDate(trip_id, ymd){
-  if (!trip_id || !ymd) return false;
+  if (!trip_id || !ymd) return false; // exige une date
   const t = GTFS.tripById?.get(trip_id); if(!t) return false;
   const svc = t.service_id; if(!svc) return false;
 
-  // 1) suppressions explicites ?
-  if (GTFS.removedByDate && GTFS.removedByDate.size){
-    const cut = GTFS.removedByDate.get(ymd);
-    if (cut && cut.has(svc)) return false;
+  // Si on a des données de dates : on est STRICT
+  if (GTFS.allowedByDate && GTFS.allowedByDate.size > 0) {
+    const allowedSet = GTFS.allowedByDate.get(ymd);
+    if (allowedSet) return allowedSet.has(svc); // présent ce jour
+    return false; // pas listé ce jour => on N'AFFICHE PAS
   }
 
-  // 2) si des ajouts (exception_type=1) sont listés POUR CE JOUR, on respecte la liste
-  if (GTFS.allowedByDate && GTFS.allowedByDate.size){
-    const add = GTFS.allowedByDate.get(ymd);
-    if (add) return add.has(svc);
-  }
-
-  // 3) sinon (jour non listé) => ACTIF par défaut (car calendar.txt n'est pas utilisé ici)
+  // Fallback ultra-rare si calendar_dates est vide: on laisse passer pour ne pas tout cacher
   return true;
 }
     
@@ -3348,8 +3331,7 @@ function findOneTransferItineraries({
     if (processedFirstLeg.has(firstKey)) continue;
 
     // numéro lisible du 1er train
-    const t1 = GTFS._tripById.get(trip1);
-const num1 = extractTrainNumber(t1?.trip_headsign) || extractTrainNumber(t1?.trip_short_name) || extractTrainNumber(trip1) || '—';
+    const num1 = extractTrainNumber(GTFS._tripById.get(trip1)?.trip_short_name) || extractTrainNumber(trip1) || '—';
 
     let best = null;
 
@@ -3390,8 +3372,7 @@ const num1 = extractTrainNumber(t1?.trip_headsign) || extractTrainNumber(t1?.tri
         if (!toDest) continue;
 
         // 🚫 2) pas le même numéro commercial
-       const t2 = GTFS._tripById.get(trip2);
-const num2 = extractTrainNumber(t2?.trip_headsign) || extractTrainNumber(t2?.trip_short_name) || extractTrainNumber(trip2) || '—';
+        const num2 = extractTrainNumber(GTFS._tripById.get(trip2)?.trip_short_name) || extractTrainNumber(trip2) || '—';
         if (num1 && num2 && num1 === num2) continue;
 
         best = {
@@ -3443,8 +3424,7 @@ const num2 = extractTrainNumber(t2?.trip_headsign) || extractTrainNumber(t2?.tri
           if (!toDest) continue;
 
           // 🚫 pas le même numéro commercial
-          const t2 = GTFS._tripById.get(trip2);
-const num2 = extractTrainNumber(t2?.trip_headsign) || extractTrainNumber(t2?.trip_short_name) || extractTrainNumber(trip2) || '—';
+          const num2 = extractTrainNumber(GTFS._tripById.get(trip2)?.trip_short_name) || extractTrainNumber(trip2) || '—';
           if (num1 && num2 && num1 === num2) continue;
 
           best = {
@@ -3556,16 +3536,9 @@ byTrip.forEach((sts, trip_id)=>{
   const depMin = Number(dep.slice(0,2))*60 + Number(dep.slice(3,5));
   if (depMin<tFromMin || depMin>tToMin) return;
 
-// --- numéro commercial
-const trow = GTFS.tripById ? GTFS.tripById.get(trip_id) : null;
-let numero = null;
-if (trow){
-  // priorité au headsign (ton cas), sinon short_name
-  numero = extractTrainNumber(trow.trip_headsign) || extractTrainNumber(trow.trip_short_name);
-}
-if (!numero) numero = extractTrainNumber(trip_id);   // dernier recours (peut échouer)
-if (!numero) return; // si toujours vide, on écarte
-
+  let numero = trow?.trip_short_name ? extractTrainNumber(trow.trip_short_name) : null;
+  if (!numero) numero = extractTrainNumber(trip_id);
+  if (!numero) return;
 
   const key = `${numero}|${dep.slice(0,5)}`;
   if (proposerTrainsOD._seen.has(key)) return;
