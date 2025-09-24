@@ -9,8 +9,6 @@
   <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.2/Sortable.min.js"></script>
   <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
-
 
   <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700&display=swap" rel="stylesheet">
   <style>
@@ -2776,80 +2774,61 @@ function buildStationSelects() {
   fill(endSel,   'Toute la ligne');
 }
 /* Rendu progressif d’un tableau HTML: parse en mémoire, clone THEAD, insère TBODY par lots */
-function injectTableChunkedIntoTrainInfo(html, { chunk = 160 } = {}) {
+function injectTableChunkedIntoTrainInfo(html, {chunk=200} = {}){
   const host = document.getElementById('trainInfo');
   if (!host) return;
 
-  // Conteneur scrollable + horodatage
+  // parse hors DOM
+  const tmp = document.createElement('div');
+  tmp.innerHTML = html;
+  const tableSrc = tmp.querySelector('table');
+  if (!tableSrc) { host.innerHTML = html; return; }
+
+  // conteneur scrollable + horodatage
   host.innerHTML = '<div class="scroll-hint">← glisser →</div><div class="table-scroll"></div><div id="lastUpdated" class="last-updated" aria-live="polite"></div>';
   const scroller = host.querySelector('.table-scroll');
 
-  // Isole <thead> et le contenu de <tbody> (texte uniquement)
-  const theadMatch = html.match(/<thead[\s\S]*?<\/thead>/i);
-  const tbodyMatch = html.match(/<tbody[^>]*>([\s\S]*?)<\/tbody>/i);
-
-  const theadHTML = theadMatch ? theadMatch[0] : '';
-  const rowsHTML  = tbodyMatch ? tbodyMatch[1] : '';
-
-  // Fallback si pas de table valide
-  if (!theadHTML && !rowsHTML) { scroller.innerHTML = html; setLastUpdated?.(); return; }
-
-  // Table cible
+  // table cible
   const tableDst = document.createElement('table');
 
-  // THEAD tout de suite (sans parse complet de la table source)
-  if (theadHTML) {
-    const theadEl = document.createElement('thead');
-    theadEl.innerHTML = theadHTML.replace(/^<thead[^>]*>|<\/thead>$/gi, '');
-    tableDst.appendChild(theadEl);
-  }
-
-  const dstBody = document.createElement('tbody');
-  tableDst.appendChild(dstBody);
+  // clone THEAD immédiatement
+  const thead = tableSrc.querySelector('thead');
+  if (thead) tableDst.appendChild(thead.cloneNode(true));
   scroller.appendChild(tableDst);
 
-  // Découpe les lignes de tbody en texte (léger pour iOS)
-  const rawRows = rowsHTML
-    .split(/<\/tr>/i)
-    .map(s => s.trim())
-    .filter(Boolean)
-    .map(s => s + '</tr>');
+  const srcBody = tableSrc.querySelector('tbody');
+  if (!srcBody){ setLastUpdated?.(); return; }
+
+  const rows = Array.from(srcBody.children);
+  const dstBody = document.createElement('tbody');
+  tableDst.appendChild(dstBody);
+
   let idx = 0;
-
-  function pump() {
-    const end = Math.min(idx + chunk, rawRows.length);
-    if (idx < end) {
-      const frag = document.createDocumentFragment();
-      const wrap = document.createElement('tbody'); // wrapper jetable
-      wrap.innerHTML = rawRows.slice(idx, end).join('');
-      while (wrap.firstChild) frag.appendChild(wrap.firstChild);
-      dstBody.appendChild(frag);
-      idx = end;
+  function pump(){
+    const end = Math.min(idx + chunk, rows.length);
+    for (; idx < end; idx++){
+      dstBody.appendChild(rows[idx].cloneNode(true));
     }
-
-    if (idx < rawRows.length) {
-      // Respiration entre paquets (iOS)
-      requestAnimationFrame(() => setTimeout(pump, 0));
+    if (idx < rows.length){
+      requestAnimationFrame(pump);
     } else {
-      // Fin : hooks post-rendu
-      try { setLastUpdated?.(); } catch {}
-      setTimeout(() => {
-        try {
-          if (window.retardsGTFS && (typeof isSelectedDateToday !== 'function' || isSelectedDateToday())) {
-            tryApplyGtfsToCurrentTable?.();
-          }
-        } catch {}
+      // fin : hooks post-rendu
+      setLastUpdated?.();
+      // GTFS-RT (non bloquant)
+      setTimeout(()=> {
+        if (window.retardsGTFS && (typeof isSelectedDateToday !== 'function' || isSelectedDateToday())){
+          tryApplyGtfsToCurrentTable?.();
+        }
       }, 0);
-      try { updateWeatherBadges?.(); } catch {}
-      try { if (window.__IS_IOS__) startWeatherAutorefresh?.(10 * 60 * 1000); else startWeatherAutorefresh?.(); } catch {}
-      try { hookGareDropdownBehavior?.(); } catch {}
-      setTimeout(() => { try { chargerEtAfficherAlertes?.(); } catch {} }, 0);
+      // météo & dropdown & alertes
+      updateWeatherBadges?.();
+      if (window.__IS_IOS__) startWeatherAutorefresh?.(10 * 60 * 1000); else startWeatherAutorefresh?.();
+      hookGareDropdownBehavior?.();
+      setTimeout(()=> { try { chargerEtAfficherAlertes?.(); } catch(e){} }, 0);
     }
   }
-
   requestAnimationFrame(pump);
-}
-    
+}   
 // — Helper: fixe le sens d’affichage ET force toujours De/À pour AM/PM
 function setDirectionForPreset(kind){
   // AM = France → Luxembourg ; PM = Luxembourg → France
@@ -3045,6 +3024,7 @@ function dl(b, a){
 }
 function hhmmInputToMin(hhmm){ if(!hhmm||!/^\d{2}:\d{2}$/.test(hhmm)) return null; const [h,m]=hhmm.split(':').map(Number); return h*60+m; }
 function dateInputToYMD(str){ if(!str||!/^\d{4}-\d{2}-\d{2}$/.test(str)) return null; const [y,m,d]=str.split('-'); return `${y}${m}${d}`; }
+function extractTrainNumber(str){ const m = String(str||'').match(/(\d{5,6})/); return m ? m[1] : null; }
 function toSec(hms){ if(!hms) return null; const [H,M,S]=hms.split(':').map(Number); return H*3600+M*60+(S||0); }
 function toHHMM(sec){ const s=Math.max(0,sec|0); const h=Math.floor(s/3600)%24,m=Math.floor((s%3600)/60); return String(h).padStart(2,'0')+':'+String(m).padStart(2,'0'); }
 function uniqDirects(list){
@@ -3108,39 +3088,43 @@ const GTFS_BASES = [
 async function fetchGTFSFile(filename){
   let lastErr;
   for (const base of GTFS_BASES){
-    const url = base + filename;
     try {
-      const r = await fetch(url, { cache: 'no-store' });
-      if (!r.ok) throw new Error('HTTP '+r.status);
-      return await r.text(); // <-- retourne le TEXTE brut
+      const txt = await fetchText(base + filename);
+      window.GTFS_STATIC_SOURCE = base; // debug
+      return txt;
     } catch(e){
       lastErr = e;
+      // on essaie la base suivante
     }
   }
   throw lastErr || new Error('Impossible de charger '+filename);
 }
 
-// --- Parsing CSV robuste via PapaParse (iOS-safe) ---
 function parseCSV(text){
-  const res = Papa.parse(text, {
-    header: true,              // objets {col:val}
-    skipEmptyLines: true,
-    dynamicTyping: false,      // on garde des strings (GTFS heures/id attendus en string)
-    fastMode: true,
-    worker: true,              // thread séparé quand possible → plus fluide sur iOS
-    transformHeader: h => String(h || '').trim(),
-    transform: v => (v == null ? '' : String(v).trim())
+  const lines=text.trim().split(/\r?\n/);
+  const headers=lines.shift().split(',');
+  return lines.map(l=>{
+    const cols=[]; 
+    let cur='',inQ=false;
+    for(let i=0;i<l.length;i++){
+      const c=l[i];
+      if(c==='"'){
+        if(inQ && l[i+1]==='"'){cur+='"'; i++;}
+        else inQ=!inQ;
+      } else if(c===',' && !inQ){
+        cols.push(cur); cur='';
+      } else cur+=c;
+    }
+    cols.push(cur);
+    const row={};
+    headers.forEach((h,idx)=>row[h]=cols[idx]??'');
+    return row;
   });
-  if (res.errors && res.errors.length) {
-    console.warn('[PapaParse] erreurs (aperçu):', res.errors.slice(0,3));
-  }
-  return res.data || [];
 }
 
 async function ensureGTFSLoaded(){
   if (GTFS.stops && GTFS.stopTimes && GTFS.trips && GTFS.tripById && GTFS.stopNameToId && GTFS.allowedByDate) return;
   
-  // on charge le TEXTE des fichiers
   const [stopsTxt, stopTimesTxt, tripsTxt, calDatesTxt] = await Promise.all([
     fetchGTFSFile('stops.txt'),
     fetchGTFSFile('stop_times.txt'),
@@ -3148,28 +3132,23 @@ async function ensureGTFSLoaded(){
     fetchGTFSFile('calendar_dates.txt'),
   ]);
 
-  // on parse avec PapaParse (parseCSV remplace déjà ta version maison)
-  const stops         = parseCSV(stopsTxt);
-  const stopTimes     = parseCSV(stopTimesTxt);
-  const trips         = parseCSV(tripsTxt);
+  const stops = parseCSV(stopsTxt);
+  const stopTimes = parseCSV(stopTimesTxt);
+  const trips = parseCSV(tripsTxt);
   const calendarDates = parseCSV(calDatesTxt);
 
-  // index nom -> id (1er id par nom)
   const stopNameToId = new Map();
   stops.forEach(s => {
-    if (s.stop_name && s.stop_id) {
-      if (!stopNameToId.has(s.stop_name)) stopNameToId.set(s.stop_id, s.stop_id); // garde s.stop_id
-      stopNameToId.set(s.stop_name, s.stop_id);
-    }
+    if (s.stop_name && s.stop_id) 
+      if(!stopNameToId.has(s.stop_name)) stopNameToId.set(s.stop_name, s.stop_id);
   });
 
-  // index trip_id -> trip row
   const tripById = new Map();
   trips.forEach(t => {
     if (t.trip_id) tripById.set(t.trip_id, t);
   });
 
-  // yyyymmdd -> Set(service_id) ajoutés / supprimés
+  // yyyymmdd -> Set(service_id) ajoutés ; et yyyymmdd -> Set(service_id) supprimés
   const allowedByDate = new Map();
   const removedByDate = new Map();
   calendarDates.forEach(row => {
@@ -3195,7 +3174,6 @@ async function ensureGTFSLoaded(){
     removedByDate 
   };
 }
-
    
 /************  GROUPES DE STOPS PAR GARE (stop_name/parent_station)  ************/
 function buildStationGroups(){
@@ -4248,57 +4226,60 @@ function linkifyGaresAndTrains(root){
 
   // Liens colonnes gares (préserve .wx car on ne modifie QUE .gare-label)
   scope.querySelectorAll('#trainInfo table tbody tr td:first-child .gare-label').forEach(label => {
-    if (!label || label.querySelector('a.gare-link')) return;
+    if (!label || label.querySelector('a.gare-link')) return; // déjà fait
     const nomGare = (label.textContent || '').trim();
     if (!nomGare) return;
     const url = getGareURL(nomGare);
-    if (!url) return;
-    const a = document.createElement('a');
-    a.href = url; a.target = '_blank'; a.rel = 'noopener'; a.className = 'gare-link';
-    a.textContent = nomGare;
-    label.replaceChildren(a);
+    if (url) {
+      label.innerHTML = `<a href="${url}" target="_blank" rel="noopener" class="gare-link">${nomGare}</a>`;
+    }
   });
 
-  // Liens entêtes trains
+  // Liens entêtes trains (une seule fois suffit, mais idempotent)
   const dateCirculation = $('#trainDate').val();
   scope.querySelectorAll('#trainInfo th[data-train-number]').forEach(th => {
     const numero = th.dataset.trainNumber;
     if (!numero) return;
+    const already = th.querySelector('a.train-link');
     const url = `https://www.sncf-voyageurs.com/fr/voyagez-avec-nous/horaires-et-itineraires/recherche-de-train/detail-train/?numeroCirculation=${numero}&dateCirculation=${dateCirculation}`;
-    const a = th.querySelector('a.train-link') || document.createElement('a');
-    a.href = url; a.target = '_blank'; a.rel = 'noopener'; a.className = 'train-link';
-    a.textContent = numero;
-    if (!a.parentNode) th.replaceChildren(a);
+    if (already) { already.href = url; already.textContent = numero; }
+    else { th.innerHTML = `<a href="${url}" target="_blank" rel="noopener" class="train-link">${numero}</a>`; }
   });
 }
 
-// ➜ passage immédiat (agit sur ce qui est déjà injecté)
+// ➜ 1) premier passage immédiat (agit sur les lignes déjà injectées)
 linkifyGaresAndTrains(document);
 
-// ➜ observe brièvement les nouvelles lignes, puis s’arrête (iOS-friendly)
+// ➜ 2) observe les paquets qui arrivent puis s’auto-désactive après inactivité
 (function observeChunkedRowsOnce(){
   const tbody = document.querySelector('#trainInfo table tbody');
   if (!tbody) return;
 
   let lastChange = Date.now();
   const obs = new MutationObserver(muts => {
-    for (const m of muts) {
-      for (const n of m.addedNodes) {
-        if (n.nodeType === 1) linkifyGaresAndTrains(n);
-      }
-    }
+    muts.forEach(m => {
+      m.addedNodes.forEach(n => {
+        if (n.nodeType === 1) { // élément
+          // on linkifie seulement ce qui vient d’arriver
+          if (n.matches && n.matches('tr')) linkifyGaresAndTrains(n);
+          else linkifyGaresAndTrains(n);
+        }
+      });
+    });
     lastChange = Date.now();
   });
 
   obs.observe(tbody, { childList: true, subtree: true });
 
+  // petit “kill switch” pour iOS : coupe l’observer après 600 ms sans nouvelles lignes
   const killer = setInterval(() => {
-    if (Date.now() - lastChange > 500) {
+    if (Date.now() - lastChange > 600) {
       clearInterval(killer);
       obs.disconnect();
     }
   }, 250);
 })();
+
 // horodatage visible sans attendre
 setLastUpdated();
 
