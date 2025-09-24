@@ -3070,11 +3070,9 @@ let GTFS = {
   removedByDate:null 
 };
 
-async function fetchText(url){
-  const r = await fetch(url, { cache: 'no-store' });
-  if(!r.ok) throw new Error('HTTP '+r.status+' on '+url);
-  return await r.text();
-}
+const __yieldToBrowser = () => (typeof setTimeout === 'function')
+  ? new Promise(resolve => setTimeout(resolve, 0))
+  : Promise.resolve();
 
 // Bases candidates (testées dans l’ordre)
 const GTFS_BASES = [
@@ -3083,60 +3081,223 @@ const GTFS_BASES = [
   'https://raw.githubusercontent.com/TekMaTe-lux/Assistant-train/main/Assistant-train/data/',
   'https://cdn.jsdelivr.net/gh/TekMaTe-lux/Assistant-train@main/Assistant-train/data/'
 ];
+function createCSVCollector(opt = {}){
+  const keepColumns = Array.isArray(opt.keepColumns) && opt.keepColumns.length ? opt.keepColumns : null;
+  const keptNames = keepColumns ? keepColumns.slice() : null;
+  const rows = [];
+  let headers = null;
+  let row = [];
+  let field = '';
+  let inQuotes = false;
+  let pendingQuote = false;
+  let lastCharCR = false;
+  let firstChunk = true;
+  let keptIndices = null;
+  let newRows = 0;
 
+  const pushField = () => {
+    row.push(field);
+    field = '';
+  };
 
-async function fetchGTFSFile(filename){
+  const initKeep = () => {
+    if (!keptNames) return;
+    keptIndices = keptNames.map(name => headers.indexOf(name));
+  };
+
+  const isMeaningfulRow = vals => {
+    if (!vals.length) return false;
+    if (vals.length === 1 && vals[0] === '') return false;
+    for (let i = 0; i < vals.length; i++){
+      if (vals[i] !== '') return true;
+    }
+    return false;
+  };
+
+  const pushRow = () => {
+    const current = row;
+    row = [];
+    if (!current.length && !headers) return;
+    if (!headers){
+      if (!isMeaningfulRow(current)) return;
+      headers = current.slice();
+      if (headers[0] && headers[0].charCodeAt && headers[0].charCodeAt(0) === 0xFEFF){
+        headers[0] = headers[0].slice(1);
+      }
+      initKeep();
+      return;
+    }
+    if (!isMeaningfulRow(current)) return;
+    const obj = {};
+    if (keptNames){
+      for (let i = 0; i < keptNames.length; i++){
+        const idx = keptIndices ? keptIndices[i] : -1;
+        if (idx >= 0){
+          obj[keptNames[i]] = current[idx] ?? '';
+        }
+      }
+    } else {
+      for (let i = 0; i < headers.length; i++){
+        obj[headers[i]] = current[i] ?? '';
+      }
+    }
+    rows.push(obj);
+    newRows++;
+  };
+
+  const processChunk = chunk => {
+    if (!chunk) return;
+    if (firstChunk){
+      firstChunk = false;
+      if (chunk.charCodeAt && chunk.charCodeAt(0) === 0xFEFF){
+        chunk = chunk.slice(1);
+      }
+    }
+    for (let idx = 0; idx < chunk.length; idx++){
+      let ch = chunk[idx];
+      if (lastCharCR){
+        lastCharCR = false;
+        if (ch === '\n') continue;
+      }
+      if (pendingQuote){
+        pendingQuote = false;
+        if (ch === '"'){
+          field += '"';
+          continue;
+        }
+        inQuotes = false;
+        idx--;
+        continue;
+      }
+      if (inQuotes){
+        if (ch === '"'){
+          if (idx + 1 < chunk.length){
+            if (chunk[idx + 1] === '"'){
+              field += '"';
+              idx++;
+              continue;
+            }
+            inQuotes = false;
+            continue;
+          }
+          pendingQuote = true;
+          continue;
+        }
+        field += ch;
+        continue;
+      }
+      if (ch === '"'){
+        inQuotes = true;
+        continue;
+      }
+      if (ch === ','){
+        pushField();
+        continue;
+      }
+      if (ch === '\r' || ch === '\n'){
+        pushField();
+        pushRow();
+        if (ch === '\r') lastCharCR = true;
+        continue;
+      }
+      field += ch;
+    }
+  };
+
+  const finish = () => {
+    if (pendingQuote){
+      pendingQuote = false;
+      inQuotes = false;
+    }
+    if (field.length || row.length){
+      pushField();
+    }
+    if (row.length) pushRow();
+    return rows;
+  };
+
+  return {
+    processChunk,
+    finish,
+    drainNewRows(){ const v = newRows; newRows = 0; return v; }
+  };
+}
+
+function parseCSV(text, opt = {}){
+  const collector = createCSVCollector(opt);
+  collector.processChunk(typeof text === 'string' ? text : String(text ?? ''));
+  return collector.finish();
+}
+
+async function parseCSVFromStream(stream, opt = {}){
+  const collector = createCSVCollector(opt);
+  if (!stream || typeof stream.getReader !== 'function'){
+    return collector.finish();
+  }
+  const reader = stream.getReader();
+  const decoder = new TextDecoder('utf-8');
+  let rowsSinceYield = 0;
+  try {
+    while (true){
+      const { value, done } = await reader.read();
+      if (value){
+        const chunk = decoder.decode(value, { stream: !done });
+        collector.processChunk(chunk);
+        rowsSinceYield += collector.drainNewRows();
+        if (rowsSinceYield >= 6000){
+          rowsSinceYield = 0;
+          await __yieldToBrowser();
+        }
+      }
+      if (done) break;
+    }
+  } finally {
+    reader.releaseLock?.();
+  }
+  const tail = decoder.decode();
+  if (tail) collector.processChunk(tail);
+  return collector.finish();
+}
+
+async function fetchAndParseCSV(filename, opt = {}){
   let lastErr;
   for (const base of GTFS_BASES){
+    const url = base + filename;
     try {
-      const txt = await fetchText(base + filename);
+      const resp = await fetch(url, { cache: 'no-store' });
+      if (!resp.ok) throw new Error('HTTP '+resp.status+' on '+url);
       window.GTFS_STATIC_SOURCE = base; // debug
-      return txt;
+      if (resp.body && typeof resp.body.getReader === 'function' && typeof TextDecoder === 'function'){
+        return await parseCSVFromStream(resp.body, opt);
+      }
+      const txt = await resp.text();
+      return parseCSV(txt, opt);
     } catch(e){
       lastErr = e;
-      // on essaie la base suivante
+// essaie la base suivante
     }
   }
   throw lastErr || new Error('Impossible de charger '+filename);
 }
 
-function parseCSV(text){
-  const lines=text.trim().split(/\r?\n/);
-  const headers=lines.shift().split(',');
-  return lines.map(l=>{
-    const cols=[]; 
-    let cur='',inQ=false;
-    for(let i=0;i<l.length;i++){
-      const c=l[i];
-      if(c==='"'){
-        if(inQ && l[i+1]==='"'){cur+='"'; i++;}
-        else inQ=!inQ;
-      } else if(c===',' && !inQ){
-        cols.push(cur); cur='';
-      } else cur+=c;
-    }
-    cols.push(cur);
-    const row={};
-    headers.forEach((h,idx)=>row[h]=cols[idx]??'');
-    return row;
-  });
-}
-
 async function ensureGTFSLoaded(){
   if (GTFS.stops && GTFS.stopTimes && GTFS.trips && GTFS.tripById && GTFS.stopNameToId && GTFS.allowedByDate) return;
-  
-  const [stopsTxt, stopTimesTxt, tripsTxt, calDatesTxt] = await Promise.all([
-    fetchGTFSFile('stops.txt'),
-    fetchGTFSFile('stop_times.txt'),
-    fetchGTFSFile('trips.txt'),
-    fetchGTFSFile('calendar_dates.txt'),
-  ]);
 
-  const stops = parseCSV(stopsTxt);
-  const stopTimes = parseCSV(stopTimesTxt);
-  const trips = parseCSV(tripsTxt);
-  const calendarDates = parseCSV(calDatesTxt);
-
+  const stops = await fetchAndParseCSV('stops.txt', {
+    keepColumns: ['stop_id','stop_name','parent_station','stop_lat','stop_lon']
+  });
+  await __yieldToBrowser();
+  const stopTimes = await fetchAndParseCSV('stop_times.txt', {
+    keepColumns: ['trip_id','arrival_time','departure_time','stop_id','stop_sequence']
+  });
+  await __yieldToBrowser();
+  const trips = await fetchAndParseCSV('trips.txt', {
+    keepColumns: ['trip_id','service_id','route_id','trip_short_name']
+  });
+  await __yieldToBrowser();
+  const calendarDates = await fetchAndParseCSV('calendar_dates.txt', {
+    keepColumns: ['service_id','date','exception_type']
+  });
   const stopNameToId = new Map();
   stops.forEach(s => {
     if (s.stop_name && s.stop_id) 
@@ -3162,16 +3323,14 @@ async function ensureGTFSLoaded(){
       removedByDate.get(ymd).add(serviceId);
     }
   });
-
-  GTFS = { 
-    stops, 
-    stopTimes, 
-    trips, 
-    calendarDates, 
-    tripById, 
-    stopNameToId, 
-    allowedByDate, 
-    removedByDate 
+  GTFS = {
+    stops,
+    stopTimes,
+    trips,
+    tripById,
+    stopNameToId,
+    allowedByDate,
+    removedByDate
   };
 }
    
