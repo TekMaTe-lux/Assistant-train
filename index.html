@@ -3069,7 +3069,8 @@ let GTFS = {
   allowedByDate:null, 
   removedByDate:null 
 };
-
+    
+let GTFS_LOADING_PROMISE = null;
 const __yieldToBrowser = () => (typeof setTimeout === 'function')
   ? new Promise(resolve => setTimeout(resolve, 0))
   : Promise.resolve();
@@ -3081,6 +3082,7 @@ const GTFS_BASES = [
   'https://raw.githubusercontent.com/TekMaTe-lux/Assistant-train/main/Assistant-train/data/',
   'https://cdn.jsdelivr.net/gh/TekMaTe-lux/Assistant-train@main/Assistant-train/data/'
 ];
+
 function createCSVCollector(opt = {}){
   const keepColumns = Array.isArray(opt.keepColumns) && opt.keepColumns.length ? opt.keepColumns : null;
   const keptNames = keepColumns ? keepColumns.slice() : null;
@@ -3282,56 +3284,73 @@ async function fetchAndParseCSV(filename, opt = {}){
 
 async function ensureGTFSLoaded(){
   if (GTFS.stops && GTFS.stopTimes && GTFS.trips && GTFS.tripById && GTFS.stopNameToId && GTFS.allowedByDate) return;
-
-  const stops = await fetchAndParseCSV('stops.txt', {
-    keepColumns: ['stop_id','stop_name','parent_station','stop_lat','stop_lon']
-  });
-  await __yieldToBrowser();
-  const stopTimes = await fetchAndParseCSV('stop_times.txt', {
-    keepColumns: ['trip_id','arrival_time','departure_time','stop_id','stop_sequence']
-  });
-  await __yieldToBrowser();
-  const trips = await fetchAndParseCSV('trips.txt', {
-    keepColumns: ['trip_id','service_id','route_id','trip_short_name']
-  });
-  await __yieldToBrowser();
-  const calendarDates = await fetchAndParseCSV('calendar_dates.txt', {
-    keepColumns: ['service_id','date','exception_type']
-  });
-  const stopNameToId = new Map();
-  stops.forEach(s => {
-    if (s.stop_name && s.stop_id) 
-      if(!stopNameToId.has(s.stop_name)) stopNameToId.set(s.stop_name, s.stop_id);
-  });
-
-  const tripById = new Map();
-  trips.forEach(t => {
-    if (t.trip_id) tripById.set(t.trip_id, t);
-  });
-
-  // yyyymmdd -> Set(service_id) ajoutés ; et yyyymmdd -> Set(service_id) supprimés
-  const allowedByDate = new Map();
-  const removedByDate = new Map();
-  calendarDates.forEach(row => {
-    const ymd = row.date, serviceId = row.service_id, exc = Number(row.exception_type);
-    if (!ymd || !serviceId) return;
-    if (exc === 1) {
-      if (!allowedByDate.has(ymd)) allowedByDate.set(ymd, new Set());
-      allowedByDate.get(ymd).add(serviceId);
-    } else if (exc === 2) {
-      if (!removedByDate.has(ymd)) removedByDate.set(ymd, new Set());
-      removedByDate.get(ymd).add(serviceId);
+  if (GTFS_LOADING_PROMISE) {
+    try {
+      await GTFS_LOADING_PROMISE;
+    } catch {
+      // previous tentative failed; let the new caller retry below
     }
-  });
-  GTFS = {
-    stops,
-    stopTimes,
-    trips,
-    tripById,
-    stopNameToId,
-    allowedByDate,
-    removedByDate
-  };
+    if (GTFS.stops && GTFS.stopTimes && GTFS.trips && GTFS.tripById && GTFS.stopNameToId && GTFS.allowedByDate) return;
+  }
+ GTFS_LOADING_PROMISE = (async () => {
+    const stops = await fetchAndParseCSV('stops.txt', {
+      keepColumns: ['stop_id','stop_name','parent_station','stop_lat','stop_lon']
+    });
+    await __yieldToBrowser();
+    const stopTimes = await fetchAndParseCSV('stop_times.txt', {
+      keepColumns: ['trip_id','arrival_time','departure_time','stop_id','stop_sequence']
+    });
+    await __yieldToBrowser();
+    const trips = await fetchAndParseCSV('trips.txt', {
+      keepColumns: ['trip_id','service_id','route_id','trip_short_name']
+    });
+    await __yieldToBrowser();
+    const calendarDates = await fetchAndParseCSV('calendar_dates.txt', {
+      keepColumns: ['service_id','date','exception_type']
+    });
+   
+    const stopNameToId = new Map();
+    stops.forEach(s => {
+      if (s.stop_name && s.stop_id)
+        if(!stopNameToId.has(s.stop_name)) stopNameToId.set(s.stop_name, s.stop_id);
+    });
+
+       const tripById = new Map();
+    trips.forEach(t => {
+      if (t.trip_id) tripById.set(t.trip_id, t);
+    });
+
+    // yyyymmdd -> Set(service_id) ajoutés ; et yyyymmdd -> Set(service_id) supprimés
+    const allowedByDate = new Map();
+    const removedByDate = new Map();
+    calendarDates.forEach(row => {
+      const ymd = row.date, serviceId = row.service_id, exc = Number(row.exception_type);
+      if (!ymd || !serviceId) return;
+      if (exc === 1) {
+        if (!allowedByDate.has(ymd)) allowedByDate.set(ymd, new Set());
+        allowedByDate.get(ymd).add(serviceId);
+      } else if (exc === 2) {
+        if (!removedByDate.has(ymd)) removedByDate.set(ymd, new Set());
+        removedByDate.get(ymd).add(serviceId);
+      }
+    });
+
+    GTFS = {
+      stops,
+      stopTimes,
+      trips,
+      tripById,
+      stopNameToId,
+      allowedByDate,
+      removedByDate
+    };
+  })();
+
+  try {
+    await GTFS_LOADING_PROMISE;
+  } finally {
+    GTFS_LOADING_PROMISE = null;
+  }
 }
    
 /************  GROUPES DE STOPS PAR GARE (stop_name/parent_station)  ************/
