@@ -238,6 +238,66 @@ input:checked + .slider {
 input:checked + .slider:before {
   transform: translateX(26px);
 }
+    /* --- Overlay de chargement GTFS --- */
+#gtfsLoadingOverlay {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 18px;
+  background: rgba(11, 15, 26, 0.92);
+  color: #00f0ff;
+  font-family: 'Orbitron', sans-serif;
+  text-align: center;
+  z-index: 5000;
+  transition: opacity 0.25s ease;
+  opacity: 1;
+  backdrop-filter: blur(6px);
+}
+
+#gtfsLoadingOverlay.is-hidden {
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+}
+
+#gtfsLoadingOverlay .gtfs-loading-box {
+  background: rgba(9, 14, 24, 0.85);
+  border: 2px solid rgba(0, 240, 255, 0.6);
+  border-radius: 18px;
+  padding: 28px 32px;
+  box-shadow: 0 0 28px rgba(0, 240, 255, 0.35);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+  max-width: 320px;
+}
+
+#gtfsLoadingOverlay .gtfs-spinner {
+  width: 58px;
+  height: 58px;
+  border-radius: 50%;
+  border: 4px solid rgba(0, 240, 255, 0.2);
+  border-top-color: #00f0ff;
+  animation: gtfs-spin 1s linear infinite;
+}
+
+#gtfsLoadingOverlay .gtfs-loading-text {
+  font-size: 1.1rem;
+  text-shadow: 0 0 12px rgba(0, 240, 255, 0.45);
+}
+
+#gtfsLoadingOverlay small {
+  color: rgba(200, 240, 255, 0.85);
+  font-size: 0.85rem;
+}
+
+@keyframes gtfs-spin {
+  to { transform: rotate(360deg); }
+}
     #liens-utiles {
   position: static; /* ou supprimer cette ligne, static est défaut */
   width: 160px; /* ou flex-basis dans flexbox */
@@ -2194,6 +2254,13 @@ function renderRowsChunked(htmlRows, tbody, chunk=200){
 </script>
 </head>
 <body>
+<div id="gtfsLoadingOverlay" class="is-hidden" aria-hidden="true" role="status" aria-live="polite">
+  <div class="gtfs-loading-box">
+    <div class="gtfs-spinner" aria-hidden="true"></div>
+    <p class="gtfs-loading-text">Chargement des horaires SNCF…</p>
+    <small>Merci de patienter pendant la récupération des données.</small>
+  </div>
+</div>  
 <!-- Modal d'accès bêta -->
 <div id="betaModal" style="position:fixed;top:0;left:0;width:100vw;height:100vh;
      background:rgba(0,0,0,0.8);display:flex;justify-content:center;align-items:center;
@@ -3071,9 +3138,50 @@ let GTFS = {
 };
     
 let GTFS_LOADING_PROMISE = null;
+
 const __yieldToBrowser = () => (typeof setTimeout === 'function')
   ? new Promise(resolve => setTimeout(resolve, 0))
   : Promise.resolve();
+
+const GTFSLoadingUI = (() => {
+  const overlayId = 'gtfsLoadingOverlay';
+  let overlay = null;
+  let textNode = null;
+  let requests = 0;
+
+  const ensureOverlay = () => {
+    if (!overlay) {
+      overlay = document.getElementById(overlayId);
+      if (overlay) textNode = overlay.querySelector('.gtfs-loading-text');
+    }
+    return overlay;
+  };
+
+  const setVisible = visible => {
+    const el = ensureOverlay();
+    if (!el) return;
+    el.classList.toggle('is-hidden', !visible);
+    el.setAttribute('aria-hidden', visible ? 'false' : 'true');
+  };
+
+  return {
+    show(message) {
+      if (!ensureOverlay()) return;
+      requests++;
+      if (message && textNode) textNode.textContent = message;
+      setVisible(true);
+    },
+    hide() {
+      if (!ensureOverlay()) return;
+      requests = Math.max(0, requests - 1);
+      if (requests === 0) setVisible(false);
+    },
+    message(message) {
+      if (!ensureOverlay() || !message || !textNode) return;
+      textNode.textContent = message;
+    }
+  };
+})();
 
 // Bases candidates (testées dans l’ordre)
 const GTFS_BASES = [
@@ -3217,7 +3325,6 @@ function createCSVCollector(opt = {}){
     if (row.length) pushRow();
     return rows;
   };
-
   return {
     processChunk,
     finish,
@@ -3284,7 +3391,7 @@ async function fetchAndParseCSV(filename, opt = {}){
 
 async function ensureGTFSLoaded(){
   if (GTFS.stops && GTFS.stopTimes && GTFS.trips && GTFS.tripById && GTFS.stopNameToId && GTFS.allowedByDate) return;
-  if (GTFS_LOADING_PROMISE) {
+    if (GTFS_LOADING_PROMISE) {
     try {
       await GTFS_LOADING_PROMISE;
     } catch {
@@ -3293,59 +3400,76 @@ async function ensureGTFSLoaded(){
     if (GTFS.stops && GTFS.stopTimes && GTFS.trips && GTFS.tripById && GTFS.stopNameToId && GTFS.allowedByDate) return;
   }
  GTFS_LOADING_PROMISE = (async () => {
-    const stops = await fetchAndParseCSV('stops.txt', {
-      keepColumns: ['stop_id','stop_name','parent_station','stop_lat','stop_lon']
-    });
-    await __yieldToBrowser();
-    const stopTimes = await fetchAndParseCSV('stop_times.txt', {
-      keepColumns: ['trip_id','arrival_time','departure_time','stop_id','stop_sequence']
-    });
-    await __yieldToBrowser();
-    const trips = await fetchAndParseCSV('trips.txt', {
-      keepColumns: ['trip_id','service_id','route_id','trip_short_name']
-    });
-    await __yieldToBrowser();
-    const calendarDates = await fetchAndParseCSV('calendar_dates.txt', {
-      keepColumns: ['service_id','date','exception_type']
-    });
-   
-    const stopNameToId = new Map();
-    stops.forEach(s => {
-      if (s.stop_name && s.stop_id)
-        if(!stopNameToId.has(s.stop_name)) stopNameToId.set(s.stop_name, s.stop_id);
-    });
+    GTFSLoadingUI.show('Chargement des arrêts SNCF…');
+    try {
+      await __yieldToBrowser();
 
-       const tripById = new Map();
-    trips.forEach(t => {
-      if (t.trip_id) tripById.set(t.trip_id, t);
-    });
+      const stops = await fetchAndParseCSV('stops.txt', {
+        keepColumns: ['stop_id','stop_name','parent_station','stop_lat','stop_lon']
+      });
+      await __yieldToBrowser();
 
-    // yyyymmdd -> Set(service_id) ajoutés ; et yyyymmdd -> Set(service_id) supprimés
-    const allowedByDate = new Map();
-    const removedByDate = new Map();
-    calendarDates.forEach(row => {
-      const ymd = row.date, serviceId = row.service_id, exc = Number(row.exception_type);
-      if (!ymd || !serviceId) return;
-      if (exc === 1) {
-        if (!allowedByDate.has(ymd)) allowedByDate.set(ymd, new Set());
-        allowedByDate.get(ymd).add(serviceId);
-      } else if (exc === 2) {
-        if (!removedByDate.has(ymd)) removedByDate.set(ymd, new Set());
-        removedByDate.get(ymd).add(serviceId);
+      GTFSLoadingUI.message('Chargement des horaires détaillés…');
+      const stopTimes = await fetchAndParseCSV('stop_times.txt', {
+        keepColumns: ['trip_id','arrival_time','departure_time','stop_id','stop_sequence']
+      });
+      await __yieldToBrowser();
+
+      GTFSLoadingUI.message('Chargement des trajets…');
+      const trips = await fetchAndParseCSV('trips.txt', {
+        keepColumns: ['trip_id','service_id','route_id','trip_short_name']
+      });
+      await __yieldToBrowser();
+    
+GTFSLoadingUI.message('Chargement du calendrier…');
+      const calendarDates = await fetchAndParseCSV('calendar_dates.txt', {
+        keepColumns: ['service_id','date','exception_type']
+      });
+      await __yieldToBrowser();
+
+      GTFSLoadingUI.message('Organisation des données…');
+      await __yieldToBrowser();
+
+      const stopNameToId = new Map();
+      stops.forEach(s => {
+        if (s.stop_name && s.stop_id)
+          if(!stopNameToId.has(s.stop_name)) stopNameToId.set(s.stop_name, s.stop_id);
+      });
+
+      const tripById = new Map();
+      trips.forEach(t => {
+        if (t.trip_id) tripById.set(t.trip_id, t);
+      });
+
+      // yyyymmdd -> Set(service_id) ajoutés ; et yyyymmdd -> Set(service_id) supprimés
+      const allowedByDate = new Map();
+      const removedByDate = new Map();
+      calendarDates.forEach(row => {
+        const ymd = row.date, serviceId = row.service_id, exc = Number(row.exception_type);
+        if (!ymd || !serviceId) return;
+        if (exc === 1) {
+          if (!allowedByDate.has(ymd)) allowedByDate.set(ymd, new Set());
+          allowedByDate.get(ymd).add(serviceId);
+        } else if (exc === 2) {
+          if (!removedByDate.has(ymd)) removedByDate.set(ymd, new Set());
+          removedByDate.get(ymd).add(serviceId);
+        }
+      });
+
+      GTFS = {
+        stops,
+        stopTimes,
+        trips,
+        tripById,
+        stopNameToId,
+        allowedByDate,
+        removedByDate
+      };
+    } finally {
+      GTFSLoadingUI.hide();
       }
-    });
-
-    GTFS = {
-      stops,
-      stopTimes,
-      trips,
-      tripById,
-      stopNameToId,
-      allowedByDate,
-      removedByDate
-    };
   })();
-
+  
   try {
     await GTFS_LOADING_PROMISE;
   } finally {
