@@ -5284,71 +5284,102 @@ function isSelectedDateToday(){
   return sel === todayYMDLux();
 }
 
-/* ---------- APPLICATION DES RETARDS GTFS-RT DANS LE TABLEAU ---------- */
-/* ---------- APPLICATION DES RETARDS GTFS-RT DANS LE TABLEAU (robuste iOS) ---------- */
+/* ---------- APPLICATION DES RETARDS GTFS-RT DANS LE TABLEAU (style API) ---------- */
 function applyRetardsFromGTFS(data) {
   const table = document.querySelector("#trainInfo table");
   if (!table) { console.log("⛔ Le tableau n'est pas encore généré !"); return; }
 
-  // 1) Récupérer les numéros de train depuis la 1ʳᵉ ligne d’en-tête (<thead> tr:first-child)
+  // entêtes (ordre des colonnes)
   const headRow = table.querySelector('thead tr:first-child');
-  if (!headRow) { console.log("[GTFS-RT] Pas d'en-tête."); return; }
-
-  const headerThs = Array.from(headRow.querySelectorAll('th[data-train-number]'));
-  if (!headerThs.length) { console.log("[GTFS-RT] Aucun th[data-train-number]."); return; }
-
-  // Tableau des numéros de train (dans l’ordre des colonnes du body)
+  const headerThs = headRow ? Array.from(headRow.querySelectorAll('th[data-train-number]')) : [];
   const headerNumbers = headerThs.map(th => (th.dataset.trainNumber || '').trim()).filter(Boolean);
+  if (!headerNumbers.length) return;
 
-  // 2) Récupérer les lignes du corps
+  // utilitaires HH:MM <-> minutes
+  const parseFirstTimeInText = (txt) => {
+    const m = String(txt||'').match(/\b(\d{1,2})[:h](\d{2})\b/);
+    if (!m) return null;
+    const h = Math.min(23, Math.max(0, parseInt(m[1],10)));
+    const mm = Math.min(59, Math.max(0, parseInt(m[2],10)));
+    return h*60 + mm;
+  };
+  const mmToHHMM = (mins) => {
+    let m = ((mins % 1440) + 1440) % 1440; // wrap 0..1439
+    const h = Math.floor(m/60), mi = m%60;
+    return (h+'').padStart(2,'0') + ':' + (mi+'').padStart(2,'0');
+  };
+
+  // lignes corps
   const tbody = table.tBodies && table.tBodies[0];
   const bodyRows = tbody ? Array.from(tbody.rows) : Array.from(table.querySelectorAll('tbody tr'));
-  if (!bodyRows.length) { 
-    console.log("[GTFS-RT] Aucun body row — rien à appliquer."); 
-    return; 
-  }
+  if (!bodyRows.length) return;
 
-  // 3) Parcourir chaque ligne gare
   for (const row of bodyRows) {
-    if (!row) continue;
-
-    // Nom de gare (robuste)
     const gare =
       row.dataset.gare ||
       row.querySelector('.gare-label')?.textContent?.trim() ||
-      row.cells?.[0]?.textContent?.trim() ||
-      '';
-
+      row.cells?.[0]?.textContent?.trim() || '';
     if (!gare) continue;
 
-    // 4) Appliquer pour chaque colonne train (offset +1 : la col 0 = gare)
     for (let i = 0; i < headerNumbers.length; i++) {
       const trainNumber = headerNumbers[i];
-      const cell = row.cells?.[i + 1]; // +1 car 1ʳᵉ colonne = gare
+      const cell = row.cells?.[i + 1];
       if (!trainNumber || !cell) continue;
 
-      const perTrain = data?.[trainNumber];
-      if (!perTrain) {
-        // Si pas de data pour ce train, on nettoie un éventuel badge existant
-        const old = cell.querySelector('.gtfs-retard');
-        if (old) old.remove();
+      const perTrain = data?.[trainNumber] || null;
+      const retardMinutes = perTrain ? perTrain[gare] : null;
+
+      // si la cellule est déjà gérée par API (amended) ou suppression/strike → ne pas toucher
+      const alreadyAPI = cell.querySelector('.delayed, .delay-strike');
+      const hasSuppression = cell.querySelector('.deleted, .strike, .cancelled');
+      if (alreadyAPI || hasSuppression) {
+        // on nettoie tout résidu d’un précédent rendu GTFS
+        if (retardMinutes == null || retardMinutes <= 0) {
+          if (cell.dataset.gtfsOriginalHtml) {
+            cell.innerHTML = cell.dataset.gtfsOriginalHtml;
+            delete cell.dataset.gtfsOriginalHtml;
+          } else {
+            // juste enlever un éventuel badge résiduel
+            cell.querySelectorAll('.gtfs-retard, .gtfs-strike').forEach(n => n.remove());
+          }
+        }
         continue;
       }
 
-      const retardMinutes = perTrain[gare];
+      if (retardMinutes != null && retardMinutes > 0) {
+        // mémorise le HTML d’origine une fois
+        if (!cell.dataset.gtfsOriginalHtml) {
+          cell.dataset.gtfsOriginalHtml = cell.innerHTML;
+        }
 
-      // Pas d'étiquette de retard si suppression/strike déjà visible
-      const hasSuppression = cell.querySelector('.deleted, .delay-strike, .strike, .cancelled');
+        // essaie d’extraire l’heure planifiée depuis le contenu actuel
+        // priorité : <strong>…</strong> (tes 1er/dernier arrêts)
+        const sourceEl = cell.querySelector('strong') || cell;
+        const baseMins = parseFirstTimeInText(sourceEl.textContent);
+        if (baseMins == null) {
+          // fallback: si on ne trouve pas d’heure, on redevient discret (rien)
+          // et on nettoie un ancien rendu si présent
+          cell.querySelectorAll('.gtfs-retard, .gtfs-strike').forEach(n => n.remove());
+          continue;
+        }
 
-      if (retardMinutes && retardMinutes > 0 && !hasSuppression) {
-        const badge = cell.querySelector('.gtfs-retard') || document.createElement('div');
-        badge.className = 'gtfs-retard';
-        badge.textContent = `+${retardMinutes} min`;
-        if (!badge.parentNode) cell.appendChild(badge);
+        const amended = baseMins + retardMinutes;
+        const baseTxt = mmToHHMM(baseMins);
+        const amendedTxt = mmToHHMM(amended);
+
+        // rendu façon API : base barrée + amended orange
+        cell.innerHTML =
+          `<span class="delay-strike gtfs-strike">${baseTxt}</span>` +
+          `<br><span class="delayed gtfs-retard">${amendedTxt}</span>`;
+
       } else {
-        // Nettoyage si plus de retard
-        const old = cell.querySelector('.gtfs-retard');
-        if (old) old.remove();
+        // pas/plus de retard → restaurer état d’origine si on l’avait altéré
+        if (cell.dataset.gtfsOriginalHtml) {
+          cell.innerHTML = cell.dataset.gtfsOriginalHtml;
+          delete cell.dataset.gtfsOriginalHtml;
+        } else {
+          cell.querySelectorAll('.gtfs-retard, .gtfs-strike').forEach(n => n.remove());
+        }
       }
     }
   }
