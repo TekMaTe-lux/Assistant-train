@@ -3425,6 +3425,27 @@ function dl(b, a){
   const toMin = s => (parseInt(s.slice(0,2))*60 + parseInt(s.slice(2,4)));
   return toMin(a) - toMin(b);
 }
+function rawHHMMToMinutes(raw){
+  if (!raw || !/^\d{4,}$/.test(raw)) return null;
+  const h = Number.parseInt(raw.slice(0, 2), 10);
+  const m = Number.parseInt(raw.slice(2, 4), 10);
+  if (!Number.isFinite(h) || !Number.isFinite(m)) return null;
+  return (h * 60) + m;
+}
+function minutesToClock(mins){
+  if (!Number.isFinite(mins)) return null;
+  const rounded = Math.round(mins);
+  const total = ((rounded % (24 * 60)) + (24 * 60)) % (24 * 60);
+  const hours = Math.floor(total / 60);
+  const minutes = total % 60;
+  return String(hours).padStart(2, '0') + ':' + String(minutes).padStart(2, '0');
+}
+function computeRetardedTime(raw, delay){
+  if (!Number.isFinite(delay)) return null;
+  const baseMinutes = rawHHMMToMinutes(raw);
+  if (baseMinutes == null) return null;
+  return minutesToClock(baseMinutes + delay);
+}    
 function hhmmInputToMin(hhmm){ if(!hhmm||!/^\d{2}:\d{2}$/.test(hhmm)) return null; const [h,m]=hhmm.split(':').map(Number); return h*60+m; }
 function dateInputToYMD(str){ if(!str||!/^\d{4}-\d{2}-\d{2}$/.test(str)) return null; const [y,m,d]=str.split('-'); return `${y}${m}${d}`; }
 function extractTrainNumber(str){ const m = String(str||'').match(/(\d{5,6})/); return m ? m[1] : null; }
@@ -4844,7 +4865,8 @@ function addManualTrain(){
           content = `<strong>${content}</strong>`;
         }
 
-        html += `<td>${content}</td>`;
+       const baseAttr = base ? ` data-base-time="${base}"` : '';
+        html += `<td${baseAttr}>${content}</td>`;
       }
 
       html += '</tr>';
@@ -5332,23 +5354,51 @@ function applyRetardsFromGTFS(data) {
         // Si pas de data pour ce train, on nettoie un éventuel badge existant
         const old = cell.querySelector('.gtfs-retard');
         if (old) old.remove();
+                if (cell.__gtfsOriginalContent) {
+          cell.innerHTML = cell.__gtfsOriginalContent;
+          cell.__gtfsOriginalContent = null;
+        }
         continue;
       }
 
-      const retardMinutes = perTrain[gare];
+      const retardMinutesValue = perTrain[gare];
+      const retardMinutes = retardMinutesValue == null ? null : Number(retardMinutesValue);
 
       // Pas d'étiquette de retard si suppression/strike déjà visible
       const hasSuppression = cell.querySelector('.deleted, .delay-strike, .strike, .cancelled');
 
-      if (retardMinutes && retardMinutes > 0 && !hasSuppression) {
+      const baseTimeRaw = cell.dataset.baseTime || null;
+      const hasDelay = Number.isFinite(retardMinutes) && retardMinutes > 0 && !hasSuppression;
+
+      if (hasDelay) {
+        if (!cell.__gtfsOriginalContent) {
+          cell.__gtfsOriginalContent = cell.innerHTML;
+        }
+
+        const delayedClock = computeRetardedTime(baseTimeRaw, retardMinutes);
+        const roundedDelay = Math.round(retardMinutes);
+        const displayText = delayedClock ? `≈ ${delayedClock}` : `+${roundedDelay} min`;
+
         const badge = cell.querySelector('.gtfs-retard') || document.createElement('div');
         badge.className = 'gtfs-retard';
-        badge.textContent = `+${retardMinutes} min`;
+        if (badge.textContent !== displayText) {
+          badge.textContent = displayText;
+        }
+        badge.dataset.delayMinutes = String(retardMinutes);
+        if (baseTimeRaw && delayedClock) {
+          badge.setAttribute('title', `Heure théorique ${ft(baseTimeRaw)} – retard ${roundedDelay} min`);
+        } else {
+          badge.removeAttribute('title');
+        }
         if (!badge.parentNode) cell.appendChild(badge);
       } else {
         // Nettoyage si plus de retard
         const old = cell.querySelector('.gtfs-retard');
         if (old) old.remove();
+        if (cell.__gtfsOriginalContent) {
+          cell.innerHTML = cell.__gtfsOriginalContent;
+          cell.__gtfsOriginalContent = null;
+        }
       }
     }
   }
