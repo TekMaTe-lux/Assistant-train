@@ -1269,16 +1269,29 @@ table[data-snapshotting="true"] tbody tr:nth-child(even) {
   }
 }
   .gtfs-retard {
-  background-color: #fff3cd;     /* Jaune clair */
-  color: #d9822b;                /* Orange foncé */
-  font-weight: bold;
-  font-size: 0.8em;
-  border-radius: 4px;
-  padding: 2px 6px;
-  display: inline-block;         /* Limite la largeur au contenu */
+  display: inline-block;
   margin-top: 2px;
-  white-space: nowrap;           /* Évite les retours à la ligne */
+  padding: 0;
+  background: none;
+  color: inherit;
+  text-align: center;
+  font-size: 0.9em;
+  line-height: 1.2;
 }
+  .gtfs-retard-base,
+  .gtfs-retard-new {
+    display: block;
+  }
+
+  .gtfs-retard-base {
+    text-decoration: line-through;
+  }
+
+  .gtfs-retard-new {
+    color: #ff8a00;
+    font-weight: 600;
+    margin-top: 2px;
+  }
 
 @media (max-width: 600px) {
   .header-container {
@@ -4952,7 +4965,7 @@ requestAnimationFrame(() => {
   setTimeout(() => {
     if (window.retardsGTFS && (typeof isSelectedDateToday !== 'function' || isSelectedDateToday())) {
       const table = document.querySelector('#trainInfo table');
-      if (table) table.querySelectorAll('.gtfs-retard').forEach(n => n.remove());
+      if (table) resetGtfsRetards(table);
       if (typeof applyRetardsFromGTFS === 'function') applyRetardsFromGTFS(window.retardsGTFS);
     }
   }, 0);
@@ -5110,7 +5123,7 @@ scheduleWeatherAfterTableSettled();
     // GTFS-RT (si déjà chargés)
     if (window.retardsGTFS) {
       const table = document.querySelector('#trainInfo table');
-      if (table) table.querySelectorAll('.gtfs-retard').forEach(n => n.remove());
+      if (table) resetGtfsRetards(table);
       if (typeof isSelectedDateToday !== 'function' || isSelectedDateToday()) {
         applyRetardsFromGTFS(window.retardsGTFS);
       }
@@ -5261,7 +5274,7 @@ function tryApplyGtfsToCurrentTable() {
   if (!window.retardsGTFS) return;
   const table = document.querySelector('#trainInfo table');
   if (!table) return;
-  table.querySelectorAll('.gtfs-retard').forEach(n => n.remove());
+  resetGtfsRetards(table);
   if (typeof applyRetardsFromGTFS === 'function') applyRetardsFromGTFS(window.retardsGTFS);
 }
 
@@ -5306,9 +5319,32 @@ function isSelectedDateToday(){
   return sel === todayYMDLux();
 }
 
-/* ---------- APPLICATION DES RETARDS GTFS-RT DANS LE TABLEAU ---------- */
 /* ---------- APPLICATION DES RETARDS GTFS-RT DANS LE TABLEAU (robuste iOS) ---------- */
-function applyRetardsFromGTFS(data) {
+function resetGtfsRetards(scope) {
+  const root = scope && typeof scope.querySelectorAll === 'function'
+    ? scope
+    : document.querySelector('#trainInfo');
+  if (!root) return;
+
+  const cells = root.matches && root.matches('td')
+    ? [root]
+    : Array.from(root.querySelectorAll ? root.querySelectorAll('td') : []);
+
+  cells.forEach(cell => {
+    if (!cell) return;
+    if (cell.__gtfsOriginalContent != null) {
+      cell.innerHTML = cell.__gtfsOriginalContent;
+      cell.__gtfsOriginalContent = null;
+    }
+    if (cell.dataset && 'gtfsDelayMinutes' in cell.dataset) {
+      delete cell.dataset.gtfsDelayMinutes;
+    }
+    const badge = cell.querySelector && cell.querySelector('.gtfs-retard');
+    if (badge && badge.parentNode === cell && cell.__gtfsOriginalContent == null) {
+      badge.remove();
+    }
+  });
+}function applyRetardsFromGTFS(data) {
   const table = document.querySelector("#trainInfo table");
   if (!table) { console.log("⛔ Le tableau n'est pas encore généré !"); return; }
 
@@ -5351,54 +5387,68 @@ function applyRetardsFromGTFS(data) {
 
       const perTrain = data?.[trainNumber];
       if (!perTrain) {
-        // Si pas de data pour ce train, on nettoie un éventuel badge existant
-        const old = cell.querySelector('.gtfs-retard');
-        if (old) old.remove();
-                if (cell.__gtfsOriginalContent) {
-          cell.innerHTML = cell.__gtfsOriginalContent;
-          cell.__gtfsOriginalContent = null;
-        }
+        resetGtfsRetards(cell);
         continue;
       }
 
       const retardMinutesValue = perTrain[gare];
       const retardMinutes = retardMinutesValue == null ? null : Number(retardMinutesValue);
 
-      // Pas d'étiquette de retard si suppression/strike déjà visible
+      // Pas d'affichage GTFS si suppression/strike déjà visible (API SNCF)
       const hasSuppression = cell.querySelector('.deleted, .delay-strike, .strike, .cancelled');
 
       const baseTimeRaw = cell.dataset.baseTime || null;
       const hasDelay = Number.isFinite(retardMinutes) && retardMinutes > 0 && !hasSuppression;
 
       if (hasDelay) {
-        if (!cell.__gtfsOriginalContent) {
-          cell.__gtfsOriginalContent = cell.innerHTML;
+        const originalHtml = cell.__gtfsOriginalContent != null
+          ? cell.__gtfsOriginalContent
+          : cell.innerHTML;
+        if (cell.__gtfsOriginalContent == null) {
+          cell.__gtfsOriginalContent = originalHtml;
         }
 
         const delayedClock = computeRetardedTime(baseTimeRaw, retardMinutes);
         const roundedDelay = Math.round(retardMinutes);
-        const displayText = delayedClock ? `${delayedClock}*` : `+${roundedDelay} min`;
+        const displayValue = delayedClock || `+${roundedDelay} min`;
 
-        const badge = cell.querySelector('.gtfs-retard') || document.createElement('div');
-        badge.className = 'gtfs-retard';
-        if (badge.textContent !== displayText) {
-          badge.textContent = displayText;
+        let wrapper = cell.querySelector('.gtfs-retard');
+        if (!wrapper) {
+          wrapper = document.createElement('div');
+          wrapper.className = 'gtfs-retard';
         }
-        badge.dataset.delayMinutes = String(retardMinutes);
-        if (baseTimeRaw && delayedClock) {
-          badge.setAttribute('title', `Heure théorique ${ft(baseTimeRaw)} – retard ${roundedDelay} min`);
+
+        const baseSpan = document.createElement('span');
+        baseSpan.className = 'gtfs-retard-base';
+        baseSpan.innerHTML = originalHtml;
+
+        const newSpan = document.createElement('span');
+        newSpan.className = 'gtfs-retard-new';
+        newSpan.textContent = displayValue;
+
+        while (wrapper.firstChild) wrapper.removeChild(wrapper.firstChild);
+        wrapper.appendChild(baseSpan);
+        wrapper.appendChild(newSpan);
+        wrapper.dataset.delayMinutes = String(retardMinutes);
+
+        const baseClock = baseTimeRaw ? ft(baseTimeRaw) : null;
+        if (baseClock && Number.isFinite(roundedDelay)) {
+          let tooltip = `Heure théorique ${baseClock} – retard ${roundedDelay} min`;
+          if (delayedClock) {
+            tooltip += ` → passage attendu ${delayedClock}`;
+          }
+          wrapper.setAttribute('title', tooltip);
+        } else if (Number.isFinite(roundedDelay)) {
+          wrapper.setAttribute('title', `Retard estimé ${roundedDelay} min`);
         } else {
-          badge.removeAttribute('title');
+          wrapper.removeAttribute('title');
         }
-        if (!badge.parentNode) cell.appendChild(badge);
+
+        while (cell.firstChild) cell.removeChild(cell.firstChild);
+        cell.appendChild(wrapper);
+        cell.dataset.gtfsDelayMinutes = String(retardMinutes);
       } else {
-        // Nettoyage si plus de retard
-        const old = cell.querySelector('.gtfs-retard');
-        if (old) old.remove();
-        if (cell.__gtfsOriginalContent) {
-          cell.innerHTML = cell.__gtfsOriginalContent;
-          cell.__gtfsOriginalContent = null;
-        }
+        resetGtfsRetards(cell);
       }
     }
   }
