@@ -315,6 +315,8 @@
         <li>Attention aux vaches et aux TGV prioritaires qui traversent la ligne.</li>
         <li>Après 90 secondes, les TGV arrivent plus souvent. Restez concentré !</li>
         <li>Utilisez les flèches ou glissez sur l'écran pour diriger votre train.</li>
+        <!-- (Optionnel) Ajouter une ligne de règle sur le fret si tu veux -->
+        <!-- <li>Toutes les 60 s, un train de fret brun (5–10 cases) arrive par un bord, s’arrête près du centre, tombe en panne 10 s, puis repart.</li> -->
       </ul>
       <button id="closeRules">Fermer</button>
     </div>
@@ -378,6 +380,14 @@
     let pauseStartTime = 0;
     let resumeAfterRules = false;
 
+    /* ====== FRET (nouvelle difficulté) ====== */
+    let freight = null;                  // { state, segments[], until, dir:{x,y}, stopCoord, speedSteps, step }
+    let scheduleFreightTimeoutId;
+    const FREIGHT_PERIOD   = 60000;      // spawn toutes les 60 s
+    const FREIGHT_STOP_MS  = 3000;       // arrêt court avant panne
+    const FREIGHT_BREAK_MS = 10000;      // panne 10 s
+    const FREIGHT_COLOR    = '#7b5b3a';  // brun
+
     const messagesSuppression = [
       "Supprimé : signal défectueux entre Thionville et Luxembourg.",
       "Supprimé : travaux imprévus sur la voie à Metz.",
@@ -414,6 +424,11 @@
       gamePaused = false;
       speedModifier = 0;
       resumeAfterRules = false;
+
+      /* reset fret */
+      freight = null;
+      if (scheduleFreightTimeoutId) clearTimeout(scheduleFreightTimeoutId);
+      scheduleFreightTimeoutId = setTimeout(scheduleFreight, FREIGHT_PERIOD);
 
       document.getElementById("score").textContent = score;
       document.getElementById("gameOverMessage").style.display = "none";
@@ -477,7 +492,8 @@
         || suppressions.some(p=>p.x===pos.x&&p.y===pos.y)
         || oranges.some(p=>p.x===pos.x&&p.y===pos.y)
         || (betail && betail.x===pos.x && betail.y===pos.y)
-        || (tgvs && tgvs.some(convoy=>convoy.segments.some(s=>s.x===pos.x&&s.y===pos.y)));
+        || (tgvs && tgvs.some(convoy=>convoy.segments.some(s=>s.x===pos.x&&s.y===pos.y)))
+        || (freight && freight.segments && freight.segments.some(s => s.x===pos.x && s.y===pos.y)); // FRET occupe ses cases
     }
 
     function draw(){
@@ -486,16 +502,31 @@
       oranges.forEach(p=>{ ctx.fillStyle="orange"; ctx.fillRect(p.x*gridSize+4, p.y*gridSize+4, gridSize-8, gridSize-8); });
       if (betail){ ctx.fillStyle="yellow"; ctx.beginPath(); ctx.arc(betail.x*gridSize+gridSize/2, betail.y*gridSize+gridSize/2, gridSize/3, 0, 2*Math.PI); ctx.fill(); }
       vaches.forEach(band=> band.forEach(p=>{ ctx.fillStyle="#fef9c3"; ctx.beginPath(); ctx.arc(p.x*gridSize+gridSize/2, p.y*gridSize+gridSize/2, gridSize/3, 0, 2*Math.PI); ctx.fill(); }));
+
       if (tgvs){
         tgvs.forEach(train=>{
           train.segments.forEach((segment,index)=>{
-            if (segment.x<0 || segment.x>=cols) return;
+            if (segment.x<0 || segment.x>=cols || segment.y<0 || segment.y>=rows) return;
             ctx.fillStyle = index===0 ? "#ff63ff" : "#7bf3ff";
             ctx.fillRect(segment.x*gridSize+2, segment.y*gridSize+2, gridSize-4, gridSize-4);
             if(index===0){ ctx.fillStyle="#1a1036"; ctx.fillRect(segment.x*gridSize+gridSize/3, segment.y*gridSize+gridSize/3, gridSize/3, gridSize/3); }
           });
         });
       }
+
+      /* FRET (dessin brun) */
+      if (freight && freight.segments){
+        freight.segments.forEach((s, idx) => {
+          if (s.x<0 || s.x>=cols || s.y<0 || s.y>=rows) return;
+          ctx.fillStyle = FREIGHT_COLOR;
+          ctx.fillRect(s.x*gridSize+1, s.y*gridSize+1, gridSize-2, gridSize-2);
+          if (idx === 0 && (freight.state === 'moving' || freight.state === 'leaving')){
+            ctx.fillStyle = '#4e3724';
+            ctx.fillRect(s.x*gridSize + gridSize/3, s.y*gridSize + gridSize/3, gridSize/3, gridSize/3);
+          }
+        });
+      }
+
       train.forEach((pos,i)=>{ ctx.fillStyle = (i===0) ? "#00f0ff" : "#006c8b"; ctx.fillRect(pos.x*gridSize+1, pos.y*gridSize+1, gridSize-2, gridSize-2); });
     }
 
@@ -505,25 +536,39 @@
       let newHead = { x: train[0].x + direction.x, y: train[0].y + direction.y };
       if (newHead.x<0) newHead.x=cols-1; if (newHead.x>=cols) newHead.x=0;
       if (newHead.y<0) newHead.y=rows-1; if (newHead.y>=rows) newHead.y=0;
+
       if (train.some(p=>p.x===newHead.x&&p.y===newHead.y)) return gameOver("Auto collision !");
       if (vaches.some(band=>band.some(p=>p.x===newHead.x&&p.y===newHead.y))) return gameOver("Votre train a percuté des vaches !");
       if (tgvs.some(convoy=>convoy.segments.some(p=>p.x===newHead.x&&p.y===newHead.y))) return gameOver("Collision avec un TGV prioritaire !");
+      /* Collision fret (quel que soit l’état) */
+      if (freight && freight.segments && freight.segments.some(p=>p.x===newHead.x && p.y===newHead.y)){
+        const why = (freight.state === 'broken')
+          ? "Collision avec un train de fret en panne !"
+          : "Collision avec un train de fret !";
+        return gameOver(why);
+      }
+
       if (suppressions.some(p=>p.x===newHead.x&&p.y===newHead.y)){
         const msg = messagesSuppression[Math.floor(Math.random()*messagesSuppression.length)];
         return gameOver(msg);
       }
+
       train.unshift(newHead);
       if (betail && newHead.x===betail.x && newHead.y===betail.y){
         score++; document.getElementById("score").textContent = score;
         if (score > highscore){ highscore = score; document.getElementById("highscore").textContent = highscore; localStorage.setItem("highscore", highscore); }
         generateBetail();
       } else { train.pop(); }
-      // Effet orange conservé (peut accélérer/réduire 2 s)
+
+      // Effet orange (accélère/ralentit 2 s)
       if (oranges.some(p=>p.x===newHead.x&&p.y===newHead.y)){
         speedModifier = (Math.random()<0.5) ? -150 : 150;
         setTimeout(()=>{ speedModifier=0; }, 2000);
       }
-      moveVaches(); moveTGVs();
+
+      moveVaches();
+      moveTGVs();
+      updateFreight(); // <--- avance/états du fret
     }
 
     function moveVaches(){ vaches.forEach(band=> band.forEach(v=> v.x--)); vaches = vaches.filter(band=> band.some(v=> v.x>=0)); }
@@ -552,6 +597,119 @@
     }
     function increaseTGVFrequency(){ if (tgvFrequency>4500){ tgvFrequency -= 1500; increaseTGVFreqTimeoutId = setTimeout(increaseTGVFrequency, 45000); } }
 
+    /* ============ FRET : spawn, déplacements, états ============ */
+    function randInt(min, max){ return min + Math.floor(Math.random() * (max - min + 1)); }
+
+    function scheduleFreight(){
+      if (gameStopped) return;
+      if (gamePaused){ scheduleFreightTimeoutId = setTimeout(scheduleFreight, 500); return; }
+      if (!freight){ freight = createFreight(); }
+      // Replanifie la tentative suivante même si un fret est déjà présent (un seul actif)
+      scheduleFreightTimeoutId = setTimeout(scheduleFreight, FREIGHT_PERIOD);
+    }
+
+    function createFreight(){
+      const length = randInt(5,10);
+      const side = Math.floor(Math.random()*4); // 0: gauche->droite, 1: droite->gauche, 2: haut->bas, 3: bas->haut
+      let dir = {x:0,y:0};
+      let segments = [];
+      let stopCoord = 0;
+
+      if (side === 0){ // gauche -> droite
+        dir = {x:1,y:0};
+        const y = Math.floor(Math.random()*rows);
+        segments = Array.from({length}, (_,i)=>({ x: -1 - i, y })); // tête à -1
+        stopCoord = Math.floor(cols * (0.45 + Math.random()*0.1));  // x cible centre
+      } else if (side === 1){ // droite -> gauche
+        dir = {x:-1,y:0};
+        const y = Math.floor(Math.random()*rows);
+        segments = Array.from({length}, (_,i)=>({ x: cols + i, y }));
+        stopCoord = Math.floor(cols * (0.45 + Math.random()*0.1));  // x cible centre
+      } else if (side === 2){ // haut -> bas
+        dir = {x:0,y:1};
+        const x = Math.floor(Math.random()*cols);
+        segments = Array.from({length}, (_,i)=>({ x, y: -1 - i }));
+        stopCoord = Math.floor(rows * (0.45 + Math.random()*0.1));  // y cible centre
+      } else { // bas -> haut
+        dir = {x:0,y:-1};
+        const x = Math.floor(Math.random()*cols);
+        segments = Array.from({length}, (_,i)=>({ x, y: rows + i }));
+        stopCoord = Math.floor(rows * (0.45 + Math.random()*0.1));  // y cible centre
+      }
+
+      return {
+        state: 'moving',                 // moving -> stopped -> broken -> leaving
+        segments,
+        dir,
+        stopCoord,
+        until: 0,
+        speedSteps: 3,                   // plus lent que le joueur/TGV
+        step: 0
+      };
+    }
+
+    function updateFreight(){
+      if (!freight || gameStopped || gamePaused) return;
+
+      switch (freight.state){
+        case 'moving': {
+          maybeAdvanceFreight();
+          const head = freight.segments[0];
+          if (!head) break;
+
+          // condition d'arrêt "près du centre" selon l'axe
+          if (freight.dir.x !== 0){ // mouvement horizontal -> on check x
+            if ((freight.dir.x > 0 && head.x >= freight.stopCoord)
+             || (freight.dir.x < 0 && head.x <= freight.stopCoord)){
+              freight.state = 'stopped';
+              freight.until = Date.now() + FREIGHT_STOP_MS;
+            }
+          } else { // vertical -> on check y
+            if ((freight.dir.y > 0 && head.y >= freight.stopCoord)
+             || (freight.dir.y < 0 && head.y <= freight.stopCoord)){
+              freight.state = 'stopped';
+              freight.until = Date.now() + FREIGHT_STOP_MS;
+            }
+          }
+          break;
+        }
+
+        case 'stopped': {
+          if (Date.now() >= freight.until){
+            freight.state = 'broken';
+            freight.until = Date.now() + FREIGHT_BREAK_MS; // panne 10 s
+          }
+          break;
+        }
+
+        case 'broken': {
+          // bloqué sur place
+          if (Date.now() >= freight.until){
+            freight.state = 'leaving'; // repart dans la même direction
+          }
+          break;
+        }
+
+        case 'leaving': {
+          maybeAdvanceFreight();
+          // despawn quand entièrement hors champ (marge de 5)
+          const visible = freight.segments.some(s => s.x >= -5 && s.x < cols+5 && s.y >= -5 && s.y < rows+5);
+          if (!visible){ freight = null; }
+          break;
+        }
+      }
+    }
+
+    function maybeAdvanceFreight(){
+      freight.step = (freight.step + 1) % freight.speedSteps;
+      if (freight.step !== 0) return;
+      // pousse chaque segment dans la direction du fret
+      freight.segments.forEach(s => {
+        s.x += freight.dir.x;
+        s.y += freight.dir.y;
+      });
+    }
+
     function gameOver(message){
       gameStopped = true;
       clearInterval(countdownInterval);
@@ -560,6 +718,7 @@
       if (increaseTGVFreqTimeoutId) clearTimeout(increaseTGVFreqTimeoutId);
       if (tgvStartTimeoutId) clearTimeout(tgvStartTimeoutId);
       if (gameLoopTimeoutId) clearTimeout(gameLoopTimeoutId);
+      if (scheduleFreightTimeoutId) clearTimeout(scheduleFreightTimeoutId); // stop fret scheduler
       if (rafId) cancelAnimationFrame(rafId), rafId = null;
       gamePaused = false; updatePauseButton(false); pauseBtn.disabled = true; resumeAfterRules=false;
       lockCanvasSize = false;
