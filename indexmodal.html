@@ -2006,6 +2006,28 @@ table[data-snapshotting="true"] tbody tr:nth-child(even) {
     font-size:.8rem;
   }
 }
+ .proposal-section{
+  margin-bottom: 28px;
+}
+.proposal-section[hidden]{
+  display: none !important;
+}
+.proposal-section__title{
+  font-size: 1.05rem;
+  font-weight: 700;
+  margin-bottom: 14px;
+  color: #00f0ff;
+  text-shadow: 0 0 8px rgba(0, 240, 255, 0.6);
+}
+.selection-modal__body .proposal-section .chips-panel{
+  margin-bottom: 20px;
+}
+.proposal-section.is-empty .proposal-section__title{
+  opacity: 0.75;
+}
+.proposal-section.is-empty .propositions .chips-panel{
+  text-align: center;
+}   
    
 /* =================== Sélection (chips utilisateur) =================== */
 .command-console .filters-row.filters-selection{
@@ -3155,9 +3177,6 @@ function renderRowsChunked(htmlRows, tbody, chunk=200){
   </a>
 </div>
 
-<!-- Résultats & sélection (inchangés, restent sous le bouton) -->
-<div id="propositions" class="propositions"></div>
-
 <div class="filters-row filters-selection">
   <div class="filter-item">
     <label for="trainNumbers" class="csv-only">Sélection (séparés par virgule)</label>
@@ -3182,6 +3201,10 @@ function renderRowsChunked(htmlRows, tbody, chunk=200){
       <p class="selection-modal__subtitle">Confirme ou ajuste ta liste avant de générer le tableau.</p>
     </div>
     <div class="selection-modal__body">
+      <div id="proposalSection" class="proposal-section" hidden>
+        <div class="proposal-section__title">Propositions personnalisées</div>
+        <div id="propositions" class="propositions" aria-live="polite"></div>
+      </div>
       <div id="selectionEmptyMessage" class="selection-empty" hidden>
         <p>Aucun train sélectionné pour le moment. Utilise les propositions pour en ajouter ou saisis un numéro manuel.</p>
       </div>
@@ -5043,7 +5066,18 @@ function renderTransferCards(transfers, startName, endName){
 /************  RECHERCHE OD (DIRECTS + CORRESPONDANCES)  ************/
 async function proposerTrainsOD(){
   const cont = document.getElementById('propositions');
-  if (cont) cont.innerHTML = 'Recherche…';
+  const section = document.getElementById('proposalSection');
+  const trigger = document.getElementById('btnProposer');
+  if (section){
+    section.hidden = false;
+    section.classList.remove('is-empty');
+  }
+  if (cont) cont.innerHTML = '<div class="chips-panel"><p>Recherche…</p></div>';
+  if (!cont) return;
+
+  if (typeof openSelectionModal === 'function'){
+    openSelectionModal({ trigger, focus: false });
+  }
 
   // reset sélection visuelle (mais garde ton Set global si tu veux cumuler)
   if (typeof selectedTrains !== 'undefined') { selectedTrains.clear(); updateSelectionUI?.(); }
@@ -5053,10 +5087,24 @@ async function proposerTrainsOD(){
   const endName   = $('#endStation').val() || '';
   const tFromMin  = hhmmInputToMin($('#timeFrom').val());
   const tToMin    = hhmmInputToMin($('#timeTo').val());
-  if(!startName || !endName){ cont.innerHTML = '<div class="chips-panel">Choisis <b>De</b> et <b>À</b>.</div>'; return; }
-  if(tFromMin==null || tToMin==null){ cont.innerHTML = '<div class="chips-panel">Plage horaire invalide.</div>'; return; }
+  if(!startName || !endName){
+    cont.innerHTML = '<div class="chips-panel">Choisis <b>De</b> et <b>À</b>.</div>';
+    if (section) section.classList.add('is-empty');
+    return;
+  }
+  if(tFromMin==null || tToMin==null){
+    cont.innerHTML = '<div class="chips-panel">Plage horaire invalide.</div>';
+    if (section) section.classList.add('is-empty');
+    return;
+  }
 
-  try{ await ensureGTFSLoaded(); }catch(e){ console.error(e); cont.innerHTML='<div class="chips-panel">Erreur GTFS.</div>'; return; }
+  try{ await ensureGTFSLoaded(); }
+  catch(e){
+    console.error(e);
+    cont.innerHTML='<div class="chips-panel">Erreur GTFS.</div>';
+    if (section) section.classList.add('is-empty');
+    return;
+  }
 
   buildStationGroups();
   const originIds = getIdsForName(startName);
@@ -5155,6 +5203,10 @@ if (allowTransfers){
 
   const transfersHTML = renderTransferCards(transfers, startName, endName);
   host.innerHTML = directsHTML + transfersHTML;
+  if (section) {
+    const hasChip = !!host.querySelector('.chip');
+    section.classList.toggle('is-empty', !hasChip);
+  }
 
   // Force le texte affiché à utiliser exactement le data-num (aucune troncature possible)
 document.querySelectorAll('#propositions .chip').forEach(chip => {
@@ -5196,6 +5248,10 @@ document.querySelectorAll('#propositions .chip').forEach(chip => {
   });
 
   chipsUpdateCount?.();
+  
+  if (typeof openSelectionModal === 'function'){
+    openSelectionModal({ trigger });
+  }
 }
 
 /* ====================== PRESETS (listes) ====================== */
@@ -5283,6 +5339,17 @@ function closeSelectionModal(options = {}){
     catch(e){ lastSelectionModalTrigger.focus(); }
   }
 }
+    
+function clearProposals(){
+  const host = document.getElementById('propositions');
+  if (host) host.replaceChildren();
+  const section = document.getElementById('proposalSection');
+  if (section){
+    section.hidden = true;
+    section.classList.remove('is-empty');
+  }
+}
+    
 function chipsUpdateCount(){
   const el = document.querySelector('#propositions #chipsCount');
   if (el) el.textContent = selectedTrains.size;
@@ -5655,7 +5722,7 @@ function addManualTrain(){
     closeSelectionModal({ restoreFocus:false });
     if (typeof cancelWeatherFetch === 'function') cancelWeatherFetch();
     mainTableRendered = true;
-    document.getElementById('propositions')?.replaceChildren();
+    clearProposals();
     await loadCompoData();
 
     // s’assure que l’input CSV reflète la sélection courante
