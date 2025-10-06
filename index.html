@@ -2996,6 +2996,63 @@ const garesParLigne = [
   { code: "87141002", nom: "Nancy", principal: true }
 ];
 
+const LINE_STOP_NAMES = new Set(garesParLigne.map(g => g.nom));
+
+function computeRelevantStopIds(stops){
+  const idToStop = new Map();
+  const childrenByParent = new Map();
+  stops.forEach(s => {
+    if (!s || !s.stop_id) return;
+    idToStop.set(s.stop_id, s);
+    const parent = s.parent_station;
+    if (parent){
+      if (!childrenByParent.has(parent)) childrenByParent.set(parent, []);
+      childrenByParent.get(parent).push(s);
+    }
+  });
+
+  const relevant = new Set();
+  const queue = [];
+
+  stops.forEach(s => {
+    const name = (s.stop_name || '').trim();
+    if (name && LINE_STOP_NAMES.has(name)){
+      if (!relevant.has(s.stop_id)){
+        relevant.add(s.stop_id);
+        queue.push(s.stop_id);
+      }
+      if (s.parent_station && !relevant.has(s.parent_station)){
+        relevant.add(s.parent_station);
+        queue.push(s.parent_station);
+      }
+    }
+  });
+
+  while (queue.length){
+    const id = queue.pop();
+    const stop = idToStop.get(id);
+    if (!stop) continue;
+
+    const parent = stop.parent_station;
+    if (parent && !relevant.has(parent)){
+      relevant.add(parent);
+      queue.push(parent);
+    }
+
+    const children = childrenByParent.get(id);
+    if (children){
+      for (const child of children){
+        if (!relevant.has(child.stop_id)){
+          relevant.add(child.stop_id);
+          queue.push(child.stop_id);
+        }
+      }
+    }
+  }
+
+  return relevant;
+}
+    
 // Ordre selon le sens
 function getStopsForDirection(sensInverse) {
   const noms = garesParLigne.map(g => g.nom);
@@ -3577,6 +3634,7 @@ const GTFS_BASES = [
 function createCSVCollector(opt = {}){
   const keepColumns = Array.isArray(opt.keepColumns) && opt.keepColumns.length ? opt.keepColumns : null;
   const keptNames = keepColumns ? keepColumns.slice() : null;
+  const filterRow = typeof opt.filterRow === 'function' ? opt.filterRow : null;
   const rows = [];
   let headers = null;
   let row = [];
@@ -3634,6 +3692,7 @@ function createCSVCollector(opt = {}){
         obj[headers[i]] = current[i] ?? '';
       }
     }
+    if (filterRow && !filterRow(obj)) return;
     rows.push(obj);
     newRows++;
   };
@@ -3787,26 +3846,41 @@ async function ensureGTFSLoaded(){
     try {
       await __yieldToBrowser();
 
-      const stops = await fetchAndParseCSV('stops.txt', {
+      let stops = await fetchAndParseCSV('stops.txt', {
         keepColumns: ['stop_id','stop_name','parent_station','stop_lat','stop_lon']
       });
+      const relevantStopIds = computeRelevantStopIds(stops);
+      stops = stops.filter(s => relevantStopIds.has(s.stop_id));
       await __yieldToBrowser();
 
       GTFSLoadingUI.message('Chargement des horaires détaillés…');
+      const relevantTripIds = new Set();
       const stopTimes = await fetchAndParseCSV('stop_times.txt', {
-        keepColumns: ['trip_id','arrival_time','departure_time','stop_id','stop_sequence']
+        keepColumns: ['trip_id','arrival_time','departure_time','stop_id','stop_sequence'],
+        filterRow: row => {
+          if (!relevantStopIds.has(row.stop_id)) return false;
+          if (row.trip_id) relevantTripIds.add(row.trip_id);
+          return true;
+        }
       });
       await __yieldToBrowser();
 
       GTFSLoadingUI.message('Chargement des trajets…');
+      const relevantServiceIds = new Set();
       const trips = await fetchAndParseCSV('trips.txt', {
-        keepColumns: ['trip_id','service_id','route_id','trip_short_name']
+        keepColumns: ['trip_id','service_id','route_id','trip_short_name'],
+        filterRow: row => {
+          if (!relevantTripIds.has(row.trip_id)) return false;
+          if (row.service_id) relevantServiceIds.add(row.service_id);
+          return true;
+        }
       });
       await __yieldToBrowser();
-    
-GTFSLoadingUI.message('Chargement du calendrier…');
+
+      GTFSLoadingUI.message('Chargement du calendrier…');
       const calendarDates = await fetchAndParseCSV('calendar_dates.txt', {
-        keepColumns: ['service_id','date','exception_type']
+        keepColumns: ['service_id','date','exception_type'],
+        filterRow: row => !row.service_id || relevantServiceIds.has(row.service_id)
       });
       await __yieldToBrowser();
 
@@ -3846,7 +3920,10 @@ GTFSLoadingUI.message('Chargement du calendrier…');
         tripById,
         stopNameToId,
         allowedByDate,
-        removedByDate
+        removedByDate,
+        relevantStopIds,
+        relevantTripIds,
+        relevantServiceIds
       };
     } finally {
       GTFSLoadingUI.hide();
