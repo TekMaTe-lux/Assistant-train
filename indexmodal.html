@@ -4087,7 +4087,8 @@ function injectTableChunkedIntoTrainInfo(html, {chunk=200} = {}){
   requestAnimationFrame(pump);
 }   
 // — Helper: fixe le sens d’affichage ET force toujours De/À pour AM/PM
-function setDirectionForPreset(kind){
+function setDirectionForPreset(kind, config){
+  const conf = config || RAPID_PRESET_CONFIG?.[kind] || null;
   // AM = France → Luxembourg ; PM = Luxembourg → France
   const sensInverse = (kind === 'PM');
 
@@ -4097,33 +4098,55 @@ function setDirectionForPreset(kind){
     buildStationSelects();
   }
 
-  // 2) Force systématiquement De/À pour correspondre au preset cliqué
   const $start = $('#startStation');
   const $end   = $('#endStation');
-  const hasOpt = ($sel, v) => $sel.find(`option[value="${v}"]`).length > 0;
+  if (!$start.length || !$end.length) return;
 
-  // on préfère Nancy si dispo, sinon Metz
+  const pickCandidate = ($sel, prefs) => {
+    if (!$sel.length || !Array.isArray(prefs)) return null;
+    for (const candidate of prefs){
+      if (!candidate) continue;
+      if ($sel.find(`option[value="${candidate}"]`).length > 0) return candidate;
+    }
+    return null;
+  };
+
+ const applyIfFound = ($sel, value) => {
+    if (!value) return false;
+    $sel.val(value);
+    return true;
+  };
+
+  const startApplied = applyIfFound($start, pickCandidate($start, conf?.displayStart));
+  const endApplied   = applyIfFound($end, pickCandidate($end, conf?.displayEnd));
+
+  if (startApplied && endApplied) return;
+
+  const hasOpt = ($sel, v) => $sel.find(`option[value="${v}"]`).length > 0;
   const FR = hasOpt($start, 'Nancy') ? 'Nancy'
            : hasOpt($start, 'Metz')  ? 'Metz'
            : null;
 
-  // on suppose que Luxembourg est présent (au pire on tombe en fallback)
   const LUX = hasOpt($start, 'Luxembourg') ? 'Luxembourg' : null;
 
-  if (FR && LUX){
-    if (kind === 'AM'){
-      $start.val(FR);         // France -> Lux
-      $end.val(LUX);
-    } else {
-      $start.val(LUX);        // Lux -> France
-      $end.val(FR);
+  if (!startApplied || !endApplied){
+    if (FR && LUX){
+      if (!startApplied) $start.val(kind === 'PM' ? LUX : FR);
+      if (!endApplied)   $end.val(kind === 'PM' ? FR : LUX);
+      return;
     }
-  } else {
-    // Fallback ultra robuste : premier ↔ dernier de la liste (hors option vide)
-    const opts = $start.find('option').map((_,o)=>o.value).get().filter(v=>v!=='');
-    if (opts.length >= 2){
-      if (kind === 'AM'){ $start.val(opts[0]); $end.val(opts[opts.length-1]); }
-      else { $start.val(opts[opts.length-1]); $end.val(opts[0]); }
+  }
+
+  // Fallback ultra robuste : premier ↔ dernier de la liste (hors option vide)
+  const opts = $start.find('option').map((_,o)=>o.value).get().filter(v=>v!=='');
+  if (opts.length >= 2){
+    if (!startApplied){
+      if (kind === 'AM') $start.val(opts[0]);
+      else $start.val(opts[opts.length-1]);
+    }
+    if (!endApplied){
+      if (kind === 'AM') $end.val(opts[opts.length-1]);
+      else $end.val(opts[0]);
     }
   }
 }
@@ -5376,8 +5399,24 @@ const PRESET_AM = "88704,88706,88708,88710,88802,88712,88501,88804,88714,88503,8
 const PRESET_PM = "88741,88743,88745,88747,88530,88749,88751,88753,88532,88755,88813,88759,88761,88815,88534,88763,88765,88767,88769".split(',');
 
   const RAPID_PRESET_CONFIG = {
-  AM: { label: 'Matin', from: '06:00', to: '10:00' },
-  PM: { label: 'Soir',  from: '16:00', to: '20:00' }
+  AM: {
+    label: 'Matin',
+    from: '06:00',
+    to: '10:00',
+    displayStart: ['Nancy', 'Metz', 'Thionville'],
+    displayEnd: ['Luxembourg'],
+    queryStart: ['Thionville', 'Metz', 'Nancy'],
+    queryEnd: ['Luxembourg']
+  },
+  PM: {
+    label: 'Soir',
+    from: '16:00',
+    to: '20:00',
+    displayStart: ['Luxembourg'],
+    displayEnd: ['Nancy', 'Metz', 'Thionville'],
+    queryStart: ['Luxembourg'],
+    queryEnd: ['Thionville', 'Metz', 'Nancy']
+  }
 };
 
 /* ====================== ÉTAT CENTRAL ====================== */
@@ -5680,15 +5719,26 @@ async function applyRapidPreset(kind, options = {}){
   const config = RAPID_PRESET_CONFIG[kind] || null;
   const fallback = kind === 'PM' ? PRESET_PM.slice() : PRESET_AM.slice();
 
-  setDirectionForPreset(kind);
+  setDirectionForPreset(kind, config);
   if (typeof syncStationSearchInputs === 'function') syncStationSearchInputs();
   if (typeof updateItineraryPreview === 'function') updateItineraryPreview();
 
   let numbers = [];
   if (config){
     try {
-      const startName = $('#startStation').val() || '';
-      const endName = $('#endStation').val() || '';
+      const $start = $('#startStation');
+      const $end = $('#endStation');
+      const pickQueryEndpoint = ($sel, prefs, fallbackValue) => {
+        if ($sel && $sel.length && Array.isArray(prefs)){
+          for (const candidate of prefs){
+            if (!candidate) continue;
+            if ($sel.find(`option[value="${candidate}"]`).length > 0) return candidate;
+          }
+        }
+        return fallbackValue;
+      };
+      const startName = pickQueryEndpoint($start, config.queryStart, $start.val() || '');
+      const endName = pickQueryEndpoint($end, config.queryEnd, $end.val() || '');
       const ymd = dateInputToYMD($('#trainDate').val()) || todayYMDLux().replace(/-/g,'');
       const proposals = await computeItineraryProposals({
         startName,
