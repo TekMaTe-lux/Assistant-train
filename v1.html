@@ -4704,7 +4704,31 @@ function addManualTrain(){
           const imp = impacted[id];
           if (imp && imp.arrival_status !== 'deleted') { newEnd = id; break; }
         }
+if (!newStart) {
+          for (let i = 0; i < train.stop_times.length; i++) {
+            const s = train.stop_times[i];
+            const id = s.stop_point.id;
+            const imp = impacted[id];
+            const departureDeleted = imp?.departure_status === 'deleted' || imp?.stop_time_effect === 'deleted';
+            const hasDeparture = !!s.departure_time;
+            if (hasDeparture && !departureDeleted) { newStart = id; break; }
+          }
+        }
 
+        if (!newEnd) {
+          for (let i = 0; i < train.stop_times.length; i++) {
+            const s = train.stop_times[i];
+            const id = s.stop_point.id;
+            const imp = impacted[id];
+            const arrivalDeleted = imp?.arrival_status === 'deleted' || imp?.stop_time_effect === 'deleted';
+            const departureDeleted = imp?.departure_status === 'deleted' || imp?.stop_time_effect === 'deleted';
+            const hasArrival = !!s.arrival_time;
+            const hasDeparture = !!s.departure_time;
+            const served = (hasArrival && !arrivalDeleted) || (hasDeparture && !departureDeleted) || (!imp && (hasArrival || hasDeparture));
+            if (served) { newEnd = id; }
+          }
+        }
+        
         results[num] = { train, impacted, newStart, newEnd, disruptions, disruptionCauses };
       } catch (e) {
         console.error("Erreur lors de la requête API:", e);
@@ -4845,6 +4869,12 @@ function addManualTrain(){
         const newStartIndex = result.train.stop_times.findIndex(s => s.stop_point.id === result.newStart);
         const newEndIndex   = result.train.stop_times.findIndex(s => s.stop_point.id === result.newEnd);
         const originalEndId = result.train.stop_times[result.train.stop_times.length - 1]?.stop_point?.id;
+        const lastIndex     = result.train.stop_times.length - 1;
+    
+        const isNewStartStop =
+          !!result.newStart &&
+          ((stop && stop.stop_point?.id === result.newStart) || (imp?.stop_point?.id === result.newStart)) &&
+          (newStartIndex > 0 || index > 0);
 
         // === ARRÊT AJOUTÉ ===
         const isAddedStop =
@@ -4867,18 +4897,26 @@ function addManualTrain(){
 
         const isFirstStop = stopName === result.train.stop_times[0]?.stop_point?.name;
         const isLastStop  = stopName === result.train.stop_times[result.train.stop_times.length - 1]?.stop_point?.name;
+        
+        const isNewEndStop =
+          !!result.newEnd &&
+          result.newEnd !== originalEndId &&
+          ((stop && stop.stop_point?.id === result.newEnd) || (imp?.stop_point?.id === result.newEnd)) &&
+          (newEndIndex >= 0 || index >= 0) &&
+          ((newEndIndex >= 0 && newEndIndex < lastIndex) || (index >= 0 && index < lastIndex));    
 
         const isFull = result.disruptions.some(d => ['NO_SERVICE','CANCELLATION'].includes(d.severity?.effect));
         if (isFull) {
           content = `<span class="deleted">${content}</span>`;
-        } else if (imp && imp.stop_point && imp.stop_point.id === result.newStart && index > 0) {
-          content = `<span class="new-start">${content}</span>`;
-        } else if (imp && imp.stop_point && imp.stop_point.id === result.newEnd && imp.stop_point.id !== originalEndId) {
-          if (amended && dl(base, amended) > 0) {
-            content = `<span class="delay-strike blink-red">${ft(base)}</span><br><span class="delayed">${ft(amended)}</span>`;
-          } else {
-            content = `<span class="delay-strike blink-red">${ft(base)}</span>`;
-          }
+         } else if (isNewStartStop || isNewEndStop) {
+          const hasAmended = !!amended;
+          const hasBase = !!base;
+          const diffMinutes = (hasAmended && hasBase) ? dl(base, amended) : null;
+          const mainTime = hasAmended && (!hasBase || diffMinutes !== 0) ? ft(amended) : ft(base);
+          const baseStrike = (hasAmended && hasBase && diffMinutes > 0)
+            ? `<span class="delay-strike">${ft(base)}</span><br>`
+            : '';
+          content = `${baseStrike}<span class="new-start">${mainTime}</span>`;     
         } else if (
           isStopDeleted ||
           (newStartIndex >= 0 && index >= 0 && index < newStartIndex) ||
