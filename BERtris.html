@@ -1,1 +1,440 @@
-jlul
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8" />
+  <title>Bétaillère – Tetris (BER Nancy Metz Lux)</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <!-- Tailwind CDN (JIT) -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    :root{
+      /* Si ton site les définit déjà, ces fallbacks seront ignorés */
+      --surface-color:#0b0f1a;
+      --surface-alt-color:#0d1422;
+      --text-color:#e0f0ff;
+      --muted-text:rgba(224,240,255,.75);
+      --accent-color:#00f0ff;
+    }
+    body{ background: var(--surface-color); color: var(--text-color); }
+  </style>
+</head>
+<body>
+  <section id="jeu-betaillere" class="min-h-screen py-6"></section>
+
+  <!-- React 18 & Babel -->
+  <script src="https://unpkg.com/react@18/umd/react.development.js" crossorigin></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js" crossorigin></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+  <!-- Le jeu (JSX transformé côté navigateur) -->
+  <script type="text/babel">
+    const {useState,useRef,useMemo,useEffect,useCallback} = React;
+
+    const COLS=10, ROWS=20;
+    const COLORS={
+      I:"bg-[color:var(--accent-color,#00f0ff)]",
+      J:"bg-[color:var(--rail-blue,#3391ff)]",
+      L:"bg-[color:var(--rail-amber,#ffb020)]",
+      O:"bg-[color:var(--rail-yellow,#ffe66d)]",
+      S:"bg-[color:var(--rail-emerald,#2bd4a6)]",
+      T:"bg-[color:var(--rail-fuchsia,#d26bff)]",
+      Z:"bg-[color:var(--rail-rose,#ff5f7a)]",
+      GHOST:"bg-white/10 border border-white/20",
+      EMPTY:"bg-[color:var(--surface-alt-color,#0d1422)]/75",
+    };
+
+    const TETROMINOS={
+      I:[[0,0,0,0],[1,1,1,1],[0,0,0,0],[0,0,0,0]],
+      J:[[1,0,0],[1,1,1],[0,0,0]],
+      L:[[0,0,1],[1,1,1],[0,0,0]],
+      O:[[1,1],[1,1]],
+      S:[[0,1,1],[1,1,0],[0,0,0]],
+      T:[[0,1,0],[1,1,1],[0,0,0]],
+      Z:[[1,1,0],[0,1,1],[0,0,0]],
+    };
+    const PIECE_KEYS=Object.keys(TETROMINOS);
+
+    function rotate(m){
+      const N=m.length, r=Array.from({length:N},()=>Array(N).fill(0));
+      for(let y=0;y<N;y++)for(let x=0;x<N;x++) r[x][N-1-y]=m[y][x];
+      return r;
+    }
+    function randomPiece(){
+      const type=PIECE_KEYS[(Math.random()*PIECE_KEYS.length)|0];
+      return {type,shape:TETROMINOS[type]};
+    }
+    function createEmptyBoard(){ return Array.from({length:ROWS},()=>Array(COLS).fill(null)); }
+    function canPlace(board,shape,posX,posY,obstacles){
+      for(let y=0;y<shape.length;y++){
+        for(let x=0;x<shape[y].length;x++){
+          if(!shape[y][x]) continue;
+          const nx=posX+x, ny=posY+y;
+          if(nx<0||nx>=COLS||ny>=ROWS) return false;
+          if(ny>=0 && (board[ny][nx] || (obstacles && obstacles[ny]?.[nx]))) return false;
+        }
+      }
+      return true;
+    }
+    function merge(board,shape,posX,posY,type){
+      const b=board.map(r=>r.slice());
+      for(let y=0;y<shape.length;y++){
+        for(let x=0;x<shape[y].length;x++){
+          if(!shape[y][x]) continue;
+          const nx=posX+x, ny=posY+y;
+          if(ny>=0&&ny<ROWS&&nx>=0&&nx<COLS) b[ny][nx]=type;
+        }
+      }
+      return b;
+    }
+    function clearLines(board){
+      const newRows=board.filter(row=>row.some(c=>!c));
+      const cleared=ROWS-newRows.length;
+      while(newRows.length<ROWS) newRows.unshift(Array(COLS).fill(null));
+      return {board:newRows, cleared};
+    }
+    function getDropY(board,shape,x,y,obstacles){
+      let drop=y; while(canPlace(board,shape,x,drop+1,obstacles)) drop++; return drop;
+    }
+    function levelSpeed(level){ return Math.max(90, 800-(level-1)*70); }
+
+    function BetaillereTetris(){
+      const [board,setBoard]=useState(createEmptyBoard);
+      const [current,setCurrent]=useState(()=>{
+        const p=randomPiece();
+        return {...p, x:(COLS/2-Math.ceil(p.shape.length/2))|0, y:-2};
+      });
+      const [nextPiece,setNextPiece]=useState(randomPiece);
+      const [hold,setHold]=useState(null);
+      const [canHold,setCanHold]=useState(true);
+      const [score,setScore]=useState(0);
+      const [lines,setLines]=useState(0);
+      const [level,setLevel]=useState(1);
+      const [paused,setPaused]=useState(false);
+      const [gameOver,setGameOver]=useState(false);
+
+      // Obstacles "train fret en panne"
+      const [obstacles,setObstacles]=useState(()=>Array.from({length:ROWS},()=>Array(COLS).fill(false)));
+      const [combo,setCombo]=useState(0);
+
+      const PIECE_LABELS={
+        I:"BER ↔ Lux (rame longue)",
+        J:"Nancy (attelage)",
+        L:"Metz (embranchement)",
+        O:"Thionville (wagon double)",
+        S:"Bettembourg (croisement)",
+        T:"Pont-à-Mousson (triage)",
+        Z:"Hettange (bifurcation)",
+      };
+
+      const loopRef=useRef(null);
+      const hazardInitialTimeout=useRef(null);
+      const hazardInterval=useRef(null);
+      const hazardTimeout=useRef(null);
+
+      const ghostY=useMemo(()=>getDropY(board,current.shape,current.x,current.y,obstacles),[board,current,obstacles]);
+
+      const spawnNew=useCallback(()=>{
+        const p=nextPiece;
+        const nx=(COLS/2-Math.ceil(p.shape.length/2))|0, ny=-2;
+        if(!canPlace(board,p.shape,nx,ny,obstacles)){ setGameOver(true); return; }
+        setCurrent({...p,x:nx,y:ny});
+        setNextPiece(randomPiece());
+        setCanHold(true);
+      },[board,nextPiece,obstacles]);
+
+      const willTopOut=useCallback((shape,x,y)=>{
+        for(let yy=0;yy<shape.length;yy++)
+          for(let xx=0;xx<shape[yy].length;xx++)
+            if(shape[yy][xx] && (y+yy<0)) return true;
+        return false;
+      },[]);
+
+      const lockAndSweep=useCallback((lockY)=>{
+        const merged=merge(board,current.shape,current.x,lockY??current.y,current.type);
+        const topped=willTopOut(current.shape,current.x,lockY??current.y);
+        const {board:clearedBoard, cleared}=clearLines(merged);
+
+        if(cleared){
+          const base=[0,100,300,500,800][cleared]*level;
+          setCombo(c=>c+1);
+          const comboBonusNow=50*(combo+1);
+          const before=lines, after=lines+cleared;
+          const wagonsBefore=Math.floor(before/10), wagonsAfter=Math.floor(after/10);
+          const wagonBonus=Math.max(0, wagonsAfter-wagonsBefore)*50;
+          setScore(s=>s+base+comboBonusNow+wagonBonus);
+          setLines(after);
+          setLevel(()=>1+Math.floor(after/10));
+        }else{
+          setCombo(0);
+        }
+
+        setBoard(clearedBoard);
+        if(topped){ setGameOver(true); return; }
+        spawnNew();
+      },[board,current,level,lines,spawnNew,willTopOut,combo]);
+
+      const hardDrop=useCallback(()=>{
+        if(gameOver||paused) return;
+        const dropY=getDropY(board,current.shape,current.x,current.y,obstacles);
+        lockAndSweep(dropY);
+      },[board,current,gameOver,paused,lockAndSweep,obstacles]);
+
+      const move=useCallback((dx)=>{
+        if(gameOver||paused) return;
+        const nx=current.x+dx;
+        if(canPlace(board,current.shape,nx,current.y,obstacles)) setCurrent(c=>({...c,x:nx}));
+      },[board,current,gameOver,paused,obstacles]);
+
+      const softDrop=useCallback(()=>{
+        if(gameOver||paused) return;
+        const ny=current.y+1;
+        if(canPlace(board,current.shape,current.x,ny,obstacles)) setCurrent(c=>({...c,y:ny}));
+        else lockAndSweep();
+      },[board,current,gameOver,paused,obstacles,lockAndSweep]);
+
+      const rotateCW=useCallback(()=>{
+        if(gameOver||paused) return;
+        const r=rotate(current.shape);
+        for(const k of [0,-1,1,-2,2]){
+          if(canPlace(board,r,current.x+k,current.y,obstacles)){ setCurrent(c=>({...c,shape:r,x:c.x+k})); return; }
+        }
+      },[board,current,gameOver,paused,obstacles]);
+
+      const doHold=useCallback(()=>{
+        if(gameOver||paused||!canHold) return;
+        setCanHold(false);
+        if(!hold){ setHold({type:current.type,shape:current.shape}); spawnNew(); }
+        else{
+          const swap=hold;
+          setHold({type:current.type,shape:current.shape});
+          const nx=(COLS/2-Math.ceil(swap.shape.length/2))|0, ny=-2;
+          if(!canPlace(board,swap.shape,nx,ny,obstacles)) setGameOver(true);
+          else setCurrent({...swap,x:nx,y:ny});
+        }
+      },[board,canHold,current,gameOver,hold,paused,spawnNew,obstacles]);
+
+      // Boucle + hazard (75s puis chaque 60s, dure 10s)
+      useEffect(()=>{
+        if(paused||gameOver) return;
+        const delay=levelSpeed(level);
+        loopRef.current=setInterval(()=>softDrop(),delay);
+
+        if(!hazardInitialTimeout.current && !hazardInterval.current){
+          hazardInitialTimeout.current=setTimeout(()=>{
+            const runHazard=()=>{
+              setObstacles(prev=>{
+                const grid=prev.map(r=>r.slice());
+                const center=4+Math.floor(Math.random()*2);
+                const cols=[center, center+(Math.random()<0.5?-1:1)];
+                if(Math.random()<0.5) cols.push(center+2*(Math.random()<0.5?-1:1));
+                const top=6, bottom=13;
+                for(let y=top;y<=bottom;y++) for(const cx of cols) if(cx>=0&&cx<COLS) grid[y][cx]=true;
+                return grid;
+              });
+              hazardTimeout.current=setTimeout(()=>{
+                setObstacles(prev=>prev.map(row=>row.map(()=>false)));
+              },10000);
+            };
+            runHazard();
+            hazardInterval.current=setInterval(runHazard,60000);
+          },75000);
+        }
+        return ()=>clearInterval(loopRef.current);
+      },[softDrop,paused,gameOver,level]);
+
+      useEffect(()=>{
+        const onKey=(e)=>{
+          if(gameOver) return;
+          const k=e.key;
+          if(["ArrowLeft","ArrowRight","ArrowDown","ArrowUp"," ","p","P","c","C"].includes(k)) e.preventDefault();
+          if(k==="ArrowLeft") move(-1);
+          else if(k==="ArrowRight") move(1);
+          else if(k==="ArrowDown") softDrop();
+          else if(k==="ArrowUp") rotateCW();
+          else if(k===" ") hardDrop();
+          else if(k==="p"||k==="P") setPaused(p=>!p);
+          else if(k==="c"||k==="C") doHold();
+        };
+        window.addEventListener("keydown",onKey,{passive:false});
+        return ()=>window.removeEventListener("keydown",onKey);
+      },[move,softDrop,rotateCW,hardDrop,doHold,gameOver]);
+
+      const ghostBoard=useMemo(()=>{
+        const dropY=ghostY, b=board.map(r=>r.slice());
+        for(let y=0;y<current.shape.length;y++){
+          for(let x=0;x<current.shape[y].length;x++){
+            if(!current.shape[y][x]) continue;
+            const nx=current.x+x, ny=dropY+y;
+            if(ny>=0&&ny<ROWS&&nx>=0&&nx<COLS && !b[ny][nx]) b[ny][nx]="GHOST";
+          }
+        }
+        return b;
+      },[board,current,ghostY]);
+
+      const displayBoard=useMemo(()=>{
+        const b=ghostBoard.map(r=>r.slice());
+        for(let y=0;y<current.shape.length;y++){
+          for(let x=0;x<current.shape[y].length;x++){
+            if(!current.shape[y][x]) continue;
+            const nx=current.x+x, ny=current.y+y;
+            if(ny>=0&&ny<ROWS&&nx>=0&&nx<COLS) b[ny][nx]=current.type;
+          }
+          }
+        return b;
+      },[ghostBoard,current]);
+
+      const resetGame=useCallback(()=>{
+        setBoard(createEmptyBoard());
+        const p=randomPiece();
+        setCurrent({...p, x:(COLS/2-Math.ceil(p.shape.length/2))|0, y:-2});
+        setNextPiece(randomPiece());
+        setHold(null); setCanHold(true);
+        setScore(0); setLines(0); setLevel(1);
+        setPaused(false); setGameOver(false); setCombo(0);
+        setObstacles(Array.from({length:ROWS},()=>Array(COLS).fill(false)));
+        if(hazardInitialTimeout.current) clearTimeout(hazardInitialTimeout.current);
+        if(hazardInterval.current) clearInterval(hazardInterval.current);
+        if(hazardTimeout.current) clearTimeout(hazardTimeout.current);
+        hazardInitialTimeout.current=hazardInterval.current=hazardTimeout.current=null;
+      },[]);
+
+      const renderMini=(piece)=>{
+        const boxCls="w-24 h-24 grid grid-cols-4 grid-rows-4 gap-0.5 p-1 bg-[color:var(--surface-color,#0b0f1a)]/60 rounded-xl";
+        if(!piece) return <div className={boxCls} />;
+        const box=Array.from({length:4},()=>Array(4).fill(null));
+        const s=piece.shape;
+        for(let y=0;y<s.length;y++) for(let x=0;x<s[y].length;x++) if(s[y][x]) box[y][x]=piece.type;
+        return (
+          <div className={boxCls}>
+            {box.flat().map((c,i)=>(<div key={i} className={`aspect-square rounded-sm ${c?COLORS[c]:COLORS.EMPTY}`} />))}
+          </div>
+        );
+      };
+
+      const wagonProgress=lines%10;
+
+      return (
+        <div className="w-full mx-auto max-w-5xl p-4 md:p-6 text-[color:var(--text-color,#e0f0ff)] [font-family:var(--font,ui-sans-serif,system-ui,Segoe_UI,Roboto,Inter)]">
+          <div className="flex flex-col md:flex-row gap-4 md:gap-6">
+            <aside className="md:w-72 flex flex-col gap-4">
+              <div className="bg-gradient-to-br from-[color:var(--surface-color,#0b0f1a)]/70 to-[color:var(--surface-alt-color,#0a0e1a)]/70 rounded-2xl p-4 shadow-[0_0_12px_rgba(0,240,255,.12)] border border-[color:var(--accent-color,#00f0ff)]/20">
+                <h2 className="text-xl font-semibold tracking-wide [text-shadow:0_0_6px_var(--accent-color,#00f0ff)]">Bétaillère – Chargement du bétail</h2>
+                <p className="text-[color:var(--muted-text,rgba(224,240,255,.75))] text-sm">
+                  Alignez les bêtes par wagons. <span className="text-[color:var(--accent-color,#00f0ff)]">Perdu si ça touche le plafond.</span>
+                </p>
+              </div>
+
+              <div className="bg-[color:var(--surface-color,#0b0f1a)]/60 rounded-2xl p-4 shadow-[0_0_12px_rgba(0,240,255,.12)] border border-[color:var(--accent-color,#00f0ff)]/10 grid grid-cols-2 gap-3 items-center">
+                <div>
+                  <div className="text-xs text-[color:var(--muted-text,rgba(224,240,255,.75))]">Score</div>
+                  <div className="text-2xl font-bold tabular-nums">{score}</div>
+                </div>
+                <div>
+                  <div className="text-xs text-[color:var(--muted-text,rgba(224,240,255,.75))]">Lignes (bêtes)</div>
+                  <div className="text-2xl font-bold tabular-nums">{lines}</div>
+                </div>
+                <div>
+                  <div className="text-xs text-[color:var(--muted-text,rgba(224,240,255,.75))]">Niveau</div>
+                  <div className="text-2xl font-bold tabular-nums">{level}</div>
+                </div>
+                <div className="col-span-2">
+                  <div className="text-xs text-[color:var(--muted-text,rgba(224,240,255,.75))] mb-1">Wagon en cours: {wagonProgress}/10</div>
+                  <div className="h-2 rounded-full bg-[color:var(--surface-alt-color,#0b1220)] overflow-hidden">
+                    <div className="h-full bg-[color:var(--accent-color,#00f0ff)]" style={{width:`${(wagonProgress/10)*100}%`}} />
+                  </div>
+                </div>
+                <div className="flex gap-2 col-span-2 mt-2">
+                  <button onClick={()=>setPaused(p=>!p)} className="flex-1 px-3 py-2 rounded-xl bg-[color:var(--surface-alt-color,#0b1220)] hover:brightness-110 transition">
+                    {paused? "Reprendre":"Pause"}
+                  </button>
+                  <button onClick={resetGame} className="flex-1 px-3 py-2 rounded-xl bg-rose-600 hover:bg-rose-500 transition">Réinitialiser</button>
+                </div>
+              </div>
+
+              <div className="bg-[color:var(--surface-color,#0b0f1a)]/60 rounded-2xl p-4 shadow-lg flex items-center justify-between">
+                <div className="flex flex-col gap-2">
+                  <div className="text-xs text-[color:var(--muted-text,rgba(224,240,255,.75))]">Prochaine rame</div>
+                  {renderMini(nextPiece)}
+                </div>
+                <div className="flex flex-col gap-2">
+                  <div className="text-xs text-[color:var(--muted-text,rgba(224,240,255,.75))]">Voie de secours (C)</div>
+                  {renderMini(hold)}
+                </div>
+              </div>
+
+              <div className="bg-[color:var(--surface-color,#0b0f1a)]/60 rounded-2xl p-4 shadow-lg">
+                <h3 className="font-semibold mb-2">Contrôles</h3>
+                <ul className="text-sm space-y-1 text-[color:var(--muted-text,rgba(224,240,255,.75))]">
+                  <li>← → : déplacer</li>
+                  <li>↓ : descendre</li>
+                  <li>↑ : rotation</li>
+                  <li>Espace : hard drop</li>
+                  <li>C : hold</li>
+                  <li>P : pause</li>
+                </ul>
+                <h4 className="font-semibold mt-3 mb-1 text-sm">Lignes & gares</h4>
+                <ul className="text-xs text-[color:var(--muted-text,rgba(224,240,255,.75))] space-y-0.5">
+                  {Object.entries(PIECE_LABELS).map(([k,v])=>(
+                    <li key={k}><span className="font-mono text-[color:var(--text-color,#e0f0ff)]">{k}</span> — {v}</li>
+                  ))}
+                </ul>
+              </div>
+            </aside>
+
+            <main className="flex-1 flex flex-col items-center">
+              <div className="relative">
+                <div className="grid grid-cols-10 gap-0.5 p-2 rounded-2xl bg-[color:var(--surface-alt-color,#0b1220)]/80 shadow-[0_0_20px_rgba(0,240,255,.25)] border border-[color:var(--accent-color,#00f0ff)]/20">
+                  {displayBoard.map((row,y)=>(
+                    <React.Fragment key={y}>
+                      {row.map((cell,x)=>{
+                        const fill = cell ? COLORS[cell] : COLORS.EMPTY;
+                        const isObstacle = obstacles[y][x];
+                        return (
+                          <div key={`${x}-${y}`} className={`w-7 h-7 md:w-8 md:h-8 rounded-sm relative ${fill}`}>
+                            {isObstacle && (
+                              <div className="absolute inset-0 rounded-sm bg-amber-300/20 border border-amber-300/30 backdrop-blur-[1px]" title="Train fret en panne" />
+                            )}
+                          </div>
+                        );
+                      })}
+                    </React.Fragment>
+                  ))}
+                </div>
+
+                {gameOver && (
+                  <div className="absolute inset-0 flex items-center justify-center bg-black/60 rounded-2xl">
+                    <div className="bg-[color:var(--surface-color,#0b0f1a)] p-6 rounded-2xl text-center space-y-3 shadow-xl">
+                      <div className="text-2xl font-bold">Train complet… et débordement !</div>
+                      <div className="text-[color:var(--muted-text,rgba(224,240,255,.75))]">Perdu: la rame a touché le plafond.</div>
+                      <div className="text-[color:var(--muted-text,rgba(224,240,255,.75))]">Score: {score}</div>
+                      <button onClick={resetGame} className="mt-2 px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 transition">Rejouer</button>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              <div className="mt-4 grid grid-cols-5 gap-2 w-full max-w-md select-none">
+                <button onClick={()=>move(-1)} className="col-span-2 py-2 rounded-2xl bg-[color:var(--surface-alt-color,#0b1220)] active:brightness-110 shadow-[0_0_10px_rgba(0,240,255,.15)] border border-[color:var(--accent-color,#00f0ff)]/15">←</button>
+                <button onClick={rotateCW} className="col-span-1 py-2 rounded-2xl bg-[color:var(--surface-alt-color,#0b1220)] active:brightness-110 shadow-[0_0_10px_rgba(0,240,255,.15)] border border-[color:var(--accent-color,#00f0ff)]/15">↻</button>
+                <button onClick={()=>move(1)} className="col-span-2 py-2 rounded-2xl bg-[color:var(--surface-alt-color,#0b1220)] active:brightness-110 shadow-[0_0_10px_rgba(0,240,255,.15)] border border-[color:var(--accent-color,#00f0ff)]/15">→</button>
+                <button onClick={softDrop} className="col-span-2 py-2 rounded-2xl bg-[color:var(--surface-alt-color,#0b1220)] active:brightness-110 shadow-[0_0_10px_rgba(0,240,255,.15)] border border-[color:var(--accent-color,#00f0ff)]/15">↓</button>
+                <button onClick={hardDrop} className="col-span-3 py-2 rounded-xl bg-[color:var(--surface-alt-color,#0b1220)] active:brightness-110">Charger vite</button>
+              </div>
+            </main>
+          </div>
+
+          <p className="mt-6 text-sm text-[color:var(--muted-text,rgba(224,240,255,.75))]">
+            Règles bêtaillère: 10 lignes = 1 wagon (+50). Combo embarquement: +50, +100, +150… pour des clears consécutifs.
+            Perdu si la pièce se verrouille au-dessus du plafond. Des pannes de train fret bloquent des colonnes 10s (à 75s puis toutes les 60s).
+          </p>
+        </div>
+      );
+    }
+
+    function App(){ return <BetaillereTetris/>; }
+
+    const root=ReactDOM.createRoot(document.getElementById('jeu-betaillere'));
+    root.render(<App/>);
+  </script>
+</body>
+</html>
