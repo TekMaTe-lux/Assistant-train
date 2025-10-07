@@ -64,6 +64,22 @@
       return {type,shape:TETROMINOS[type]};
     }
     function createEmptyBoard(){ return Array.from({length:ROWS},()=>Array(COLS).fill(null)); }
+    function settleColumns(board,columns){
+      const targets=columns??Array.from({length:COLS},(_,i)=>i);
+      const settled=board.map(row=>row.slice());
+      for(const x of targets){
+        let writeRow=ROWS-1;
+        for(let y=0;y<ROWS;y++) settled[y][x]=null;
+        for(let y=ROWS-1;y>=0;y--){
+          const cell=board[y][x];
+          if(cell){
+            settled[writeRow][x]=cell;
+            writeRow--;
+          }
+        }
+      }
+      return settled;
+    }
     function canPlace(board,shape,posX,posY,obstacles){
       for(let y=0;y<shape.length;y++){
         for(let x=0;x<shape[y].length;x++){
@@ -127,12 +143,40 @@
       };
 
       const loopRef=useRef(null);
+      const audioRef=useRef(null);
       const hazardInitialTimeout=useRef(null);
       const hazardInterval=useRef(null);
       const hazardTimeout=useRef(null);
 
       const ghostY=useMemo(()=>getDropY(board,current.shape,current.x,current.y,obstacles),[board,current,obstacles]);
 
+useEffect(()=>{
+        const audio=audioRef.current;
+        if(!audio) return;
+        audio.loop=true;
+        audio.volume=0.6;
+        const tryPlay=()=>{ audio.play().catch(()=>{}); };
+        const resume=()=>{
+          tryPlay();
+          document.removeEventListener("pointerdown",resume);
+          document.removeEventListener("keydown",resume);
+        };
+        tryPlay();
+        document.addEventListener("pointerdown",resume);
+        document.addEventListener("keydown",resume);
+        const handleVisibility=()=>{
+          if(document.visibilityState==="visible") tryPlay();
+          else audio.pause();
+        };
+        document.addEventListener("visibilitychange",handleVisibility);
+        return ()=>{
+          document.removeEventListener("pointerdown",resume);
+          document.removeEventListener("keydown",resume);
+          document.removeEventListener("visibilitychange",handleVisibility);
+          audio.pause();
+        };
+      },[]);
+      
       const spawnNew=useCallback(()=>{
         const p=nextPiece;
         const nx=(COLS/2-Math.ceil(p.shape.length/2))|0, ny=-2;
@@ -232,7 +276,15 @@
                 return grid;
               });
               hazardTimeout.current=setTimeout(()=>{
-                setObstacles(prev=>prev.map(row=>row.map(()=>false)));
+                setObstacles(prev=>{
+                  const blocked=new Set();
+                  prev.forEach(row=>row.forEach((cell,x)=>{ if(cell) blocked.add(x); }));
+                  if(blocked.size){
+                    const columns=Array.from(blocked.values()).sort((a,b)=>a-b);
+                    setBoard(b=>settleColumns(b,columns));
+                  }
+                  return prev.map(row=>row.map(()=>false));
+                });
               },10000);
             };
             runHazard();
@@ -315,6 +367,13 @@
 
       return (
         <div className="w-full mx-auto max-w-5xl p-4 md:p-6 text-[color:var(--text-color,#e0f0ff)] [font-family:var(--font,ui-sans-serif,system-ui,Segoe_UI,Roboto,Inter)]">
+          <audio
+            ref={audioRef}
+            src="Tek'Ma'Te - Power of the SNCF jingle.mp3"
+            preload="auto"
+            controls
+            className="w-full max-w-md mb-4 rounded-xl bg-[color:var(--surface-alt-color,#0b1220)]/80"
+          />
           <div className="flex flex-col md:flex-row gap-4 md:gap-6">
             <aside className="md:w-72 flex flex-col gap-4">
               <div className="bg-gradient-to-br from-[color:var(--surface-color,#0b0f1a)]/70 to-[color:var(--surface-alt-color,#0a0e1a)]/70 rounded-2xl p-4 shadow-[0_0_12px_rgba(0,240,255,.12)] border border-[color:var(--accent-color,#00f0ff)]/20">
