@@ -3377,7 +3377,17 @@ body.modal-open{ overflow:hidden; }
   max-width: 85%;
   white-space: pre-line;
 }
+ #meuhh-panel .meuhh-knowledge {
+  display: block;
+  font-size: 0.9rem;
+  line-height: 1.4;
+  color: #d2f6ff;
+}
 
+#meuhh-panel .meuhh-knowledge strong {
+  color: #00f0ff;
+}
+  
 .meuhh-suggestions {
   display: flex;
   flex-wrap: wrap;
@@ -8362,7 +8372,8 @@ function scheduleWeatherAfterTableSettled(){
     stopIndex: {},
     isPanelOpen: false,
     weatherCache: null,
-    lastWeatherTime: 0
+    lastWeatherTime: 0,
+    knowledge: null
   };
 
   const jokes = [
@@ -8420,7 +8431,164 @@ function scheduleWeatherAfterTableSettled(){
     });
     addMessage('meuhh', wrapper);
   }
+function normalizeText(str) {
+    return (str || '')
+      .toString()
+      .normalize('NFD')
+      .replace(/\p{Diacritic}/gu, '')
+      .toLowerCase()
+      .trim();
+  }
 
+  function normalizeWhitespace(str) {
+    return (str || '').replace(/\s+/g, ' ').trim();
+  }
+
+  function truncateText(str, max = 600) {
+    if (!str) return '';
+    if (str.length <= max) return str;
+    return `${str.slice(0, max - 1)}…`;
+  }
+
+  function escapeHtml(str) {
+    return (str || '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+
+  function buildSiteKnowledge() {
+    const knowledge = {
+      overview: '',
+      panels: [],
+      headings: [],
+      quickActions: [],
+    };
+
+    const heroHeading = document.querySelector('.hero-heading');
+    const heroSub = document.querySelector('.hero-sub span');
+    const consoleHeader = document.querySelector('.command-console .console-header');
+    const overviewPieces = [heroHeading, heroSub, consoleHeader]
+      .map((el) => (el ? normalizeWhitespace(el.textContent || el.innerText) : ''))
+      .filter(Boolean);
+    knowledge.overview = overviewPieces.join(' — ');
+
+    document.querySelectorAll('details.console-section').forEach((detail) => {
+      const titleEl = detail.querySelector('.section-title') || detail.querySelector('.section-summary');
+      const contentEl = detail.querySelector('.section-content');
+      const title = titleEl ? normalizeWhitespace(titleEl.textContent || titleEl.innerText) : '';
+      const summary = contentEl ? truncateText(normalizeWhitespace(contentEl.innerText || '')) : '';
+      if (title && summary) {
+        knowledge.panels.push({ title, summary });
+      }
+    });
+
+    const seenHeadings = new Set();
+    document.querySelectorAll('h2, h3').forEach((heading) => {
+      const title = normalizeWhitespace(heading.textContent || heading.innerText);
+      if (!title || seenHeadings.has(title)) return;
+      seenHeadings.add(title);
+
+      const summaryParts = [];
+      let sibling = heading.nextElementSibling;
+      while (sibling && !/^H[23]$/i.test(sibling.tagName || '')) {
+        const text = normalizeWhitespace(sibling.innerText || sibling.textContent || '');
+        if (text) summaryParts.push(text);
+        sibling = sibling.nextElementSibling;
+      }
+
+      if (summaryParts.length) {
+        knowledge.headings.push({ title, summary: truncateText(summaryParts.join(' ')) });
+      }
+    });
+
+    document.querySelectorAll('.quick-button-group').forEach((group) => {
+      const label = normalizeWhitespace(group.getAttribute('aria-label') || 'Raccourcis disponibles');
+      const items = Array.from(group.querySelectorAll('button'))
+        .map((btn) => normalizeWhitespace(btn.textContent))
+        .filter(Boolean);
+      if (items.length) {
+        knowledge.quickActions.push({ title: label, summary: items.join(' • ') });
+      }
+    });
+
+    const trainInfo = document.querySelector('#trainInfo');
+    if (trainInfo) {
+      knowledge.headings.push({
+        title: 'Tableau de circulation',
+        summary: 'La zone « Trafic en direct » affiche un tableau par gare et par numéro de train après un clic sur Rechercher. Chaque case contient l’heure théorique, les retards éventuels et les arrêts ajoutés ou supprimés.',
+      });
+    }
+
+    const alertes = document.getElementById('alertes');
+    if (alertes) {
+      knowledge.headings.push({
+        title: 'Alertes trafic',
+        summary: 'Les perturbations CFL/SNCF apparaissent sous forme de cartes colorées. Clique sur une alerte pour dérouler la description et voir les trains concernés.',
+      });
+    }
+
+    return knowledge;
+  }
+
+  function scoreKnowledgeEntry(entry, tokens) {
+    const haystack = normalizeText(`${entry.title} ${entry.summary}`);
+    if (!haystack) return 0;
+    return tokens.reduce((score, token) => {
+      if (!token) return score;
+      let delta = 0;
+      if (haystack.includes(token)) {
+        delta += token.length;
+      }
+      const titleHaystack = normalizeText(entry.title);
+      if (titleHaystack.includes(token)) {
+        delta += token.length * 2;
+      }
+      return score + delta;
+    }, 0);
+  }
+
+  function searchSiteKnowledge(message, knowledge) {
+    const normalized = normalizeText(message);
+    if (!normalized) return [];
+    const tokens = normalized.split(/[^a-z0-9]+/).filter(Boolean);
+    if (!tokens.length) return [];
+
+    const candidates = [...knowledge.panels, ...knowledge.headings, ...knowledge.quickActions];
+    const scored = candidates
+      .map((entry) => ({ entry, score: scoreKnowledgeEntry(entry, tokens) }))
+      .filter((item) => item.score > 0)
+      .sort((a, b) => b.score - a.score);
+
+    return scored.slice(0, 3).map((item) => item.entry);
+  }
+
+  function formatKnowledgeResponse(entries, overview) {
+    if (!entries.length) return null;
+    const blocks = entries.map((entry) => `
+      <div class="meuhh-knowledge">
+        <strong>${escapeHtml(entry.title)}</strong><br>
+        <span>${escapeHtml(entry.summary)}</span>
+      </div>
+    `);
+    const intro = overview ? `<p>${escapeHtml(overview)}</p>` : '';
+    return `${intro}${blocks.join('<hr>')}<p><small>Réponse basée sur le contenu actuel de la page La Bétaillère.</small></p>`;
+  }
+
+  function listKnowledgeTitles(knowledge) {
+    const titles = [...knowledge.panels, ...knowledge.headings]
+      .map((entry) => entry.title)
+      .filter(Boolean);
+    if (!titles.length) return null;
+    const escaped = titles.map((title) => escapeHtml(title));
+    return `Je peux t'expliquer :<br>• ${escaped.join('<br>• ')}<br><br>Dis-moi le chapitre qui t'intéresse et je te détaille le fonctionnement.`;
+  }
+
+  const siteKnowledge = buildSiteKnowledge();
+  state.knowledge = siteKnowledge;
+  
   async function ensureStopsLoaded() {
     if (state.stops) {
       return state.stops;
@@ -8458,6 +8626,270 @@ function scheduleWeatherAfterTableSettled(){
     }
   }
 
+  function extractStationCandidate(message) {
+    const regex = /(depuis|de|à partir de|a partir de|vers|pour|direction|jusqu'\s?a)\s+([^,.!?;]+)/gi;
+    let match;
+    while ((match = regex.exec(message)) !== null) {
+      const raw = match[2] || '';
+      const cleaned = raw
+        .split(/vers|pour|direction|jusqu'\s?a|,|;|\.|\?|!| et /i)[0]
+        .replace(/la gare de|gare de|station de|stop de/gi, '')
+        .trim();
+      if (cleaned) {
+        return cleaned;
+      }
+    }
+    return '';
+  }
+
+  function detectStationInMessage(message) {
+    const normalizedMessage = normalizeStationName(message);
+    if (!normalizedMessage) return '';
+    let best = '';
+    let bestLength = 0;
+    if (Array.isArray(garesParLigne)) {
+      garesParLigne.forEach((gare) => {
+        const normName = normalizeStationName(gare.nom);
+        if (normName && normalizedMessage.includes(normName) && normName.length > bestLength) {
+          best = gare.nom;
+          bestLength = normName.length;
+        }
+      });
+    }
+    return best;
+  }
+
+  async function resolveStationName(message) {
+    const direct = detectStationInMessage(message);
+    if (direct) {
+      return direct;
+    }
+
+    const candidate = extractStationCandidate(message) || message;
+    const normalizedCandidate = normalizeStationName(candidate);
+    if (!normalizedCandidate) {
+      return '';
+    }
+
+    try {
+      await ensureStopsLoaded();
+    } catch (e) {
+      console.warn('Stops indisponibles pour la résolution de gare:', e);
+    }
+
+    let bestName = '';
+    let bestScore = -Infinity;
+
+    const evaluate = (name) => {
+      if (!name) return;
+      const norm = normalizeStationName(name);
+      if (!norm) return;
+      let score = 0;
+      if (norm === normalizedCandidate) score += 100;
+      if (norm.includes(normalizedCandidate)) score += normalizedCandidate.length * 3;
+      if (normalizedCandidate.includes(norm)) score += norm.length * 2;
+      if (score === 0 && norm.slice(0, normalizedCandidate.length) === normalizedCandidate) score += normalizedCandidate.length;
+      score -= Math.abs(norm.length - normalizedCandidate.length) * 0.25;
+      if (score > bestScore) {
+        bestScore = score;
+        bestName = name;
+      }
+    };
+
+    if (Array.isArray(garesParLigne)) {
+      garesParLigne.forEach((gare) => evaluate(gare.nom));
+    }
+    if (Array.isArray(state.stops)) {
+      state.stops.forEach((stop) => evaluate(stop.name));
+    }
+
+    return bestScore > 0 ? bestName : '';
+  }
+
+  function hhmmDataToClock(value) {
+    if (!value) return '';
+    if (/^\d{4}$/.test(value)) {
+      return `${value.slice(0, 2)}:${value.slice(2, 4)}`;
+    }
+    return value;
+  }
+
+  function computeDelay(baseClock, actualClock) {
+    const baseMinutes = hhmmInputToMin(baseClock);
+    const actualMinutes = hhmmInputToMin(actualClock);
+    if (baseMinutes == null || actualMinutes == null) return null;
+    let delta = actualMinutes - baseMinutes;
+    if (delta < -600) {
+      delta += 24 * 60;
+    }
+    if (delta > 600) {
+      delta -= 24 * 60;
+    }
+    return delta;
+  }
+
+  function describeCellStatus(cell) {
+    if (!cell) return null;
+    const text = normalizeWhitespace(cell.textContent || '');
+    if (!text || text === '-') return null;
+
+    const baseRaw = cell.dataset.baseTime || '';
+    const baseClock = hhmmDataToClock(baseRaw);
+    const delayStrike = cell.querySelector('.delay-strike');
+    const delayed = cell.querySelector('.delayed');
+    const deleted = cell.querySelector('.deleted');
+    const added = cell.querySelector('.added-stop');
+    const newStart = cell.querySelector('.new-start');
+
+    if (added) {
+      return {
+        time: normalizeWhitespace(added.textContent),
+        status: 'Arrêt exceptionnel ajouté',
+      };
+    }
+
+    if (deleted) {
+      return {
+        time: baseClock || text,
+        status: 'Train supprimé pour cette gare',
+      };
+    }
+
+    if (newStart) {
+      const newTime = normalizeWhitespace(newStart.textContent || '');
+      const previous = delayStrike ? normalizeWhitespace(delayStrike.textContent || '') : baseClock;
+      const status = previous && previous !== newTime
+        ? `Nouveau point de départ, ancien horaire ${previous}`
+        : 'Nouveau point de départ pour ce train';
+      return { time: newTime || text, status };
+    }
+
+    if (delayed) {
+      const actual = normalizeWhitespace(delayed.textContent || '');
+      const delay = computeDelay(baseClock, actual);
+      const deltaText = Number.isFinite(delay) && delay > 0 ? `(+${delay} min)` : '';
+      return {
+        time: actual || text,
+        status: `Retard annoncé ${deltaText}`.trim(),
+      };
+    }
+
+    if (delayStrike && baseClock) {
+      const actual = text.replace(delayStrike.textContent || '', '').trim() || baseClock;
+      const delay = computeDelay(baseClock, actual);
+      const deltaText = Number.isFinite(delay) && delay > 0 ? `(+${delay} min)` : '';
+      return {
+        time: actual,
+        status: `Retard annoncé ${deltaText}`.trim(),
+      };
+    }
+
+    return {
+      time: text,
+      status: baseClock && baseClock !== text ? `Horaire adapté depuis ${baseClock}` : '',
+    };
+  }
+
+  function describeStationSchedule(stationName, limit = 5) {
+    const table = document.querySelector('#trainInfo table');
+    if (!table) {
+      return {
+        ok: false,
+        message: "Je n'ai pas encore de tableau chargé. Clique sur « Rechercher » dans la console ou attends que les bétaillères se chargent.",
+      };
+    }
+
+    const rows = Array.from(table.querySelectorAll('tbody tr[data-gare]'));
+    if (!rows.length) {
+      return {
+        ok: false,
+        message: "Le tableau est vide pour l'instant. Utilise la console pour lancer une recherche ou change la plage horaire.",
+      };
+    }
+
+    const normalizedTarget = normalizeStationName(stationName);
+    let targetRow = rows.find((row) => normalizeStationName(row.dataset.gare || '') === normalizedTarget);
+    if (!targetRow) {
+      targetRow = rows.find((row) => normalizeStationName(row.dataset.gare || '').includes(normalizedTarget));
+    }
+    if (!targetRow) {
+      return {
+        ok: false,
+        message: `Je ne vois pas ${stationName} dans le tableau actuel. Vérifie les filtres De/À ou charge une autre direction.`,
+      };
+    }
+
+    const headers = Array.from(table.querySelectorAll('thead tr:first-child th[data-train-number]'));
+    const details = [];
+    headers.forEach((header, index) => {
+      const trainNumber = header?.dataset?.trainNumber || normalizeWhitespace(header?.textContent || '');
+      const cell = targetRow.children[index + 1];
+      const description = describeCellStatus(cell);
+      if (!trainNumber || !description || !description.time || description.time === '-') {
+        return;
+      }
+      details.push({
+        train: trainNumber,
+        time: description.time,
+        status: description.status,
+      });
+    });
+
+    if (!details.length) {
+      return {
+        ok: false,
+        message: `Aucun passage affiché pour ${stationName} sur la sélection actuelle. Essaie d'élargir la plage horaire ou autorise les correspondances.`,
+      };
+    }
+
+    const lines = details.slice(0, limit).map((info) => {
+      const status = info.status ? ` — ${info.status}` : '';
+      return `• <strong>${escapeHtml(info.train)}</strong> : ${escapeHtml(info.time)}${escapeHtml(status)}`;
+    });
+    const more = details.length > limit ? `<br><small>${details.length - limit} autres trains sont disponibles dans le tableau.</small>` : '';
+    return {
+      ok: true,
+      message: `Horaires à <strong>${escapeHtml(stationName)}</strong> :<br>${lines.join('<br>')}${more}`,
+    };
+  }
+
+  async function handleScheduleQuery(message) {
+    const stationName = await resolveStationName(message);
+    if (!stationName) {
+      return false;
+    }
+
+    const report = describeStationSchedule(stationName);
+    if (!report.ok) {
+      addMessage('meuhh', report.message);
+    } else {
+      addMessage('meuhh', report.message);
+    }
+    return true;
+  }
+
+  function handleSiteQuestion(message) {
+    if (!state.knowledge) return false;
+    const lower = message.toLowerCase();
+    if (/liste|chapitre|chapitres|sections?|menu/.test(lower)) {
+      const list = listKnowledgeTitles(state.knowledge);
+      if (list) {
+        addMessage('meuhh', list);
+        return true;
+      }
+    }
+
+    const entries = searchSiteKnowledge(message, state.knowledge);
+    if (!entries.length) {
+      return false;
+    }
+    const html = formatKnowledgeResponse(entries, state.knowledge.overview);
+    if (html) {
+      addMessage('meuhh', html);
+      return true;
+    }
+    return false;
+  }
   async function fetchWeather(location) {
     const now = Date.now();
     if (state.weatherCache && now - state.lastWeatherTime < 10 * 60 * 1000) {
@@ -8545,6 +8977,7 @@ function scheduleWeatherAfterTableSettled(){
     }
     addMessage('user', message);
     const lower = message.toLowerCase();
+    const normalized = normalizeText(message);
 
     if (/meteo|pluie|temps|météo/.test(lower)) {
       await handleWeatherQuery();
@@ -8556,8 +8989,22 @@ function scheduleWeatherAfterTableSettled(){
       return;
     }
 
-    if (/train|horaire|gare|station|arrêt|arret/.test(lower)) {
+    if (/(train|horaire|horaires|départ|depart|arrivée|arrivee|circulation|prochain|gare|station|arrêt|arret)/.test(lower)) {
+      const handled = await handleScheduleQuery(message);
+      if (handled) {
+        return;
+      }
       await handleGTFSQuery(message);
+      return;
+    }
+
+    if (/(site|betaillere|bétaillère|console|chapitre|section|fonctionnement|fonctionne|mode d'emploi|mode d’emploi|comment ça marche|comment ca marche|utiliser|utilisation|guide)/.test(lower)) {
+      if (handleSiteQuestion(message)) {
+        return;
+      }
+    }
+
+    if (normalized && normalized.length > 4 && handleSiteQuestion(message)) {
       return;
     }
 
@@ -8565,6 +9012,7 @@ function scheduleWeatherAfterTableSettled(){
       "Je suis Meuhh, la vache connectée de la Betaillère. Pose-moi une question sur les trains, la météo ou demande une blague !",
       "Si tu veux un prochain train, indique-moi la gare de départ. Pour la météo, demande-moi ce qui tombe du ciel !",
       "Je peux jongler entre GTFS statiques, API CFL (quand connecté) et météo. Que veux-tu que je surveille ?"
+      "Besoin d'un mode d'emploi ? Demande-moi un chapitre de la Bétaillère et je te guide."
     ];
     addMessage('meuhh', defaultReplies[Math.floor(Math.random() * defaultReplies.length)]);
   }
@@ -8576,6 +9024,7 @@ function scheduleWeatherAfterTableSettled(){
       addSuggestions([
         'Quelle est la météo ?',
         'Prochain train depuis Luxembourg',
+        'Comment utiliser la console de commande ?',
         'Raconte-moi une blague BERNancyMetzLux'
       ]);
     }
