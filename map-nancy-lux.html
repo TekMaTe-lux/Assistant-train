@@ -95,6 +95,12 @@
       <input id="period" type="range" min="1" max="30" step="1" value="10">
       <label class="muted"><input id="smooth" type="checkbox" checked> animation fluide</label>
     </div>
+    <div class="ctrl">
+      <span class="muted">Icônes :</span>
+      <label class="muted"><input id="toggle-major" type="checkbox" checked> gares prioritaires</label>
+      <label class="muted"><input id="toggle-regular" type="checkbox" checked> gares secondaires</label>
+      <label class="muted"><input id="toggle-trains" type="checkbox" checked> bétaillères</label>
+    </div> 
     <span id="clock" class="muted">—</span>
     <span id="counts" class="muted">—</span>
     <span id="status" class="muted"></span>
@@ -310,7 +316,12 @@ const WEEKDAY_FIELDS = ['sunday','monday','tuesday','wednesday','thursday','frid
   // ---------- Leaflet ----------
   const map = L.map('map').setView([49.2, 6.15], 9);
   L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{ attribution:'© OpenStreetMap' }).addTo(map);
-  const overlay = { rfn:null, cfl:null, garesGTFS:null, axisStations:null };
+  const overlay = { rfn:null, cfl:null, garesGTFS:null, axisStationsMajor:null, axisStationsRegular:null, trains:null };
+  const layerVisibility = {
+    stationsMajor: true,
+    stationsRegular: true,
+    trains: true
+  };
   const trainMarkers = new Map();
   const trainCowById = new Map();
   const trainDataById = new Map();  
@@ -353,7 +364,6 @@ const WEEKDAY_FIELDS = ['sunday','monday','tuesday','wednesday','thursday','frid
     let activeTripId = null;
   let activeStationId = null;
 
-  renderAxisStations();
   const tripPanelEl = document.getElementById('trip-panel');
   const tripPanelCloseBtn = document.getElementById('trip-panel-close');
   const tripPanelIconEl = document.getElementById('trip-panel-icon');
@@ -364,6 +374,35 @@ const WEEKDAY_FIELDS = ['sunday','monday','tuesday','wednesday','thursday','frid
   const tripProgressTextEl = document.getElementById('trip-progress-text');
   const tripStopsTitleEl = document.getElementById('trip-stops-title');
   const tripStopsEl = document.getElementById('trip-stops');
+  const toggleMajorEl = document.getElementById('toggle-major');
+  const toggleRegularEl = document.getElementById('toggle-regular');
+  const toggleTrainsEl = document.getElementById('toggle-trains');
+
+  if (toggleMajorEl){
+    layerVisibility.stationsMajor = toggleMajorEl.checked;
+    toggleMajorEl.addEventListener('change', ()=>{
+      layerVisibility.stationsMajor = toggleMajorEl.checked;
+      applyLayerVisibility();
+    });
+  }
+
+  if (toggleRegularEl){
+    layerVisibility.stationsRegular = toggleRegularEl.checked;
+    toggleRegularEl.addEventListener('change', ()=>{
+      layerVisibility.stationsRegular = toggleRegularEl.checked;
+      applyLayerVisibility();
+    });
+  }
+
+  if (toggleTrainsEl){
+    layerVisibility.trains = toggleTrainsEl.checked;
+    toggleTrainsEl.addEventListener('change', ()=>{
+      layerVisibility.trains = toggleTrainsEl.checked;
+      applyLayerVisibility();
+    });
+  }
+
+  renderAxisStations();
 
   function clearActiveSelection(){
     activeTripId = null;
@@ -837,13 +876,43 @@ const mapContainerEl = map.getContainer();
       station.stopSet = new Set(station.stopIds);
     }
   }
-
-  function renderAxisStations(){
-    if (overlay.axisStations){
-      overlay.axisStations.removeFrom(map);
-      overlay.axisStations = null;
+function setLayerGroupVisibility(group, visible){
+    if (!group) return;
+    const onMap = map.hasLayer(group);
+    if (visible && !onMap){
+      group.addTo(map);
+    } else if (!visible && onMap){
+      group.removeFrom(map);
     }
-    const markers = [];
+  }
+
+  function applyLayerVisibility(){
+    setLayerGroupVisibility(overlay.axisStationsMajor, layerVisibility.stationsMajor);
+    setLayerGroupVisibility(overlay.axisStationsRegular, layerVisibility.stationsRegular);
+    setLayerGroupVisibility(overlay.trains, layerVisibility.trains);
+  }
+
+  function ensureTrainLayer(){
+    if (!overlay.trains){
+      overlay.trains = L.layerGroup();
+      if (layerVisibility.trains){
+        overlay.trains.addTo(map);
+      }
+    }
+    return overlay.trains;
+  }
+    
+  function renderAxisStations(){
+    if (overlay.axisStationsMajor){
+      overlay.axisStationsMajor.remove();
+      overlay.axisStationsMajor = null;
+    }
+    if (overlay.axisStationsRegular){
+      overlay.axisStationsRegular.remove();
+      overlay.axisStationsRegular = null;
+    }
+    const majorMarkers = [];
+    const regularMarkers = [];
     for (const station of AXIS_STATIONS){
       if (!isFinite(station.lat) || !isFinite(station.lon)) continue;
       const marker = L.marker([station.lat, station.lon], {
@@ -853,11 +922,19 @@ const mapContainerEl = map.getContainer();
         zIndexOffset:600
       });
       marker.bindTooltip(station.label, {permanent:false});
-      markers.push(marker);
+      if (station.type === 'major'){
+        majorMarkers.push(marker);
+      } else {
+        regularMarkers.push(marker);
+      }
     }
-    if (markers.length){
-      overlay.axisStations = L.layerGroup(markers).addTo(map);
+    if (majorMarkers.length){
+      overlay.axisStationsMajor = L.layerGroup(majorMarkers);
     }
+    if (regularMarkers.length){
+      overlay.axisStationsRegular = L.layerGroup(regularMarkers);
+    }
+    applyLayerVisibility();
   }
   
    // ---------- Graphe réseau (pour suivre les voies) ----------
@@ -1352,55 +1429,60 @@ let calendarDateRows = null;
   }
 
   function renderTrains(list){
-  const seen = new Set();
+  const layer = ensureTrainLayer();
+    const seen = new Set();
 
-  for (const t of list){
-    seen.add(t.id);
-    trainDataById.set(t.id, t);
-    const displayName = t.number ? (t.headsign ? `${t.headsign} — Train ${t.number}` : `Train ${t.number}`) : (t.headsign || t.id);
-    t.displayName = displayName;
+    for (const t of list){
+      seen.add(t.id);
+      trainDataById.set(t.id, t);
+      const displayName = t.number ? (t.headsign ? `${t.headsign} — Train ${t.number}` : `Train ${t.number}`) : (t.headsign || t.id);
+      t.displayName = displayName;
 
-    if (trainMarkers.has(t.id)){
-      const marker = trainMarkers.get(t.id);
-      marker.setLatLng([t.lat, t.lon]);
-      marker.setIcon(iconForTrain(t));
-      marker.setZIndexOffset(1000); // passer devant les couches vectorielles
-      if (marker.getPopup()) marker.unbindPopup();
-    } else {
-      const m = L.marker([t.lat, t.lon], {
-        icon: iconForTrain(t),
-        zIndexOffset: 1000,       // au-dessus des lignes RFN/CFL
-        riseOnHover: true,        // confort visuel
-        keyboard: false
-      }).addTo(map);
-      trainMarkers.set(t.id, m);
+      if (trainMarkers.has(t.id)){
+        const marker = trainMarkers.get(t.id);
+        marker.setLatLng([t.lat, t.lon]);
+        marker.setIcon(iconForTrain(t));
+        marker.setZIndexOffset(1000); // passer devant les couches vectorielles
+        if (marker.getPopup()) marker.unbindPopup();
+      } else {
+        const m = L.marker([t.lat, t.lon], {
+          icon: iconForTrain(t),
+          zIndexOffset: 1000,       // au-dessus des lignes RFN/CFL
+          riseOnHover: true,        // confort visuel
+          keyboard: false
+        });
+        layer.addLayer(m);
+        trainMarkers.set(t.id, m);
+      }
     }
-  }
 
-  // nettoyage des marqueurs disparus
-  for (const [id,mk] of trainMarkers.entries()){
-    if(!seen.has(id)){
-      map.removeLayer(mk);
-      trainMarkers.delete(id);
-      trainCowById.delete(id);
-      trainDataById.delete(id);
-      if (activeTripId === id){
-        activeTripId = null;
-        if (activeStationId){
-          renderPanel();
-        } else {
-          hideTripPanel();
+   // nettoyage des marqueurs disparus
+    for (const [id,mk] of trainMarkers.entries()){
+      if(!seen.has(id)){
+        if (overlay.trains){
+          overlay.trains.removeLayer(mk);
+        }
+        mk.remove();
+        trainMarkers.delete(id);
+        trainCowById.delete(id);
+        trainDataById.delete(id);
+        if (activeTripId === id){
+          activeTripId = null;
+          if (activeStationId){
+            renderPanel();
+          } else {
+            hideTripPanel();
+          }
         }
       }
     }
-  }
 
   if (activeStationId || (activeTripId && trainDataById.has(activeTripId))){
-    renderPanel();
+      renderPanel();
+    }
+    document.getElementById('counts').textContent = `${list.length} train(s) actifs`;
+    document.getElementById('clock').textContent = 'Heure locale : ' + new Date().toLocaleTimeString();
   }
-  document.getElementById('counts').textContent = `${list.length} train(s) actifs`;
-  document.getElementById('clock').textContent = 'Heure locale : ' + new Date().toLocaleTimeString();
-}
 
   // ---------- Boucle ----------
   let periodMs = 10000, nextTick = performance.now();
