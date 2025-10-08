@@ -2,7 +2,7 @@
 <html lang="fr">
 <head>
   <meta charset="utf-8"/>
-  <title>Carte Nancy ↔ Luxembourg — Trains sur le tracé (sans shapes GTFS)</title>
+  <title>Carte Nancy ↔ Luxembourg — Réseaux + Gares + Trains (GTFS sans shapes)</title>
   <meta name="viewport" content="width=device-width,initial-scale=1"/>
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
   <style>
@@ -25,8 +25,8 @@
 </head>
 <body>
   <header>
-    <div style="font-weight:700">Nancy ↔ Luxembourg — Trains sur le tracé RFN+CFL (GTFS statique, sans shapes)</div>
-    <div class="muted">Les trains suivent le <b>corridor</b> construit depuis les GeoJSON RFN+CFL. Interpolation temporelle entre arrêts, position curviligne réelle sur la ligne.</div>
+    <div style="font-weight:700">Nancy ↔ Luxembourg — Réseaux officiels + Gares + Trains (GTFS statique, sans shapes)</div>
+    <div class="muted">Trains placés par interpolation entre gares à partir de <code>stop_times.txt</code>. Tracé RFN (SNCF) + CFL en GeoJSON. Rafraîchissement réglable.</div>
   </header>
 
   <div id="map"></div>
@@ -104,66 +104,279 @@
     el.innerHTML = (isErr?'<span class="err">':'' ) + msg + (isErr?'</span>':'');
   }
 
-  // ---------- Maths géo / utilitaires ----------
+  // ---------- Maths géo (approx) ----------
   const R = 6371000;
   function toXY(lat, lon, lat0){ const x=(lon*Math.PI/180)*Math.cos(lat0*Math.PI/180), y=(lat*Math.PI/180); return {x,y}; }
   function distLL(a,b){ const lat0=(a.lat+b.lat)/2; const A=toXY(a.lat,a.lon,lat0), B=toXY(b.lat,b.lon,lat0); const dx=B.x-A.x, dy=B.y-A.y; return Math.sqrt(dx*dx+dy*dy)*R; }
+  function lerp(a,b,t){ return a + (b-a)*t; }
+
+  // ---------- Temps ----------
   function gtfsTimeToSec(t){ if(!t) return null; const [H,M,S]=t.split(':').map(Number); return H*3600+M*60+(S||0); }
   function nowSecLocal(){ const d=new Date(); return d.getHours()*3600 + d.getMinutes()*60 + d.getSeconds(); }
   function fmtMinSec(s){ const m=Math.floor(s/60), r=s%60; return `${m}m${String(r).padStart(2,'0')}s`; }
 
-  // projection point -> segment de la polyline + curviligne
-  function projectPointOnSeg(p,a,b){
-    const lat0=(a.lat+b.lat)/2, P=toXY(p.lat,p.lon,lat0), A=toXY(a.lat,a.lon,lat0), B=toXY(b.lat,b.lon,lat0);
-    const ABx=B.x-A.x, ABy=B.y-A.y, APx=P.x-A.x, APy=P.y-A.y, ab2=ABx*ABx+ABy*ABy;
-    let t=ab2? (APx*ABx+APy*ABy)/ab2 : 0; t=Math.max(0,Math.min(1,t));
-    const X=A.x+t*ABx, Y=A.y+t*ABy; const lon=X/Math.cos(lat0*Math.PI/180)*180/Math.PI, lat=Y*180/Math.PI;
-    const dseg=distLL(a,{lat,lon}); return { t, d:dseg, point:{lat,lon} };
-  }
-  function pointAlong(shapePts, d){
-    if(shapePts.length===0) return null;
-    if(d<=0) return {lat:shapePts[0].lat, lon:shapePts[0].lon};
-    if(d>=shapePts.at(-1).cum) return {lat:shapePts.at(-1).lat, lon:shapePts.at(-1).lon};
-    let i=1; while(i<shapePts.length && shapePts[i].cum<d) i++;
-    const B=shapePts[i], A=shapePts[i-1]; const r=(d-A.cum)/(B.cum-A.cum);
-    return {lat:A.lat+r*(B.lat-A.lat), lon:A.lon+r*(B.lon-A.lon)};
-  }
-
   // ---------- État données ----------
   const stopsById = new Map();              // stop_id -> {stop_id,name,lat,lon}
-  const stopTimesByTrip = new Map();        // trip_id -> [ {stop_id, arr, dep, seq} ]
-  const tripsById = new Map();              // (optionnel) trip_id -> {route_id, headsign, service_id}
-  const routesById = new Map();             // (optionnel)
-  let activeServiceIds = null;
-
-  // Corridor + mapping arrêt -> distance curviligne
-  let CORRIDOR = null;                 // [{lat,lon,cum}]
-  const stopCurvDist = new Map();      // stop_id -> d (m)
+  const stopTimesByTrip = new Map();        // trip_id -> [ {stop_id, arr, dep, seq} ] trié
+  const tripsById = new Map();              // (optionnel) trip_id -> {route_id, headsign}
+  const routesById = new Map();             // (optionnel) route_id -> {route_short_name, route_long_name}
+  let activeServiceIds = null;              // Set<string> pour today si calendar_dates dispo
 
   // ---------- Leaflet ----------
   const map = L.map('map').setView([49.2, 6.15], 9);
   L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{ attribution:'© OpenStreetMap' }).addTo(map);
-  const overlay = { rfn:null, cfl:null, garesGTFS:null, corridor:null };
+  const overlay = { rfn:null, cfl:null, garesGTFS:null };
   const trainMarkers = new Map();
+
+   // ---------- Graphe réseau (pour suivre les voies) ----------
+  const networkGraph = new Map();       // key -> { key, lat, lon, neighbors: Map<key, distance> }
+  const networkNodes = [];              // liste des noeuds pour recherche voisinage
+  const stopNearestCache = new Map();   // stop_id -> { node, dist }
+  const stopPathCache = new Map();      // "stopA|stopB" -> chemin pré-calculé
+
+  function coordKey(lat, lon){ return `${Math.round(lat*1e6)},${Math.round(lon*1e6)}`; }
+
+  function ensureNetworkNode(lat, lon){
+    const key = coordKey(lat, lon);
+    if (!networkGraph.has(key)){
+      networkGraph.set(key, { key, lat, lon, neighbors: new Map() });
+      networkNodes.push(networkGraph.get(key));
+    }
+    return networkGraph.get(key);
+  }
+
+  function addNetworkEdge(latA, lonA, latB, lonB){
+    const nodeA = ensureNetworkNode(latA, lonA);
+    const nodeB = ensureNetworkNode(latB, lonB);
+    const d = distLL({lat:latA, lon:lonA}, {lat:latB, lon:lonB});
+    if (!isFinite(d) || d <= 0) return;
+    if (!nodeA.neighbors.has(nodeB.key) || nodeA.neighbors.get(nodeB.key) > d){
+      nodeA.neighbors.set(nodeB.key, d);
+    }
+    if (!nodeB.neighbors.has(nodeA.key) || nodeB.neighbors.get(nodeA.key) > d){
+      nodeB.neighbors.set(nodeA.key, d);
+    }
+  }
+
+  function ingestGeoJSONNetwork(data){
+    if (!data) return;
+    const features = data.type === 'FeatureCollection' ? data.features : [data];
+    for (const feat of features){
+      if (!feat || !feat.geometry) continue;
+      const geom = feat.geometry;
+      const type = geom.type;
+      if (type === 'LineString'){
+        processLineStringCoords(geom.coordinates);
+      } else if (type === 'MultiLineString'){
+        for (const coords of geom.coordinates){ processLineStringCoords(coords); }
+      }
+    }
+  }
+
+  function processLineStringCoords(coords){
+    if (!Array.isArray(coords)) return;
+    for (let i=1;i<coords.length;i++){
+      const [lonA, latA] = coords[i-1];
+      const [lonB, latB] = coords[i];
+      if (!isFinite(latA) || !isFinite(lonA) || !isFinite(latB) || !isFinite(lonB)) continue;
+      addNetworkEdge(latA, lonA, latB, lonB);
+    }
+  }
+
+  function nearestNetworkNode(stop){
+    if (!stop) return null;
+    if (stopNearestCache.has(stop.stop_id)) return stopNearestCache.get(stop.stop_id);
+    let best = null, bestDist = Infinity;
+    for (const node of networkNodes){
+      const d = distLL({lat:stop.lat, lon:stop.lon}, {lat:node.lat, lon:node.lon});
+      if (d < bestDist){ bestDist = d; best = node; }
+    }
+    const res = best ? { node: best, dist: bestDist } : null;
+    stopNearestCache.set(stop.stop_id, res);
+    return res;
+  }
+
+  function shortestPathNodes(startKey, endKey){
+    if (!networkGraph.has(startKey) || !networkGraph.has(endKey)) return null;
+    if (startKey === endKey) return [networkGraph.get(startKey)];
+
+    const distMap = new Map([[startKey, 0]]);
+    const prevMap = new Map();
+    const visited = new Set();
+    const queue = [{ key: startKey, dist: 0 }];
+
+    while (queue.length){
+      queue.sort((a,b)=>a.dist-b.dist);
+      const { key, dist } = queue.shift();
+      if (visited.has(key)) continue;
+      visited.add(key);
+      if (key === endKey) break;
+      const node = networkGraph.get(key);
+      if (!node) continue;
+      for (const [nextKey, weight] of node.neighbors){
+        if (visited.has(nextKey)) continue;
+        const newDist = dist + weight;
+        if (newDist < (distMap.get(nextKey) ?? Infinity)){
+          distMap.set(nextKey, newDist);
+          prevMap.set(nextKey, key);
+          queue.push({ key: nextKey, dist: newDist });
+        }
+      }
+    }
+
+    if (!distMap.has(endKey)) return null;
+    const keys = [];
+    let cur = endKey;
+    while (cur){
+      keys.push(cur);
+      if (cur === startKey) break;
+      cur = prevMap.get(cur);
+      if (cur === undefined) return null;
+    }
+    keys.reverse();
+    return keys.map(k=>networkGraph.get(k)).filter(Boolean);
+  }
+
+  function makePath(rawCoords, isFallback){
+    const coords = [];
+    const cum = [];
+    let total = 0;
+    for (let i=0;i<rawCoords.length;i++){
+      const c = rawCoords[i];
+      if (!Array.isArray(c) || c.length<2) continue;
+      if (!coords.length){
+        coords.push(c);
+        cum.push(0);
+        continue;
+      }
+      const prev = coords[coords.length-1];
+      const d = distLL({lat:prev[0], lon:prev[1]}, {lat:c[0], lon:c[1]});
+      if (!isFinite(d)) continue;
+      if (d < 0.5){
+        if (i === rawCoords.length-1 && (prev[0] !== c[0] || prev[1] !== c[1])){
+          coords.push(c);
+          cum.push(total);
+        }
+        continue;
+      }
+      total += d;
+      coords.push(c);
+      cum.push(total);
+    }
+    if (coords.length < 2 && rawCoords.length){
+      const last = rawCoords[rawCoords.length-1];
+      if (last && (coords.length === 0 || coords[coords.length-1][0] !== last[0] || coords[coords.length-1][1] !== last[1])){
+        coords.push(last);
+        cum.push(total);
+      }
+    }
+    if (!coords.length){
+      coords.push([0,0]);
+      cum.push(0);
+    } else if (coords.length === 1){
+      coords.push(coords[0]);
+      cum.push(total);
+    }
+    return { coords, cumDistances: cum, totalDist: total, isFallback: !!isFallback };
+  }
+
+  function directPathBetweenStops(stopA, stopB){
+    return makePath([[stopA.lat, stopA.lon],[stopB.lat, stopB.lon]], true);
+  }
+
+  function computeStopPath(stopA, stopB){
+    const direct = directPathBetweenStops(stopA, stopB);
+    if (!networkNodes.length) return direct;
+    const anchorA = nearestNetworkNode(stopA);
+    const anchorB = nearestNetworkNode(stopB);
+    if (!anchorA || !anchorB) return direct;
+    const pathNodes = shortestPathNodes(anchorA.node.key, anchorB.node.key);
+    if (!pathNodes || !pathNodes.length) return direct;
+
+    const coords = [[stopA.lat, stopA.lon]];
+    const firstNode = pathNodes[0];
+    if (firstNode) coords.push([firstNode.lat, firstNode.lon]);
+    for (let i=1;i<pathNodes.length-1;i++){
+      const node = pathNodes[i];
+      coords.push([node.lat, node.lon]);
+    }
+    const lastNode = pathNodes[pathNodes.length-1];
+    if (lastNode) coords.push([lastNode.lat, lastNode.lon]);
+    coords.push([stopB.lat, stopB.lon]);
+
+    const path = makePath(coords, false);
+    if (!path.totalDist) return direct;
+    return path;
+  }
+
+  function pathBetweenStops(stopA, stopB){
+    if (!stopA || !stopB) return null;
+    const key = `${stopA.stop_id}|${stopB.stop_id}`;
+    if (stopPathCache.has(key)) return stopPathCache.get(key);
+    const path = computeStopPath(stopA, stopB);
+    stopPathCache.set(key, path);
+    const revKey = `${stopB.stop_id}|${stopA.stop_id}`;
+    if (!stopPathCache.has(revKey) && path){
+      const revCoords = [...path.coords].map(c=>[c[0], c[1]]).reverse();
+      stopPathCache.set(revKey, makePath(revCoords, path.isFallback));
+    }
+    return path;
+  }
+
+  function positionAlongPath(path, ratio){
+    if (!path) return null;
+    const target = Math.max(0, Math.min(1, ratio)) * (path.totalDist || 0);
+    const cum = path.cumDistances;
+    const coords = path.coords;
+    if (!coords || coords.length === 0) return null;
+    if (coords.length === 1) return { lat: coords[0][0], lon: coords[0][1] };
+    for (let i=1;i<cum.length;i++){
+      if (target <= cum[i]){
+        const segLen = cum[i] - cum[i-1];
+        const t = segLen > 0 ? (target - cum[i-1]) / segLen : 0;
+        const [latA, lonA] = coords[i-1];
+        const [latB, lonB] = coords[i];
+        return { lat: lerp(latA, latB, t), lon: lerp(lonA, lonB, t) };
+      }
+    }
+    const last = coords[coords.length-1];
+    return { lat: last[0], lon: last[1] };
+  } 
 
   // zones d'intérêt (filtre "sillon" simple)
   const AXIS_STOP_KEYWORDS = ['nancy','pont-','metz','hagondange','thionville','bettembourg','luxembourg'];
 
-  function tripPassesAxis(seq){
-    const names = seq.map(s=> (stopsById.get(s.stop_id)?.name || '').toLowerCase());
-    const hits = names.filter(n=> AXIS_STOP_KEYWORDS.some(k=> n.includes(k))).length;
-    return hits >= 2;
-  }
-  function serviceAllowed(trip_id){
-    if (!activeServiceIds || !tripsById.has(trip_id)) return true;
-    const svc = tripsById.get(trip_id).service_id;
-    if (!svc) return true;
-    return activeServiceIds.has(svc);
+  // ---------- Chargement réseaux ----------
+  async function loadNetworks(){
+    try {
+      const rfn = await fetchJSONAny(FILES.rfn);
+      ingestGeoJSONNetwork(rfn);
+      overlay.rfn = L.geoJSON(rfn, { style:{ color:'#00f0ff', weight:3, opacity:0.6 } }).addTo(map);
+      let bounds = overlay.rfn.getBounds();
+
+      try {
+        const cfl = await fetchJSONAny(FILES.cfl);
+        ingestGeoJSONNetwork(cfl);
+        overlay.cfl = L.geoJSON(cfl, { style:{ color:'#ff00e0', weight:3, opacity:0.6 } }).addTo(map);
+        bounds.extend(overlay.cfl.getBounds());
+      } catch(e){
+        setStatus('RFN chargé — CFL introuvable (ok si en cours de conversion)', true);
+      }
+
+      stopNearestCache.clear();
+      stopPathCache.clear();
+
+      map.fitBounds(bounds);
+    } catch(e){
+      setStatus('Erreur chargement réseaux: '+e.message, true);
+    }
   }
 
-  // ---------- Charger GTFS (on a besoin des stops avant de bâtir le corridor) ----------
+  // ---------- Chargement GTFS (sans shapes) ----------
   async function loadGTFS(){
     try {
+      stopNearestCache.clear();
+      stopPathCache.clear();
       // stops
       const stops = await parseCSVAny(FILES.stops);
       for (const s of stops){
@@ -186,16 +399,23 @@
       }
       for (const [k,v] of stopTimesByTrip) v.sort((a,b)=>a.seq-b.seq);
 
+      // trips (optionnel)
       try {
         const trips = await parseCSVAny(FILES.trips);
-        for (const t of trips){ tripsById.set(t.trip_id, { route_id:t.route_id, headsign:t.trip_headsign, service_id:t.service_id }); }
+        for (const t of trips){
+          tripsById.set(t.trip_id, { route_id:t.route_id, headsign:t.trip_headsign });
+        }
       } catch(_){ /* ok si absent */ }
 
+      // routes (optionnel)
       try {
         const routes = await parseCSVAny(FILES.routes);
-        for (const r of routes){ routesById.set(r.route_id, { short:r.route_short_name, long:r.route_long_name }); }
+        for (const r of routes){
+          routesById.set(r.route_id, { short:r.route_short_name, long:r.route_long_name });
+        }
       } catch(_){ /* ok si absent */ }
 
+      // calendar_dates (optionnel)
       try {
         const cdates = await parseCSVAny(FILES.calendar_dates);
         const today = new Date();
@@ -206,11 +426,16 @@
         const add = new Set(), remove = new Set();
         for (const row of cdates){
           if (row.date !== ymd) continue;
-          if (String(row.exception_type)==='1') add.add(row.service_id);
-          if (String(row.exception_type)==='2') remove.add(row.service_id);
+          if (row.exception_type === '1' || row.exception_type === 1) add.add(row.service_id);
+          if (row.exception_type === '2' || row.exception_type === 2) remove.add(row.service_id);
         }
-        activeServiceIds = add.size? add : null;
-      } catch(_){ /* ok */ }
+        if (add.size || remove.size){
+          activeServiceIds = add;
+          // S’il y a des trips avec service_id à retirer, on pourrait filtrer,
+          // mais sans trips.txt on ne peut pas relier service_id -> trip.
+          // Si trips.txt est présent, on filtrera plus bas.
+        }
+      } catch(_){ /* ok si absent */ }
 
       // Dessine les gares (GTFS)
       const gares = [];
@@ -228,103 +453,21 @@
     }
   }
 
-  // ---------- Charger réseaux + construire le CORRIDOR continu ----------
-  async function loadNetworksAndCorridor(){
-    try {
-      const [rfn, cfl] = await Promise.all([
-        fetchJSONAny(FILES.rfn),
-        fetchJSONAny(FILES.cfl).catch(()=>({type:'FeatureCollection',features:[]})) // CFL peut être absent
-      ]);
-
-      overlay.rfn = L.geoJSON(rfn, { style:{ color:'#00f0ff', weight:3, opacity:0.35 } }).addTo(map);
-      let bounds = overlay.rfn.getBounds();
-      if (cfl.features && cfl.features.length){
-        overlay.cfl = L.geoJSON(cfl, { style:{ color:'#ff00e0', weight:3, opacity:0.35 } }).addTo(map);
-        bounds.extend(overlay.cfl.getBounds());
-      }
-      map.fitBounds(bounds);
-
-      // Construire le corridor: aplatir RFN+CFL -> points, ordonner le long de l'axe Nancy↔Lux, dédoublonner, cumuler
-      function extractPoints(geo){
-        const out = [];
-        const pushLine = (coords)=>{
-          for (let i=0;i<coords.length;i++){
-            const [lon,lat] = coords[i];
-            out.push({lat,lon});
-            // densification légère si segments > 1500 m
-            if (i>0){
-              const prev = out[out.length-2];
-              if (distLL(prev, {lat,lon}) > 1500) {
-                out.splice(out.length-1, 0, { lat:(prev.lat+lat)/2, lon:(prev.lon+lon)/2 });
-              }
-            }
-          }
-        };
-        for (const f of geo.features || []){
-          const g = f.geometry; if (!g) continue;
-          if (g.type==='LineString') pushLine(g.coordinates);
-          else if (g.type==='MultiLineString'){ for (const ls of g.coordinates) pushLine(ls); }
-        }
-        return out;
-      }
-
-      const pts = [...extractPoints(rfn), ...extractPoints(cfl)];
-      if (pts.length < 2) { setStatus('Corridor: aucun point (vérifie les GeoJSON)', true); return; }
-
-      // Axe principal approximatif: utiliser deux stops emblématiques si dispo, sinon Nancy/Lux
-      const axisStops = ['Nancy','Metz','Thionville','Bettembourg','Luxembourg'];
-      const sample=[]; for (const s of stopsById.values()){ if (axisStops.some(k=> (s.name||'').toLowerCase().includes(k.toLowerCase()))) sample.push(s); }
-      const Aref = sample[0] || {lat:48.6921, lon:6.1844};
-      const Bref = sample.at(-1) || {lat:49.5998, lon:6.1333};
-      const lat0 = (Aref.lat + Bref.lat)/2;
-      const Axy = toXY(Aref.lat, Aref.lon, lat0), Bxy = toXY(Bref.lat, Bref.lon, lat0);
-      const vABx = Bxy.x - Axy.x, vABy = Bxy.y - Axy.y, ab2 = vABx*vABx + vABy*vABy;
-
-      function scoreOnAxis(p){
-        const P = toXY(p.lat, p.lon, lat0);
-        const APx = P.x - Axy.x, APy = P.y - Axy.y;
-        return ab2 ? (APx*vABx + APy*vABy)/Math.sqrt(ab2) : 0;
-      }
-
-      pts.sort((p,q)=> scoreOnAxis(p) - scoreOnAxis(q));  // ordonner
-      // dédoublonner (epsilon)
-      const EPS = 60;
-      const corridorPts = [];
-      for (const p of pts){
-        if (corridorPts.length===0) { corridorPts.push(p); continue; }
-        const last = corridorPts[corridorPts.length-1];
-        if (distLL(last, p) >= EPS) corridorPts.push(p);
-      }
-      // cumul
-      let cum=0; CORRIDOR=[];
-      for (let i=0;i<corridorPts.length;i++){
-        if (i>0) cum += distLL(corridorPts[i-1], corridorPts[i]);
-        CORRIDOR.push({ lat:corridorPts[i].lat, lon:corridorPts[i].lon, cum });
-      }
-
-      // afficher le corridor mis en avant
-      overlay.corridor = L.polyline(CORRIDOR.map(p=>[p.lat,p.lon]), {color:'#00e3a1', weight:4, opacity:0.8}).addTo(map);
-
-      // projeter chaque arrêt GTFS sur le corridor pour obtenir son abscisse curviligne "d"
-      for (const s of stopsById.values()){
-        let best={cum:0,dist:Infinity};
-        for (let i=0;i<CORRIDOR.length-1;i++){
-          const a=CORRIDOR[i], b=CORRIDOR[i+1];
-          const proj=projectPointOnSeg({lat:s.lat,lon:s.lon}, a,b);
-          if (proj.d < best.dist){
-            best={ cum: a.cum + proj.t*(b.cum - a.cum), dist: proj.d };
-          }
-        }
-        stopCurvDist.set(s.stop_id, best.cum);
-      }
-
-      setStatus('Corridor construit — points: '+CORRIDOR.length);
-    } catch(e){
-      setStatus('Erreur réseaux/corridor: '+e.message, true);
-    }
+  // ---------- Filtre sillon & service du jour ----------
+  function tripPassesAxis(seq){
+    const names = seq.map(s=> (stopsById.get(s.stop_id)?.name || '').toLowerCase());
+    const hits = names.filter(n=> AXIS_STOP_KEYWORDS.some(k=> n.includes(k))).length;
+    return hits >= 2;
   }
 
-  // ---------- Calcul positions (curviligne sur corridor) ----------
+  function serviceAllowed(trip_id){
+    if (!activeServiceIds || !tripsById.has(trip_id)) return true;
+    const svc = tripsById.get(trip_id).service_id;
+    if (!svc) return true;
+    return activeServiceIds.has(svc);
+  }
+
+  // ---------- Calcul positions (interpolation arrêt→arrêt) ----------
   function trainsAt(nowSec){
     const items=[];
     for (const [trip_id, seq] of stopTimesByTrip.entries()){
@@ -343,26 +486,23 @@
         if (tA==null || tB==null || tB<=tA) continue;
         if (nowSec < tA || nowSec > tB) continue;
 
-        const dA = stopCurvDist.get(A.stop_id);
-        const dB = stopCurvDist.get(B.stop_id);
-        if (dA==null || dB==null) continue;
+        const sA = stopsById.get(A.stop_id), sB = stopsById.get(B.stop_id);
+        if (!sA || !sB) continue;
 
         const r=(nowSec - tA)/(tB - tA); // 0..1
-        const d = dA + r*(dB - dA);
-        const pt = pointAlong(CORRIDOR, d);
-        if (!pt) continue;
+        const path = pathBetweenStops(sA, sB);
+        const pos = positionAlongPath(path, r) || { lat: lerp(sA.lat, sB.lat, r), lon: lerp(sA.lon, sB.lon, r) };
+        const { lat, lon } = pos;
+        const etaSec = Math.max(0, Math.round(tB - nowSec));
 
-        const sA = stopsById.get(A.stop_id), sB = stopsById.get(B.stop_id);
         const trip = tripsById.get(trip_id) || {};
         const route = routesById.get(trip.route_id) || {};
 
         items.push({
           id: trip_id,
           headsign: trip.headsign || route.long || route.short || '',
-          from: sA?.name || '—',
-          to:   sB?.name || '—',
-          etaSec: Math.max(0, Math.round(tB - nowSec)),
-          lat: pt.lat, lon: pt.lon,
+          from: sA.name, to: sB.name,
+          etaSec, lat, lon,
           route_id: trip.route_id
         });
         break;
@@ -403,9 +543,8 @@
 
   // ---------- Boot ----------
   (async function boot(){
-    await loadGTFS();                // besoin des stops pour projeter ensuite
-    await loadNetworksAndCorridor();// construit le corridor RFN+CFL + abscisses des arrêts
-    if (!CORRIDOR){ setStatus('Impossible de construire le corridor.', true); return; }
+    await loadNetworks();
+    await loadGTFS();
     tick();
     requestAnimationFrame(loop);
   })().catch(e=> setStatus('Erreur initialisation: '+e.message, true));
