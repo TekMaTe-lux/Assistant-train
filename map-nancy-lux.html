@@ -1,0 +1,330 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8"/>
+  <title>Carte Nancy ↔ Luxembourg — Réseaux + Gares + Trains (GTFS statique)</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+  <style>
+    :root{ color-scheme: dark; }
+    body{ margin:0; background:#0b0f1a; color:#e0f0ff; font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; }
+    header{ padding:10px 14px; background:#0e1726; border-bottom:1px solid #20324b; }
+    #map{ height: calc(100vh - 110px); }
+    .panel{ display:flex; gap:12px; align-items:center; padding:8px 14px; background:#0e1726; border-top:1px solid #20324b; }
+    .badge{ padding:2px 6px; border:1px solid #2a3b55; border-radius:6px; font-size:12px; }
+    .muted{ opacity:.8; font-size:12px; }
+    .ctrl{ display:flex; align-items:center; gap:8px; }
+    .ctrl input[type="range"]{ width:160px; }
+    .legend-dot{ display:inline-block; width:10px; height:10px; border-radius:50%; margin-right:6px; }
+    .dot-train{ background:#00f0ff; }
+    .dot-gare{ background:#a0ff00; }
+    .dot-rfn{ background:#00f0ff; }
+    .dot-cfl{ background:#ff00e0; }
+  </style>
+</head>
+<body>
+  <header>
+    <div style="font-weight:700">Nancy ↔ Luxembourg — Réseaux officiels + Gares + Trains (GTFS statique)</div>
+    <div class="muted">Réseaux: RFN (SNCF) + CFL — Gares: GTFS + (option) points CFL — Trains: positions théoriques interpolées le long des <i>shapes</i> GTFS. Pas de temps réel opérateur.</div>
+  </header>
+
+  <div id="map"></div>
+
+  <div class="panel">
+    <span class="badge"><span class="legend-dot dot-rfn"></span>RFN</span>
+    <span class="badge"><span class="legend-dot dot-cfl"></span>CFL</span>
+    <span class="badge"><span class="legend-dot dot-gare"></span>Gares</span>
+    <span class="badge"><span class="legend-dot dot-train"></span>Trains</span>
+    <div class="ctrl">
+      <label class="muted">Rafraîchissement: <span id="hz">10</span>s</label>
+      <input id="period" type="range" min="1" max="30" step="1" value="10">
+      <label class="muted"><input id="smooth" type="checkbox" checked> animation fluide</label>
+    </div>
+    <span id="clock" class="muted">—</span>
+    <span id="counts" class="muted">—</span>
+  </div>
+
+  <!-- libs -->
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://unpkg.com/papaparse@5.4.1/papaparse.min.js"></script>
+
+  <script>
+  // ---------- chemins des données (ton repo) ----------
+  const PATH = 'data/';
+  const FILES = {
+    // réseau
+    merged: 'nancy_lux_full.geojson', // si présent, on l’utilise
+    rfn:    'lignes_rfn.geojson',
+    cfl:    'lignes_cfl.geojson',
+    pointsCFL: 'points_cfl.geojson', // optionnel
+    // GTFS statique
+    stops:      'stops.txt',
+    trips:      'trips.txt',
+    stop_times: 'stop_times.txt',
+    shapes:     'shapes.txt',
+    // calendrier (option)
+    //calendar: 'calendar.txt',
+    //calendar_dates: 'calendar_dates.txt',
+  };
+
+  // ---------- utilitaires ----------
+  const parseCSV = (url) => new Promise((resolve, reject) => {
+    Papa.parse(url, { download:true, header:true, dynamicTyping:false, skipEmptyLines:true,
+      complete: (res)=>resolve(res.data), error: reject });
+  });
+
+  function exists(url){
+    return fetch(url, {method:'HEAD'}).then(r=> r.ok).catch(()=>false);
+  }
+
+  function gtfsTimeToSec(t){ if(!t) return null; const [H,M,S]=t.split(':').map(Number); return H*3600+M*60+(S||0); }
+  function nowSecLocal(){ const d=new Date(); return d.getHours()*3600 + d.getMinutes()*60 + d.getSeconds(); }
+
+  // approx distances/projections pour cumuls shape
+  const R = 6371000;
+  function toXY(lat, lon, lat0){ const x=(lon*Math.PI/180)*Math.cos(lat0*Math.PI/180), y=(lat*Math.PI/180); return {x,y}; }
+  function distLL(a,b){ const lat0=(a.lat+b.lat)/2; const A=toXY(a.lat,a.lon,lat0), B=toXY(b.lat,b.lon,lat0); const dx=B.x-A.x, dy=B.y-A.y; return Math.sqrt(dx*dx+dy*dy)*R; }
+  function projectPointOnSeg(p,a,b){
+    const lat0=(a.lat+b.lat)/2, P=toXY(p.lat,p.lon,lat0), A=toXY(a.lat,a.lon,lat0), B=toXY(b.lat,b.lon,lat0);
+    const ABx=B.x-A.x, ABy=B.y-A.y, APx=P.x-A.x, APy=P.y-A.y, ab2=ABx*ABx+ABy*ABy;
+    let t=ab2? (APx*ABx+APy*ABy)/ab2 : 0; t=Math.max(0,Math.min(1,t));
+    const X=A.x+t*ABx, Y=A.y+t*ABy; const lon=X/Math.cos(lat0*Math.PI/180)*180/Math.PI, lat=Y*180/Math.PI;
+    const dseg=distLL(a,{lat,lon}); return { t, d:dseg, point:{lat,lon} };
+  }
+  function pointAlong(shapePts, d){
+    if(shapePts.length===0) return null;
+    if(d<=0) return {lat:shapePts[0].lat, lon:shapePts[0].lon};
+    if(d>=shapePts.at(-1).cum) return {lat:shapePts.at(-1).lat, lon:shapePts.at(-1).lon};
+    let i=1; while(i<shapePts.length && shapePts[i].cum<d) i++;
+    const B=shapePts[i], A=shapePts[i-1]; const r=(d-A.cum)/(B.cum-A.cum);
+    return {lat:A.lat+r*(B.lat-A.lat), lon:A.lon+r*(B.lon-A.lon)};
+  }
+
+  // ---------- état GTFS ----------
+  const stopsById = new Map();        // stop_id -> {stop_id,name,lat,lon}
+  const tripsById = new Map();        // trip_id -> {trip_id,route_id,service_id,shape_id,headsign}
+  const stopTimesByTrip = new Map();  // trip_id -> [ {stop_id, arrival, departure, seq, sdist?} ]
+  const shapesById = new Map();       // shape_id -> [ {lat,lon,cum(m)} ]
+
+  // ---------- Leaflet ----------
+  const map = L.map('map').setView([49.2, 6.15], 9);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution:'© OpenStreetMap' }).addTo(map);
+  const overlay = { rfn:null, cfl:null, merged:null, garesCFL:null, garesGTFS:null };
+  const trainMarkers = new Map();
+
+  // ---------- chargement réseau (RFN/CFL) ----------
+  async function loadNetworks(){
+    const mergedOk = await exists(PATH+FILES.merged);
+    if (mergedOk){
+      const geo = await fetch(PATH+FILES.merged).then(r=>r.json());
+      overlay.merged = L.geoJSON(geo, { style:{ color:'#00cfff', weight:3, opacity:0.8 } }).addTo(map);
+      map.fitBounds(overlay.merged.getBounds());
+    } else {
+      // affiche les deux couches si pas de fichier fusionné
+      const rfn = await fetch(PATH+FILES.rfn).then(r=>r.json());
+      const cfl = await fetch(PATH+FILES.cfl).then(r=>r.json());
+      overlay.rfn = L.geoJSON(rfn, { style:{ color:'#00f0ff', weight:3, opacity:0.6 } }).addTo(map);
+      overlay.cfl = L.geoJSON(cfl, { style:{ color:'#ff00e0', weight:3, opacity:0.6 } }).addTo(map);
+      const b = overlay.rfn.getBounds(); b.extend(overlay.cfl.getBounds()); map.fitBounds(b);
+    }
+    // points CFL (optionnel si présent)
+    if (await exists(PATH+FILES.pointsCFL)) {
+      const pts = await fetch(PATH+FILES.pointsCFL).then(r=>r.json());
+      overlay.garesCFL = L.geoJSON(pts, {
+        pointToLayer: (f,latlng)=> L.circleMarker(latlng,{radius:4, color:'#a0ff00', weight:1})
+      }).addTo(map);
+    }
+  }
+
+  // ---------- chargement GTFS ----------
+  async function loadGTFS(){
+    const [stops, trips, stop_times, shapes] = await Promise.all([
+      parseCSV(PATH+FILES.stops),
+      parseCSV(PATH+FILES.trips),
+      parseCSV(PATH+FILES.stop_times),
+      parseCSV(PATH+FILES.shapes),
+    ]);
+
+    // stops
+    for (const s of stops){
+      const lat=parseFloat(s.stop_lat), lon=parseFloat(s.stop_lon);
+      if (!isFinite(lat)||!isFinite(lon)) continue;
+      stopsById.set(s.stop_id, { stop_id:s.stop_id, name:s.stop_name, lat, lon });
+    }
+
+    // trips
+    for (const t of trips){
+      tripsById.set(t.trip_id, { trip_id:t.trip_id, route_id:t.route_id, service_id:t.service_id, shape_id:t.shape_id, headsign:t.trip_headsign });
+    }
+
+    // stop_times groupés
+    for (const st of stop_times){
+      const trip_id = st.trip_id;
+      if (!stopTimesByTrip.has(trip_id)) stopTimesByTrip.set(trip_id, []);
+      stopTimesByTrip.get(trip_id).push({
+        stop_id: st.stop_id,
+        arrival: gtfsTimeToSec(st.arrival_time),
+        departure: gtfsTimeToSec(st.departure_time),
+        seq: Number(st.stop_sequence),
+        sdist: st.shape_dist_traveled ? Number(st.shape_dist_traveled) : null
+      });
+    }
+    for (const [k,v] of stopTimesByTrip) v.sort((a,b)=>a.seq-b.seq);
+
+    // shapes -> cumul en mètres
+    const tmp = {};
+    for (const row of shapes){
+      const sid=row.shape_id, lat=parseFloat(row.shape_pt_lat), lon=parseFloat(row.shape_pt_lon), seq=Number(row.shape_pt_sequence);
+      if(!tmp[sid]) tmp[sid]=[];
+      tmp[sid].push({lat,lon,seq});
+    }
+    for (const sid of Object.keys(tmp)){
+      const pts=tmp[sid].sort((a,b)=>a.seq-b.seq); let cum=0; const out=[];
+      for (let i=0;i<pts.length;i++){ if(i>0) cum+=distLL(pts[i-1], pts[i]); out.push({lat:pts[i].lat, lon:pts[i].lon, cum}); }
+      shapesById.set(sid, out);
+    }
+
+    // dessine les gares issues du GTFS (côté FR + LU)
+    const gares = [];
+    for (const s of stopsById.values()){ gares.push([s.lat, s.lon, s.name]); }
+    overlay.garesGTFS = L.layerGroup(
+      gares.map(([lat,lon,name])=>{
+        const m=L.circleMarker([lat,lon],{radius:3, color:'#a0ff00', weight:1});
+        m.bindTooltip(name, {permanent:false}); return m;
+      })
+    ).addTo(map);
+  }
+
+  // ---------- mapping trip -> courbe (abscisses) ----------
+  function buildTripCurve(trip_id){
+    const trip = tripsById.get(trip_id); if(!trip) return null;
+    const seq = stopTimesByTrip.get(trip_id); if(!seq || seq.length<2) return null;
+    const shape = shapesById.get(trip.shape_id); if(!shape || shape.length<2) return null;
+
+    // 1) utiliser shape_dist_traveled si disponible
+    const hasSD = seq.every(s=>s.sdist!=null);
+    let curve = [];
+
+    if (hasSD){
+      // Heuristique d’unité (m ou km). On normalise vers mètres en comparant au max shape.
+      const maxShape = shape.at(-1).cum || 1, maxSD = Math.max(...seq.map(s=>s.sdist));
+      let factor = 1.0;
+      if (maxSD>0 && maxShape>0){
+        const m_as_is = Math.abs(maxSD - maxShape);
+        const m_km    = Math.abs(maxSD*1000 - maxShape);
+        factor = (m_km < m_as_is) ? 1000 : 1;
+      }
+      curve = seq.map(s=>({ stop_id:s.stop_id, tArr:s.arrival??s.departure, tDep:s.departure??s.arrival, d:s.sdist*factor }));
+    } else {
+      // 2) sinon : projeter chaque arrêt sur la polyligne du shape
+      curve = seq.map(s=>{
+        const stop = stopsById.get(s.stop_id); if(!stop) return null;
+        let best={cum:0,dist:Infinity};
+        for (let i=0;i<shape.length-1;i++){
+          const a=shape[i], b=shape[i+1];
+          const proj=projectPointOnSeg({lat:stop.lat,lon:stop.lon}, a,b);
+          const lateral = proj.d; // distance le long partielle utilisée comme proxy
+          if (lateral < best.dist){ best={cum: a.cum + proj.t*(b.cum-a.cum), dist:lateral}; }
+        }
+        return { stop_id:s.stop_id, tArr:s.arrival??s.departure, tDep:s.departure??s.arrival, d:best.cum };
+      }).filter(Boolean);
+    }
+
+    // clamp croissant
+    for (let i=1;i<curve.length;i++){ if (curve[i].d < curve[i-1].d) curve[i].d = curve[i-1].d; }
+    return { trip, shape, curve };
+  }
+
+  // ---------- calcul des trains actifs à t ----------
+  // Filtre “sillon” basique par mots-clés (à ajuster si besoin)
+  const AXIS_STOP_KEYWORDS = ['nancy','metz','thionville','bettembourg','luxembourg','pont-','hagondange'];
+
+  function trainsAt(nowSec){
+    const items=[];
+    for (const [trip_id, seq] of stopTimesByTrip.entries()){
+      if (seq.length<2) continue;
+
+      // Trip actif ?
+      const start = seq[0].departure ?? seq[0].arrival;
+      const end   = seq.at(-1).arrival ?? seq.at(-1).departure;
+      if (start==null || end==null || nowSec<start || nowSec>end) continue;
+
+      // Filtre axe (au moins 2 arrêts “connus”)
+      const names = seq.map(s=> (stopsById.get(s.stop_id)?.name || '').toLowerCase());
+      const hits = names.filter(n=> AXIS_STOP_KEYWORDS.some(k=> n.includes(k))).length;
+      if (hits<2) continue;
+
+      const tc = buildTripCurve(trip_id); if(!tc) continue;
+
+      for (let i=0;i<tc.curve.length-1;i++){
+        const A=tc.curve[i], B=tc.curve[i+1];
+        const tA = A.tDep ?? A.tArr, tB = B.tArr ?? B.tDep;
+        if (tA==null || tB==null || tB<=tA) continue;
+        if (nowSec < tA || nowSec > tB) continue;
+
+        const r=(nowSec - tA)/(tB - tA);
+        const d=A.d + r*(B.d - A.d);
+        const pt=pointAlong(tc.shape, d);
+        if(!pt) break;
+
+        items.push({
+          id: trip_id,
+          route_id: tc.trip.route_id,
+          headsign: tc.trip.headsign,
+          shape_id: tc.trip.shape_id,
+          from: stopsById.get(seq[i].stop_id)?.name || '—',
+          to:   stopsById.get(seq[i+1].stop_id)?.name || '—',
+          etaSec: Math.max(0, Math.round(tB - nowSec)),
+          lat: pt.lat, lon: pt.lon
+        });
+        break;
+      }
+    }
+    return items;
+  }
+
+  // ---------- rendu trains ----------
+  function fmtMinSec(s){ const m=Math.floor(s/60), r=s%60; return `${m}m${String(r).padStart(2,'0')}s`; }
+
+  function renderTrains(list){
+    const seen = new Set();
+    for (const t of list){
+      seen.add(t.id);
+      const html = `<b>${t.headsign || t.id}</b><br/>${t.from} → ${t.to}<br/>ETA ~ ${fmtMinSec(t.etaSec)}<br/><span class="muted">route ${t.route_id||'—'} / shape ${t.shape_id||'—'}</span>`;
+      if (trainMarkers.has(t.id)){
+        trainMarkers.get(t.id).setLatLng([t.lat,t.lon]).setPopupContent(html);
+      } else {
+        const m = L.circleMarker([t.lat,t.lon], {radius:6, weight:1, color:'#00f0ff'}).addTo(map);
+        m.bindPopup(html);
+        trainMarkers.set(t.id, m);
+      }
+    }
+    // retire les disparus
+    for (const [id,mk] of trainMarkers.entries()){ if(!seen.has(id)){ map.removeLayer(mk); trainMarkers.delete(id); } }
+    document.getElementById('counts').textContent = `${list.length} train(s) actifs`;
+    document.getElementById('clock').textContent = 'Heure locale : ' + new Date().toLocaleTimeString();
+  }
+
+  // ---------- boucle de rafraîchissement ----------
+  let periodMs = 10000, nextTick = performance.now();
+  const periodEl = document.getElementById('period'), hzEl=document.getElementById('hz'), smoothEl=document.getElementById('smooth');
+  periodEl.addEventListener('input', ()=>{ hzEl.textContent=periodEl.value; periodMs=Number(periodEl.value)*1000; nextTick=performance.now(); });
+
+  function tick(){ const now=nowSecLocal(); renderTrains(trainsAt(now)); }
+
+  function loop(ts){
+    if (ts >= nextTick){ tick(); nextTick = ts + periodMs; }
+    if (smoothEl.checked) tick(); // animation fluide par recalcul continu
+    requestAnimationFrame(loop);
+  }
+
+  // ---------- boot ----------
+  (async function boot(){
+    await loadNetworks();
+    await loadGTFS();
+    tick();
+    requestAnimationFrame(loop);
+  })().catch(console.error);
+  </script>
+</body>
+</html>
