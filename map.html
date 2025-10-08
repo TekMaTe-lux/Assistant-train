@@ -68,7 +68,8 @@
     stop_times:   'stop_times.txt',
     trips:        'trips.txt',          // optionnel
     routes:       'routes.txt',         // optionnel (pour labels)
-    calendar_dates: 'calendar_dates.txt'// optionnel (filtrage jour)
+    calendar:     'calendar.txt',       // optionnel (jours de circulation)
+    calendar_dates: 'calendar_dates.txt'// optionnel (exceptions jour)
   };
 
   // ---------- Helpers fetch multi-bases ----------
@@ -103,6 +104,51 @@
     const el=document.getElementById('status');
     el.innerHTML = (isErr?'<span class="err">':'' ) + msg + (isErr?'</span>':'');
   }
+const WEEKDAY_FIELDS = ['sunday','monday','tuesday','wednesday','thursday','friday','saturday'];
+
+  function todayYMD(){
+    const d=new Date();
+    const y=d.getFullYear();
+    const m=String(d.getMonth()+1).padStart(2,'0');
+    const day=String(d.getDate()).padStart(2,'0');
+    return { ymd:`${y}${m}${day}`, weekday:WEEKDAY_FIELDS[d.getDay()] };
+  }
+
+  function computeActiveServiceSet(calendarRows, calendarDateRows){
+    const hasCalendar = Array.isArray(calendarRows) && calendarRows.length;
+    const hasDates = Array.isArray(calendarDateRows) && calendarDateRows.length;
+    if (!hasCalendar && !hasDates) return null;
+
+    const { ymd, weekday } = todayYMD();
+    const active = new Set();
+
+    if (hasCalendar){
+      for (const row of calendarRows){
+        if (!row) continue;
+        const svc = row.service_id;
+        if (!svc) continue;
+        const start=row.start_date, end=row.end_date;
+        if (start && start > ymd) continue;
+        if (end && end < ymd) continue;
+        const runs = row[weekday];
+        if (runs === '1' || runs === 1) active.add(svc);
+      }
+    }
+
+    if (hasDates){
+      for (const row of calendarDateRows){
+        if (!row || row.date !== ymd) continue;
+        const svc = row.service_id;
+        if (!svc) continue;
+        const type = String(row.exception_type);
+        if (type === '1'){ active.add(svc); }
+        else if (type === '2'){ active.delete(svc); }
+      }
+    }
+
+    return active;
+  }
+    
 
   // ---------- Maths géo (approx) ----------
   const R = 6371000;
@@ -118,9 +164,9 @@
   // ---------- État données ----------
   const stopsById = new Map();              // stop_id -> {stop_id,name,lat,lon}
   const stopTimesByTrip = new Map();        // trip_id -> [ {stop_id, arr, dep, seq} ] trié
-  const tripsById = new Map();              // (optionnel) trip_id -> {route_id, headsign}
+  const tripsById = new Map();              // (optionnel) trip_id -> {route_id, headsign, service_id}
   const routesById = new Map();             // (optionnel) route_id -> {route_short_name, route_long_name}
-  let activeServiceIds = null;              // Set<string> pour today si calendar_dates dispo
+  let activeServiceIds = null;              // Set<string> services actifs aujourd'hui (calendar/calendar_dates)
 
   // ---------- Leaflet ----------
   const map = L.map('map').setView([49.2, 6.15], 9);
@@ -403,7 +449,7 @@
       try {
         const trips = await parseCSVAny(FILES.trips);
         for (const t of trips){
-          tripsById.set(t.trip_id, { route_id:t.route_id, headsign:t.trip_headsign });
+          tripsById.set(t.trip_id, { route_id:t.route_id, headsign:t.trip_headsign, service_id:t.service_id });
         }
       } catch(_){ /* ok si absent */ }
 
@@ -415,28 +461,20 @@
         }
       } catch(_){ /* ok si absent */ }
 
-      // calendar_dates (optionnel)
+      // calendar + calendar_dates (optionnels)
+      let calendarRows = null;
       try {
-        const cdates = await parseCSVAny(FILES.calendar_dates);
-        const today = new Date();
-        const y = today.getFullYear();
-        const m = String(today.getMonth()+1).padStart(2,'0');
-        const d = String(today.getDate()).padStart(2,'0');
-        const ymd = `${y}${m}${d}`;
-        const add = new Set(), remove = new Set();
-        for (const row of cdates){
-          if (row.date !== ymd) continue;
-          if (row.exception_type === '1' || row.exception_type === 1) add.add(row.service_id);
-          if (row.exception_type === '2' || row.exception_type === 2) remove.add(row.service_id);
-        }
-        if (add.size || remove.size){
-          activeServiceIds = add;
-          // S’il y a des trips avec service_id à retirer, on pourrait filtrer,
-          // mais sans trips.txt on ne peut pas relier service_id -> trip.
-          // Si trips.txt est présent, on filtrera plus bas.
-        }
+       calendarRows = await parseCSVAny(FILES.calendar);
+      } catch(_){ /* ok si absent */ }
+      
+let calendarDateRows = null;
+      try {
+        calendarDateRows = await parseCSVAny(FILES.calendar_dates);
       } catch(_){ /* ok si absent */ }
 
+      activeServiceIds = computeActiveServiceSet(calendarRows, calendarDateRows);
+      if (activeServiceIds && !tripsById.size) activeServiceIds = null;
+      
       // Dessine les gares (GTFS)
       const gares = [];
       for (const s of stopsById.values()){ gares.push([s.lat, s.lon, s.name]); }
@@ -447,7 +485,9 @@
         })
       ).addTo(map);
 
-      setStatus('GTFS chargé — ' + stopsById.size + ' gares, ' + stopTimesByTrip.size + ' trips.');
+      let statusMsg = 'GTFS chargé — ' + stopsById.size + ' gares, ' + stopTimesByTrip.size + ' trips';
+      if (activeServiceIds) statusMsg += ', ' + activeServiceIds.size + ' services actifs aujourd\'hui';
+      setStatus(statusMsg + '.');
     } catch(e){
       setStatus('Erreur chargement GTFS: '+e.message, true);
     }
@@ -461,10 +501,10 @@
   }
 
   function serviceAllowed(trip_id){
-    if (!activeServiceIds || !tripsById.has(trip_id)) return true;
-    const svc = tripsById.get(trip_id).service_id;
-    if (!svc) return true;
-    return activeServiceIds.has(svc);
+    if (!activeServiceIds) return true;
+    const trip = tripsById.get(trip_id);
+    if (!trip || !trip.service_id) return false;
+    return activeServiceIds.has(trip.service_id);
   }
 
   // ---------- Calcul positions (interpolation arrêt→arrêt) ----------
