@@ -1,265 +1,1409 @@
 <!doctype html>
 <html lang="fr">
 <head>
-  <meta charset="utf-8" />
-  <title>Ajusteur d’offset GeoJSON — CFL</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <link
-    rel="stylesheet"
-    href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
-    integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
-    crossorigin=""
-  />
+  <meta charset="utf-8"/>
+  <title>Carte Nancy ↔ Luxembourg — Réseaux + Gares + Trains (GTFS sans shapes)</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
   <style>
-    :root { color-scheme: dark; }
-    html, body { height: 100%; margin: 0; }
-    #map { height: 100%; }
-
-    .hud {
-      position: absolute; top: 10px; left: 10px;
-      background: rgba(14, 23, 38, .85);
-      color: #e0f0ff; font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
-      border: 1px solid #20324b; border-radius: 12px; padding: 10px 12px; z-index: 9999;
-      box-shadow: 0 6px 18px rgba(0,0,0,.3);
-      max-width: min(92vw, 420px);
-    }
-    .hud h3 { margin: 0 0 6px; font-size: 16px; }
-    .hud .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 6px 0; }
-    .hud code { background: #0b0f1a; padding: 2px 6px; border-radius: 6px; border: 1px solid #1b2a3c; }
-    .hud input[type="text"] {
-      background: #0b0f1a; color: #e0f0ff; border: 1px solid #1b2a3c; border-radius: 8px; padding: 6px 8px;
-      width: 110px;
-    }
-    .hud button {
-      background: #0b0f1a; color: #00f0ff; border: 1px solid #1b2a3c; border-radius: 10px; padding: 6px 10px;
-      cursor: pointer;
-    }
-    .hud small { color: #9ab3c9; }
-    .leaflet-container a { color: #00f0ff; }
+    :root{ color-scheme: dark; }
+    body{ margin:0; background:#0b0f1a; color:#e0f0ff; font-family: system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif; }
+    header{ padding:10px 14px; background:#0e1726; border-bottom:1px solid #20324b; }
+    #map{ height: calc(100vh - 110px); }
+    .panel{ display:flex; gap:12px; align-items:center; padding:8px 14px; background:#0e1726; border-top:1px solid #20324b; flex-wrap:wrap;}
+    .badge{ padding:2px 6px; border:1px solid #2a3b55; border-radius:6px; font-size:12px; }
+    .muted{ opacity:.8; font-size:12px; }
+    .ctrl{ display:flex; align-items:center; gap:8px; }
+    .ctrl input[type="range"]{ width:160px; }
+    .legend-dot{ display:inline-block; width:10px; height:10px; border-radius:50%; margin-right:6px; }
+    .dot-train{ background:#00f0ff; }
+    .dot-gare{ background:#a0ff00; }
+    .dot-rfn{ background:#00f0ff; }
+    .dot-cfl{ background:#ff00e0; }
+    .err{ color:#ffb4b4 }
+    .cow-marker{ display:flex; align-items:center; gap:6px; font-size:22px; text-shadow:0 0 4px #000; border:none; background:transparent; color:inherit; padding:0; margin:0; line-height:1; }
+    .cow-marker:focus-visible{ outline:2px solid #a0ff00; outline-offset:2px; }
+    .cow-marker .train-num{ font-size:13px; font-weight:600; padding:2px 5px; border-radius:6px; border:1px solid #2a3b55; background:rgba(14,23,38,0.9); color:#e0f0ff; white-space:nowrap; }
+    .station-marker{ display:inline-flex; align-items:center; justify-content:center; width:32px; height:32px; border-radius:50%; border:1px solid #314463; background:rgba(14,23,38,0.92); color:#d9f27f; font-size:18px; text-shadow:0 0 4px #000; box-shadow:0 0 8px rgba(0,0,0,0.35); cursor:pointer; padding:0; margin:0; line-height:1; }
+    .station-marker.station-major{ color:#ffe28a; border-color:#ffc857; box-shadow:0 0 10px rgba(255,200,87,0.45); }
+    .station-marker.station-regular{ color:#c5f36f; border-color:#5f8f2d; }
+    .station-marker:focus-visible{ outline:2px solid #a0ff00; outline-offset:2px; }
+    .trip-panel{ position:fixed; top:96px; right:18px; width:320px; max-height:calc(100vh - 140px); background:rgba(11,15,26,0.95); border:1px solid #20324b; border-radius:14px; box-shadow:0 18px 36px rgba(0,0,0,0.35); padding:16px; display:flex; flex-direction:column; gap:12px; backdrop-filter:blur(6px); overflow:hidden; z-index:3000; }
+    .trip-panel.hidden{ display:none; }
+    .trip-panel-header{ display:flex; align-items:center; justify-content:space-between; gap:12px; }
+    .trip-panel-title{ display:flex; align-items:center; gap:8px; font-weight:700; font-size:16px; }
+    .trip-panel-icon{ font-size:20px; filter: drop-shadow(0 0 4px rgba(0,0,0,0.6)); }
+    .trip-panel-close{ border:none; background:rgba(32,50,75,0.6); color:#e0f0ff; font-size:18px; width:28px; height:28px; border-radius:50%; cursor:pointer; display:flex; align-items:center; justify-content:center; }
+    .trip-panel-close:hover{ background:rgba(160,255,0,0.25); color:#0b0f1a; }
+    .trip-panel-summary{ font-size:13px; line-height:1.4; color:#aabbd1; }
+    .trip-progress{ display:flex; flex-direction:column; gap:6px; }
+    .trip-progress-bar{ position:relative; height:6px; width:100%; background:#162233; border-radius:999px; overflow:hidden; }
+    .trip-progress-bar-fill{ position:absolute; top:0; left:0; height:100%; background:linear-gradient(90deg,#00f0ff,#a0ff00); width:0%; transition:width 0.4s ease; }
+    .trip-progress-text{ font-size:12px; color:#94a7c4; }
+    .trip-stops{ flex:1; overflow:auto; padding-right:4px; display:flex; flex-direction:column; gap:10px; }
+    .trip-stops.station-mode{ gap:8px; }
+    .trip-stops-title{ font-size:12px; color:#8093b5; text-transform:uppercase; letter-spacing:.08em; }
+    .trip-stop{ position:relative; display:flex; gap:12px; align-items:flex-start; padding-left:12px; --connector-progress:0; }
+    .trip-stop::before{ content:''; position:absolute; left:0; top:6px; width:10px; height:10px; border-radius:50%; background:#2a3b55; box-shadow:0 0 6px rgba(0,240,255,0.3); transition:transform 0.3s ease, box-shadow 0.3s ease; }
+    .trip-stop.passed::before{ background:#2c8bff; opacity:0.6; box-shadow:none; }
+    .trip-stop.current::before{ background:#00f0ff; box-shadow:0 0 10px rgba(0,240,255,0.8); }
+    .trip-stop.enroute::before{ transform:scale(1.05); box-shadow:0 0 14px rgba(0,240,255,0.85); }
+    .trip-stop.upcoming::before{ background:#243249; }
+    .trip-stop.approaching::before{ background:#1e3049; box-shadow:0 0 8px rgba(0,240,255,0.45); }
+    .trip-stop.passed{ --connector-progress:1; }
+    .trip-stop:not(:last-child)::after{ content:''; position:absolute; left:4px; top:16px; bottom:-10px; width:2px; background:linear-gradient(180deg, rgba(0,240,255,0.55) 0%, rgba(0,240,255,0.55) calc(var(--connector-progress, 0) * 100%), rgba(36,50,73,0.6) calc(var(--connector-progress, 0) * 100%), rgba(36,50,73,0.6) 100%); transition:background 0.3s ease; }
+    .trip-stop:last-child::after{ display:none; }
+    .stop-time{ display:flex; flex-direction:column; gap:2px; align-items:flex-end; font-size:12px; color:#90a1b8; min-width:86px; font-variant-numeric:tabular-nums; }
+    .stop-time .time-entry{ line-height:1.1; padding:0; margin:0; }
+    .stop-time .time-arr{ color:#8fa1be; }
+    .stop-time .time-dep{ color:#d6e6ff; font-weight:600; }
+    .stop-time .time-neutral{ color:#90a1b8; }
+    .stop-main{ display:flex; flex-direction:column; gap:3px; }
+    .stop-name{ font-weight:600; font-size:14px; color:#e0f0ff; }
+    .stop-note{ font-size:11px; color:#7f92b1; text-transform:uppercase; letter-spacing:.04em; }
+    .stop-note strong{ color:#a0ff00; font-weight:600; }
+    .hidden{ display:none !important; }
+    .leaflet-marker-icon { pointer-events: auto !important; }
+    .cow-marker, .cow-marker * { pointer-events: auto; cursor: pointer; }
+    .station-event{ display:flex; gap:12px; align-items:flex-start; padding:10px 12px; border-radius:12px; border:1px solid #263752; background:rgba(22,34,51,0.7); box-shadow:0 6px 18px rgba(0,0,0,0.25); }
+    .station-event-main{ flex:1; display:flex; flex-direction:column; gap:4px; }
+    .station-event-title{ font-weight:600; color:#e0f0ff; font-size:14px; }
+    .station-event-note{ font-size:12px; color:#8fa1be; }
+    .station-event-times{ display:flex; flex-direction:column; gap:2px; font-size:12px; color:#d6e6ff; }
+    .station-event-status{ font-size:11px; color:#a0ff00; text-transform:uppercase; letter-spacing:.05em; }
+    .station-event.empty{ justify-content:center; color:#8fa1be; font-size:13px; padding:16px; text-align:center; }
+    .station-train-link{ display:inline-flex; align-items:center; gap:6px; border:1px solid #2a3b55; border-radius:8px; padding:6px 10px; background:rgba(11,15,26,0.8); color:#e0f0ff; font-size:12px; cursor:pointer; text-shadow:0 0 4px #000; }
+    .station-train-link:hover{ border-color:#5bd6ff; color:#a0ff00; }
+    .station-train-link:focus-visible{ outline:2px solid #a0ff00; outline-offset:2px; }
   </style>
 </head>
 <body>
+  <header>
+    <div style="font-weight:700">Nancy ↔ Luxembourg — Réseaux officiels + Gares + Trains (GTFS statique, sans shapes)</div>
+    <div class="muted">Trains placés par interpolation entre gares à partir de <code>stop_times.txt</code>. Tracé RFN (SNCF) + CFL en GeoJSON. Rafraîchissement réglable.</div>
+  </header>
+
   <div id="map"></div>
 
-  <div class="hud" id="hud">
-    <h3>Ajusteur d’offset — CFL</h3>
-    <div class="row">
-      Fichier : <code id="fileLabel">data/lignes_cfl.geojson</code>
+  <div class="panel">
+    <span class="badge"><span class="legend-dot dot-rfn"></span>RFN</span>
+    <span class="badge"><span class="legend-dot dot-cfl"></span>CFL</span>
+    <span class="badge"><span class="legend-dot dot-gare"></span>Gares</span>
+    <span class="badge"><span class="legend-dot dot-train"></span>Trains</span>
+    <div class="ctrl">
+      <label class="muted">Rafraîchissement: <span id="hz">10</span>s</label>
+      <input id="period" type="range" min="1" max="30" step="1" value="10">
+      <label class="muted"><input id="smooth" type="checkbox" checked> animation fluide</label>
     </div>
-    <div class="row">
-      Offset lon (°) :
-      <input type="text" id="offLon" value="0">
-      Offset lat (°) :
-      <input type="text" id="offLat" value="0">
-      Pas :
-      <input type="text" id="stepDeg" value="0.0001" title="taille du pas en degrés">
-    </div>
-    <div class="row">
-      <button id="applyBtn">Appliquer</button>
-      <button id="resetBtn" title="R">Réinitialiser</button>
-      <button id="exportBtn" title="E">Exporter GeoJSON ajusté</button>
-    </div>
-    <div class="row">
-      <small>
-        Raccourcis : flèches ← ↑ → ↓ pour déplacer • <code>+</code>/<code>-</code> pour changer le pas •
-        <code>R</code> réinit • <code>E</code> export.
-      </small>
-    </div>
-    <div class="row">
-      <small id="metersHint">≈ 0 m/pas</small>
-    </div>
+    <span id="clock" class="muted">—</span>
+    <span id="counts" class="muted">—</span>
+    <span id="status" class="muted"></span>
   </div>
 
-  <script
-    src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
-    integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
-    crossorigin=""
-  ></script>
+  <div id="trip-panel" class="trip-panel hidden" aria-live="polite">
+    <div class="trip-panel-header">
+      <div class="trip-panel-title">
+        <span id="trip-panel-icon" class="trip-panel-icon" aria-hidden="true">🐄</span>
+        <span id="trip-panel-train">Sélectionnez un train ou une gare</span>
+      </div>
+      <button id="trip-panel-close" class="trip-panel-close" type="button" aria-label="Fermer">×</button>
+    </div>
+    <div id="trip-panel-summary" class="trip-panel-summary">Cliquez sur une icône vache ou grange pour afficher le détail.</div>
+    <div class="trip-progress hidden" id="trip-progress">
+      <div class="trip-progress-bar"><div id="trip-progress-fill" class="trip-progress-bar-fill"></div></div>
+      <div id="trip-progress-text" class="trip-progress-text"></div>
+    </div>
+    <div id="trip-stops-title" class="trip-stops-title hidden">Gares desservies</div>
+    <div id="trip-stops" class="trip-stops"></div>
+  </div>
+  
+  <!-- libs -->
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://unpkg.com/papaparse@5.4.1/papaparse.min.js"></script>
+
   <script>
-    // === CONFIG ===
-    const GEOJSON_URL = "data/lignes_cfl.geojson"; // change si besoin
-    const STYLE = { color: "magenta", weight: 2 };
+  // ---------- Bases: 1) local /data/ , 2) GitHub RAW ----------
+  const BASES = [
+    location.origin + '/data/',
+    'https://raw.githubusercontent.com/TekMaTe-lux/Assistant-train/main/data/'
+  ];
 
-    // === STATE ===
-    let map, baseLayer;
-    let originalGeoJSON = null;   // données source (non modifiées)
-    let currentLayer = null;      // couche Leaflet présentée
-    let offset = { lon: 0, lat: 0 }; // offset en degrés
-    let step = 0.0001;            // pas de déplacement en degrés
+  // ---------- Fichiers attendus ----------
+  const FILES = {
+    // réseaux (noms selon ton repo)
+    rfn:    'lignes-du-rfn.geojson',
+    cfl:    'lignes_cfl-ajusté.geojson',
 
-    // === INIT MAP ===
-    map = L.map("map").setView([49.56, 6.12], 12);
-    baseLayer = L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-      maxZoom: 19,
-      attribution: "&copy; OpenStreetMap"
-    }).addTo(map);
+    // GTFS requis / optionnels
+    stops:        'stops.txt',
+    stop_times:   'stop_times.txt',
+    trips:        'trips.txt',          // optionnel
+    routes:       'routes.txt',         // optionnel (pour labels)
+    calendar:     'calendar.txt',       // optionnel (jours de circulation)
+    calendar_dates: 'calendar_dates.txt'// optionnel (exceptions jour)
+  };
 
-    // Charger GeoJSON
-    fetch(GEOJSON_URL)
-      .then(r => r.json())
-      .then(data => {
-        originalGeoJSON = data;
-        drawWithOffset();
-        updateMetersHint();
-      })
-      .catch(err => {
-        console.error("Erreur de chargement GeoJSON:", err);
-        alert("Impossible de charger le GeoJSON. Vérifie l’URL en haut du panneau.");
-      });
+  // ---------- Helpers fetch multi-bases ----------
+  function urlFor(name, baseIndex=0){ return BASES[baseIndex] + name; }
 
-    // === UI elements ===
-    const offLonInput = document.getElementById("offLon");
-    const offLatInput = document.getElementById("offLat");
-    const stepInput   = document.getElementById("stepDeg");
-    const applyBtn    = document.getElementById("applyBtn");
-    const resetBtn    = document.getElementById("resetBtn");
-    const exportBtn   = document.getElementById("exportBtn");
-    const metersHint  = document.getElementById("metersHint");
-    document.getElementById("fileLabel").textContent = GEOJSON_URL;
+  async function fetchJSONAny(name){
+    for (let i=0;i<BASES.length;i++){
+      try { const r = await fetch(urlFor(name,i), {mode:'cors'}); if (r.ok) return await r.json(); } catch(_) {}
+    }
+    throw new Error('Introuvable: '+name);
+  }
 
-    applyBtn.onclick = () => {
-      offset.lon = parseFloat(offLonInput.value) || 0;
-      offset.lat = parseFloat(offLatInput.value) || 0;
-      step       = parseFloat(stepInput.value)   || 0.0001;
-      drawWithOffset();
-      updateMetersHint();
-    };
+  async function fetchTextAny(name){
+    for (let i=0;i<BASES.length;i++){
+      try { const r = await fetch(urlFor(name,i), {mode:'cors'}); if (r.ok) return await r.text(); } catch(_) {}
+    }
+    throw new Error('Introuvable: '+name);
+  }
 
-    resetBtn.onclick = () => {
-      offset = { lon: 0, lat: 0 };
-      offLonInput.value = "0";
-      offLatInput.value = "0";
-      drawWithOffset();
-      updateMetersHint();
-    };
+  function parseCSVAny(name){
+    return new Promise(async (resolve, reject) => {
+      try {
+        const csv = await fetchTextAny(name);
+        Papa.parse(csv, { header:true, dynamicTyping:false, skipEmptyLines:true,
+          complete: (res)=>resolve(res.data), error: reject
+        });
+      } catch(e){ reject(e); }
+    });
+  }
 
-    exportBtn.onclick = () => {
-      if (!originalGeoJSON) return;
-      const adjusted = buildAdjustedGeoJSON();
-      const blob = new Blob([JSON.stringify(adjusted, null, 2)], { type: "application/geo+json" });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      const stamp = new Date().toISOString().replace(/[:.]/g,"-");
-      a.download = `lignes_cfl_offset_${offset.lon}_${offset.lat}_${stamp}.geojson`;
-      a.click();
-      URL.revokeObjectURL(url);
-    };
+  function setStatus(msg, isErr=false){
+    const el=document.getElementById('status');
+    el.innerHTML = (isErr?'<span class="err">':'' ) + msg + (isErr?'</span>':'');
+  }
+    
+function escapeHTML(str){
+    return String(str ?? '').replace(/[&<>"']/g, c=>({
+      '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;'
+    })[c]);
+  }
+  function escapeAttr(str){
+    return String(str ?? '').replace(/[&<>"']/g, c=>({
+      '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;'
+    })[c]);
+  }
+ function extractTrainNumberCandidate(value){
+    if (value == null) return null;
+    const raw = String(value).trim();
+    if (!raw) return null;
+    const probes = [raw.split(':')[0], raw];
+    for (const probe of probes){
+      if (!probe) continue;
+      const big = probe.match(/\d{4,}/);
+      if (big) return big[0];
+    }
+    for (const probe of probes){
+      if (!probe) continue;
+      const mid = probe.match(/\d{3,}/);
+      if (mid) return mid[0];
+    }
+    return null;
+  }
 
-    // === KEYBOARD CONTROLS ===
-    window.addEventListener("keydown", (e) => {
-      if (!originalGeoJSON) return;
-      let changed = false;
+  function trainNumberForTrip(trip, route, tripId){
+    const candidates = [
+      trip?.trip_short_name,
+      trip?.headsign,
+      tripId ? tripId.split(':')[0] : null,
+      route?.short
+    ];
+    for (const candidate of candidates){
+      const num = extractTrainNumberCandidate(candidate);
+      if (num) return num;
+    }
+    if (trip?.trip_short_name) return trip.trip_short_name;
+    if (trip?.headsign) return trip.headsign;
+    if (route?.short) return route.short;
+    if (route?.long) return route.long;
+    return tripId;
+  }
+   
+    
+const WEEKDAY_FIELDS = ['sunday','monday','tuesday','wednesday','thursday','friday','saturday'];
 
-      if (e.key === "ArrowLeft") { offset.lon -= step; changed = true; }
-      if (e.key === "ArrowRight"){ offset.lon += step; changed = true; }
-      if (e.key === "ArrowUp")   { offset.lat += step; changed = true; }
-      if (e.key === "ArrowDown") { offset.lat -= step; changed = true; }
+  function todayYMD(){
+    const d=new Date();
+    const y=d.getFullYear();
+    const m=String(d.getMonth()+1).padStart(2,'0');
+    const day=String(d.getDate()).padStart(2,'0');
+    return { ymd:`${y}${m}${day}`, weekday:WEEKDAY_FIELDS[d.getDay()] };
+  }
 
-      if (e.key === "+") { step *= 2; stepInput.value = step; updateMetersHint(); }
-      if (e.key === "-") { step /= 2; stepInput.value = step; updateMetersHint(); }
+  function computeActiveServiceSet(calendarRows, calendarDateRows){
+    const hasCalendar = Array.isArray(calendarRows) && calendarRows.length;
+    const hasDates = Array.isArray(calendarDateRows) && calendarDateRows.length;
+    if (!hasCalendar && !hasDates) return null;
 
-      if (e.key.toLowerCase() === "r") { offset = { lon: 0, lat: 0 }; changed = true; }
-      if (e.key.toLowerCase() === "e") { exportBtn.click(); }
+    const { ymd, weekday } = todayYMD();
+    const active = new Set();
 
-      if (changed) {
-        offLonInput.value = offset.lon.toFixed(7);
-        offLatInput.value = offset.lat.toFixed(7);
-        drawWithOffset();
+    if (hasCalendar){
+      for (const row of calendarRows){
+        if (!row) continue;
+        const svc = row.service_id;
+        if (!svc) continue;
+        const start=row.start_date, end=row.end_date;
+        if (start && start > ymd) continue;
+        if (end && end < ymd) continue;
+        const runs = row[weekday];
+        if (runs === '1' || runs === 1) active.add(svc);
       }
+    }
+
+    if (hasDates){
+      for (const row of calendarDateRows){
+        if (!row || row.date !== ymd) continue;
+        const svc = row.service_id;
+        if (!svc) continue;
+        const type = String(row.exception_type);
+        if (type === '1'){ active.add(svc); }
+        else if (type === '2'){ active.delete(svc); }
+      }
+    }
+
+    return active;
+  }
+    
+
+  // ---------- Maths géo (approx) ----------
+  const R = 6371000;
+  function toXY(lat, lon, lat0){ const x=(lon*Math.PI/180)*Math.cos(lat0*Math.PI/180), y=(lat*Math.PI/180); return {x,y}; }
+  function distLL(a,b){ const lat0=(a.lat+b.lat)/2; const A=toXY(a.lat,a.lon,lat0), B=toXY(b.lat,b.lon,lat0); const dx=B.x-A.x, dy=B.y-A.y; return Math.sqrt(dx*dx+dy*dy)*R; }
+  function lerp(a,b,t){ return a + (b-a)*t; }
+
+  // ---------- Temps ----------
+  function gtfsTimeToSec(t){ if(!t) return null; const [H,M,S]=t.split(':').map(Number); return H*3600+M*60+(S||0); }
+  function nowSecLocal(){ const d=new Date(); return d.getHours()*3600 + d.getMinutes()*60 + d.getSeconds(); }
+  function fmtMinSec(s){ const m=Math.floor(s/60), r=s%60; return `${m}m${String(r).padStart(2,'0')}s`; }
+  function fmtHHMM(sec){
+    if (sec==null || !isFinite(sec)) return '—';
+    const totalMinutes = Math.floor(sec/60);
+    const totalHours = Math.floor(totalMinutes/60);
+    const minutes = totalMinutes % 60;
+    const hoursInDay = ((totalHours % 24) + 24) % 24;
+    const dayOffset = Math.floor(totalHours / 24);
+    const base = `${String(hoursInDay).padStart(2,'0')}:${String(minutes).padStart(2,'0')}`;
+    if (dayOffset > 0) return `${base} (+${dayOffset}j)`;
+    return base;
+  }
+
+  function fmtRelative(sec){
+    if (sec==null || !isFinite(sec)) return '';
+    if (Math.abs(sec) < 30) return 'maintenant';
+    const minutes = Math.round(Math.abs(sec) / 60);
+    if (minutes <= 1) return sec >= 0 ? 'dans ~1 min' : 'il y a ~1 min';
+    return sec >= 0 ? `dans ~${minutes} min` : `il y a ~${minutes} min`;
+  }
+  
+
+  // ---------- État données ----------
+  const stopsById = new Map();              // stop_id -> {stop_id,name,lat,lon}
+  const stopTimesByTrip = new Map();        // trip_id -> [ {stop_id, arr, dep, seq} ] trié
+  const tripsById = new Map();              // (optionnel) trip_id -> {route_id, headsign, service_id}
+  const routesById = new Map();             // (optionnel) route_id -> {route_short_name, route_long_name}
+  let activeServiceIds = null;              // Set<string> services actifs aujourd'hui (calendar/calendar_dates)
+
+  // ---------- Leaflet ----------
+  const map = L.map('map').setView([49.2, 6.15], 9);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{ attribution:'© OpenStreetMap' }).addTo(map);
+  const overlay = { rfn:null, cfl:null, garesGTFS:null, axisStations:null };
+  const trainMarkers = new Map();
+  const trainCowById = new Map();
+  const trainDataById = new Map();  
+  const COW_EMOJIS = ['🐄','🐮','🐃','🐂','🐄'];
+  const stopChildrenByParent = new Map();
+
+  const AXIS_STATIONS = [
+    { id:'nancy', label:'Nancy', stopArea:'StopArea:OCE87141002', lat:48.689857, lon:6.174579, type:'major' },
+    { id:'champigneulles', label:'Champigneulles', stopArea:'StopArea:OCE87141085', lat:48.735025, lon:6.168952, type:'regular' },
+    { id:'frouard', label:'Frouard', stopArea:'StopArea:OCE87141077', lat:48.755428, lon:6.143927, type:'regular' },
+    { id:'pompey', label:'Pompey', stopArea:'StopArea:OCE87141788', lat:48.77304, lon:6.13061, type:'regular' },
+    { id:'pont-a-mousson', label:'Pont-à-Mousson', stopArea:'StopArea:OCE87141820', lat:48.900348, lon:6.051021, type:'regular' },
+    { id:'pagny-moselle', label:'Pagny-sur-Moselle', stopArea:'StopArea:OCE87192468', lat:48.9852, lon:6.025035, type:'regular' },
+    { id:'noveant', label:'Novéant-sur-Moselle', stopArea:'StopArea:OCE87192427', lat:49.028717, lon:6.052051, type:'regular' },
+    { id:'ars-sur-moselle', label:'Ars-sur-Moselle', stopArea:'StopArea:OCE87192401', lat:49.074475, lon:6.077646, type:'regular' },
+    { id:'metz', label:'Metz', stopArea:'StopArea:OCE87192039', lat:49.109466, lon:6.177052, type:'major' },
+    { id:'woippy', label:'Woippy', stopArea:'StopArea:OCE87192088', lat:49.148797, lon:6.155621, type:'regular' },
+    { id:'maizieres', label:'Maizières-lès-Metz', stopArea:'StopArea:OCE87191106', lat:49.215536, lon:6.158727, type:'regular' },
+    { id:'hagondange', label:'Hagondange', stopArea:'StopArea:OCE87191114', lat:49.25356, lon:6.16448, type:'regular' },
+    { id:'uckange', label:'Uckange', stopArea:'StopArea:OCE87191130', lat:49.303459, lon:6.1566, type:'regular' },
+    { id:'thionville', label:'Thionville', stopArea:'StopArea:OCE87191007', lat:49.353965, lon:6.168582, type:'major' },
+    { id:'hettange-grande', label:'Hettange-Grande', stopArea:'StopArea:OCE87191163', lat:49.407685, lon:6.156759, type:'regular' },
+    { id:'bettembourg', label:'Bettembourg', stopArea:'StopArea:OCE82006030', lat:49.516111, lon:6.101111, type:'major' },
+    { id:'howald', label:'Howald', stopArea:'StopArea:OCE82002501', lat:49.58032, lon:6.13232, type:'regular' },
+    { id:'luxembourg', label:'Luxembourg', stopArea:'StopArea:OCE82001000', lat:49.599722, lon:6.134722, type:'major' }
+  ];
+  const axisStationsById = new Map(AXIS_STATIONS.map(st=>[st.id, st]));  
+
+    let activeTripId = null;
+  let activeStationId = null;
+
+  renderAxisStations();
+  const tripPanelEl = document.getElementById('trip-panel');
+  const tripPanelCloseBtn = document.getElementById('trip-panel-close');
+  const tripPanelIconEl = document.getElementById('trip-panel-icon');
+  const tripPanelTrainEl = document.getElementById('trip-panel-train');
+  const tripPanelSummaryEl = document.getElementById('trip-panel-summary');
+  const tripProgressWrapEl = document.getElementById('trip-progress');
+  const tripProgressFillEl = document.getElementById('trip-progress-fill');
+  const tripProgressTextEl = document.getElementById('trip-progress-text');
+  const tripStopsTitleEl = document.getElementById('trip-stops-title');
+  const tripStopsEl = document.getElementById('trip-stops');
+
+  function clearActiveSelection(){
+    activeTripId = null;
+    activeStationId = null;
+  }
+
+  tripPanelCloseBtn.addEventListener('click', ()=>{
+    clearActiveSelection();
+    hideTripPanel();
+  });
+
+  map.on('click', ()=>{  
+   if (activeTripId || activeStationId){
+      clearActiveSelection();
+      hideTripPanel();
+    }
+  });
+
+  function cowForTrain(id){
+    if (!trainCowById.has(id)){
+      const cow = COW_EMOJIS[Math.floor(Math.random()*COW_EMOJIS.length)] || '🐄';
+      trainCowById.set(id, cow);
+    }
+    return trainCowById.get(id);
+  }
+
+  function iconForTrain(train){
+    const cow = cowForTrain(train.id);
+    const num = escapeHTML(train.number || train.id);
+    const safeId = escapeAttr(train.id);
+    const aria = escapeAttr(`Voir le détail du ${train.number ? `train ${train.number}` : 'train'}`);
+    return L.divIcon({
+      className:'',
+      html:`<button type="button" class="cow-marker" data-train-id="${safeId}" aria-label="${aria}">${cow}<span class="train-num">${num}</span></button>`,
+      iconSize:null,
+      iconAnchor:[20,20]
+    });
+  }  
+    
+function iconForStation(station){
+    const emoji = station.type === 'major' ? '🏠' : '🏡';
+    const classes = `station-marker ${station.type === 'major' ? 'station-major' : 'station-regular'}`;
+    const safeId = escapeAttr(station.id);
+    const aria = escapeAttr(`Ouvrir la fiche de la gare ${station.label}${station.type === 'major' ? ' (principale)' : ''}`);
+    return L.divIcon({
+      className:'',
+      html:`<button type="button" class="${classes}" data-station-id="${safeId}" aria-label="${aria}">${emoji}</button>`,
+      iconSize:null,
+      iconAnchor:[16,16]
+    });
+  }
+  
+const mapContainerEl = map.getContainer();
+  function handleTrainActivate(ev){
+    const btn = ev.target.closest?.('.cow-marker');
+    if (!btn) return;
+    ev.preventDefault();
+    ev.stopPropagation();
+    const id = btn.getAttribute('data-train-id');
+    if (id) openTripPanel(id);
+  }
+
+  function handleStationActivate(ev){
+    const btn = ev.target.closest?.('.station-marker');
+    if (!btn) return;
+    ev.preventDefault();
+    ev.stopPropagation();
+    const id = btn.getAttribute('data-station-id');
+    if (id) openStationPanel(id);
+  }
+  
+  mapContainerEl.addEventListener('pointerdown', handleTrainActivate, { passive:false });
+  mapContainerEl.addEventListener('click', handleTrainActivate, { passive:false });
+  mapContainerEl.addEventListener('pointerdown', handleStationActivate, { passive:false });
+  mapContainerEl.addEventListener('click', handleStationActivate, { passive:false });  
+  mapContainerEl.addEventListener('keydown', (ev)=>{
+    const btn = ev.target.closest?.('.cow-marker');
+    if (btn && (ev.key === 'Enter' || ev.key === ' ')){
+      ev.preventDefault();
+      ev.stopPropagation();
+      const id = btn.getAttribute('data-train-id');
+      if (id) openTripPanel(id);
+      return;
+    }
+    const stationBtn = ev.target.closest?.('.station-marker');
+    if (!stationBtn) return;
+    if (ev.key === 'Enter' || ev.key === ' '){
+      ev.preventDefault();
+      ev.stopPropagation();
+      const id = stationBtn.getAttribute('data-station-id');
+      if (id) openStationPanel(id);
+    }
+  });
+
+  tripStopsEl.addEventListener('click', (ev)=>{
+    const btn = ev.target.closest?.('.station-train-link');
+    if (!btn) return;
+    ev.preventDefault();
+    const id = btn.getAttribute('data-train-id');
+    if (id) openTripPanel(id);
+  });
+
+  tripStopsEl.addEventListener('keydown', (ev)=>{
+    const btn = ev.target.closest?.('.station-train-link');
+    if (!btn) return;
+    if (ev.key === 'Enter' || ev.key === ' '){
+      ev.preventDefault();
+      const id = btn.getAttribute('data-train-id');
+      if (id) openTripPanel(id);
+    }
+  });
+  
+
+  function hideTripPanel(){
+    tripPanelEl.classList.add('hidden');
+    tripPanelIconEl.textContent = '🐄';
+    tripPanelTrainEl.textContent = 'Sélectionnez un train ou une gare';
+    tripPanelSummaryEl.textContent = 'Cliquez sur une icône vache ou grange pour afficher le détail.';
+    tripProgressWrapEl.classList.add('hidden');
+    tripProgressFillEl.style.width = '0%';
+    tripProgressTextEl.textContent = '';
+    tripStopsTitleEl.classList.add('hidden');
+    tripStopsTitleEl.textContent = 'Gares desservies';
+    tripStopsEl.innerHTML = '';
+    tripStopsEl.classList.remove('station-mode');
+  }
+
+  function openTripPanel(trainId){
+    activeTripId = trainId;
+    activeStationId = null;
+    tripPanelEl.classList.remove('hidden');
+    renderPanel();
+  }
+
+  function openStationPanel(stationId){
+    activeStationId = stationId;
+    activeTripId = null;
+    tripPanelEl.classList.remove('hidden');
+     renderPanel();
+  }
+
+  function renderPanel(){
+    if (activeStationId){
+      renderStationPanel();
+    } else if (activeTripId){
+      renderTripPanel();
+    } else {
+      hideTripPanel();
+    }
+  }
+
+  function renderTripPanel(){
+    if (!activeTripId){ hideTripPanel(); return; }
+    const data = trainDataById.get(activeTripId);
+    if (!data){
+      activeTripId = null;
+      if (!activeStationId) hideTripPanel();
+      return;
+    }
+
+    tripStopsEl.classList.remove('station-mode');
+    tripPanelIconEl.textContent = cowForTrain(activeTripId);
+
+    if (data.number){
+      tripPanelTrainEl.textContent = `Train ${data.number}`;
+    } else if (data.headsign){
+      tripPanelTrainEl.textContent = data.headsign;
+    } else {
+      tripPanelTrainEl.textContent = data.id || 'Sélectionnez un train';
+    }
+
+    const seq = stopTimesByTrip.get(activeTripId);
+    if (!seq || !seq.length){
+      tripPanelSummaryEl.textContent = 'Données de trajet indisponibles pour ce service.';
+      tripProgressWrapEl.classList.add('hidden');
+      tripStopsTitleEl.classList.add('hidden');
+      tripStopsEl.innerHTML = '';
+      return;
+    }
+
+    const stops = seq.map((st, idx)=>{
+      const stopMeta = stopsById.get(st.stop_id);
+      const name = stopMeta?.name || st.stop_id;
+      const arrival = st.arrival;
+      const departure = st.departure;
+      const isFirst = idx === 0;
+      const isLast = idx === seq.length - 1;
+      const arrTxt = arrival!=null ? fmtHHMM(arrival) : null;
+      const depTxt = departure!=null ? fmtHHMM(departure) : null;
+      const timeParts = [];
+      let label;
+      
+      if (isFirst){
+        const base = departure ?? arrival;
+        const baseTxt = base!=null ? fmtHHMM(base) : null;
+        if (baseTxt){
+          const type = departure!=null ? 'dep' : 'arr';
+          timeParts.push({ type, text: baseTxt });
+          label = baseTxt;
+        }
+      } else if (isLast){
+        const base = arrival ?? departure;
+       const baseTxt = base!=null ? fmtHHMM(base) : null;
+        if (baseTxt){
+          const type = arrival!=null ? 'arr' : 'dep';
+          timeParts.push({ type, text: baseTxt });
+          label = baseTxt;
+        }
+      } else {
+        if (arrTxt){
+          timeParts.push({ type:'arr', text: arrTxt });
+        }
+        if (depTxt){
+          if (depTxt !== arrTxt){
+            timeParts.push({ type:'dep', text: depTxt });
+          } else if (!arrTxt){
+            timeParts.push({ type:'dep', text: depTxt });
+          }
+        }
+      }
+
+      if (!timeParts.length){
+        const fallback = arrTxt || depTxt;
+        if (fallback){
+          timeParts.push({ type: arrTxt ? 'arr' : depTxt ? 'dep' : 'neutral', text: fallback });
+          label = fallback;
+        } else {
+          timeParts.push({ type:'neutral', text:'—' });
+          label = '—';
+        }
+      }
+      
+      if (!label){
+        label = timeParts[0]?.text ?? '—';
+      }
+
+      return { name, arrival, departure, isFirst, isLast, label, timeParts };
     });
 
-    // === RENDU AVEC OFFSET (sans accumulation d’erreurs) ===
-    function drawWithOffset() {
-      if (!originalGeoJSON) return;
-      if (currentLayer) {
-        currentLayer.remove();
-        currentLayer = null;
-      }
-      const adjusted = buildAdjustedGeoJSON();
-      currentLayer = L.geoJSON(adjusted, { style: STYLE }).addTo(map);
+    const startName = stops[0]?.name || '—';
+    const endName = stops.at(-1)?.name || '—';
+    const summaryStartTime = data.startSec!=null ? fmtHHMM(data.startSec) : stops[0] ? stops[0].label : '—';
+    const summaryEndTime = data.endSec!=null ? fmtHHMM(data.endSec) : stops.at(-1) ? stops.at(-1).label : '—';
+    tripPanelSummaryEl.innerHTML = `${escapeHTML(startName)} <strong>${escapeHTML(summaryStartTime)}</strong> → ${escapeHTML(endName)} <strong>${escapeHTML(summaryEndTime)}</strong>`;
+
+    const totalStops = stops.length;
+    if (totalStops > 0){
+      const plural = totalStops > 1 ? 's' : '';
+      const intermediates = Math.max(0, totalStops - 2);
+      const interText = intermediates > 0 ? ` — ${intermediates} intermédiaire${intermediates>1?'s':''}` : '';
+      tripStopsTitleEl.classList.remove('hidden');
+      tripStopsTitleEl.textContent = `Gares desservies (${totalStops} arrêt${plural})${interText}`;
+    } else {
+      tripStopsTitleEl.classList.add('hidden');
+      tripStopsTitleEl.textContent = 'Gares desservies';
     }
 
-    // Construit un GeoJSON *neuf* à partir de l’original + offset
-    function buildAdjustedGeoJSON() {
-      // Clone superficiel des propriétés de niveau 1
-      const base = {
-        type: originalGeoJSON.type,
-        name: originalGeoJSON.name,
-        features: originalGeoJSON.features.map(f => ({
-          type: "Feature",
-          properties: { ...(f.properties || {}) },
-          geometry: offsetGeometry(f.geometry, offset.lon, offset.lat)
-        }))
-      };
-      // On retire "crs" si présent (souvent inutile en GeoJSON pur)
-      if (base.crs) delete base.crs;
-      return base;
+    if (data.progress!=null && isFinite(data.progress)){
+      const pct = Math.max(0, Math.min(1, data.progress));
+      tripProgressWrapEl.classList.remove('hidden');
+      tripProgressFillEl.style.width = `${(pct*100).toFixed(1)}%`;
+      const pctText = Math.round(pct*100);
+      const segText = data.from && data.to ? `${data.from} → ${data.to}` : 'En circulation';
+      const etaText = isFinite(data.etaSec) ? `Arrivée dans ~${fmtMinSec(data.etaSec)}` : '';
+      tripProgressTextEl.textContent = `Progression ${pctText}% — ${segText}${etaText ? ' · '+etaText : ''}`;
+    } else {
+      tripProgressWrapEl.classList.add('hidden');
+      tripProgressFillEl.style.width = '0%';
+      tripProgressTextEl.textContent = '';
     }
 
-    // Applique l’offset à n’importe quelle géométrie (LineString / MultiLineString, etc.)
-    function offsetGeometry(geom, dx, dy) {
-      if (!geom) return geom;
-      const type = geom.type;
+    const segIdx = data.segmentIndex ?? -1;
+    const segProg = data.segmentProgress ?? 0;
+    const segFraction = Math.max(0, Math.min(1, segProg));
 
-      // Fonction utilitaire : ajoute dx,dy à une coord [lon,lat,(alt)]
-      const shift = (coord) => {
-        const [lon, lat, ...rest] = coord;
-        return [lon + dx, lat + dy, ...rest];
-      };
-
-      // Traitement récursif pour tous les niveaux de tableaux
-      const transformCoords = (coords, depth) => {
-        if (depth === 1) {
-          // tableau de positions
-          return coords.map(shift);
-        } else {
-          // tableau imbriqué
-          return coords.map(c => transformCoords(c, depth - 1));
+    const stopsHtml = stops.map((info, idx)=>{
+      let status = 'upcoming';
+      let connectorProgress = 0;
+      const extraClasses = [];
+      if (segIdx >= 0){
+       if (idx < segIdx){
+          status = 'passed';
+          connectorProgress = 1;
+        } else if (idx === segIdx){
+          status = 'current';
+         connectorProgress = segFraction;
+          if (segFraction > 0.05){
+            extraClasses.push('enroute');
+          }
+        } else if (idx === segIdx + 1){
+          status = 'approaching';
         }
-      };
-
-      // Profondeur selon le type
-      // Point:0, LineString:1, Polygon:2, MultiLineString:2, MultiPolygon:3...
-      const depthMap = {
-        "Point": 0,
-        "MultiPoint": 1,
-        "LineString": 1,
-        "MultiLineString": 2,
-        "Polygon": 2,
-        "MultiPolygon": 3,
-        "GeometryCollection": null
-      };
-
-      if (type === "Point") {
-        return { type, coordinates: [geom.coordinates[0] + dx, geom.coordinates[1] + dy] };
+      } else if (data.nowSec!=null){
+        const ref = info.isFirst ? (seq[idx].departure ?? seq[idx].arrival) : (seq[idx].arrival ?? seq[idx].departure);
+        if (ref!=null){
+          status = data.nowSec >= ref ? 'passed' : 'upcoming';
+        }
       }
 
-      if (type === "GeometryCollection") {
-        return {
-          type,
-          geometries: (geom.geometries || []).map(g => offsetGeometry(g, dx, dy))
-        };
+      const noteParts = [];
+      if (info.isFirst) noteParts.push('Départ');
+      if (info.isLast) noteParts.push('Arrivée finale');
+      if (segIdx >= 0){
+        if (idx === segIdx) noteParts.push('Dernier arrêt');
+        if (idx === segIdx + 1) noteParts.push('Prochain arrêt');
+      }
+      const note = noteParts.length ? `<div class="stop-note"><strong>${escapeHTML(noteParts.join(' · '))}</strong></div>` : '';
+      const timesHtml = info.timeParts.map(part=>{
+        const cls = part.type === 'arr' ? 'time-arr' : part.type === 'dep' ? 'time-dep' : 'time-neutral';
+        return `<div class="time-entry ${cls}">${escapeHTML(part.text)}</div>`;
+      }).join('');
+      const classes = [status, ...extraClasses].filter(Boolean).join(' ');
+      const styleAttr = connectorProgress > 0 && !info.isLast ? ` style="--connector-progress:${connectorProgress.toFixed(3)}"` : '';
+      return `<div class="trip-stop ${classes}"${styleAttr}><div class="stop-time">${timesHtml}</div><div class="stop-main"><div class="stop-name">${escapeHTML(info.name)}</div>${note}</div></div>`;
+    }).join('');
+
+    tripStopsEl.innerHTML = stopsHtml || '<div class="trip-stop"><div class="stop-main"><div class="stop-name">Aucun arrêt disponible</div></div></div>';
+  }
+
+  function renderStationPanel(){
+    if (!activeStationId){ hideTripPanel(); return; }
+    const station = axisStationsById.get(activeStationId);
+    if (!station){ hideTripPanel(); return; }
+
+    tripStopsEl.classList.add('station-mode');
+    const emoji = station.type === 'major' ? '🏠' : '🏡';
+    tripPanelIconEl.textContent = emoji;
+    tripPanelTrainEl.textContent = `Gare de ${station.label}`;
+
+    const classification = station.type === 'major'
+      ? 'Gare principale de l’axe Nancy ↔ Luxembourg'
+      : 'Gare intermédiaire Nancy ↔ Luxembourg';
+    const summaryParts = [escapeHTML(classification)];
+    if (isFinite(station.lat) && isFinite(station.lon)){
+      summaryParts.push(`<span class="muted">(${escapeHTML(station.lat.toFixed(3))} ; ${escapeHTML(station.lon.toFixed(3))})</span>`);
+    }
+    tripPanelSummaryEl.innerHTML = summaryParts.join('<br>');
+
+    tripProgressWrapEl.classList.add('hidden');
+    tripProgressFillEl.style.width = '0%';
+    tripProgressTextEl.textContent = '';
+
+    const events = computeStationEvents(station);
+    if (events.length){
+      tripStopsTitleEl.classList.remove('hidden');
+      tripStopsTitleEl.textContent = `Trains observés (${events.length})`;
+    } else {
+      tripStopsTitleEl.classList.remove('hidden');
+      tripStopsTitleEl.textContent = 'Trains observés';
+    }
+
+    if (!events.length){
+      tripStopsEl.innerHTML = '<div class="station-event empty">Aucun train en approche immédiate.</div>';
+      return;
+    }
+
+    const cards = events.map(ev=>{
+      const title = ev.number ? `Train ${ev.number}` : (ev.headsign || ev.displayName || ev.trainId);
+      const subtitle = [];
+      if (ev.headsign && (!ev.number || !title.includes(ev.headsign))){
+        subtitle.push(ev.headsign);
+      } else if (ev.displayName && ev.displayName !== title){
+        subtitle.push(ev.displayName);
+      }
+      const statusText = ev.state + (ev.diff!=null && isFinite(ev.diff) ? ` · ${fmtRelative(ev.diff)}` : '');
+      const arrLine = ev.arrSec!=null ? `<div>Arrivée : <strong>${escapeHTML(fmtHHMM(ev.arrSec))}</strong></div>` : '';
+      const depLine = ev.depSec!=null ? `<div>Départ : <strong>${escapeHTML(fmtHHMM(ev.depSec))}</strong></div>` : '';
+      const note = subtitle.length ? `<div class="station-event-note">${escapeHTML(subtitle.join(' — '))}</div>` : '';
+      const times = `<div class="station-event-times">${arrLine}${depLine}</div>`;
+      const btnId = escapeAttr(ev.trainId);
+      const btnLabel = escapeAttr(`Ouvrir le détail du ${ev.number ? `train ${ev.number}` : 'service'}`);
+      return `<div class="station-event"><div class="station-event-main"><div class="station-event-title">${escapeHTML(title)}</div><div class="station-event-status">${escapeHTML(statusText)}</div>${times}${note}</div><button type="button" class="station-train-link" data-train-id="${btnId}" aria-label="${btnLabel}">${ev.cow}<span>Détails</span></button></div>`;
+    }).join('');
+
+    tripStopsEl.innerHTML = cards;
+  }
+
+  function computeStationEvents(station){
+    const stopIds = station.stopSet || new Set(station.stopIds || []);
+    const now = nowSecLocal();
+    const events = [];
+
+    for (const [tripId, train] of trainDataById.entries()){
+      const seq = stopTimesByTrip.get(tripId);
+      if (!seq || !seq.length) continue;
+      let target = null;
+      for (const st of seq){
+        if (stopIds.has(st.stop_id)) { target = st; break; }
+        const meta = stopsById.get(st.stop_id);
+        if (meta?.parent_station && stopIds.has(meta.parent_station)){ target = st; break; }
+      }
+      if (!target) continue;
+
+      const arrSec = target.arrival;
+      const depSec = target.departure;
+      let state = null;
+      let focusSec = null;
+
+      if (arrSec!=null && depSec!=null && now >= arrSec && now <= depSec){
+        state = 'En gare';
+        focusSec = depSec;
+      } else if (arrSec!=null && arrSec >= now){
+        state = 'Arrivée';
+        focusSec = arrSec;
+      } else if (depSec!=null && depSec >= now){
+        state = 'Départ';
+        focusSec = depSec;
+      } else {
+        continue;
       }
 
-      const depth = depthMap[type];
-      if (depth == null) return geom; // type non géré : on renvoie tel quel
-
-      return {
-        type,
-        coordinates: transformCoords(geom.coordinates, depth)
-      };
+      events.push({
+        trainId: tripId,
+        number: train.number,
+        headsign: train.headsign,
+        displayName: train.displayName || train.number || tripId,
+        arrSec,
+        depSec,
+        state,
+        focusSec,
+        diff: focusSec - now,
+        cow: cowForTrain(tripId)
+      });
     }
 
-    // Affichage info « mètres par pas » (approx)
-    function updateMetersHint() {
-      const center = map.getCenter();
-      const metersPerDegLat = 111320; // approx
-      const metersPerDegLon = 111320 * Math.cos(center.lat * Math.PI/180);
-      const mLon = Math.abs(step * metersPerDegLon);
-      const mLat = Math.abs(step * metersPerDegLat);
-      metersHint.textContent = `Pas actuel ≈ ${mLon.toFixed(1)} m (est/ouest) · ${mLat.toFixed(1)} m (nord/sud)`;
+    events.sort((a,b)=>a.focusSec - b.focusSec);
+    return events.slice(0, 8);
+  }
+
+  function prepareStationMetadata(){
+    for (const station of AXIS_STATIONS){
+      const ids = new Set(station.stopIds || []);
+      if (station.stopArea){
+        ids.add(station.stopArea);
+        if (stopChildrenByParent.has(station.stopArea)){
+          for (const child of stopChildrenByParent.get(station.stopArea)){
+            ids.add(child.stop_id);
+          }
+        }
+      }
+      if (!isFinite(station.lat) || !isFinite(station.lon)){
+        if (station.stopArea && stopsById.has(station.stopArea)){
+          const meta = stopsById.get(station.stopArea);
+          station.lat = meta.lat;
+          station.lon = meta.lon;
+        } else {
+          for (const id of ids){
+            const meta = stopsById.get(id);
+            if (meta){ station.lat = meta.lat; station.lon = meta.lon; break; }
+          }
+        }
+      }
+      station.stopIds = Array.from(ids);
+      station.stopSet = new Set(station.stopIds);
     }
+  }
+
+  function renderAxisStations(){
+    if (overlay.axisStations){
+      overlay.axisStations.removeFrom(map);
+      overlay.axisStations = null;
+    }
+    const markers = [];
+    for (const station of AXIS_STATIONS){
+      if (!isFinite(station.lat) || !isFinite(station.lon)) continue;
+      const marker = L.marker([station.lat, station.lon], {
+        icon: iconForStation(station),
+        keyboard:false,
+        interactive:true,
+        zIndexOffset:600
+      });
+      marker.bindTooltip(station.label, {permanent:false});
+      markers.push(marker);
+    }
+    if (markers.length){
+      overlay.axisStations = L.layerGroup(markers).addTo(map);
+    }
+  }
+  
+   // ---------- Graphe réseau (pour suivre les voies) ----------
+  const networkGraph = new Map();       // key -> { key, lat, lon, neighbors: Map<key, distance> }
+  const networkNodes = [];              // liste des noeuds pour recherche voisinage
+  const stopNearestCache = new Map();   // stop_id -> { node, dist }
+  const stopPathCache = new Map();      // "stopA|stopB" -> chemin pré-calculé
+
+  function coordKey(lat, lon){ return `${Math.round(lat*1e6)},${Math.round(lon*1e6)}`; }
+
+  function ensureNetworkNode(lat, lon){
+    const key = coordKey(lat, lon);
+    if (!networkGraph.has(key)){
+      networkGraph.set(key, { key, lat, lon, neighbors: new Map() });
+      networkNodes.push(networkGraph.get(key));
+    }
+    return networkGraph.get(key);
+  }
+
+  function addNetworkEdge(latA, lonA, latB, lonB){
+    const nodeA = ensureNetworkNode(latA, lonA);
+    const nodeB = ensureNetworkNode(latB, lonB);
+    const d = distLL({lat:latA, lon:lonA}, {lat:latB, lon:lonB});
+    if (!isFinite(d) || d <= 0) return;
+    if (!nodeA.neighbors.has(nodeB.key) || nodeA.neighbors.get(nodeB.key) > d){
+      nodeA.neighbors.set(nodeB.key, d);
+    }
+    if (!nodeB.neighbors.has(nodeA.key) || nodeB.neighbors.get(nodeA.key) > d){
+      nodeB.neighbors.set(nodeA.key, d);
+    }
+  }
+
+  function ingestGeoJSONNetwork(data){
+    if (!data) return;
+    const features = data.type === 'FeatureCollection' ? data.features : [data];
+    for (const feat of features){
+      if (!feat || !feat.geometry) continue;
+      const geom = feat.geometry;
+      const type = geom.type;
+      if (type === 'LineString'){
+        processLineStringCoords(geom.coordinates);
+      } else if (type === 'MultiLineString'){
+        for (const coords of geom.coordinates){ processLineStringCoords(coords); }
+      }
+    }
+  }
+
+  function processLineStringCoords(coords){
+    if (!Array.isArray(coords)) return;
+    for (let i=1;i<coords.length;i++){
+      const [lonA, latA] = coords[i-1];
+      const [lonB, latB] = coords[i];
+      if (!isFinite(latA) || !isFinite(lonA) || !isFinite(latB) || !isFinite(lonB)) continue;
+      addNetworkEdge(latA, lonA, latB, lonB);
+    }
+  }
+
+   const MANUAL_CONNECTOR_SEGMENTS = [
+    [
+      [49.46658076914014, 6.109331392744701],
+      [49.46755304211354, 6.109018226768153],
+      [49.46931476747459, 6.1065390722530575],
+      [49.469567548081336, 6.106489521458154]
+    ],
+    [
+      [49.59566960334967, 6.132002684138384],
+      [49.59630311920914, 6.13202748113627],
+      [49.596980429233994, 6.132399875022308],
+      [49.59757307502195, 6.132725730032224],
+      [49.59816571983299, 6.133051591553611],
+      [49.59958814769005, 6.133883041433622]
+    ],
+    [
+      [49.47186965380722, 6.107870598848106],
+      [49.47174049199803, 6.107837229130531],
+      [49.47165083458342, 6.107847549681084],
+      [49.47158132710657, 6.1078565279550565],
+      [49.471561250728215, 6.10785928146085],
+      [49.47147437188764, 6.10787201838786],
+      [49.47136754808134, 6.107889521458154],
+      [49.47129303581469, 6.107902935704486],
+      [49.471260872767445, 6.107909032993145],
+      [49.47120384149182, 6.107920302550652],
+      [49.471154361229715, 6.107930552961227],
+      [49.471114767474596, 6.107939072253058]
+    ],
+    [
+      [49.51742762768063, 6.101569489369114],
+      [49.51740417509697, 6.101688948209521]
+    ],
+    [
+      [49.45545408844863, 6.129087542059966],
+      [49.45545408934669, 6.129087542114585]
+    ]
+  ];
+
+  function applyManualConnectors(){
+    for (const segment of MANUAL_CONNECTOR_SEGMENTS){
+      if (!Array.isArray(segment) || segment.length < 2) continue;
+      for (let i=1;i<segment.length;i++){
+        const prev = segment[i-1];
+        const curr = segment[i];
+        if (!prev || !curr) continue;
+        const [latA, lonA] = prev;
+        const [latB, lonB] = curr;
+        if (!isFinite(latA) || !isFinite(lonA) || !isFinite(latB) || !isFinite(lonB)) continue;
+        addNetworkEdge(latA, lonA, latB, lonB);
+      }
+    }
+  }
+ 
+  function nearestNetworkNode(stop){
+    if (!stop) return null;
+    if (stopNearestCache.has(stop.stop_id)) return stopNearestCache.get(stop.stop_id);
+    let best = null, bestDist = Infinity;
+    for (const node of networkNodes){
+      const d = distLL({lat:stop.lat, lon:stop.lon}, {lat:node.lat, lon:node.lon});
+      if (d < bestDist){ bestDist = d; best = node; }
+    }
+    const res = best ? { node: best, dist: bestDist } : null;
+    stopNearestCache.set(stop.stop_id, res);
+    return res;
+  }
+
+  function shortestPathNodes(startKey, endKey){
+    if (!networkGraph.has(startKey) || !networkGraph.has(endKey)) return null;
+    if (startKey === endKey) return [networkGraph.get(startKey)];
+
+    const distMap = new Map([[startKey, 0]]);
+    const prevMap = new Map();
+    const visited = new Set();
+    const queue = [{ key: startKey, dist: 0 }];
+
+    while (queue.length){
+      queue.sort((a,b)=>a.dist-b.dist);
+      const { key, dist } = queue.shift();
+      if (visited.has(key)) continue;
+      visited.add(key);
+      if (key === endKey) break;
+      const node = networkGraph.get(key);
+      if (!node) continue;
+      for (const [nextKey, weight] of node.neighbors){
+        if (visited.has(nextKey)) continue;
+        const newDist = dist + weight;
+        if (newDist < (distMap.get(nextKey) ?? Infinity)){
+          distMap.set(nextKey, newDist);
+          prevMap.set(nextKey, key);
+          queue.push({ key: nextKey, dist: newDist });
+        }
+      }
+    }
+
+    if (!distMap.has(endKey)) return null;
+    const keys = [];
+    let cur = endKey;
+    while (cur){
+      keys.push(cur);
+      if (cur === startKey) break;
+      cur = prevMap.get(cur);
+      if (cur === undefined) return null;
+    }
+    keys.reverse();
+    return keys.map(k=>networkGraph.get(k)).filter(Boolean);
+  }
+
+  function makePath(rawCoords, isFallback){
+    const coords = [];
+    const cum = [];
+    let total = 0;
+    for (let i=0;i<rawCoords.length;i++){
+      const c = rawCoords[i];
+      if (!Array.isArray(c) || c.length<2) continue;
+      if (!coords.length){
+        coords.push(c);
+        cum.push(0);
+        continue;
+      }
+      const prev = coords[coords.length-1];
+      const d = distLL({lat:prev[0], lon:prev[1]}, {lat:c[0], lon:c[1]});
+      if (!isFinite(d)) continue;
+      if (d < 0.5){
+        if (i === rawCoords.length-1 && (prev[0] !== c[0] || prev[1] !== c[1])){
+          coords.push(c);
+          cum.push(total);
+        }
+        continue;
+      }
+      total += d;
+      coords.push(c);
+      cum.push(total);
+    }
+    if (coords.length < 2 && rawCoords.length){
+      const last = rawCoords[rawCoords.length-1];
+      if (last && (coords.length === 0 || coords[coords.length-1][0] !== last[0] || coords[coords.length-1][1] !== last[1])){
+        coords.push(last);
+        cum.push(total);
+      }
+    }
+    if (!coords.length){
+      coords.push([0,0]);
+      cum.push(0);
+    } else if (coords.length === 1){
+      coords.push(coords[0]);
+      cum.push(total);
+    }
+    return { coords, cumDistances: cum, totalDist: total, isFallback: !!isFallback };
+  }
+
+  function directPathBetweenStops(stopA, stopB){
+    return makePath([[stopA.lat, stopA.lon],[stopB.lat, stopB.lon]], true);
+  }
+
+  function computeStopPath(stopA, stopB){
+    const direct = directPathBetweenStops(stopA, stopB);
+    if (!networkNodes.length) return direct;
+    const anchorA = nearestNetworkNode(stopA);
+    const anchorB = nearestNetworkNode(stopB);
+    if (!anchorA || !anchorB) return direct;
+    const pathNodes = shortestPathNodes(anchorA.node.key, anchorB.node.key);
+    if (!pathNodes || !pathNodes.length) return direct;
+
+    const coords = [[stopA.lat, stopA.lon]];
+    const firstNode = pathNodes[0];
+    if (firstNode) coords.push([firstNode.lat, firstNode.lon]);
+    for (let i=1;i<pathNodes.length-1;i++){
+      const node = pathNodes[i];
+      coords.push([node.lat, node.lon]);
+    }
+    const lastNode = pathNodes[pathNodes.length-1];
+    if (lastNode) coords.push([lastNode.lat, lastNode.lon]);
+    coords.push([stopB.lat, stopB.lon]);
+
+    const path = makePath(coords, false);
+    if (!path.totalDist) return direct;
+    return path;
+  }
+
+  function pathBetweenStops(stopA, stopB){
+    if (!stopA || !stopB) return null;
+    const key = `${stopA.stop_id}|${stopB.stop_id}`;
+    if (stopPathCache.has(key)) return stopPathCache.get(key);
+    const path = computeStopPath(stopA, stopB);
+    stopPathCache.set(key, path);
+    const revKey = `${stopB.stop_id}|${stopA.stop_id}`;
+    if (!stopPathCache.has(revKey) && path){
+      const revCoords = [...path.coords].map(c=>[c[0], c[1]]).reverse();
+      stopPathCache.set(revKey, makePath(revCoords, path.isFallback));
+    }
+    return path;
+  }
+
+  function positionAlongPath(path, ratio){
+    if (!path) return null;
+    const target = Math.max(0, Math.min(1, ratio)) * (path.totalDist || 0);
+    const cum = path.cumDistances;
+    const coords = path.coords;
+    if (!coords || coords.length === 0) return null;
+    if (coords.length === 1) return { lat: coords[0][0], lon: coords[0][1] };
+    for (let i=1;i<cum.length;i++){
+      if (target <= cum[i]){
+        const segLen = cum[i] - cum[i-1];
+        const t = segLen > 0 ? (target - cum[i-1]) / segLen : 0;
+        const [latA, lonA] = coords[i-1];
+        const [latB, lonB] = coords[i];
+        return { lat: lerp(latA, latB, t), lon: lerp(lonA, lonB, t) };
+      }
+    }
+    const last = coords[coords.length-1];
+    return { lat: last[0], lon: last[1] };
+  } 
+
+  // zones d'intérêt (filtre "sillon" simple)
+  const AXIS_STOP_KEYWORDS = ['nancy','pont-','metz','hagondange','thionville','bettembourg','luxembourg'];
+
+  // ---------- Chargement réseaux ----------
+  async function loadNetworks(){
+    try {
+      const rfn = await fetchJSONAny(FILES.rfn);
+      ingestGeoJSONNetwork(rfn);
+      overlay.rfn = L.geoJSON(rfn, { style:{ color:'#00f0ff', weight:3, opacity:0.6 } }).addTo(map);
+      let bounds = overlay.rfn.getBounds();
+
+      try {
+        const cfl = await fetchJSONAny(FILES.cfl);
+        ingestGeoJSONNetwork(cfl);
+        overlay.cfl = L.geoJSON(cfl, { style:{ color:'#ff00e0', weight:3, opacity:0.6 } }).addTo(map);
+        bounds.extend(overlay.cfl.getBounds());
+      } catch(e){
+        setStatus('RFN chargé — CFL introuvable (ok si en cours de conversion)', true);
+      }
+
+      applyManualConnectors();
+
+      stopNearestCache.clear();
+      stopPathCache.clear();
+
+      map.fitBounds(bounds);
+    } catch(e){
+      setStatus('Erreur chargement réseaux: '+e.message, true);
+    }
+  }
+
+  // ---------- Chargement GTFS (sans shapes) ----------
+  async function loadGTFS(){
+    try {
+      stopNearestCache.clear();
+      stopPathCache.clear();
+      // stops
+     stopChildrenByParent.clear(); 
+      const stops = await parseCSVAny(FILES.stops);
+      for (const s of stops){
+        const lat=parseFloat(s.stop_lat), lon=parseFloat(s.stop_lon);
+        if (!isFinite(lat)||!isFinite(lon)) continue;
+        const parent = s.parent_station || null;
+        const locationType = Number(s.location_type ?? 0) || 0;
+        const entry = { stop_id:s.stop_id, name:s.stop_name, lat, lon, parent_station:parent, location_type:locationType };
+        stopsById.set(s.stop_id, entry);
+        if (parent){
+          if (!stopChildrenByParent.has(parent)) stopChildrenByParent.set(parent, []);
+          stopChildrenByParent.get(parent).push(entry);
+        }
+      }
+
+      // stop_times -> groupés par trip
+      const stop_times = await parseCSVAny(FILES.stop_times);
+      for (const st of stop_times){
+        const tid = st.trip_id; if(!tid) continue;
+        if (!stopTimesByTrip.has(tid)) stopTimesByTrip.set(tid, []);
+        stopTimesByTrip.get(tid).push({
+          stop_id: st.stop_id,
+          arrival: gtfsTimeToSec(st.arrival_time),
+          departure: gtfsTimeToSec(st.departure_time),
+          seq: Number(st.stop_sequence)
+        });
+      }
+      for (const [k,v] of stopTimesByTrip) v.sort((a,b)=>a.seq-b.seq);
+
+      // trips (optionnel)
+      try {
+        const trips = await parseCSVAny(FILES.trips);
+        for (const t of trips){
+          tripsById.set(t.trip_id, { route_id:t.route_id, headsign:t.trip_headsign, service_id:t.service_id, trip_short_name:t.trip_short_name });
+        }
+      } catch(_){ /* ok si absent */ }
+
+      // routes (optionnel)
+      try {
+        const routes = await parseCSVAny(FILES.routes);
+        for (const r of routes){
+          routesById.set(r.route_id, { short:r.route_short_name, long:r.route_long_name });
+        }
+      } catch(_){ /* ok si absent */ }
+
+      // calendar + calendar_dates (optionnels)
+      let calendarRows = null;
+      try {
+       calendarRows = await parseCSVAny(FILES.calendar);
+      } catch(_){ /* ok si absent */ }
+      
+let calendarDateRows = null;
+      try {
+        calendarDateRows = await parseCSVAny(FILES.calendar_dates);
+      } catch(_){ /* ok si absent */ }
+
+      activeServiceIds = computeActiveServiceSet(calendarRows, calendarDateRows);
+      if (activeServiceIds && !tripsById.size) activeServiceIds = null;
+      
+      // Dessine les gares (GTFS)
+      const gares = [];
+      for (const s of stopsById.values()){ gares.push([s.lat, s.lon, s.name]); }
+      overlay.garesGTFS = L.layerGroup(
+        gares.map(([lat,lon,name])=>{
+          const m=L.circleMarker([lat,lon],{radius:3, color:'#a0ff00', weight:1});
+          m.bindTooltip(name, {permanent:false}); return m;
+        })
+      ).addTo(map);
+
+      prepareStationMetadata();
+      renderAxisStations();
+
+      let statusMsg = 'GTFS chargé — ' + stopsById.size + ' gares, ' + stopTimesByTrip.size + ' trips';
+      if (activeServiceIds) statusMsg += ', ' + activeServiceIds.size + ' services actifs aujourd\'hui';
+      setStatus(statusMsg + '.');
+    } catch(e){
+      setStatus('Erreur chargement GTFS: '+e.message, true);
+    }
+  }
+
+  // ---------- Filtre sillon & service du jour ----------
+  function tripPassesAxis(seq){
+    const names = seq.map(s=> (stopsById.get(s.stop_id)?.name || '').toLowerCase());
+    const hits = names.filter(n=> AXIS_STOP_KEYWORDS.some(k=> n.includes(k))).length;
+    return hits >= 2;
+  }
+
+  function serviceAllowed(trip_id){
+    if (!activeServiceIds) return true;
+    const trip = tripsById.get(trip_id);
+    if (!trip || !trip.service_id) return false;
+    return activeServiceIds.has(trip.service_id);
+  }
+
+  // ---------- Calcul positions (interpolation arrêt→arrêt) ----------
+  function trainsAt(nowSec){
+    const items=[];
+    for (const [trip_id, seq] of stopTimesByTrip.entries()){
+      if (seq.length<2) continue;
+      if (!tripPassesAxis(seq)) continue;
+      if (!serviceAllowed(trip_id)) continue;
+
+      const start = seq[0].departure ?? seq[0].arrival;
+      const end   = seq.at(-1).arrival ?? seq.at(-1).departure;
+      if (start==null || end==null || nowSec<start || nowSec>end) continue;
+      const totalSpan = end - start;
+      const tripProgress = totalSpan > 0 ? (nowSec - start) / totalSpan : null;
+
+      const trip = tripsById.get(trip_id) || {};
+      const route = routesById.get(trip.route_id) || {};
+      const number = trainNumberForTrip(trip, route, trip_id);
+      const headsign = (()=>{
+        if (trip.headsign && trip.headsign !== number) return trip.headsign;
+        if (route.long && route.long !== number) return route.long;
+        if (route.short && route.short !== number) return route.short;
+        return '';
+      })();
+
+      let positioned = false;
+
+      for (let i=0;i<seq.length;i++){
+        const stop = seq[i];
+        const arr = stop.arrival;
+        const dep = stop.departure;
+        if (arr==null || dep==null || dep<=arr) continue;
+        if (nowSec < arr || nowSec > dep) continue;
+
+        const stopMeta = stopsById.get(stop.stop_id);
+        if (!stopMeta) continue;
+
+        const nextStop = seq[i+1] ? stopsById.get(seq[i+1].stop_id) : null;
+        const etaSec = Math.max(0, Math.round(dep - nowSec));
+
+        items.push({
+          id: trip_id,
+          headsign,
+          from: stopMeta.name || stop.stop_id,
+          to: nextStop?.name || stopMeta.name || stop.stop_id,
+          etaSec,
+          lat: stopMeta.lat,
+          lon: stopMeta.lon,
+          route_id: trip.route_id,
+          number,
+          startSec: start,
+          endSec: end,
+          progress: tripProgress,
+          segmentIndex: i,
+          segmentProgress: 0,
+          nowSec,
+          stopsCount: seq.length
+        });
+        positioned = true;
+        break;
+      }
+
+      if (positioned) continue;
+
+      for (let i=0;i<seq.length-1;i++){
+        const A=seq[i], B=seq[i+1];
+        const tA = A.departure ?? A.arrival;
+        const tB = B.arrival   ?? B.departure;
+
+        const sA = stopsById.get(A.stop_id), sB = stopsById.get(B.stop_id);
+        if (!sA || !sB) continue;
+
+      if (tA==null || tB==null || tB<=tA) continue;
+        if (nowSec < tA || nowSec > tB) continue;  
+
+        const r=(nowSec - tA)/(tB - tA); // 0..1
+        const path = pathBetweenStops(sA, sB);
+        const pos = positionAlongPath(path, r) || { lat: lerp(sA.lat, sB.lat, r), lon: lerp(sA.lon, sB.lon, r) };
+        const { lat, lon } = pos;
+        const etaSec = Math.max(0, Math.round(tB - nowSec));
+
+        items.push({
+          id: trip_id,
+          headsign,
+          from: sA.name || A.stop_id,
+          to: sB.name || B.stop_id,
+          etaSec, lat, lon,
+          route_id: trip.route_id,
+          number,
+          startSec: start,
+          endSec: end,
+          progress: tripProgress,
+          segmentIndex: i,
+          segmentProgress: r,
+          nowSec,
+          stopsCount: seq.length
+        });
+        break;
+      }
+    }
+    return items;
+  }
+
+  function renderTrains(list){
+  const seen = new Set();
+
+  for (const t of list){
+    seen.add(t.id);
+    trainDataById.set(t.id, t);
+    const displayName = t.number ? (t.headsign ? `${t.headsign} — Train ${t.number}` : `Train ${t.number}`) : (t.headsign || t.id);
+    t.displayName = displayName;
+
+    if (trainMarkers.has(t.id)){
+      const marker = trainMarkers.get(t.id);
+      marker.setLatLng([t.lat, t.lon]);
+      marker.setIcon(iconForTrain(t));
+      marker.setZIndexOffset(1000); // passer devant les couches vectorielles
+      if (marker.getPopup()) marker.unbindPopup();
+    } else {
+      const m = L.marker([t.lat, t.lon], {
+        icon: iconForTrain(t),
+        zIndexOffset: 1000,       // au-dessus des lignes RFN/CFL
+        riseOnHover: true,        // confort visuel
+        keyboard: false
+      }).addTo(map);
+      trainMarkers.set(t.id, m);
+    }
+  }
+
+  // nettoyage des marqueurs disparus
+  for (const [id,mk] of trainMarkers.entries()){
+    if(!seen.has(id)){
+      map.removeLayer(mk);
+      trainMarkers.delete(id);
+      trainCowById.delete(id);
+      trainDataById.delete(id);
+      if (activeTripId === id){
+        activeTripId = null;
+        if (activeStationId){
+          renderPanel();
+        } else {
+          hideTripPanel();
+        }
+      }
+    }
+  }
+
+  if (activeStationId || (activeTripId && trainDataById.has(activeTripId))){
+    renderPanel();
+  }
+  document.getElementById('counts').textContent = `${list.length} train(s) actifs`;
+  document.getElementById('clock').textContent = 'Heure locale : ' + new Date().toLocaleTimeString();
+}
+
+  // ---------- Boucle ----------
+  let periodMs = 10000, nextTick = performance.now();
+  const periodEl = document.getElementById('period'), hzEl=document.getElementById('hz'), smoothEl=document.getElementById('smooth');
+  periodEl.addEventListener('input', ()=>{ hzEl.textContent=periodEl.value; periodMs=Number(periodEl.value)*1000; nextTick=performance.now(); });
+
+  function tick(){ renderTrains(trainsAt(nowSecLocal())); }
+  function loop(ts){
+    if (ts >= nextTick){ tick(); nextTick = ts + periodMs; }
+    if (smoothEl.checked) tick();
+    requestAnimationFrame(loop);
+  }
+
+  // ---------- Boot ----------
+  (async function boot(){
+    await loadNetworks();
+    await loadGTFS();
+    tick();
+    requestAnimationFrame(loop);
+  })().catch(e=> setStatus('Erreur initialisation: '+e.message, true));
   </script>
 </body>
 </html>
