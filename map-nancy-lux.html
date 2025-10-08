@@ -50,6 +50,15 @@
     .stop-note{ font-size:11px; color:#7f92b1; text-transform:uppercase; letter-spacing:.04em; }
     .stop-note strong{ color:#a0ff00; font-weight:600; }
     .hidden{ display:none !important; }
+    .train-list{ display:flex; flex-direction:column; gap:8px; border-top:1px solid rgba(32,50,75,0.6); padding-top:10px; max-height:200px; }
+    .train-list-title{ font-size:11px; color:#8093b5; text-transform:uppercase; letter-spacing:.08em; }
+    .train-list-items{ display:flex; flex-direction:column; gap:6px; overflow:auto; padding-right:4px; max-height:160px; }
+    .train-list-item{ display:flex; flex-direction:column; align-items:flex-start; gap:2px; border:1px solid transparent; background:rgba(22,34,51,0.85); color:#e0f0ff; padding:8px 10px; border-radius:10px; font-size:12px; line-height:1.35; cursor:pointer; transition:background .2s, border-color .2s; text-align:left; }
+    .train-list-item:hover{ background:rgba(32,50,75,0.85); border-color:#2a3b55; }
+    .train-list-item.active{ border-color:#00f0ff; box-shadow:0 0 0 1px rgba(0,240,255,0.4); }
+    .train-list-item-code{ font-weight:700; font-size:13px; }
+    .train-list-item-headsign{ color:#90a1b8; font-size:11px; }
+    .train-list-empty{ font-size:12px; color:#90a1b8; }
   </style>
 </head>
 <body>
@@ -75,7 +84,7 @@
     <span id="status" class="muted"></span>
   </div>
 
-  <div id="trip-panel" class="trip-panel hidden" aria-live="polite">
+  <div id="trip-panel" class="trip-panel" aria-live="polite">
     <div class="trip-panel-header">
       <div class="trip-panel-title">
         <span id="trip-panel-icon" class="trip-panel-icon" aria-hidden="true">🐄</span>
@@ -84,6 +93,10 @@
       <button id="trip-panel-close" class="trip-panel-close" type="button" aria-label="Fermer">×</button>
     </div>
     <div id="trip-panel-summary" class="trip-panel-summary">Cliquez sur une icône vache pour afficher le détail du trajet.</div>
+    <div id="train-list" class="train-list">
+      <div class="train-list-title">Trains actifs</div>
+      <div class="train-list-empty">Chargement…</div>
+    </div>
     <div class="trip-progress hidden" id="trip-progress">
       <div class="trip-progress-bar"><div id="trip-progress-fill" class="trip-progress-bar-fill"></div></div>
       <div id="trip-progress-text" class="trip-progress-text"></div>
@@ -278,6 +291,7 @@ const WEEKDAY_FIELDS = ['sunday','monday','tuesday','wednesday','thursday','frid
   const COW_EMOJIS = ['🐄','🐮','🐃','🐂','🐄'];
 
     let activeTripId = null;
+  let userDismissedSelection = false;
   const tripPanelEl = document.getElementById('trip-panel');
   const tripPanelCloseBtn = document.getElementById('trip-panel-close');
   const tripPanelIconEl = document.getElementById('trip-panel-icon');
@@ -288,17 +302,35 @@ const WEEKDAY_FIELDS = ['sunday','monday','tuesday','wednesday','thursday','frid
   const tripProgressTextEl = document.getElementById('trip-progress-text');
   const tripStopsTitleEl = document.getElementById('trip-stops-title');
   const tripStopsEl = document.getElementById('trip-stops');
+  const trainListEl = document.getElementById('train-list');
+  let lastTrainListSignature = null;
+  let lastTrainListRender = 0;
 
   tripPanelCloseBtn.addEventListener('click', ()=>{
     activeTripId = null;
+    userDismissedSelection = true;
     hideTripPanel();
   });
+
+    if (trainListEl){
+    trainListEl.addEventListener('click', (evt)=>{
+      const target = evt.target.closest('[data-train-id]');
+      if (!target) return;
+      evt.preventDefault();
+      evt.stopPropagation();
+      const trainId = target.getAttribute('data-train-id');
+      if (trainId){
+        openTripPanel(trainId);
+      }
+    });
+  }
 
   map.on('click', (evt)=>{
     const original = evt?.originalEvent;
     if (original?.defaultPrevented || original?._stopped) return;
     if (activeTripId){
       activeTripId = null;
+      userDismissedSelection = true;
       hideTripPanel();
     }
   });
@@ -321,9 +353,63 @@ const WEEKDAY_FIELDS = ['sunday','monday','tuesday','wednesday','thursday','frid
       iconAnchor:[20,20]
     });
   }  
+function updateTrainListActiveState(){
+    if (!trainListEl) return;
+    const buttons = trainListEl.querySelectorAll('[data-train-id]');
+    buttons.forEach(btn => {
+      if (btn.getAttribute('data-train-id') === activeTripId){
+        btn.classList.add('active');
+      } else {
+        btn.classList.remove('active');
+      }
+    });
+  }
 
+  function sortTrainsForList(trains){
+    const arr = Array.isArray(trains) ? [...trains] : Array.from(trains || []);
+    arr.sort((a,b)=>{
+      const aEta = isFinite(a?.etaSec) ? a.etaSec : Infinity;
+      const bEta = isFinite(b?.etaSec) ? b.etaSec : Infinity;
+      if (aEta !== bEta) return aEta - bEta;
+      const aLabel = (a?.number || a?.id || '').toString();
+      const bLabel = (b?.number || b?.id || '').toString();
+      return aLabel.localeCompare(bLabel, 'fr', { numeric:true, sensitivity:'base' });
+    });
+    return arr;
+  }
+
+  function renderTrainList(trains, force=false){
+    if (!trainListEl) return;
+    const arr = sortTrainsForList(trains);
+    const signature = arr.map(t=>`${t.id}|${t.number||''}|${t.headsign||''}|${t.from||''}|${t.to||''}`).sort().join('||');
+    const now = Date.now();
+    if (!force && signature === lastTrainListSignature && (now - lastTrainListRender) < 1000){
+      updateTrainListActiveState();
+      return;
+    }
+    lastTrainListSignature = signature;
+    lastTrainListRender = now;
+    if (!arr.length){
+      trainListEl.innerHTML = '<div class="train-list-title">Trains actifs</div><div class="train-list-empty">Aucun train actif pour le moment.</div>';
+      updateTrainListActiveState();
+      return;
+    }
+    const itemsHtml = arr.map(t=>{
+      const primary = t.number || t.id;
+      const subtitleParts = [];
+      if (t.headsign && t.headsign !== primary) subtitleParts.push(t.headsign);
+      if (t.from && t.to) subtitleParts.push(`${t.from} → ${t.to}`);
+      if (isFinite(t.etaSec)) subtitleParts.push(`Arrivée dans ~${fmtMinSec(t.etaSec)}`);
+      const subtitle = subtitleParts.join(' · ');
+      const subtitleHtml = subtitle ? `<span class="train-list-item-headsign">${escapeHTML(subtitle)}</span>` : '';
+      return `<button type="button" class="train-list-item" data-train-id="${escapeHTML(t.id)}"><span class="train-list-item-code">${escapeHTML(primary)}</span>${subtitleHtml}</button>`;
+    }).join('');
+    trainListEl.innerHTML = `<div class="train-list-title">Trains actifs</div><div class="train-list-items">${itemsHtml}</div>`;
+    updateTrainListActiveState();
+  }
+    
   function hideTripPanel(){
-    tripPanelEl.classList.add('hidden');
+    tripPanelEl.classList.remove('hidden');
     tripPanelIconEl.textContent = '🐄';
     tripPanelTrainEl.textContent = 'Sélectionnez un train';
     tripPanelSummaryEl.textContent = 'Cliquez sur une icône vache pour afficher le détail du trajet.';
@@ -333,18 +419,26 @@ const WEEKDAY_FIELDS = ['sunday','monday','tuesday','wednesday','thursday','frid
     tripStopsTitleEl.classList.add('hidden');
     tripStopsTitleEl.textContent = 'Gares desservies';
     tripStopsEl.innerHTML = '';
+    renderTrainList([...trainDataById.values()], true);
   }
 
   function openTripPanel(trainId){
+    userDismissedSelection = false;
     activeTripId = trainId;
     tripPanelEl.classList.remove('hidden');
     renderTripPanel();
+    renderTrainList([...trainDataById.values()], true);
   }
 
   function renderTripPanel(){
     if (!activeTripId){ hideTripPanel(); return; }
     const data = trainDataById.get(activeTripId);
-    if (!data){ hideTripPanel(); return; }
+    if (!data){
+      activeTripId = null;
+      userDismissedSelection = false;
+      hideTripPanel();
+      return;
+    }
 
     tripPanelIconEl.textContent = cowForTrain(activeTripId);
 
@@ -884,11 +978,20 @@ let calendarDateRows = null;
         trainDataById.delete(id);
         if (activeTripId === id){
           activeTripId = null;
+          userDismissedSelection = false;
           hideTripPanel();
         }
       }
     }
-    if (activeTripId && trainDataById.has(activeTripId)){
+    renderTrainList(list);
+    if (!activeTripId && list.length && !userDismissedSelection){
+      const sorted = sortTrainsForList(list);
+      const first = sorted[0];
+      if (first){
+        openTripPanel(first.id);
+        return;
+      }
+    } else if (activeTripId && trainDataById.has(activeTripId)){
       renderTripPanel();
     }
     document.getElementById('counts').textContent = `${list.length} train(s) actifs`;
