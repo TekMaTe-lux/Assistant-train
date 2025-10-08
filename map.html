@@ -320,13 +320,38 @@ const WEEKDAY_FIELDS = ['sunday','monday','tuesday','wednesday','thursday','frid
   function iconForTrain(train){
     const cow = cowForTrain(train.id);
     const num = escapeHTML(train.number || train.id);
+    const safeId = escapeAttr(train.id);
+    const aria = escapeAttr(`Voir le détail du ${train.number ? `train ${train.number}` : 'train'}`);
     return L.divIcon({
       className:'',
-      html:`<button type="button" class="cow-marker" data-train-id="${escapeAttr(train.id)}">${cow}<span class="train-num">${num}</span></button>`,
+      html:`<button type="button" class="cow-marker" data-train-id="${safeId}" aria-label="${aria}">${cow}<span class="train-num">${num}</span></button>`,
       iconSize:null,
       iconAnchor:[20,20]
     });
   }  
+const mapContainerEl = map.getContainer();
+  function handleTrainActivate(ev){
+    const btn = ev.target.closest?.('.cow-marker');
+    if (!btn) return;
+    ev.preventDefault();
+    ev.stopPropagation();
+    const id = btn.getAttribute('data-train-id');
+    if (id) openTripPanel(id);
+  }
+
+  mapContainerEl.addEventListener('pointerdown', handleTrainActivate, { passive:false });
+  mapContainerEl.addEventListener('click', handleTrainActivate, { passive:false });
+  mapContainerEl.addEventListener('keydown', (ev)=>{
+    const btn = ev.target.closest?.('.cow-marker');
+    if (!btn) return;
+    if (ev.key === 'Enter' || ev.key === ' '){
+      ev.preventDefault();
+      ev.stopPropagation();
+      const id = btn.getAttribute('data-train-id');
+      if (id) openTripPanel(id);
+    }
+  });
+  
 
   function hideTripPanel(){
     tripPanelEl.classList.add('hidden');
@@ -868,36 +893,19 @@ let calendarDateRows = null;
     const displayName = t.number ? (t.headsign ? `${t.headsign} — Train ${t.number}` : `Train ${t.number}`) : (t.headsign || t.id);
     t.displayName = displayName;
 
-    const ensureClick = (marker, id)=>{
-      // On blinde: on retire d'abord puis on remet l'écouteur.
-      marker.off('click');
-      marker.on('click', (evt)=>{
-        // Stopper tout pour éviter que la carte capte le clic
-        if (evt?.originalEvent){
-          L.DomEvent.stop(evt.originalEvent);
-          L.DomEvent.preventDefault(evt.originalEvent);
-        }
-        const targetBtn = evt?.originalEvent?.target?.closest ? evt.originalEvent.target.closest('[data-train-id]') : null;
-        const clickedId = targetBtn?.getAttribute ? targetBtn.getAttribute('data-train-id') : null;
-        openTripPanel(clickedId || id);
-      });
-    };
-
     if (trainMarkers.has(t.id)){
       const marker = trainMarkers.get(t.id);
       marker.setLatLng([t.lat, t.lon]);
       marker.setIcon(iconForTrain(t));
       marker.setZIndexOffset(1000); // passer devant les couches vectorielles
-      ensureClick(marker, t.id);
       if (marker.getPopup()) marker.unbindPopup();
     } else {
       const m = L.marker([t.lat, t.lon], {
         icon: iconForTrain(t),
         zIndexOffset: 1000,       // au-dessus des lignes RFN/CFL
         riseOnHover: true,        // confort visuel
-        keyboard: true
+        keyboard: false
       }).addTo(map);
-      ensureClick(m, t.id);
       trainMarkers.set(t.id, m);
     }
   }
