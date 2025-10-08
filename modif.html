@@ -1,0 +1,265 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8" />
+  <title>Ajusteur d’offset GeoJSON — CFL</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link
+    rel="stylesheet"
+    href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+    integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
+    crossorigin=""
+  />
+  <style>
+    :root { color-scheme: dark; }
+    html, body { height: 100%; margin: 0; }
+    #map { height: 100%; }
+
+    .hud {
+      position: absolute; top: 10px; left: 10px;
+      background: rgba(14, 23, 38, .85);
+      color: #e0f0ff; font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+      border: 1px solid #20324b; border-radius: 12px; padding: 10px 12px; z-index: 9999;
+      box-shadow: 0 6px 18px rgba(0,0,0,.3);
+      max-width: min(92vw, 420px);
+    }
+    .hud h3 { margin: 0 0 6px; font-size: 16px; }
+    .hud .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 6px 0; }
+    .hud code { background: #0b0f1a; padding: 2px 6px; border-radius: 6px; border: 1px solid #1b2a3c; }
+    .hud input[type="text"] {
+      background: #0b0f1a; color: #e0f0ff; border: 1px solid #1b2a3c; border-radius: 8px; padding: 6px 8px;
+      width: 110px;
+    }
+    .hud button {
+      background: #0b0f1a; color: #00f0ff; border: 1px solid #1b2a3c; border-radius: 10px; padding: 6px 10px;
+      cursor: pointer;
+    }
+    .hud small { color: #9ab3c9; }
+    .leaflet-container a { color: #00f0ff; }
+  </style>
+</head>
+<body>
+  <div id="map"></div>
+
+  <div class="hud" id="hud">
+    <h3>Ajusteur d’offset — CFL</h3>
+    <div class="row">
+      Fichier : <code id="fileLabel">data/lignes_cfl.geojson</code>
+    </div>
+    <div class="row">
+      Offset lon (°) :
+      <input type="text" id="offLon" value="0">
+      Offset lat (°) :
+      <input type="text" id="offLat" value="0">
+      Pas :
+      <input type="text" id="stepDeg" value="0.0001" title="taille du pas en degrés">
+    </div>
+    <div class="row">
+      <button id="applyBtn">Appliquer</button>
+      <button id="resetBtn" title="R">Réinitialiser</button>
+      <button id="exportBtn" title="E">Exporter GeoJSON ajusté</button>
+    </div>
+    <div class="row">
+      <small>
+        Raccourcis : flèches ← ↑ → ↓ pour déplacer • <code>+</code>/<code>-</code> pour changer le pas •
+        <code>R</code> réinit • <code>E</code> export.
+      </small>
+    </div>
+    <div class="row">
+      <small id="metersHint">≈ 0 m/pas</small>
+    </div>
+  </div>
+
+  <script
+    src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+    integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
+    crossorigin=""
+  ></script>
+  <script>
+    // === CONFIG ===
+    const GEOJSON_URL = "data/lignes_cfl.geojson"; // change si besoin
+    const STYLE = { color: "magenta", weight: 2 };
+
+    // === STATE ===
+    let map, baseLayer;
+    let originalGeoJSON = null;   // données source (non modifiées)
+    let currentLayer = null;      // couche Leaflet présentée
+    let offset = { lon: 0, lat: 0 }; // offset en degrés
+    let step = 0.0001;            // pas de déplacement en degrés
+
+    // === INIT MAP ===
+    map = L.map("map").setView([49.56, 6.12], 12);
+    baseLayer = L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+      maxZoom: 19,
+      attribution: "&copy; OpenStreetMap"
+    }).addTo(map);
+
+    // Charger GeoJSON
+    fetch(GEOJSON_URL)
+      .then(r => r.json())
+      .then(data => {
+        originalGeoJSON = data;
+        drawWithOffset();
+        updateMetersHint();
+      })
+      .catch(err => {
+        console.error("Erreur de chargement GeoJSON:", err);
+        alert("Impossible de charger le GeoJSON. Vérifie l’URL en haut du panneau.");
+      });
+
+    // === UI elements ===
+    const offLonInput = document.getElementById("offLon");
+    const offLatInput = document.getElementById("offLat");
+    const stepInput   = document.getElementById("stepDeg");
+    const applyBtn    = document.getElementById("applyBtn");
+    const resetBtn    = document.getElementById("resetBtn");
+    const exportBtn   = document.getElementById("exportBtn");
+    const metersHint  = document.getElementById("metersHint");
+    document.getElementById("fileLabel").textContent = GEOJSON_URL;
+
+    applyBtn.onclick = () => {
+      offset.lon = parseFloat(offLonInput.value) || 0;
+      offset.lat = parseFloat(offLatInput.value) || 0;
+      step       = parseFloat(stepInput.value)   || 0.0001;
+      drawWithOffset();
+      updateMetersHint();
+    };
+
+    resetBtn.onclick = () => {
+      offset = { lon: 0, lat: 0 };
+      offLonInput.value = "0";
+      offLatInput.value = "0";
+      drawWithOffset();
+      updateMetersHint();
+    };
+
+    exportBtn.onclick = () => {
+      if (!originalGeoJSON) return;
+      const adjusted = buildAdjustedGeoJSON();
+      const blob = new Blob([JSON.stringify(adjusted, null, 2)], { type: "application/geo+json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      const stamp = new Date().toISOString().replace(/[:.]/g,"-");
+      a.download = `lignes_cfl_offset_${offset.lon}_${offset.lat}_${stamp}.geojson`;
+      a.click();
+      URL.revokeObjectURL(url);
+    };
+
+    // === KEYBOARD CONTROLS ===
+    window.addEventListener("keydown", (e) => {
+      if (!originalGeoJSON) return;
+      let changed = false;
+
+      if (e.key === "ArrowLeft") { offset.lon -= step; changed = true; }
+      if (e.key === "ArrowRight"){ offset.lon += step; changed = true; }
+      if (e.key === "ArrowUp")   { offset.lat += step; changed = true; }
+      if (e.key === "ArrowDown") { offset.lat -= step; changed = true; }
+
+      if (e.key === "+") { step *= 2; stepInput.value = step; updateMetersHint(); }
+      if (e.key === "-") { step /= 2; stepInput.value = step; updateMetersHint(); }
+
+      if (e.key.toLowerCase() === "r") { offset = { lon: 0, lat: 0 }; changed = true; }
+      if (e.key.toLowerCase() === "e") { exportBtn.click(); }
+
+      if (changed) {
+        offLonInput.value = offset.lon.toFixed(7);
+        offLatInput.value = offset.lat.toFixed(7);
+        drawWithOffset();
+      }
+    });
+
+    // === RENDU AVEC OFFSET (sans accumulation d’erreurs) ===
+    function drawWithOffset() {
+      if (!originalGeoJSON) return;
+      if (currentLayer) {
+        currentLayer.remove();
+        currentLayer = null;
+      }
+      const adjusted = buildAdjustedGeoJSON();
+      currentLayer = L.geoJSON(adjusted, { style: STYLE }).addTo(map);
+    }
+
+    // Construit un GeoJSON *neuf* à partir de l’original + offset
+    function buildAdjustedGeoJSON() {
+      // Clone superficiel des propriétés de niveau 1
+      const base = {
+        type: originalGeoJSON.type,
+        name: originalGeoJSON.name,
+        features: originalGeoJSON.features.map(f => ({
+          type: "Feature",
+          properties: { ...(f.properties || {}) },
+          geometry: offsetGeometry(f.geometry, offset.lon, offset.lat)
+        }))
+      };
+      // On retire "crs" si présent (souvent inutile en GeoJSON pur)
+      if (base.crs) delete base.crs;
+      return base;
+    }
+
+    // Applique l’offset à n’importe quelle géométrie (LineString / MultiLineString, etc.)
+    function offsetGeometry(geom, dx, dy) {
+      if (!geom) return geom;
+      const type = geom.type;
+
+      // Fonction utilitaire : ajoute dx,dy à une coord [lon,lat,(alt)]
+      const shift = (coord) => {
+        const [lon, lat, ...rest] = coord;
+        return [lon + dx, lat + dy, ...rest];
+      };
+
+      // Traitement récursif pour tous les niveaux de tableaux
+      const transformCoords = (coords, depth) => {
+        if (depth === 1) {
+          // tableau de positions
+          return coords.map(shift);
+        } else {
+          // tableau imbriqué
+          return coords.map(c => transformCoords(c, depth - 1));
+        }
+      };
+
+      // Profondeur selon le type
+      // Point:0, LineString:1, Polygon:2, MultiLineString:2, MultiPolygon:3...
+      const depthMap = {
+        "Point": 0,
+        "MultiPoint": 1,
+        "LineString": 1,
+        "MultiLineString": 2,
+        "Polygon": 2,
+        "MultiPolygon": 3,
+        "GeometryCollection": null
+      };
+
+      if (type === "Point") {
+        return { type, coordinates: [geom.coordinates[0] + dx, geom.coordinates[1] + dy] };
+      }
+
+      if (type === "GeometryCollection") {
+        return {
+          type,
+          geometries: (geom.geometries || []).map(g => offsetGeometry(g, dx, dy))
+        };
+      }
+
+      const depth = depthMap[type];
+      if (depth == null) return geom; // type non géré : on renvoie tel quel
+
+      return {
+        type,
+        coordinates: transformCoords(geom.coordinates, depth)
+      };
+    }
+
+    // Affichage info « mètres par pas » (approx)
+    function updateMetersHint() {
+      const center = map.getCenter();
+      const metersPerDegLat = 111320; // approx
+      const metersPerDegLon = 111320 * Math.cos(center.lat * Math.PI/180);
+      const mLon = Math.abs(step * metersPerDegLon);
+      const mLat = Math.abs(step * metersPerDegLat);
+      metersHint.textContent = `Pas actuel ≈ ${mLon.toFixed(1)} m (est/ouest) · ${mLat.toFixed(1)} m (nord/sud)`;
+    }
+  </script>
+</body>
+</html>
