@@ -2,7 +2,7 @@
 <html lang="fr">
 <head>
   <meta charset="utf-8"/>
-  <title>Carte Nancy ↔ Luxembourg — Réseaux + Gares + Trains (GTFS sans shapes)</title>
+  <title>Carte Nancy ↔ Luxembourg — Trains sur le tracé (sans shapes GTFS)</title>
   <meta name="viewport" content="width=device-width,initial-scale=1"/>
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
   <style>
@@ -25,8 +25,8 @@
 </head>
 <body>
   <header>
-    <div style="font-weight:700">Nancy ↔ Luxembourg — Réseaux officiels + Gares + Trains (GTFS statique, sans shapes)</div>
-    <div class="muted">Trains placés par interpolation entre gares à partir de <code>stop_times.txt</code>. Tracé RFN (SNCF) + CFL en GeoJSON. Rafraîchissement réglable.</div>
+    <div style="font-weight:700">Nancy ↔ Luxembourg — Trains sur le tracé RFN+CFL (GTFS statique, sans shapes)</div>
+    <div class="muted">Les trains suivent le <b>corridor</b> construit depuis les GeoJSON RFN+CFL. Interpolation temporelle entre arrêts, position curviligne réelle sur la ligne.</div>
   </header>
 
   <div id="map"></div>
@@ -104,55 +104,64 @@
     el.innerHTML = (isErr?'<span class="err">':'' ) + msg + (isErr?'</span>':'');
   }
 
-  // ---------- Maths géo (approx) ----------
+  // ---------- Maths géo / utilitaires ----------
   const R = 6371000;
   function toXY(lat, lon, lat0){ const x=(lon*Math.PI/180)*Math.cos(lat0*Math.PI/180), y=(lat*Math.PI/180); return {x,y}; }
   function distLL(a,b){ const lat0=(a.lat+b.lat)/2; const A=toXY(a.lat,a.lon,lat0), B=toXY(b.lat,b.lon,lat0); const dx=B.x-A.x, dy=B.y-A.y; return Math.sqrt(dx*dx+dy*dy)*R; }
-  function lerp(a,b,t){ return a + (b-a)*t; }
-
-  // ---------- Temps ----------
   function gtfsTimeToSec(t){ if(!t) return null; const [H,M,S]=t.split(':').map(Number); return H*3600+M*60+(S||0); }
   function nowSecLocal(){ const d=new Date(); return d.getHours()*3600 + d.getMinutes()*60 + d.getSeconds(); }
   function fmtMinSec(s){ const m=Math.floor(s/60), r=s%60; return `${m}m${String(r).padStart(2,'0')}s`; }
 
+  // projection point -> segment de la polyline + curviligne
+  function projectPointOnSeg(p,a,b){
+    const lat0=(a.lat+b.lat)/2, P=toXY(p.lat,p.lon,lat0), A=toXY(a.lat,a.lon,lat0), B=toXY(b.lat,b.lon,lat0);
+    const ABx=B.x-A.x, ABy=B.y-A.y, APx=P.x-A.x, APy=P.y-A.y, ab2=ABx*ABx+ABy*ABy;
+    let t=ab2? (APx*ABx+APy*ABy)/ab2 : 0; t=Math.max(0,Math.min(1,t));
+    const X=A.x+t*ABx, Y=A.y+t*ABy; const lon=X/Math.cos(lat0*Math.PI/180)*180/Math.PI, lat=Y*180/Math.PI;
+    const dseg=distLL(a,{lat,lon}); return { t, d:dseg, point:{lat,lon} };
+  }
+  function pointAlong(shapePts, d){
+    if(shapePts.length===0) return null;
+    if(d<=0) return {lat:shapePts[0].lat, lon:shapePts[0].lon};
+    if(d>=shapePts.at(-1).cum) return {lat:shapePts.at(-1).lat, lon:shapePts.at(-1).lon};
+    let i=1; while(i<shapePts.length && shapePts[i].cum<d) i++;
+    const B=shapePts[i], A=shapePts[i-1]; const r=(d-A.cum)/(B.cum-A.cum);
+    return {lat:A.lat+r*(B.lat-A.lat), lon:A.lon+r*(B.lon-A.lon)};
+  }
+
   // ---------- État données ----------
   const stopsById = new Map();              // stop_id -> {stop_id,name,lat,lon}
-  const stopTimesByTrip = new Map();        // trip_id -> [ {stop_id, arr, dep, seq} ] trié
-  const tripsById = new Map();              // (optionnel) trip_id -> {route_id, headsign}
-  const routesById = new Map();             // (optionnel) route_id -> {route_short_name, route_long_name}
-  let activeServiceIds = null;              // Set<string> pour today si calendar_dates dispo
+  const stopTimesByTrip = new Map();        // trip_id -> [ {stop_id, arr, dep, seq} ]
+  const tripsById = new Map();              // (optionnel) trip_id -> {route_id, headsign, service_id}
+  const routesById = new Map();             // (optionnel)
+  let activeServiceIds = null;
+
+  // Corridor + mapping arrêt -> distance curviligne
+  let CORRIDOR = null;                 // [{lat,lon,cum}]
+  const stopCurvDist = new Map();      // stop_id -> d (m)
 
   // ---------- Leaflet ----------
   const map = L.map('map').setView([49.2, 6.15], 9);
   L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{ attribution:'© OpenStreetMap' }).addTo(map);
-  const overlay = { rfn:null, cfl:null, garesGTFS:null };
+  const overlay = { rfn:null, cfl:null, garesGTFS:null, corridor:null };
   const trainMarkers = new Map();
 
   // zones d'intérêt (filtre "sillon" simple)
   const AXIS_STOP_KEYWORDS = ['nancy','pont-','metz','hagondange','thionville','bettembourg','luxembourg'];
 
-  // ---------- Chargement réseaux ----------
-  async function loadNetworks(){
-    try {
-      const rfn = await fetchJSONAny(FILES.rfn);
-      overlay.rfn = L.geoJSON(rfn, { style:{ color:'#00f0ff', weight:3, opacity:0.6 } }).addTo(map);
-      let bounds = overlay.rfn.getBounds();
-
-      try {
-        const cfl = await fetchJSONAny(FILES.cfl);
-        overlay.cfl = L.geoJSON(cfl, { style:{ color:'#ff00e0', weight:3, opacity:0.6 } }).addTo(map);
-        bounds.extend(overlay.cfl.getBounds());
-      } catch(e){
-        setStatus('RFN chargé — CFL introuvable (ok si en cours de conversion)', true);
-      }
-
-      map.fitBounds(bounds);
-    } catch(e){
-      setStatus('Erreur chargement réseaux: '+e.message, true);
-    }
+  function tripPassesAxis(seq){
+    const names = seq.map(s=> (stopsById.get(s.stop_id)?.name || '').toLowerCase());
+    const hits = names.filter(n=> AXIS_STOP_KEYWORDS.some(k=> n.includes(k))).length;
+    return hits >= 2;
+  }
+  function serviceAllowed(trip_id){
+    if (!activeServiceIds || !tripsById.has(trip_id)) return true;
+    const svc = tripsById.get(trip_id).service_id;
+    if (!svc) return true;
+    return activeServiceIds.has(svc);
   }
 
-  // ---------- Chargement GTFS (sans shapes) ----------
+  // ---------- Charger GTFS (on a besoin des stops avant de bâtir le corridor) ----------
   async function loadGTFS(){
     try {
       // stops
@@ -177,23 +186,16 @@
       }
       for (const [k,v] of stopTimesByTrip) v.sort((a,b)=>a.seq-b.seq);
 
-      // trips (optionnel)
       try {
         const trips = await parseCSVAny(FILES.trips);
-        for (const t of trips){
-          tripsById.set(t.trip_id, { route_id:t.route_id, headsign:t.trip_headsign });
-        }
+        for (const t of trips){ tripsById.set(t.trip_id, { route_id:t.route_id, headsign:t.trip_headsign, service_id:t.service_id }); }
       } catch(_){ /* ok si absent */ }
 
-      // routes (optionnel)
       try {
         const routes = await parseCSVAny(FILES.routes);
-        for (const r of routes){
-          routesById.set(r.route_id, { short:r.route_short_name, long:r.route_long_name });
-        }
+        for (const r of routes){ routesById.set(r.route_id, { short:r.route_short_name, long:r.route_long_name }); }
       } catch(_){ /* ok si absent */ }
 
-      // calendar_dates (optionnel)
       try {
         const cdates = await parseCSVAny(FILES.calendar_dates);
         const today = new Date();
@@ -204,16 +206,11 @@
         const add = new Set(), remove = new Set();
         for (const row of cdates){
           if (row.date !== ymd) continue;
-          if (row.exception_type === '1' || row.exception_type === 1) add.add(row.service_id);
-          if (row.exception_type === '2' || row.exception_type === 2) remove.add(row.service_id);
+          if (String(row.exception_type)==='1') add.add(row.service_id);
+          if (String(row.exception_type)==='2') remove.add(row.service_id);
         }
-        if (add.size || remove.size){
-          activeServiceIds = add;
-          // S’il y a des trips avec service_id à retirer, on pourrait filtrer,
-          // mais sans trips.txt on ne peut pas relier service_id -> trip.
-          // Si trips.txt est présent, on filtrera plus bas.
-        }
-      } catch(_){ /* ok si absent */ }
+        activeServiceIds = add.size? add : null;
+      } catch(_){ /* ok */ }
 
       // Dessine les gares (GTFS)
       const gares = [];
@@ -231,21 +228,103 @@
     }
   }
 
-  // ---------- Filtre sillon & service du jour ----------
-  function tripPassesAxis(seq){
-    const names = seq.map(s=> (stopsById.get(s.stop_id)?.name || '').toLowerCase());
-    const hits = names.filter(n=> AXIS_STOP_KEYWORDS.some(k=> n.includes(k))).length;
-    return hits >= 2;
+  // ---------- Charger réseaux + construire le CORRIDOR continu ----------
+  async function loadNetworksAndCorridor(){
+    try {
+      const [rfn, cfl] = await Promise.all([
+        fetchJSONAny(FILES.rfn),
+        fetchJSONAny(FILES.cfl).catch(()=>({type:'FeatureCollection',features:[]})) // CFL peut être absent
+      ]);
+
+      overlay.rfn = L.geoJSON(rfn, { style:{ color:'#00f0ff', weight:3, opacity:0.35 } }).addTo(map);
+      let bounds = overlay.rfn.getBounds();
+      if (cfl.features && cfl.features.length){
+        overlay.cfl = L.geoJSON(cfl, { style:{ color:'#ff00e0', weight:3, opacity:0.35 } }).addTo(map);
+        bounds.extend(overlay.cfl.getBounds());
+      }
+      map.fitBounds(bounds);
+
+      // Construire le corridor: aplatir RFN+CFL -> points, ordonner le long de l'axe Nancy↔Lux, dédoublonner, cumuler
+      function extractPoints(geo){
+        const out = [];
+        const pushLine = (coords)=>{
+          for (let i=0;i<coords.length;i++){
+            const [lon,lat] = coords[i];
+            out.push({lat,lon});
+            // densification légère si segments > 1500 m
+            if (i>0){
+              const prev = out[out.length-2];
+              if (distLL(prev, {lat,lon}) > 1500) {
+                out.splice(out.length-1, 0, { lat:(prev.lat+lat)/2, lon:(prev.lon+lon)/2 });
+              }
+            }
+          }
+        };
+        for (const f of geo.features || []){
+          const g = f.geometry; if (!g) continue;
+          if (g.type==='LineString') pushLine(g.coordinates);
+          else if (g.type==='MultiLineString'){ for (const ls of g.coordinates) pushLine(ls); }
+        }
+        return out;
+      }
+
+      const pts = [...extractPoints(rfn), ...extractPoints(cfl)];
+      if (pts.length < 2) { setStatus('Corridor: aucun point (vérifie les GeoJSON)', true); return; }
+
+      // Axe principal approximatif: utiliser deux stops emblématiques si dispo, sinon Nancy/Lux
+      const axisStops = ['Nancy','Metz','Thionville','Bettembourg','Luxembourg'];
+      const sample=[]; for (const s of stopsById.values()){ if (axisStops.some(k=> (s.name||'').toLowerCase().includes(k.toLowerCase()))) sample.push(s); }
+      const Aref = sample[0] || {lat:48.6921, lon:6.1844};
+      const Bref = sample.at(-1) || {lat:49.5998, lon:6.1333};
+      const lat0 = (Aref.lat + Bref.lat)/2;
+      const Axy = toXY(Aref.lat, Aref.lon, lat0), Bxy = toXY(Bref.lat, Bref.lon, lat0);
+      const vABx = Bxy.x - Axy.x, vABy = Bxy.y - Axy.y, ab2 = vABx*vABx + vABy*vABy;
+
+      function scoreOnAxis(p){
+        const P = toXY(p.lat, p.lon, lat0);
+        const APx = P.x - Axy.x, APy = P.y - Axy.y;
+        return ab2 ? (APx*vABx + APy*vABy)/Math.sqrt(ab2) : 0;
+      }
+
+      pts.sort((p,q)=> scoreOnAxis(p) - scoreOnAxis(q));  // ordonner
+      // dédoublonner (epsilon)
+      const EPS = 60;
+      const corridorPts = [];
+      for (const p of pts){
+        if (corridorPts.length===0) { corridorPts.push(p); continue; }
+        const last = corridorPts[corridorPts.length-1];
+        if (distLL(last, p) >= EPS) corridorPts.push(p);
+      }
+      // cumul
+      let cum=0; CORRIDOR=[];
+      for (let i=0;i<corridorPts.length;i++){
+        if (i>0) cum += distLL(corridorPts[i-1], corridorPts[i]);
+        CORRIDOR.push({ lat:corridorPts[i].lat, lon:corridorPts[i].lon, cum });
+      }
+
+      // afficher le corridor mis en avant
+      overlay.corridor = L.polyline(CORRIDOR.map(p=>[p.lat,p.lon]), {color:'#00e3a1', weight:4, opacity:0.8}).addTo(map);
+
+      // projeter chaque arrêt GTFS sur le corridor pour obtenir son abscisse curviligne "d"
+      for (const s of stopsById.values()){
+        let best={cum:0,dist:Infinity};
+        for (let i=0;i<CORRIDOR.length-1;i++){
+          const a=CORRIDOR[i], b=CORRIDOR[i+1];
+          const proj=projectPointOnSeg({lat:s.lat,lon:s.lon}, a,b);
+          if (proj.d < best.dist){
+            best={ cum: a.cum + proj.t*(b.cum - a.cum), dist: proj.d };
+          }
+        }
+        stopCurvDist.set(s.stop_id, best.cum);
+      }
+
+      setStatus('Corridor construit — points: '+CORRIDOR.length);
+    } catch(e){
+      setStatus('Erreur réseaux/corridor: '+e.message, true);
+    }
   }
 
-  function serviceAllowed(trip_id){
-    if (!activeServiceIds || !tripsById.has(trip_id)) return true;
-    const svc = tripsById.get(trip_id).service_id;
-    if (!svc) return true;
-    return activeServiceIds.has(svc);
-  }
-
-  // ---------- Calcul positions (interpolation arrêt→arrêt) ----------
+  // ---------- Calcul positions (curviligne sur corridor) ----------
   function trainsAt(nowSec){
     const items=[];
     for (const [trip_id, seq] of stopTimesByTrip.entries()){
@@ -264,22 +343,26 @@
         if (tA==null || tB==null || tB<=tA) continue;
         if (nowSec < tA || nowSec > tB) continue;
 
-        const sA = stopsById.get(A.stop_id), sB = stopsById.get(B.stop_id);
-        if (!sA || !sB) continue;
+        const dA = stopCurvDist.get(A.stop_id);
+        const dB = stopCurvDist.get(B.stop_id);
+        if (dA==null || dB==null) continue;
 
         const r=(nowSec - tA)/(tB - tA); // 0..1
-        const lat = lerp(sA.lat, sB.lat, r);
-        const lon = lerp(sA.lon, sB.lon, r);
-        const etaSec = Math.max(0, Math.round(tB - nowSec));
+        const d = dA + r*(dB - dA);
+        const pt = pointAlong(CORRIDOR, d);
+        if (!pt) continue;
 
+        const sA = stopsById.get(A.stop_id), sB = stopsById.get(B.stop_id);
         const trip = tripsById.get(trip_id) || {};
         const route = routesById.get(trip.route_id) || {};
 
         items.push({
           id: trip_id,
           headsign: trip.headsign || route.long || route.short || '',
-          from: sA.name, to: sB.name,
-          etaSec, lat, lon,
+          from: sA?.name || '—',
+          to:   sB?.name || '—',
+          etaSec: Math.max(0, Math.round(tB - nowSec)),
+          lat: pt.lat, lon: pt.lon,
           route_id: trip.route_id
         });
         break;
@@ -320,8 +403,9 @@
 
   // ---------- Boot ----------
   (async function boot(){
-    await loadNetworks();
-    await loadGTFS();
+    await loadGTFS();                // besoin des stops pour projeter ensuite
+    await loadNetworksAndCorridor();// construit le corridor RFN+CFL + abscisses des arrêts
+    if (!CORRIDOR){ setStatus('Impossible de construire le corridor.', true); return; }
     tick();
     requestAnimationFrame(loop);
   })().catch(e=> setStatus('Erreur initialisation: '+e.message, true));
