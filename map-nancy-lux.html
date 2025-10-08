@@ -289,9 +289,46 @@ const WEEKDAY_FIELDS = ['sunday','monday','tuesday','wednesday','thursday','frid
   const overlay = { rfn:null, cfl:null, garesGTFS:null };
   const trainMarkers = new Map();
   const trainCowById = new Map();
-  const trainDataById = new Map();  
+  const trainDataById = new Map();
   const COW_EMOJIS = ['🐄','🐮','🐃','🐂','🐄'];
 
+    const markerPane = map.getPanes()?.markerPane || null;
+  function buttonFromMarkerEvent(evt){
+    if (!evt) return null;
+    if (typeof evt.composedPath === 'function'){
+      const path = evt.composedPath();
+      for (const node of path){
+        if (!(node instanceof Element)) continue;
+        if (node.hasAttribute('data-train-id')) return node;
+        if (node === markerPane) break;
+      }
+    }
+    let node = evt.target instanceof Element ? evt.target : null;
+    while (node && node !== markerPane){
+      if (node.hasAttribute && node.hasAttribute('data-train-id')){
+        return node;
+      }
+      node = node.parentElement;
+    }
+    return null;
+  }
+
+  function handleMarkerButtonClick(evt){
+    const button = buttonFromMarkerEvent(evt);
+    if (!button) return false;
+    L.DomEvent.stop(evt);
+    const trainId = button.getAttribute('data-train-id');
+    if (trainId){
+      openTripPanel(trainId);
+      return true;
+    }
+    return false;
+  }
+
+  if (markerPane){
+    L.DomEvent.on(markerPane, 'click', handleMarkerButtonClick);
+  }
+    
     let activeTripId = null;
   let userDismissedSelection = false;
   const tripPanelEl = document.getElementById('trip-panel');
@@ -330,6 +367,7 @@ const WEEKDAY_FIELDS = ['sunday','monday','tuesday','wednesday','thursday','frid
   map.on('click', (evt)=>{
     const original = evt?.originalEvent;
     if (original?.defaultPrevented || original?._stopped) return;
+    if (buttonFromMarkerEvent(original)) return;
     if (activeTripId){
       activeTripId = null;
       userDismissedSelection = true;
@@ -968,14 +1006,8 @@ let calendarDateRows = null;
       } else {
         const m = L.marker([t.lat,t.lon], { icon: iconForTrain(t) }).addTo(map);
         m.on('click', (evt)=>{
-          if (evt?.originalEvent){
-            L.DomEvent.stop(evt.originalEvent);
-            const targetButton = evt.originalEvent.target?.closest('[data-train-id]');
-            const dataId = targetButton?.getAttribute('data-train-id');
-            if (dataId){
-              openTripPanel(dataId);
-              return;
-            }
+          if (evt?.originalEvent && handleMarkerButtonClick(evt.originalEvent)){
+            return;          
           }
           openTripPanel(t.id);
         });
