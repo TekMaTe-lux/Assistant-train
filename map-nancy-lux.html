@@ -38,14 +38,21 @@
     .trip-progress-text{ font-size:12px; color:#94a7c4; }
     .trip-stops{ flex:1; overflow:auto; padding-right:4px; display:flex; flex-direction:column; gap:10px; }
     .trip-stops-title{ font-size:12px; color:#8093b5; text-transform:uppercase; letter-spacing:.08em; }
-    .trip-stop{ position:relative; display:flex; gap:12px; align-items:flex-start; padding-left:12px; }
-    .trip-stop::before{ content:''; position:absolute; left:0; top:6px; width:10px; height:10px; border-radius:50%; background:#2a3b55; box-shadow:0 0 6px rgba(0,240,255,0.3); }
+    .trip-stop{ position:relative; display:flex; gap:12px; align-items:flex-start; padding-left:12px; --connector-progress:0; }
+    .trip-stop::before{ content:''; position:absolute; left:0; top:6px; width:10px; height:10px; border-radius:50%; background:#2a3b55; box-shadow:0 0 6px rgba(0,240,255,0.3); transition:transform 0.3s ease, box-shadow 0.3s ease; }
     .trip-stop.passed::before{ background:#2c8bff; opacity:0.6; box-shadow:none; }
     .trip-stop.current::before{ background:#00f0ff; box-shadow:0 0 10px rgba(0,240,255,0.8); }
+    .trip-stop.enroute::before{ transform:scale(1.05); box-shadow:0 0 14px rgba(0,240,255,0.85); }
     .trip-stop.upcoming::before{ background:#243249; }
-    .trip-stop:not(:last-child)::after{ content:''; position:absolute; left:4px; top:16px; bottom:-10px; width:2px; background:linear-gradient(180deg,rgba(0,240,255,0.25),rgba(36,50,73,0.6)); }
+    .trip-stop.approaching::before{ background:#1e3049; box-shadow:0 0 8px rgba(0,240,255,0.45); }
+    .trip-stop.passed{ --connector-progress:1; }
+    .trip-stop:not(:last-child)::after{ content:''; position:absolute; left:4px; top:16px; bottom:-10px; width:2px; background:linear-gradient(180deg, rgba(0,240,255,0.55) 0%, rgba(0,240,255,0.55) calc(var(--connector-progress, 0) * 100%), rgba(36,50,73,0.6) calc(var(--connector-progress, 0) * 100%), rgba(36,50,73,0.6) 100%); transition:background 0.3s ease; }
     .trip-stop:last-child::after{ display:none; }
-    .stop-time{ font-size:12px; color:#90a1b8; min-width:86px; }
+    .stop-time{ display:flex; flex-direction:column; gap:2px; align-items:flex-end; font-size:12px; color:#90a1b8; min-width:86px; font-variant-numeric:tabular-nums; }
+    .stop-time .time-entry{ line-height:1.1; padding:0; margin:0; }
+    .stop-time .time-arr{ color:#8fa1be; }
+    .stop-time .time-dep{ color:#d6e6ff; font-weight:600; }
+    .stop-time .time-neutral{ color:#90a1b8; }
     .stop-main{ display:flex; flex-direction:column; gap:3px; }
     .stop-name{ font-weight:600; font-size:14px; color:#e0f0ff; }
     .stop-note{ font-size:11px; color:#7f92b1; text-transform:uppercase; letter-spacing:.04em; }
@@ -403,27 +410,56 @@ const mapContainerEl = map.getContainer();
       const departure = st.departure;
       const isFirst = idx === 0;
       const isLast = idx === seq.length - 1;
+      const arrTxt = arrival!=null ? fmtHHMM(arrival) : null;
+      const depTxt = departure!=null ? fmtHHMM(departure) : null;
+      const timeParts = [];
       let label;
+      
       if (isFirst){
         const base = departure ?? arrival;
-        label = base!=null ? fmtHHMM(base) : '—';
+        const baseTxt = base!=null ? fmtHHMM(base) : null;
+        if (baseTxt){
+          const type = departure!=null ? 'dep' : 'arr';
+          timeParts.push({ type, text: baseTxt });
+          label = baseTxt;
+        }
       } else if (isLast){
         const base = arrival ?? departure;
-        label = base!=null ? fmtHHMM(base) : '—';
+       const baseTxt = base!=null ? fmtHHMM(base) : null;
+        if (baseTxt){
+          const type = arrival!=null ? 'arr' : 'dep';
+          timeParts.push({ type, text: baseTxt });
+          label = baseTxt;
+        }
       } else {
-        const arrTxt = arrival!=null ? fmtHHMM(arrival) : null;
-        const depTxt = departure!=null ? fmtHHMM(departure) : null;
-        if (arrTxt && depTxt && arrTxt !== depTxt){
-          label = `Arr. ${arrTxt} — Dep. ${depTxt}`;
-        } else if (arrTxt){
-          label = `Arr. ${arrTxt}`;
-        } else if (depTxt){
-          label = `Dep. ${depTxt}`;
+        if (arrTxt){
+          timeParts.push({ type:'arr', text: arrTxt });
+        }
+        if (depTxt){
+          if (depTxt !== arrTxt){
+            timeParts.push({ type:'dep', text: depTxt });
+          } else if (!arrTxt){
+            timeParts.push({ type:'dep', text: depTxt });
+          }
+        }
+      }
+
+      if (!timeParts.length){
+        const fallback = arrTxt || depTxt;
+        if (fallback){
+          timeParts.push({ type: arrTxt ? 'arr' : depTxt ? 'dep' : 'neutral', text: fallback });
+          label = fallback;
         } else {
+          timeParts.push({ type:'neutral', text:'—' });
           label = '—';
         }
       }
-      return { name, arrival, departure, isFirst, isLast, label };
+      
+      if (!label){
+        label = timeParts[0]?.text ?? '—';
+      }
+
+      return { name, arrival, departure, isFirst, isLast, label, timeParts };
     });
 
     const startName = stops[0]?.name || '—';
@@ -460,15 +496,24 @@ const mapContainerEl = map.getContainer();
 
     const segIdx = data.segmentIndex ?? -1;
     const segProg = data.segmentProgress ?? 0;
+    const segFraction = Math.max(0, Math.min(1, segProg));
 
     const stopsHtml = stops.map((info, idx)=>{
       let status = 'upcoming';
+      let connectorProgress = 0;
+      const extraClasses = [];
       if (segIdx >= 0){
-        if (idx < segIdx) status = 'passed';
-        else if (idx === segIdx){
-          status = segProg <= 0.05 ? 'current' : 'passed';
-        } else if (idx === segIdx + 1){
+       if (idx < segIdx){
+          status = 'passed';
+          connectorProgress = 1;
+        } else if (idx === segIdx){
           status = 'current';
+         connectorProgress = segFraction;
+          if (segFraction > 0.05){
+            extraClasses.push('enroute');
+          }
+        } else if (idx === segIdx + 1){
+          status = 'approaching';
         }
       } else if (data.nowSec!=null){
         const ref = info.isFirst ? (seq[idx].departure ?? seq[idx].arrival) : (seq[idx].arrival ?? seq[idx].departure);
@@ -485,7 +530,13 @@ const mapContainerEl = map.getContainer();
         if (idx === segIdx + 1) noteParts.push('Prochain arrêt');
       }
       const note = noteParts.length ? `<div class="stop-note"><strong>${escapeHTML(noteParts.join(' · '))}</strong></div>` : '';
-      return `<div class="trip-stop ${status}"><div class="stop-time">${escapeHTML(info.label)}</div><div class="stop-main"><div class="stop-name">${escapeHTML(info.name)}</div>${note}</div></div>`;
+      const timesHtml = info.timeParts.map(part=>{
+        const cls = part.type === 'arr' ? 'time-arr' : part.type === 'dep' ? 'time-dep' : 'time-neutral';
+        return `<div class="time-entry ${cls}">${escapeHTML(part.text)}</div>`;
+      }).join('');
+      const classes = [status, ...extraClasses].filter(Boolean).join(' ');
+      const styleAttr = connectorProgress > 0 && !info.isLast ? ` style="--connector-progress:${connectorProgress.toFixed(3)}"` : '';
+      return `<div class="trip-stop ${classes}"${styleAttr}><div class="stop-time">${timesHtml}</div><div class="stop-main"><div class="stop-name">${escapeHTML(info.name)}</div>${note}</div></div>`;
     }).join('');
 
     tripStopsEl.innerHTML = stopsHtml || '<div class="trip-stop"><div class="stop-main"><div class="stop-name">Aucun arrêt disponible</div></div></div>';
@@ -838,15 +889,65 @@ let calendarDateRows = null;
       const totalSpan = end - start;
       const tripProgress = totalSpan > 0 ? (nowSec - start) / totalSpan : null;
 
+      const trip = tripsById.get(trip_id) || {};
+      const route = routesById.get(trip.route_id) || {};
+      const number = trainNumberForTrip(trip, route, trip_id);
+      const headsign = (()=>{
+        if (trip.headsign && trip.headsign !== number) return trip.headsign;
+        if (route.long && route.long !== number) return route.long;
+        if (route.short && route.short !== number) return route.short;
+        return '';
+      })();
+
+      let positioned = false;
+
+      for (let i=0;i<seq.length;i++){
+        const stop = seq[i];
+        const arr = stop.arrival;
+        const dep = stop.departure;
+        if (arr==null || dep==null || dep<=arr) continue;
+        if (nowSec < arr || nowSec > dep) continue;
+
+        const stopMeta = stopsById.get(stop.stop_id);
+        if (!stopMeta) continue;
+
+        const nextStop = seq[i+1] ? stopsById.get(seq[i+1].stop_id) : null;
+        const etaSec = Math.max(0, Math.round(dep - nowSec));
+
+        items.push({
+          id: trip_id,
+          headsign,
+          from: stopMeta.name || stop.stop_id,
+          to: nextStop?.name || stopMeta.name || stop.stop_id,
+          etaSec,
+          lat: stopMeta.lat,
+          lon: stopMeta.lon,
+          route_id: trip.route_id,
+          number,
+          startSec: start,
+          endSec: end,
+          progress: tripProgress,
+          segmentIndex: i,
+          segmentProgress: 0,
+          nowSec,
+          stopsCount: seq.length
+        });
+        positioned = true;
+        break;
+      }
+
+      if (positioned) continue;
+
       for (let i=0;i<seq.length-1;i++){
         const A=seq[i], B=seq[i+1];
         const tA = A.departure ?? A.arrival;
         const tB = B.arrival   ?? B.departure;
-        if (tA==null || tB==null || tB<=tA) continue;
-        if (nowSec < tA || nowSec > tB) continue;
 
         const sA = stopsById.get(A.stop_id), sB = stopsById.get(B.stop_id);
         if (!sA || !sB) continue;
+
+      if (tA==null || tB==null || tB<=tA) continue;
+        if (nowSec < tA || nowSec > tB) continue;  
 
         const r=(nowSec - tA)/(tB - tA); // 0..1
         const path = pathBetweenStops(sA, sB);
@@ -854,21 +955,11 @@ let calendarDateRows = null;
         const { lat, lon } = pos;
         const etaSec = Math.max(0, Math.round(tB - nowSec));
 
-        const trip = tripsById.get(trip_id) || {};
-        const route = routesById.get(trip.route_id) || {};
-
-        const number = trainNumberForTrip(trip, route, trip_id);
-        const headsign = (()=>{
-          if (trip.headsign && trip.headsign !== number) return trip.headsign;
-          if (route.long && route.long !== number) return route.long;
-          if (route.short && route.short !== number) return route.short;
-          return '';
-        })();
-
         items.push({
           id: trip_id,
           headsign,
-          from: sA.name, to: sB.name,
+          from: sA.name || A.stop_id,
+          to: sB.name || B.stop_id,
           etaSec, lat, lon,
           route_id: trip.route_id,
           number,
