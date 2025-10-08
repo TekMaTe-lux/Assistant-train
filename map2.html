@@ -2,23 +2,40 @@
 <html lang="fr">
 <head>
   <meta charset="utf-8"/>
-  <title>Carte Nancy ↔ Luxembourg — Gares + Trains (GTFS sans shapes)</title>
+  <title>Carte Nancy ↔ Luxembourg — Gares + Trains (filtres & détail)</title>
   <meta name="viewport" content="width=device-width,initial-scale=1"/>
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
   <style>
     :root{ color-scheme: dark; }
     body{ margin:0; background:#0b0f1a; color:#e0f0ff; font-family: system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif; }
     header{ padding:10px 14px; background:#0e1726; border-bottom:1px solid #20324b; }
-    #map{ height: calc(100vh - 110px); }
-    .panel{ display:flex; gap:12px; align-items:center; padding:8px 14px; background:#0e1726; border-top:1px solid #20324b; flex-wrap:wrap;}
+    #map{ height: calc(100vh - 170px); }
+
+    .panel{
+      display:flex; flex-wrap:wrap; gap:12px; align-items:center;
+      padding:10px 14px; background:#0e1726; border-top:1px solid #20324b; border-bottom:1px solid #20324b;
+    }
     .badge{ padding:2px 6px; border:1px solid #2a3b55; border-radius:6px; font-size:12px; }
-    .muted{ opacity:.8; font-size:12px; }
     .legend-dot{ display:inline-block; width:10px; height:10px; border-radius:50%; margin-right:6px; }
     .dot-train{ background:#00f0ff; }
     .dot-gare{ background:#a0ff00; }
     .dot-rfn{ background:#00f0ff; }
     .dot-cfl{ background:#ff00e0; }
+    .muted{ opacity:.8; font-size:12px; }
     .err{ color:#ffb4b4 }
+
+    /* Filtres */
+    .filters{
+      display:flex; flex-wrap:wrap; gap:8px 12px; align-items:flex-end;
+      padding:10px 14px; background:#0e1726; border-top:1px solid #20324b;
+    }
+    .fgrp{ display:flex; flex-direction:column; gap:6px; }
+    .fgrp label{ font-size:12px; color:#a7b7cf; }
+    select,input[type="date"],input[type="time"]{
+      background:#0b1322; color:#e0f0ff; border:1px solid #2a3b55; border-radius:8px; padding:6px 8px; min-width:180px;
+    }
+    .chkline{ display:flex; align-items:center; gap:6px; font-size:13px; color:#a7b7cf; }
+
     /* Icône bouton cliquable même en mouvement */
     .leaflet-marker-pane { pointer-events: auto !important; }
     .cow-marker{
@@ -33,8 +50,14 @@
       border:1px solid #2a3b55; background:rgba(14,23,38,0.9); color:#e0f0ff; white-space:nowrap;
     }
 
-    /* Panneau trajet (simple) */
-    .trip-panel{ position:fixed; top:96px; right:18px; width:320px; max-height:calc(100vh - 140px); background:rgba(11,15,26,0.95); border:1px solid #20324b; border-radius:14px; box-shadow:0 18px 36px rgba(0,0,0,0.35); padding:16px; display:flex; flex-direction:column; gap:12px; backdrop-filter:blur(6px); overflow:hidden; }
+    /* Panneau trajet : au-dessus de la carte */
+    .trip-panel{
+      position:fixed; z-index:2000; top:140px; right:18px;
+      width:340px; max-height:calc(100vh - 180px);
+      background:rgba(11,15,26,0.95); border:1px solid #20324b; border-radius:14px;
+      box-shadow:0 18px 36px rgba(0,0,0,0.35);
+      padding:16px; display:flex; flex-direction:column; gap:12px; backdrop-filter:blur(6px); overflow:hidden;
+    }
     .trip-panel.hidden{ display:none; }
     .trip-panel-header{ display:flex; align-items:center; justify-content:space-between; gap:12px; }
     .trip-panel-title{ display:flex; align-items:center; gap:8px; font-weight:700; font-size:16px; }
@@ -50,16 +73,20 @@
     .stop-time{ font-size:12px; color:#90a1b8; min-width:86px; }
     .stop-name{ font-weight:600; font-size:14px; color:#e0f0ff; }
     .hidden{ display:none !important; }
+
+    @media (max-width: 640px){
+      #map{ height: calc(100vh - 220px); }
+      .trip-panel{ top:180px; right:10px; width:92vw; }
+    }
   </style>
 </head>
 <body>
   <header>
     <div style="font-weight:700">Nancy ↔ Luxembourg — Gares + Trains (GTFS statique, sans shapes)</div>
-    <div class="muted">Trains interpolés entre gares depuis <code>stop_times.txt</code>. Tracé RFN (SNCF) + CFL. Clic sur la vache ou le numéro pour le détail.</div>
+    <div class="muted">Interpolation entre gares depuis <code>stop_times.txt</code>. Clic sur la vache ou le numéro pour le détail.</div>
   </header>
 
-  <div id="map"></div>
-
+  <!-- Bandeau légende + statut -->
   <div class="panel">
     <span class="badge"><span class="legend-dot dot-rfn"></span>RFN</span>
     <span class="badge"><span class="legend-dot dot-cfl"></span>CFL</span>
@@ -70,6 +97,37 @@
     <span id="status" class="muted"></span>
   </div>
 
+  <!-- FILTRES (comme avant) -->
+  <div class="filters" id="filters">
+    <div class="fgrp">
+      <label for="startSel">Départ</label>
+      <select id="startSel"><option value="">— Toute la ligne —</option></select>
+    </div>
+    <div class="fgrp">
+      <label for="endSel">Arrivée</label>
+      <select id="endSel"><option value="">— Toute la ligne —</option></select>
+    </div>
+    <div class="fgrp">
+      <label for="dateSel">Date</label>
+      <input id="dateSel" type="date">
+    </div>
+    <div class="fgrp">
+      <label for="tStart">Heure début</label>
+      <input id="tStart" type="time" value="00:00">
+    </div>
+    <div class="fgrp">
+      <label for="tEnd">Heure fin</label>
+      <input id="tEnd" type="time" value="23:59">
+    </div>
+    <div class="fgrp">
+      <label>&nbsp;</label>
+      <label class="chkline"><input id="realtime" type="checkbox" checked> Temps réel</label>
+    </div>
+  </div>
+
+  <div id="map"></div>
+
+  <!-- PANNEAU DÉTAIL -->
   <div id="trip-panel" class="trip-panel hidden" aria-live="polite">
     <div class="trip-panel-header">
       <div class="trip-panel-title">
@@ -88,7 +146,7 @@
   <script src="https://unpkg.com/papaparse@5.4.1/papaparse.min.js"></script>
 
   <script>
-  // ---------- Bases de données (local puis GitHub RAW) ----------
+  // ---------- Bases ----------
   const BASES = [
     location.origin + '/data/',
     'https://raw.githubusercontent.com/TekMaTe-lux/Assistant-train/main/data/'
@@ -100,7 +158,7 @@
     calendar:'calendar.txt', calendar_dates:'calendar_dates.txt'
   };
 
-  // ---------- Utilitaires ----------
+  // ---------- Utils ----------
   function urlFor(name, i=0){ return BASES[i] + name; }
   async function fetchJSONAny(name){ for(let i=0;i<BASES.length;i++){ try{ const r=await fetch(urlFor(name,i),{mode:'cors'}); if(r.ok) return r.json(); }catch{} } throw new Error('Introuvable: '+name); }
   async function fetchTextAny(name){ for(let i=0;i<BASES.length;i++){ try{ const r=await fetch(urlFor(name,i),{mode:'cors'}); if(r.ok) return r.text(); }catch{} } throw new Error('Introuvable: '+name); }
@@ -111,13 +169,13 @@
   // ---------- Temps ----------
   function gtfsTimeToSec(t){ if(!t) return null; const [H,M,S]=t.split(':').map(Number); return H*3600+M*60+(S||0); }
   function fmtHHMM(sec){ if(sec==null||!isFinite(sec)) return '—'; const m=Math.floor(sec/60), h=Math.floor(m/60)%24; return String(h).padStart(2,'0')+':'+String(m%60).padStart(2,'0'); }
+  function timeToSec(hhmm){ if(!hhmm) return null; const [h,m]=hhmm.split(':').map(Number); return h*3600+m*60; }
 
   // ---------- États ----------
   const stopsById = new Map();
-  const stopTimesByTrip = new Map(); // trip_id -> [{stop_id, arr, dep, seq}]
+  const stopTimesByTrip = new Map(); // trip_id -> [{stop_id, arrival, departure, seq}]
   const tripsById = new Map();
   const routesById = new Map();
-  let activeServiceIds = null;
 
   // ---------- Carte ----------
   const map = L.map('map').setView([49.2, 6.15], 9);
@@ -147,7 +205,7 @@
     });
   }
 
-  // ---------- Réseau (pour cheminement simple) ----------
+  // ---------- Réseau (graph) ----------
   const networkGraph = new Map(); const networkNodes=[];
   const stopNearestCache = new Map(); const stopPathCache = new Map();
   const R=6371000; const toXY=(lat,lon,lat0)=>({x:(lon*Math.PI/180)*Math.cos(lat0*Math.PI/180), y:(lat*Math.PI/180)});
@@ -160,7 +218,8 @@
   function shortestPath(startKey,endKey){
     if(!networkGraph.has(startKey)||!networkGraph.has(endKey)) return null; if(startKey===endKey) return [networkGraph.get(startKey)];
     const dist=new Map([[startKey,0]]), prev=new Map(), vis=new Set(); const q=[{key:startKey,dist:0}];
-    while(q.length){ q.sort((a,b)=>a.dist-b.dist); const {key,kdist}=q.shift()||{key:null}; const d=(kdist??dist.get(key)); if(!key||vis.has(key)) continue; vis.add(key); if(key===endKey) break; const node=networkGraph.get(key); for(const [nk,w] of node.neighbors){ if(vis.has(nk)) continue; const nd=(dist.get(key)||0)+w; if(nd<(dist.get(nk)||Infinity)){ dist.set(nk,nd); prev.set(nk,key); q.push({key:nk,dist:nd}); } } }
+    while(q.length){ q.sort((a,b)=>a.dist-b.dist); const {key,dist:qd}=q.shift(); if(!key||vis.has(key)) continue; vis.add(key); if(key===endKey) break; const node=networkGraph.get(key);
+      for(const [nk,w] of node.neighbors){ if(vis.has(nk)) continue; const nd=(dist.get(key)||0)+w; if(nd<(dist.get(nk)||Infinity)){ dist.set(nk,nd); prev.set(nk,key); q.push({key:nk,dist:nd}); } } }
     if(!dist.has(endKey)) return null; const keys=[]; let cur=endKey; while(cur){ keys.push(cur); if(cur===startKey) break; cur=prev.get(cur); if(cur===undefined) return null; } keys.reverse(); return keys.map(k=>networkGraph.get(k)).filter(Boolean);
   }
   function makePath(coords){ const out=[], cum=[]; let tot=0; for(let i=0;i<coords.length;i++){ const c=coords[i]; if(!Array.isArray(c)||c.length<2) continue; if(!out.length){ out.push(c); cum.push(0); continue; } const prev=out[out.length-1]; const d=distLL({lat:prev[0],lon:prev[1]},{lat:c[0],lon:c[1]}); if(!isFinite(d)) continue; if(d<0.5){ if(i===coords.length-1 && (prev[0]!==c[0]||prev[1]!==c[1])){ out.push(c); cum.push(tot); } continue; } tot+=d; out.push(c); cum.push(tot); } if(out.length===0) out.push([0,0]),cum.push(0); if(out.length===1) out.push(out[0]),cum.push(tot); return {coords:out,cumDistances:cum,totalDist:tot}; }
@@ -214,31 +273,80 @@
       try{ const trips=await parseCSVAny(FILES.trips); for(const t of trips){ tripsById.set(t.trip_id,{ route_id:t.route_id, headsign:t.trip_headsign, service_id:t.service_id, trip_short_name:t.trip_short_name }); } }catch{}
       // routes (opt)
       try{ const routes=await parseCSVAny(FILES.routes); for(const r of routes){ routesById.set(r.route_id,{ short:r.route_short_name, long:r.route_long_name }); } }catch{}
+
       setStatus(`GTFS chargé — ${stopsById.size} gares, ${stopTimesByTrip.size} trips.`);
-      // gares
-      const gares=[]; for(const s of stopsById.values()){ gares.push([s.lat,s.lon,s.name]); }
-      overlay.gares = L.layerGroup(gares.map(([la,lo,name])=>{ const m=L.circleMarker([la,lo],{radius:3,color:'#a0ff00',weight:1}); m.bindTooltip(name); return m; })).addTo(map);
+
+      // Remplir selects Départ / Arrivée
+      const orderedNames = Array.from(new Set(
+        [...stopsById.values()].map(s=>s.name).filter(Boolean).sort((a,b)=>a.localeCompare(b,'fr'))
+      ));
+      const startSel=document.getElementById('startSel');
+      const endSel=document.getElementById('endSel');
+      for(const name of orderedNames){
+        const o1=document.createElement('option'); o1.value=name; o1.textContent=name; startSel.appendChild(o1);
+        const o2=document.createElement('option'); o2.value=name; o2.textContent=name; endSel.appendChild(o2);
+      }
     }catch(e){ setStatus('Erreur GTFS: '+e.message, true); }
   }
 
+  // ---------- Filtrage "comme avant" ----------
+  const startSel = document.getElementById('startSel');
+  const endSel   = document.getElementById('endSel');
+  const dateSel  = document.getElementById('dateSel');
+  const tStart   = document.getElementById('tStart');
+  const tEnd     = document.getElementById('tEnd');
+  const realtimeEl = document.getElementById('realtime');
+
+  // Date par défaut = aujourd'hui (utile pour UI ; GTFS-RT non branché ici)
+  (function initDateDefault(){
+    const d=new Date(); const y=d.getFullYear(), m=String(d.getMonth()+1).padStart(2,'0'), da=String(d.getDate()).padStart(2,'0');
+    dateSel.value = `${y}-${m}-${da}`;
+  })();
+
+  function seqContainsOrderedStops(seq, startName, endName){
+    if(!startName && !endName) return true;
+    const names = seq.map(s => (stopsById.get(s.stop_id)?.name || ''));
+    let startIdx = startName ? names.findIndex(n => n === startName) : 0;
+    if(startIdx < 0) return false;
+    let endIdx = endName ? names.findIndex((n,i)=> i>startIdx && n === endName) : names.length-1;
+    if(endIdx < 0) return false;
+    return endIdx > startIdx;
+  }
+
+  function inTimeWindow(startSecTrip, endSecTrip, nowSec){
+    // si temps réel coché => on regarde si "maintenant" est dans la plage filtres (tStart/tEnd) ET dans le trip
+    const winStart = timeToSec(tStart.value) ?? 0;
+    const winEnd   = timeToSec(tEnd.value) ?? 24*3600-1;
+    const insideFilter = nowSec >= winStart && nowSec <= winEnd;
+    // Si tu veux filtrer sur la fenêtre même en simulation, below code l'applique toujours
+    const insideTrip   = nowSec >= startSecTrip && nowSec <= endSecTrip;
+    return insideFilter && insideTrip;
+  }
+
   // ---------- Trains (interpolation arrêt→arrêt) ----------
-  const AXIS_STOP_KEYWORDS = ['nancy','pont-','metz','hagondange','thionville','bettembourg','luxembourg'];
-  function tripPassesAxis(seq){ const names=seq.map(s=>(stopsById.get(s.stop_id)?.name||'').toLowerCase()); return names.filter(n=>AXIS_STOP_KEYWORDS.some(k=>n.includes(k))).length>=2; }
   function trainsAt(nowSec){
+    const startName = startSel.value || null;
+    const endName   = endSel.value   || null;
+
     const items=[];
     for(const [trip_id,seq] of stopTimesByTrip.entries()){
       if(seq.length<2) continue;
-      if(!tripPassesAxis(seq)) continue;
-      const start=seq[0].departure ?? seq[0].arrival;
-      const end  =seq.at(-1).arrival ?? seq.at(-1).departure;
-      if(start==null||end==null||nowSec<start||nowSec>end) continue;
-      const totalSpan=end-start; const tripProgress=totalSpan>0?(nowSec-start)/totalSpan:null;
+      // Filtre parcours
+      if(!seqContainsOrderedStops(seq, startName, endName)) continue;
 
+      const start = seq[0].departure ?? seq[0].arrival;
+      const end   = seq.at(-1).arrival ?? seq.at(-1).departure;
+      if(start==null || end==null) continue;
+
+      // Filtre horaire
+      if(!inTimeWindow(start, end, nowSec)) continue;
+
+      // Trouver segment courant
       for(let i=0;i<seq.length-1;i++){
         const A=seq[i], B=seq[i+1];
         const tA=A.departure ?? A.arrival; const tB=B.arrival ?? B.departure;
-        if(tA==null||tB==null||tB<=tA) continue;
-        if(nowSec<tA||nowSec>tB) continue;
+        if(tA==null || tB==null || tB<=tA) continue;
+        if(nowSec < tA || nowSec > tB) continue;
 
         const sA=stopsById.get(A.stop_id), sB=stopsById.get(B.stop_id); if(!sA||!sB) continue;
         const r=(nowSec - tA)/(tB - tA);
@@ -252,8 +360,9 @@
         items.push({
           id:trip_id, headsign, from:sA.name, to:sB.name,
           lat:pos.lat, lon:pos.lon, number,
-          startSec:start, endSec:end, progress:tripProgress,
-          segmentIndex:i, segmentProgress:r
+          startSec:start, endSec:end,
+          segmentIndex:i, segmentProgress:r,
+          stopsCount:seq.length
         });
         break;
       }
@@ -269,7 +378,7 @@
       if(trainMarkers.has(t.id)){
         const marker=trainMarkers.get(t.id);
         marker.setLatLng([t.lat,t.lon]);
-        marker.setIcon(iconForTrain(t));      // l'HTML contient data-train-id (délégation gère les clics)
+        marker.setIcon(iconForTrain(t));      // HTML avec data-train-id (délégation gère les clics)
         marker.setZIndexOffset(1000);
       }else{
         const m=L.marker([t.lat,t.lon],{ icon:iconForTrain(t), zIndexOffset:1000, riseOnHover:true, keyboard:false }).addTo(map);
@@ -288,7 +397,7 @@
     if(activeTripId && trainDataById.has(activeTripId)) renderTripPanel();
   }
 
-  // ---------- Panneau trajet ----------
+  // ---------- Panneau détail ----------
   let activeTripId=null;
   const tripPanelEl=document.getElementById('trip-panel');
   const tripPanelCloseBtn=document.getElementById('trip-panel-close');
@@ -365,12 +474,23 @@
   });
 
   // ---------- Boucle ----------
+  function getNowSec(){
+    if(realtimeEl.checked){
+      const d=new Date(); return d.getHours()*3600 + d.getMinutes()*60 + d.getSeconds();
+    }else{
+      // si tu décoches "Temps réel", on utilise la borne début choisie comme "heure courante" de simulation
+      return timeToSec(tStart.value) ?? 0;
+    }
+  }
   function tick(){
-    const now = new Date(), sec = now.getHours()*3600 + now.getMinutes()*60 + now.getSeconds();
+    const now = new Date();
     document.getElementById('clock').textContent = 'Heure locale : ' + now.toLocaleTimeString();
-    renderTrains(trainsAt(sec));
+    renderTrains(trainsAt(getNowSec()));
   }
   function loop(){ tick(); requestAnimationFrame(loop); }
+
+  // Recalc à chaque changement de filtre
+  [startSel,endSel,dateSel,tStart,tEnd,realtimeEl].forEach(el=> el.addEventListener('change', tick));
 
   // ---------- Boot ----------
   (async function(){
