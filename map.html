@@ -308,8 +308,24 @@ const WEEKDAY_FIELDS = ['sunday','monday','tuesday','wednesday','thursday','frid
   let activeServiceIds = null;              // Set<string> services actifs aujourd'hui (calendar/calendar_dates)
 
   // ---------- Leaflet ----------
-  const map = L.map('map').setView([49.2, 6.15], 9);
-  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{ attribution:'© OpenStreetMap' }).addTo(map);
+  const FOCUS_BOUNDS = L.latLngBounds([[48.35, 5.8], [49.85, 6.45]]);
+  const MAX_BOUNDS = FOCUS_BOUNDS.pad(0.15);
+  const map = L.map('map', {
+    maxBounds: MAX_BOUNDS,
+    maxBoundsViscosity: 1.0,
+    worldCopyJump: false,
+    zoomSnap: 0.25,
+    zoomDelta: 0.25
+  }).fitBounds(FOCUS_BOUNDS);
+  map.whenReady(()=>{
+    map.setMinZoom(map.getZoom());
+    map.setMaxZoom(map.getZoom() + 5);
+  });
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{
+    attribution:'© OpenStreetMap',
+    noWrap:true,
+    bounds: MAX_BOUNDS
+  }).addTo(map);
   const overlay = { rfn:null, cfl:null, garesGTFS:null, axisStations:null };
   const trainMarkers = new Map();
   const trainCowById = new Map();
@@ -1114,18 +1130,85 @@ const mapContainerEl = map.getContainer();
   const AXIS_STOP_KEYWORDS = ['nancy','pont-','metz','hagondange','thionville','bettembourg','luxembourg'];
 
   // ---------- Chargement réseaux ----------
+  function mergeExtents(base, next){
+    if (!next) return base ? { ...base } : null;
+    if (!base) return { ...next };
+    return {
+      minLat: Math.min(base.minLat, next.minLat),
+      minLon: Math.min(base.minLon, next.minLon),
+      maxLat: Math.max(base.maxLat, next.maxLat),
+      maxLon: Math.max(base.maxLon, next.maxLon)
+    };
+  }
+
+  function geometryExtents(geometry){
+    if (!geometry) return null;
+    if (geometry.type === 'GeometryCollection'){
+      let merged = null;
+      for (const g of geometry.geometries || []){
+        const ext = geometryExtents(g);
+        if (ext) merged = mergeExtents(merged, ext);
+      }
+      return merged;
+    }
+    let minLat = Infinity, minLon = Infinity, maxLat = -Infinity, maxLon = -Infinity;
+    const visit = (coords)=>{
+      if (!coords) return;
+      if (typeof coords[0] === 'number'){
+        const lon = coords[0];
+        const lat = coords[1];
+        if (!isFinite(lat) || !isFinite(lon)) return;
+        if (lat < minLat) minLat = lat;
+        if (lon < minLon) minLon = lon;
+        if (lat > maxLat) maxLat = lat;
+        if (lon > maxLon) maxLon = lon;
+        return;
+      }
+      for (const part of coords){ visit(part); }
+    };
+    visit(geometry.coordinates);
+    if (!isFinite(minLat) || !isFinite(minLon) || !isFinite(maxLat) || !isFinite(maxLon)) return null;
+    return { minLat, minLon, maxLat, maxLon };
+  }
+
+  function extentsIntersect(extents, bounds){
+    if (!extents) return false;
+    const sw = bounds.getSouthWest();
+    const ne = bounds.getNorthEast();
+    return !(extents.minLat > ne.lat || extents.maxLat < sw.lat || extents.minLon > ne.lng || extents.maxLon < sw.lng);
+  }
+
+  function featureIntersectsBounds(feature, bounds){
+    if (!feature) return false;
+    const geometry = feature.geometry || feature;
+    if (!geometry) return false;
+    if (geometry.type === 'GeometryCollection'){
+      return (geometry.geometries || []).some(g=>featureIntersectsBounds({ geometry:g }, bounds));
+    }
+    const extents = geometryExtents(geometry);
+    return extentsIntersect(extents, bounds);
+  }
+
+  function filterGeoJSONToBounds(collection, bounds){
+    if (!collection) return collection;
+    if (collection.type === 'FeatureCollection' && Array.isArray(collection.features)){
+      const features = collection.features.filter(feat=>featureIntersectsBounds(feat, bounds));
+      return { ...collection, features };
+    }
+    return collection;
+  }  
   async function loadNetworks(){
     try {
-      const rfn = await fetchJSONAny(FILES.rfn);
+      const rfnRaw = await fetchJSONAny(FILES.rfn);
+      const rfn = filterGeoJSONToBounds(rfnRaw, MAX_BOUNDS);
       ingestGeoJSONNetwork(rfn);
       overlay.rfn = L.geoJSON(rfn, { style:{ color:'#00f0ff', weight:3, opacity:0.6 } }).addTo(map);
-      let bounds = overlay.rfn.getBounds();
 
       try {
-        const cfl = await fetchJSONAny(FILES.cfl);
+        const cflRaw = await fetchJSONAny(FILES.cfl);
+        const cfl = filterGeoJSONToBounds(cflRaw, MAX_BOUNDS);
         ingestGeoJSONNetwork(cfl);
         overlay.cfl = L.geoJSON(cfl, { style:{ color:'#ff00e0', weight:3, opacity:0.6 } }).addTo(map);
-        bounds.extend(overlay.cfl.getBounds());
       } catch(e){
         setStatus('RFN chargé — CFL introuvable (ok si en cours de conversion)', true);
       }
@@ -1135,7 +1218,6 @@ const mapContainerEl = map.getContainer();
       stopNearestCache.clear();
       stopPathCache.clear();
 
-      map.fitBounds(bounds);
     } catch(e){
       setStatus('Erreur chargement réseaux: '+e.message, true);
     }
