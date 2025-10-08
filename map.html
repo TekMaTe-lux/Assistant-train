@@ -21,6 +21,8 @@
     .dot-rfn{ background:#00f0ff; }
     .dot-cfl{ background:#ff00e0; }
     .err{ color:#ffb4b4 }
+    .cow-marker{ display:flex; align-items:center; gap:6px; font-size:22px; text-shadow:0 0 4px #000; }
+    .cow-marker .train-num{ font-size:13px; font-weight:600; padding:2px 5px; border-radius:6px; border:1px solid #2a3b55; background:rgba(14,23,38,0.9); color:#e0f0ff; white-space:nowrap; }
   </style>
 </head>
 <body>
@@ -104,6 +106,49 @@
     const el=document.getElementById('status');
     el.innerHTML = (isErr?'<span class="err">':'' ) + msg + (isErr?'</span>':'');
   }
+    
+function escapeHTML(str){
+    return String(str ?? '').replace(/[&<>"']/g, c=>({
+      '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;'
+    })[c]);
+  }
+ function extractTrainNumberCandidate(value){
+    if (value == null) return null;
+    const raw = String(value).trim();
+    if (!raw) return null;
+    const probes = [raw.split(':')[0], raw];
+    for (const probe of probes){
+      if (!probe) continue;
+      const big = probe.match(/\d{4,}/);
+      if (big) return big[0];
+    }
+    for (const probe of probes){
+      if (!probe) continue;
+      const mid = probe.match(/\d{3,}/);
+      if (mid) return mid[0];
+    }
+    return null;
+  }
+
+  function trainNumberForTrip(trip, route, tripId){
+    const candidates = [
+      trip?.trip_short_name,
+      trip?.headsign,
+      tripId ? tripId.split(':')[0] : null,
+      route?.short
+    ];
+    for (const candidate of candidates){
+      const num = extractTrainNumberCandidate(candidate);
+      if (num) return num;
+    }
+    if (trip?.trip_short_name) return trip.trip_short_name;
+    if (trip?.headsign) return trip.headsign;
+    if (route?.short) return route.short;
+    if (route?.long) return route.long;
+    return tripId;
+  }
+   
+    
 const WEEKDAY_FIELDS = ['sunday','monday','tuesday','wednesday','thursday','friday','saturday'];
 
   function todayYMD(){
@@ -173,6 +218,27 @@ const WEEKDAY_FIELDS = ['sunday','monday','tuesday','wednesday','thursday','frid
   L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{ attribution:'© OpenStreetMap' }).addTo(map);
   const overlay = { rfn:null, cfl:null, garesGTFS:null };
   const trainMarkers = new Map();
+  const trainCowById = new Map();
+  const COW_EMOJIS = ['🐄','🐮','🐃','🐂','🐄\u200d⬛'];
+
+  function cowForTrain(id){
+    if (!trainCowById.has(id)){
+      const cow = COW_EMOJIS[Math.floor(Math.random()*COW_EMOJIS.length)] || '🐄';
+      trainCowById.set(id, cow);
+    }
+    return trainCowById.get(id);
+  }
+
+  function iconForTrain(train){
+    const cow = cowForTrain(train.id);
+    const num = escapeHTML(train.number || train.id);
+    return L.divIcon({
+      className:'',
+      html:`<div class="cow-marker">${cow}<span class="train-num">${num}</span></div>`,
+      iconSize:null,
+      iconAnchor:[20,20]
+    });
+  }  
 
    // ---------- Graphe réseau (pour suivre les voies) ----------
   const networkGraph = new Map();       // key -> { key, lat, lon, neighbors: Map<key, distance> }
@@ -449,7 +515,7 @@ const WEEKDAY_FIELDS = ['sunday','monday','tuesday','wednesday','thursday','frid
       try {
         const trips = await parseCSVAny(FILES.trips);
         for (const t of trips){
-          tripsById.set(t.trip_id, { route_id:t.route_id, headsign:t.trip_headsign, service_id:t.service_id });
+          tripsById.set(t.trip_id, { route_id:t.route_id, headsign:t.trip_headsign, service_id:t.service_id, trip_short_name:t.trip_short_name });
         }
       } catch(_){ /* ok si absent */ }
 
@@ -538,12 +604,21 @@ let calendarDateRows = null;
         const trip = tripsById.get(trip_id) || {};
         const route = routesById.get(trip.route_id) || {};
 
+        const number = trainNumberForTrip(trip, route, trip_id);
+        const headsign = (()=>{
+          if (trip.headsign && trip.headsign !== number) return trip.headsign;
+          if (route.long && route.long !== number) return route.long;
+          if (route.short && route.short !== number) return route.short;
+          return '';
+        })();
+
         items.push({
           id: trip_id,
-          headsign: trip.headsign || route.long || route.short || '',
+          headsign,
           from: sA.name, to: sB.name,
           etaSec, lat, lon,
-          route_id: trip.route_id
+          route_id: trip.route_id,
+          number
         });
         break;
       }
@@ -555,16 +630,27 @@ let calendarDateRows = null;
     const seen = new Set();
     for (const t of list){
       seen.add(t.id);
-      const html = `<b>${t.headsign || t.id}</b><br/>${t.from} → ${t.to}<br/>ETA ~ ${fmtMinSec(t.etaSec)}${t.route_id?'<br/><span class="muted">route '+t.route_id+'</span>':''}`;
+      const displayName = t.number ? (t.headsign ? `${t.headsign} — Train ${t.number}` : `Train ${t.number}`) : (t.headsign || t.id);
+      const headsignLine = t.headsign ? `<br/>Destination : ${escapeHTML(t.headsign)}` : '';
+      const html = `<b>${escapeHTML(displayName)}</b><br/>Train : ${escapeHTML(t.number)}${headsignLine}<br/>${escapeHTML(t.from)} → ${escapeHTML(t.to)}<br/>ETA ~ ${fmtMinSec(t.etaSec)}${t.route_id?'<br/><span class="muted">route '+escapeHTML(t.route_id)+'</span>':''}`;
       if (trainMarkers.has(t.id)){
-        trainMarkers.get(t.id).setLatLng([t.lat,t.lon]).setPopupContent(html);
+        const marker = trainMarkers.get(t.id);
+        marker.setLatLng([t.lat,t.lon]);
+        marker.setIcon(iconForTrain(t));
+        marker.setPopupContent(html);
       } else {
-        const m = L.circleMarker([t.lat,t.lon], {radius:6, weight:1, color:'#00f0ff'}).addTo(map);
+        const m = L.marker([t.lat,t.lon], { icon: iconForTrain(t) }).addTo(map);
         m.bindPopup(html);
         trainMarkers.set(t.id, m);
       }
     }
-    for (const [id,mk] of trainMarkers.entries()){ if(!seen.has(id)){ map.removeLayer(mk); trainMarkers.delete(id); } }
+    for (const [id,mk] of trainMarkers.entries()){
+      if(!seen.has(id)){
+        map.removeLayer(mk);
+        trainMarkers.delete(id);
+        trainCowById.delete(id);
+      }
+    }
     document.getElementById('counts').textContent = `${list.length} train(s) actifs`;
     document.getElementById('clock').textContent = 'Heure locale : ' + new Date().toLocaleTimeString();
   }
