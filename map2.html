@@ -1,0 +1,384 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8"/>
+  <title>Carte Nancy ↔ Luxembourg — Gares + Trains (GTFS sans shapes)</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+  <style>
+    :root{ color-scheme: dark; }
+    body{ margin:0; background:#0b0f1a; color:#e0f0ff; font-family: system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif; }
+    header{ padding:10px 14px; background:#0e1726; border-bottom:1px solid #20324b; }
+    #map{ height: calc(100vh - 110px); }
+    .panel{ display:flex; gap:12px; align-items:center; padding:8px 14px; background:#0e1726; border-top:1px solid #20324b; flex-wrap:wrap;}
+    .badge{ padding:2px 6px; border:1px solid #2a3b55; border-radius:6px; font-size:12px; }
+    .muted{ opacity:.8; font-size:12px; }
+    .legend-dot{ display:inline-block; width:10px; height:10px; border-radius:50%; margin-right:6px; }
+    .dot-train{ background:#00f0ff; }
+    .dot-gare{ background:#a0ff00; }
+    .dot-rfn{ background:#00f0ff; }
+    .dot-cfl{ background:#ff00e0; }
+    .err{ color:#ffb4b4 }
+    /* Icône bouton cliquable même en mouvement */
+    .leaflet-marker-pane { pointer-events: auto !important; }
+    .cow-marker{
+      display:inline-flex; align-items:center; gap:6px;
+      font-size:22px; text-shadow:0 0 4px #000;
+      background:transparent; border:0; padding:2px 6px;
+      cursor:pointer; pointer-events:auto;
+    }
+    .cow-marker:focus-visible{ outline:2px solid #a0ff00; outline-offset:2px; }
+    .cow-marker .train-num{
+      font-size:13px; font-weight:600; padding:2px 5px; border-radius:6px;
+      border:1px solid #2a3b55; background:rgba(14,23,38,0.9); color:#e0f0ff; white-space:nowrap;
+    }
+
+    /* Panneau trajet (simple) */
+    .trip-panel{ position:fixed; top:96px; right:18px; width:320px; max-height:calc(100vh - 140px); background:rgba(11,15,26,0.95); border:1px solid #20324b; border-radius:14px; box-shadow:0 18px 36px rgba(0,0,0,0.35); padding:16px; display:flex; flex-direction:column; gap:12px; backdrop-filter:blur(6px); overflow:hidden; }
+    .trip-panel.hidden{ display:none; }
+    .trip-panel-header{ display:flex; align-items:center; justify-content:space-between; gap:12px; }
+    .trip-panel-title{ display:flex; align-items:center; gap:8px; font-weight:700; font-size:16px; }
+    .trip-panel-close{ border:none; background:rgba(32,50,75,0.6); color:#e0f0ff; font-size:18px; width:28px; height:28px; border-radius:50%; cursor:pointer; display:flex; align-items:center; justify-content:center; }
+    .trip-panel-summary{ font-size:13px; line-height:1.4; color:#aabbd1; }
+    .trip-stops{ flex:1; overflow:auto; padding-right:4px; display:flex; flex-direction:column; gap:10px; }
+    .trip-stops-title{ font-size:12px; color:#8093b5; text-transform:uppercase; letter-spacing:.08em; }
+    .trip-stop{ position:relative; display:flex; gap:12px; align-items:flex-start; padding-left:12px; }
+    .trip-stop::before{ content:''; position:absolute; left:0; top:6px; width:10px; height:10px; border-radius:50%; background:#2a3b55; box-shadow:0 0 6px rgba(0,240,255,0.3); }
+    .trip-stop.passed::before{ background:#2c8bff; opacity:.6; box-shadow:none; }
+    .trip-stop.current::before{ background:#00f0ff; box-shadow:0 0 10px rgba(0,240,255,0.8); }
+    .trip-stop:not(:last-child)::after{ content:''; position:absolute; left:4px; top:16px; bottom:-10px; width:2px; background:linear-gradient(180deg,rgba(0,240,255,0.25),rgba(36,50,73,0.6)); }
+    .stop-time{ font-size:12px; color:#90a1b8; min-width:86px; }
+    .stop-name{ font-weight:600; font-size:14px; color:#e0f0ff; }
+    .hidden{ display:none !important; }
+  </style>
+</head>
+<body>
+  <header>
+    <div style="font-weight:700">Nancy ↔ Luxembourg — Gares + Trains (GTFS statique, sans shapes)</div>
+    <div class="muted">Trains interpolés entre gares depuis <code>stop_times.txt</code>. Tracé RFN (SNCF) + CFL. Clic sur la vache ou le numéro pour le détail.</div>
+  </header>
+
+  <div id="map"></div>
+
+  <div class="panel">
+    <span class="badge"><span class="legend-dot dot-rfn"></span>RFN</span>
+    <span class="badge"><span class="legend-dot dot-cfl"></span>CFL</span>
+    <span class="badge"><span class="legend-dot dot-gare"></span>Gares</span>
+    <span class="badge"><span class="legend-dot dot-train"></span>Trains</span>
+    <span id="clock" class="muted">—</span>
+    <span id="counts" class="muted">—</span>
+    <span id="status" class="muted"></span>
+  </div>
+
+  <div id="trip-panel" class="trip-panel hidden" aria-live="polite">
+    <div class="trip-panel-header">
+      <div class="trip-panel-title">
+        <span id="trip-panel-icon" aria-hidden="true">🐄</span>
+        <span id="trip-panel-train">Sélectionnez un train</span>
+      </div>
+      <button id="trip-panel-close" class="trip-panel-close" type="button" aria-label="Fermer">×</button>
+    </div>
+    <div id="trip-panel-summary" class="trip-panel-summary">Cliquez sur une icône vache pour afficher le détail du trajet.</div>
+    <div id="trip-stops-title" class="trip-stops-title hidden">Gares desservies</div>
+    <div id="trip-stops" class="trip-stops"></div>
+  </div>
+
+  <!-- libs -->
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://unpkg.com/papaparse@5.4.1/papaparse.min.js"></script>
+
+  <script>
+  // ---------- Bases de données (local puis GitHub RAW) ----------
+  const BASES = [
+    location.origin + '/data/',
+    'https://raw.githubusercontent.com/TekMaTe-lux/Assistant-train/main/data/'
+  ];
+  const FILES = {
+    rfn:'lignes-du-rfn.geojson', cfl:'lignes_cfl.geojson',
+    stops:'stops.txt', stop_times:'stop_times.txt',
+    trips:'trips.txt', routes:'routes.txt',
+    calendar:'calendar.txt', calendar_dates:'calendar_dates.txt'
+  };
+
+  // ---------- Utilitaires ----------
+  function urlFor(name, i=0){ return BASES[i] + name; }
+  async function fetchJSONAny(name){ for(let i=0;i<BASES.length;i++){ try{ const r=await fetch(urlFor(name,i),{mode:'cors'}); if(r.ok) return r.json(); }catch{} } throw new Error('Introuvable: '+name); }
+  async function fetchTextAny(name){ for(let i=0;i<BASES.length;i++){ try{ const r=await fetch(urlFor(name,i),{mode:'cors'}); if(r.ok) return r.text(); }catch{} } throw new Error('Introuvable: '+name); }
+  function parseCSVAny(name){ return new Promise(async (res,rej)=>{ try{ const csv=await fetchTextAny(name); Papa.parse(csv,{header:true,skipEmptyLines:true,complete:r=>res(r.data),error:rej}); }catch(e){ rej(e);} }); }
+  function setStatus(msg,err=false){ document.getElementById('status').innerHTML=(err?'<span class="err">':'')+msg+(err?'</span>':''); }
+  function escapeHTML(s){ return String(s??'').replace(/[&<>"']/g,c=>({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c])); }
+
+  // ---------- Temps ----------
+  function gtfsTimeToSec(t){ if(!t) return null; const [H,M,S]=t.split(':').map(Number); return H*3600+M*60+(S||0); }
+  function fmtHHMM(sec){ if(sec==null||!isFinite(sec)) return '—'; const m=Math.floor(sec/60), h=Math.floor(m/60)%24; return String(h).padStart(2,'0')+':'+String(m%60).padStart(2,'0'); }
+
+  // ---------- États ----------
+  const stopsById = new Map();
+  const stopTimesByTrip = new Map(); // trip_id -> [{stop_id, arr, dep, seq}]
+  const tripsById = new Map();
+  const routesById = new Map();
+  let activeServiceIds = null;
+
+  // ---------- Carte ----------
+  const map = L.map('map').setView([49.2, 6.15], 9);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{ attribution:'© OpenStreetMap' }).addTo(map);
+  const overlay = { rfn:null, cfl:null, gares:null };
+  const trainMarkers = new Map();     // id -> marker
+  const trainDataById = new Map();    // id -> data pour panneau
+  const trainCowById = new Map();
+  const COW_EMOJIS = ['🐄','🐮','🐃','🐂','🐄'];
+
+  // ---------- Vache / numéro ----------
+  function cowForTrain(id){ if(!trainCowById.has(id)) trainCowById.set(id, COW_EMOJIS[Math.floor(Math.random()*COW_EMOJIS.length)]||'🐄'); return trainCowById.get(id); }
+  function extractTrainNumberCandidate(v){ if(v==null) return null; const raw=String(v).trim(); if(!raw) return null; const probes=[raw.split(':')[0],raw]; for(const p of probes){ const m=p&&p.match(/\d{4,}/); if(m) return m[0]; } for(const p of probes){ const m=p&&p.match(/\d{3,}/); if(m) return m[0]; } return null; }
+  function trainNumberForTrip(trip, route, tripId){
+    const cands=[trip?.trip_short_name, trip?.headsign, tripId?tripId.split(':')[0]:null, route?.short];
+    for(const c of cands){ const n=extractTrainNumberCandidate(c); if(n) return n; }
+    return trip?.trip_short_name||trip?.headsign||route?.short||route?.long||tripId;
+  }
+  function iconForTrain(train){
+    const cow = cowForTrain(train.id);
+    const num = escapeHTML(train.number || train.id);
+    const id  = escapeHTML(train.id);
+    return L.divIcon({
+      className:'',
+      html:`<button type="button" class="cow-marker" data-train-id="${id}" aria-label="Voir le détail du ${num ? 'train '+num : 'train'}">${cow}<span class="train-num">${num}</span></button>`,
+      iconSize:null, iconAnchor:[20,20]
+    });
+  }
+
+  // ---------- Réseau (pour cheminement simple) ----------
+  const networkGraph = new Map(); const networkNodes=[];
+  const stopNearestCache = new Map(); const stopPathCache = new Map();
+  const R=6371000; const toXY=(lat,lon,lat0)=>({x:(lon*Math.PI/180)*Math.cos(lat0*Math.PI/180), y:(lat*Math.PI/180)});
+  function distLL(a,b){ const lat0=(a.lat+b.lat)/2; const A=toXY(a.lat,a.lon,lat0), B=toXY(b.lat,b.lon,lat0); const dx=B.x-A.x, dy=B.y-A.y; return Math.sqrt(dx*dx+dy*dy)*R; }
+  function coordKey(lat,lon){ return `${Math.round(lat*1e6)},${Math.round(lon*1e6)}`; }
+  function ensureNode(lat,lon){ const k=coordKey(lat,lon); if(!networkGraph.has(k)){ networkGraph.set(k,{key:k,lat,lon,neighbors:new Map()}); networkNodes.push(networkGraph.get(k)); } return networkGraph.get(k); }
+  function addEdge(la,loa,lb,lob){ const A=ensureNode(la,loa), B=ensureNode(lb,lob); const d=distLL({lat:la,lon:loa},{lat:lb,lon:lob}); if(!isFinite(d)||d<=0) return; if(!A.neighbors.has(B.key)||A.neighbors.get(B.key)>d) A.neighbors.set(B.key,d); if(!B.neighbors.has(A.key)||B.neighbors.get(A.key)>d) B.neighbors.set(A.key,d); }
+  function ingestGeoJSON(g){ const feats=g.type==='FeatureCollection'?g.features:[g]; for(const f of feats){ const geom=f?.geometry; if(!geom) continue; if(geom.type==='LineString'){ const c=geom.coordinates; for(let i=1;i<c.length;i++){ const [lonA,latA]=c[i-1], [lonB,latB]=c[i]; addEdge(latA,lonA,latB,lonB); } } else if(geom.type==='MultiLineString'){ for(const c of geom.coordinates){ for(let i=1;i<c.length;i++){ const [lonA,latA]=c[i-1], [lonB,latB]=c[i]; addEdge(latA,lonA,latB,lonB); } } } } }
+  function nearestNode(stop){ if(stopNearestCache.has(stop.stop_id)) return stopNearestCache.get(stop.stop_id); let best=null,bd=Infinity; for(const n of networkNodes){ const d=distLL({lat:stop.lat,lon:stop.lon},{lat:n.lat,lon:n.lon}); if(d<bd){bd=d;best=n;} } const res=best?{node:best,dist:bd}:null; stopNearestCache.set(stop.stop_id,res); return res; }
+  function shortestPath(startKey,endKey){
+    if(!networkGraph.has(startKey)||!networkGraph.has(endKey)) return null; if(startKey===endKey) return [networkGraph.get(startKey)];
+    const dist=new Map([[startKey,0]]), prev=new Map(), vis=new Set(); const q=[{key:startKey,dist:0}];
+    while(q.length){ q.sort((a,b)=>a.dist-b.dist); const {key,kdist}=q.shift()||{key:null}; const d=(kdist??dist.get(key)); if(!key||vis.has(key)) continue; vis.add(key); if(key===endKey) break; const node=networkGraph.get(key); for(const [nk,w] of node.neighbors){ if(vis.has(nk)) continue; const nd=(dist.get(key)||0)+w; if(nd<(dist.get(nk)||Infinity)){ dist.set(nk,nd); prev.set(nk,key); q.push({key:nk,dist:nd}); } } }
+    if(!dist.has(endKey)) return null; const keys=[]; let cur=endKey; while(cur){ keys.push(cur); if(cur===startKey) break; cur=prev.get(cur); if(cur===undefined) return null; } keys.reverse(); return keys.map(k=>networkGraph.get(k)).filter(Boolean);
+  }
+  function makePath(coords){ const out=[], cum=[]; let tot=0; for(let i=0;i<coords.length;i++){ const c=coords[i]; if(!Array.isArray(c)||c.length<2) continue; if(!out.length){ out.push(c); cum.push(0); continue; } const prev=out[out.length-1]; const d=distLL({lat:prev[0],lon:prev[1]},{lat:c[0],lon:c[1]}); if(!isFinite(d)) continue; if(d<0.5){ if(i===coords.length-1 && (prev[0]!==c[0]||prev[1]!==c[1])){ out.push(c); cum.push(tot); } continue; } tot+=d; out.push(c); cum.push(tot); } if(out.length===0) out.push([0,0]),cum.push(0); if(out.length===1) out.push(out[0]),cum.push(tot); return {coords:out,cumDistances:cum,totalDist:tot}; }
+  function pathBetweenStops(a,b){
+    const key=`${a.stop_id}|${b.stop_id}`; if(stopPathCache.has(key)) return stopPathCache.get(key);
+    if(!networkNodes.length){ const p=makePath([[a.lat,a.lon],[b.lat,b.lon]]); stopPathCache.set(key,p); return p; }
+    const na=nearestNode(a), nb=nearestNode(b); if(!na||!nb){ const p=makePath([[a.lat,a.lon],[b.lat,b.lon]]); stopPathCache.set(key,p); return p; }
+    const nodes=shortestPath(na.node.key, nb.node.key); if(!nodes){ const p=makePath([[a.lat,a.lon],[b.lat,b.lon]]); stopPathCache.set(key,p); return p; }
+    const coords=[[a.lat,a.lon], ...nodes.map(n=>[n.lat,n.lon]), [b.lat,b.lon]];
+    const p=makePath(coords); stopPathCache.set(key,p); return p;
+  }
+  function positionAlongPath(path,ratio){
+    const target=Math.max(0,Math.min(1,ratio))*(path.totalDist||0), cum=path.cumDistances, c=path.coords;
+    if(c.length===1) return {lat:c[0][0],lon:c[0][1]};
+    for(let i=1;i<cum.length;i++){ if(target<=cum[i]){ const seg=cum[i]-cum[i-1]; const t=seg>0?(target-cum[i-1])/seg:0; const [la,loa]=c[i-1], [lb,lob]=c[i]; return {lat:la+(lb-la)*t, lon:loa+(lob-loa)*t}; } }
+    const last=c[c.length-1]; return {lat:last[0], lon:last[1]};
+  }
+
+  // ---------- Chargements ----------
+  async function loadNetworks(){
+    try{
+      const rfn = await fetchJSONAny(FILES.rfn);
+      ingestGeoJSON(rfn);
+      overlay.rfn = L.geoJSON(rfn, { style:{ color:'#00f0ff', weight:3, opacity:0.6 }, interactive:false }).addTo(map);
+      let bounds = overlay.rfn.getBounds();
+      try{
+        const cfl = await fetchJSONAny(FILES.cfl);
+        ingestGeoJSON(cfl);
+        overlay.cfl = L.geoJSON(cfl, { style:{ color:'#ff00e0', weight:3, opacity:0.6 }, interactive:false }).addTo(map);
+        bounds.extend(overlay.cfl.getBounds());
+      }catch(e){ setStatus('RFN ok — CFL manquant (conversion en cours ?)', true); }
+      map.fitBounds(bounds);
+    }catch(e){ setStatus('Erreur réseaux: '+e.message, true); }
+  }
+
+  async function loadGTFS(){
+    try{
+      stopNearestCache.clear(); stopPathCache.clear();
+      // stops
+      const stops = await parseCSVAny(FILES.stops);
+      for(const s of stops){ const lat=+s.stop_lat, lon=+s.stop_lon; if(!isFinite(lat)||!isFinite(lon)) continue; stopsById.set(s.stop_id,{stop_id:s.stop_id,name:s.stop_name,lat,lon}); }
+      // stop_times
+      const stop_times = await parseCSVAny(FILES.stop_times);
+      for(const st of stop_times){
+        const tid=st.trip_id; if(!tid) continue;
+        if(!stopTimesByTrip.has(tid)) stopTimesByTrip.set(tid, []);
+        stopTimesByTrip.get(tid).push({ stop_id:st.stop_id, arrival:gtfsTimeToSec(st.arrival_time), departure:gtfsTimeToSec(st.departure_time), seq:+st.stop_sequence });
+      }
+      for(const [k,v] of stopTimesByTrip) v.sort((a,b)=>a.seq-b.seq);
+      // trips (opt)
+      try{ const trips=await parseCSVAny(FILES.trips); for(const t of trips){ tripsById.set(t.trip_id,{ route_id:t.route_id, headsign:t.trip_headsign, service_id:t.service_id, trip_short_name:t.trip_short_name }); } }catch{}
+      // routes (opt)
+      try{ const routes=await parseCSVAny(FILES.routes); for(const r of routes){ routesById.set(r.route_id,{ short:r.route_short_name, long:r.route_long_name }); } }catch{}
+      setStatus(`GTFS chargé — ${stopsById.size} gares, ${stopTimesByTrip.size} trips.`);
+      // gares
+      const gares=[]; for(const s of stopsById.values()){ gares.push([s.lat,s.lon,s.name]); }
+      overlay.gares = L.layerGroup(gares.map(([la,lo,name])=>{ const m=L.circleMarker([la,lo],{radius:3,color:'#a0ff00',weight:1}); m.bindTooltip(name); return m; })).addTo(map);
+    }catch(e){ setStatus('Erreur GTFS: '+e.message, true); }
+  }
+
+  // ---------- Trains (interpolation arrêt→arrêt) ----------
+  const AXIS_STOP_KEYWORDS = ['nancy','pont-','metz','hagondange','thionville','bettembourg','luxembourg'];
+  function tripPassesAxis(seq){ const names=seq.map(s=>(stopsById.get(s.stop_id)?.name||'').toLowerCase()); return names.filter(n=>AXIS_STOP_KEYWORDS.some(k=>n.includes(k))).length>=2; }
+  function trainsAt(nowSec){
+    const items=[];
+    for(const [trip_id,seq] of stopTimesByTrip.entries()){
+      if(seq.length<2) continue;
+      if(!tripPassesAxis(seq)) continue;
+      const start=seq[0].departure ?? seq[0].arrival;
+      const end  =seq.at(-1).arrival ?? seq.at(-1).departure;
+      if(start==null||end==null||nowSec<start||nowSec>end) continue;
+      const totalSpan=end-start; const tripProgress=totalSpan>0?(nowSec-start)/totalSpan:null;
+
+      for(let i=0;i<seq.length-1;i++){
+        const A=seq[i], B=seq[i+1];
+        const tA=A.departure ?? A.arrival; const tB=B.arrival ?? B.departure;
+        if(tA==null||tB==null||tB<=tA) continue;
+        if(nowSec<tA||nowSec>tB) continue;
+
+        const sA=stopsById.get(A.stop_id), sB=stopsById.get(B.stop_id); if(!sA||!sB) continue;
+        const r=(nowSec - tA)/(tB - tA);
+        const path=pathBetweenStops(sA,sB);
+        const pos=positionAlongPath(path,r)||{lat:sA.lat+(sB.lat-sA.lat)*r,lon:sA.lon+(sB.lon-sA.lon)*r};
+
+        const trip=tripsById.get(trip_id)||{}; const route=routesById.get(trip.route_id)||{};
+        const number = trainNumberForTrip(trip,route,trip_id);
+        const headsign = (trip.headsign && trip.headsign!==number) ? trip.headsign : (route.long||route.short||'');
+
+        items.push({
+          id:trip_id, headsign, from:sA.name, to:sB.name,
+          lat:pos.lat, lon:pos.lon, number,
+          startSec:start, endSec:end, progress:tripProgress,
+          segmentIndex:i, segmentProgress:r
+        });
+        break;
+      }
+    }
+    return items;
+  }
+
+  function renderTrains(list){
+    const seen=new Set();
+    for(const t of list){
+      seen.add(t.id);
+      trainDataById.set(t.id, t);
+      if(trainMarkers.has(t.id)){
+        const marker=trainMarkers.get(t.id);
+        marker.setLatLng([t.lat,t.lon]);
+        marker.setIcon(iconForTrain(t));      // l'HTML contient data-train-id (délégation gère les clics)
+        marker.setZIndexOffset(1000);
+      }else{
+        const m=L.marker([t.lat,t.lon],{ icon:iconForTrain(t), zIndexOffset:1000, riseOnHover:true, keyboard:false }).addTo(map);
+        trainMarkers.set(t.id,m);
+      }
+    }
+    // cleanup
+    for(const [id,mk] of trainMarkers.entries()){
+      if(!seen.has(id)){
+        map.removeLayer(mk); trainMarkers.delete(id); trainCowById.delete(id); trainDataById.delete(id);
+        if(activeTripId===id){ activeTripId=null; hideTripPanel(); }
+      }
+    }
+    document.getElementById('counts').textContent = `${list.length} train(s) actifs`;
+    document.getElementById('clock').textContent  = 'Heure locale : ' + new Date().toLocaleTimeString();
+    if(activeTripId && trainDataById.has(activeTripId)) renderTripPanel();
+  }
+
+  // ---------- Panneau trajet ----------
+  let activeTripId=null;
+  const tripPanelEl=document.getElementById('trip-panel');
+  const tripPanelCloseBtn=document.getElementById('trip-panel-close');
+  const tripPanelIconEl=document.getElementById('trip-panel-icon');
+  const tripPanelTrainEl=document.getElementById('trip-panel-train');
+  const tripPanelSummaryEl=document.getElementById('trip-panel-summary');
+  const tripStopsTitleEl=document.getElementById('trip-stops-title');
+  const tripStopsEl=document.getElementById('trip-stops');
+
+  tripPanelCloseBtn.addEventListener('click',()=>{ activeTripId=null; hideTripPanel(); });
+  map.on('click', ()=>{ if(activeTripId){ activeTripId=null; hideTripPanel(); }});
+
+  function hideTripPanel(){
+    tripPanelEl.classList.add('hidden');
+    tripPanelIconEl.textContent='🐄';
+    tripPanelTrainEl.textContent='Sélectionnez un train';
+    tripPanelSummaryEl.textContent='Cliquez sur une icône vache pour afficher le détail du trajet.';
+    tripStopsTitleEl.classList.add('hidden');
+    tripStopsEl.innerHTML='';
+  }
+  function openTripPanel(id){ activeTripId=id; tripPanelEl.classList.remove('hidden'); renderTripPanel(); }
+
+  function renderTripPanel(){
+    const data=trainDataById.get(activeTripId);
+    if(!data){ hideTripPanel(); return; }
+    tripPanelIconEl.textContent=cowForTrain(activeTripId);
+    const title = data.number ? (`Train ${data.number}` + (data.headsign? ` — ${data.headsign}`:'')) : (data.headsign||data.id);
+    tripPanelTrainEl.textContent=title;
+
+    const seq=stopTimesByTrip.get(activeTripId);
+    if(!seq||!seq.length){ tripPanelSummaryEl.textContent='Données de trajet indisponibles pour ce service.'; tripStopsTitleEl.classList.add('hidden'); tripStopsEl.innerHTML=''; return; }
+
+    const stops = seq.map((st,i)=>{
+      const meta=stopsById.get(st.stop_id), name=meta?.name||st.stop_id;
+      const arr=st.arrival, dep=st.departure, isFirst=i===0, isLast=i===seq.length-1;
+      let label='—'; if(isFirst) label=fmtHHMM(dep??arr); else if(isLast) label=fmtHHMM(arr??dep); else { const a=arr!=null?fmtHHMM(arr):null, d=dep!=null?fmtHHMM(dep):null; label=a&&d&&a!==d?`Arr. ${a} — Dep. ${d}`:(a?`Arr. ${a}`:(d?`Dep. ${d}`:'—')); }
+      return {name, label, isFirst, isLast};
+    });
+
+    const startName=stops[0]?.name||'—', endName=stops.at(-1)?.name||'—';
+    const startTime=fmtHHMM(data.startSec), endTime=fmtHHMM(data.endSec);
+    tripPanelSummaryEl.innerHTML = `${escapeHTML(startName)} <strong>${escapeHTML(startTime)}</strong> → ${escapeHTML(endName)} <strong>${escapeHTML(endTime)}</strong>`;
+
+    const total=stops.length, inter=Math.max(0,total-2);
+    tripStopsTitleEl.classList.remove('hidden');
+    tripStopsTitleEl.textContent = `Gares desservies (${total} arrêt${total>1?'s':''})${inter?` — ${inter} intermédiaire${inter>1?'s':''}`:''}`;
+
+    const segIdx=data.segmentIndex??-1, segProg=data.segmentProgress??0;
+    tripStopsEl.innerHTML = stops.map((info,idx)=>{
+      let status='upcoming';
+      if(segIdx>=0){
+        if(idx<segIdx) status='passed';
+        else if(idx===segIdx) status=segProg<=0.05?'current':'passed';
+        else if(idx===segIdx+1) status='current';
+      }
+      return `<div class="trip-stop ${status}"><div class="stop-time">${escapeHTML(info.label)}</div><div class="stop-name">${escapeHTML(info.name)}</div></div>`;
+    }).join('');
+  }
+
+  // ---------- Délégation d'événements (clic fiable en mouvement) ----------
+  const mapEl = map.getContainer();
+  function handleTrainActivate(ev){
+    const btn = ev.target.closest?.('.cow-marker');
+    if(!btn) return;
+    ev.preventDefault(); ev.stopPropagation();
+    const id=btn.getAttribute('data-train-id');
+    if(id) openTripPanel(id);
+  }
+  mapEl.addEventListener('pointerdown', handleTrainActivate, {passive:false});
+  mapEl.addEventListener('click', handleTrainActivate, {passive:false});
+  mapEl.addEventListener('keydown', (ev)=>{
+    const btn = ev.target.closest?.('.cow-marker'); if(!btn) return;
+    if(ev.key==='Enter' || ev.key===' '){ ev.preventDefault(); ev.stopPropagation(); const id=btn.getAttribute('data-train-id'); if(id) openTripPanel(id); }
+  });
+
+  // ---------- Boucle ----------
+  function tick(){
+    const now = new Date(), sec = now.getHours()*3600 + now.getMinutes()*60 + now.getSeconds();
+    document.getElementById('clock').textContent = 'Heure locale : ' + now.toLocaleTimeString();
+    renderTrains(trainsAt(sec));
+  }
+  function loop(){ tick(); requestAnimationFrame(loop); }
+
+  // ---------- Boot ----------
+  (async function(){
+    await loadNetworks();
+    await loadGTFS();
+    tick();
+    requestAnimationFrame(loop);
+  })().catch(e=> setStatus('Erreur init: '+e.message, true));
+  </script>
+</body>
+</html>
