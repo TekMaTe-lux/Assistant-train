@@ -112,6 +112,42 @@ function escapeHTML(str){
       '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;'
     })[c]);
   }
+ function extractTrainNumberCandidate(value){
+    if (value == null) return null;
+    const raw = String(value).trim();
+    if (!raw) return null;
+    const probes = [raw.split(':')[0], raw];
+    for (const probe of probes){
+      if (!probe) continue;
+      const big = probe.match(/\d{4,}/);
+      if (big) return big[0];
+    }
+    for (const probe of probes){
+      if (!probe) continue;
+      const mid = probe.match(/\d{3,}/);
+      if (mid) return mid[0];
+    }
+    return null;
+  }
+
+  function trainNumberForTrip(trip, route, tripId){
+    const candidates = [
+      trip?.trip_short_name,
+      trip?.headsign,
+      tripId ? tripId.split(':')[0] : null,
+      route?.short
+    ];
+    for (const candidate of candidates){
+      const num = extractTrainNumberCandidate(candidate);
+      if (num) return num;
+    }
+    if (trip?.trip_short_name) return trip.trip_short_name;
+    if (trip?.headsign) return trip.headsign;
+    if (route?.short) return route.short;
+    if (route?.long) return route.long;
+    return tripId;
+  }
+   
     
 const WEEKDAY_FIELDS = ['sunday','monday','tuesday','wednesday','thursday','friday','saturday'];
 
@@ -568,11 +604,17 @@ let calendarDateRows = null;
         const trip = tripsById.get(trip_id) || {};
         const route = routesById.get(trip.route_id) || {};
 
-        const number = trip.trip_short_name || route.short || route.long || trip_id;
+        const number = trainNumberForTrip(trip, route, trip_id);
+        const headsign = (()=>{
+          if (trip.headsign && trip.headsign !== number) return trip.headsign;
+          if (route.long && route.long !== number) return route.long;
+          if (route.short && route.short !== number) return route.short;
+          return '';
+        })();
 
         items.push({
           id: trip_id,
-          headsign: trip.headsign || route.long || route.short || '',
+          headsign,
           from: sA.name, to: sB.name,
           etaSec, lat, lon,
           route_id: trip.route_id,
@@ -588,8 +630,9 @@ let calendarDateRows = null;
     const seen = new Set();
     for (const t of list){
       seen.add(t.id);
-      const displayName = t.headsign || t.number || t.id;
-      const html = `<b>${escapeHTML(displayName)}</b><br/>Train : ${escapeHTML(t.number)}<br/>${escapeHTML(t.from)} → ${escapeHTML(t.to)}<br/>ETA ~ ${fmtMinSec(t.etaSec)}${t.route_id?'<br/><span class="muted">route '+escapeHTML(t.route_id)+'</span>':''}`;
+      const displayName = t.number ? (t.headsign ? `${t.headsign} — Train ${t.number}` : `Train ${t.number}`) : (t.headsign || t.id);
+      const headsignLine = t.headsign ? `<br/>Destination : ${escapeHTML(t.headsign)}` : '';
+      const html = `<b>${escapeHTML(displayName)}</b><br/>Train : ${escapeHTML(t.number)}${headsignLine}<br/>${escapeHTML(t.from)} → ${escapeHTML(t.to)}<br/>ETA ~ ${fmtMinSec(t.etaSec)}${t.route_id?'<br/><span class="muted">route '+escapeHTML(t.route_id)+'</span>':''}`;
       if (trainMarkers.has(t.id)){
         const marker = trainMarkers.get(t.id);
         marker.setLatLng([t.lat,t.lon]);
