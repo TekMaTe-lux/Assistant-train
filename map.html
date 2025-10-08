@@ -50,6 +50,8 @@
     .stop-note{ font-size:11px; color:#7f92b1; text-transform:uppercase; letter-spacing:.04em; }
     .stop-note strong{ color:#a0ff00; font-weight:600; }
     .hidden{ display:none !important; }
+    .leaflet-marker-icon { pointer-events: auto !important; }
+    .cow-marker, .cow-marker * { pointer-events: auto; cursor: pointer; }
   </style>
 </head>
 <body>
@@ -852,46 +854,66 @@ let calendarDateRows = null;
   }
 
   function renderTrains(list){
-    const seen = new Set();
-    for (const t of list){
-      seen.add(t.id);
-      trainDataById.set(t.id, t);
-      const displayName = t.number ? (t.headsign ? `${t.headsign} — Train ${t.number}` : `Train ${t.number}`) : (t.headsign || t.id);
-      t.displayName = displayName;
-      if (trainMarkers.has(t.id)){
-        const marker = trainMarkers.get(t.id);
-        marker.setLatLng([t.lat,t.lon]);
-        marker.setIcon(iconForTrain(t));
-        if (marker.getPopup()) marker.unbindPopup();
-      } else {
-        const m = L.marker([t.lat,t.lon], { icon: iconForTrain(t) }).addTo(map);
-        m.on('click', (evt)=>{
-          if (evt?.originalEvent){
-            L.DomEvent.stop(evt.originalEvent);
-          }
-          openTripPanel(t.id);
-        });
-        trainMarkers.set(t.id, m);
-      }
-    }
-    for (const [id,mk] of trainMarkers.entries()){
-      if(!seen.has(id)){
-        map.removeLayer(mk);
-        trainMarkers.delete(id);
-        trainCowById.delete(id);
-        trainDataById.delete(id);
-        if (activeTripId === id){
-          activeTripId = null;
-          hideTripPanel();
+  const seen = new Set();
+
+  for (const t of list){
+    seen.add(t.id);
+    trainDataById.set(t.id, t);
+    const displayName = t.number ? (t.headsign ? `${t.headsign} — Train ${t.number}` : `Train ${t.number}`) : (t.headsign || t.id);
+    t.displayName = displayName;
+
+    const ensureClick = (marker, id)=>{
+      // On blinde: on retire d'abord puis on remet l'écouteur.
+      marker.off('click');
+      marker.on('click', (evt)=>{
+        // Stopper tout pour éviter que la carte capte le clic
+        if (evt?.originalEvent){
+          L.DomEvent.stop(evt.originalEvent);
+          L.DomEvent.preventDefault(evt.originalEvent);
         }
+        openTripPanel(id);
+      });
+    };
+
+    if (trainMarkers.has(t.id)){
+      const marker = trainMarkers.get(t.id);
+      marker.setLatLng([t.lat, t.lon]);
+      marker.setIcon(iconForTrain(t));
+      marker.setZIndexOffset(1000); // passer devant les couches vectorielles
+      ensureClick(marker, t.id);
+      if (marker.getPopup()) marker.unbindPopup();
+    } else {
+      const m = L.marker([t.lat, t.lon], {
+        icon: iconForTrain(t),
+        zIndexOffset: 1000,       // au-dessus des lignes RFN/CFL
+        riseOnHover: true,        // confort visuel
+        keyboard: true
+      }).addTo(map);
+      ensureClick(m, t.id);
+      trainMarkers.set(t.id, m);
+    }
+  }
+
+  // nettoyage des marqueurs disparus
+  for (const [id,mk] of trainMarkers.entries()){
+    if(!seen.has(id)){
+      map.removeLayer(mk);
+      trainMarkers.delete(id);
+      trainCowById.delete(id);
+      trainDataById.delete(id);
+      if (activeTripId === id){
+        activeTripId = null;
+        hideTripPanel();
       }
     }
-    if (activeTripId && trainDataById.has(activeTripId)){
-      renderTripPanel();
-    }
-    document.getElementById('counts').textContent = `${list.length} train(s) actifs`;
-    document.getElementById('clock').textContent = 'Heure locale : ' + new Date().toLocaleTimeString();
   }
+
+  if (activeTripId && trainDataById.has(activeTripId)){
+    renderTripPanel();
+  }
+  document.getElementById('counts').textContent = `${list.length} train(s) actifs`;
+  document.getElementById('clock').textContent = 'Heure locale : ' + new Date().toLocaleTimeString();
+}
 
   // ---------- Boucle ----------
   let periodMs = 10000, nextTick = performance.now();
