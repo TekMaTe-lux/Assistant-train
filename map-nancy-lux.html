@@ -16,8 +16,6 @@
     .ctrl{ display:flex; align-items:center; gap:8px; }
     .ctrl input[type="range"]{ width:160px; }
     .legend-dot{ display:inline-block; width:10px; height:10px; border-radius:50%; margin-right:6px; }
-    .dot-train{ background:#00f0ff; }
-    .dot-gare{ background:#a0ff00; }
     .dot-rfn{ background:#00f0ff; }
     .dot-cfl{ background:#ff00e0; }
     .err{ color:#ffb4b4 }
@@ -88,8 +86,6 @@
   <div class="panel">
     <span class="badge"><span class="legend-dot dot-rfn"></span>RFN</span>
     <span class="badge"><span class="legend-dot dot-cfl"></span>CFL</span>
-    <span class="badge"><span class="legend-dot dot-gare"></span>Gares</span>
-    <span class="badge"><span class="legend-dot dot-train"></span>Trains</span>
     <div class="ctrl">
       <label class="muted">Rafraîchissement: <span id="hz">10</span>s</label>
       <input id="period" type="range" min="1" max="30" step="1" value="10">
@@ -316,7 +312,7 @@ const WEEKDAY_FIELDS = ['sunday','monday','tuesday','wednesday','thursday','frid
   // ---------- Leaflet ----------
   const map = L.map('map').setView([49.2, 6.15], 9);
   L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{ attribution:'© OpenStreetMap' }).addTo(map);
-  const overlay = { rfn:null, cfl:null, garesGTFS:null, axisStationsMajor:null, axisStationsRegular:null, trains:null };
+  const overlay = { rfn:null, cfl:null, axisStationsMajor:null, axisStationsRegular:null, trains:null };
   const layerVisibility = {
     stationsMajor: true,
     stationsRegular: true,
@@ -1231,8 +1227,14 @@ function setLayerGroupVisibility(group, visible){
     try {
       stopNearestCache.clear();
       stopPathCache.clear();
-      // stops
-     stopChildrenByParent.clear(); 
+      stopTimesByTrip.clear();
+      tripsById.clear();
+      routesById.clear();
+      stopsById.clear();
+      stopChildrenByParent.clear();
+
+      const rawStopsById = new Map();
+      const rawStopChildrenByParent = new Map();
       const stops = await parseCSVAny(FILES.stops);
       for (const s of stops){
         const lat=parseFloat(s.stop_lat), lon=parseFloat(s.stop_lon);
@@ -1240,10 +1242,10 @@ function setLayerGroupVisibility(group, visible){
         const parent = s.parent_station || null;
         const locationType = Number(s.location_type ?? 0) || 0;
         const entry = { stop_id:s.stop_id, name:s.stop_name, lat, lon, parent_station:parent, location_type:locationType };
-        stopsById.set(s.stop_id, entry);
+        rawStopsById.set(s.stop_id, entry);
         if (parent){
-          if (!stopChildrenByParent.has(parent)) stopChildrenByParent.set(parent, []);
-          stopChildrenByParent.get(parent).push(entry);
+          if (!rawStopChildrenByParent.has(parent)) rawStopChildrenByParent.set(parent, []);
+          rawStopChildrenByParent.get(parent).push(entry);
         }
       }
 
@@ -1261,11 +1263,60 @@ function setLayerGroupVisibility(group, visible){
       }
       for (const [k,v] of stopTimesByTrip) v.sort((a,b)=>a.seq-b.seq);
 
+       const axisStopIds = new Set();
+      const axisTripIds = new Set();
+
+      for (const [tripId, seq] of Array.from(stopTimesByTrip.entries())){
+        if (!tripPassesAxis(seq, rawStopsById)){
+          stopTimesByTrip.delete(tripId);
+          continue;
+        }
+        axisTripIds.add(tripId);
+        for (const st of seq){
+          const meta = rawStopsById.get(st.stop_id);
+          if (!meta) continue;
+          axisStopIds.add(meta.stop_id);
+          if (meta.parent_station){
+            axisStopIds.add(meta.parent_station);
+            if (rawStopChildrenByParent.has(meta.parent_station)){
+              for (const child of rawStopChildrenByParent.get(meta.parent_station)){
+                axisStopIds.add(child.stop_id);
+              }
+            }
+          }
+          if (rawStopChildrenByParent.has(meta.stop_id)){
+            for (const child of rawStopChildrenByParent.get(meta.stop_id)){
+              axisStopIds.add(child.stop_id);
+            }
+          }
+        }
+      }
+
+      for (const id of axisStopIds){
+        const meta = rawStopsById.get(id);
+        if (!meta) continue;
+        stopsById.set(id, meta);
+      }
+      for (const [parent, children] of rawStopChildrenByParent.entries()){
+        if (!axisStopIds.has(parent)) continue;
+        const filtered = children.filter(child=>axisStopIds.has(child.stop_id));
+        if (filtered.length){
+          stopChildrenByParent.set(parent, filtered);
+        }
+      }
+
+      rawStopsById.clear();
+      rawStopChildrenByParent.clear();
+
+      const axisRouteIds = new Set();
+
       // trips (optionnel)
       try {
         const trips = await parseCSVAny(FILES.trips);
         for (const t of trips){
+         if (axisTripIds.size && !axisTripIds.has(t.trip_id)) continue;
           tripsById.set(t.trip_id, { route_id:t.route_id, headsign:t.trip_headsign, service_id:t.service_id, trip_short_name:t.trip_short_name });
+          if (t.route_id) axisRouteIds.add(t.route_id);
         }
       } catch(_){ /* ok si absent */ }
 
@@ -1273,6 +1324,7 @@ function setLayerGroupVisibility(group, visible){
       try {
         const routes = await parseCSVAny(FILES.routes);
         for (const r of routes){
+          if (axisRouteIds.size && !axisRouteIds.has(r.route_id)) continue;
           routesById.set(r.route_id, { short:r.route_short_name, long:r.route_long_name });
         }
       } catch(_){ /* ok si absent */ }
@@ -1283,23 +1335,13 @@ function setLayerGroupVisibility(group, visible){
        calendarRows = await parseCSVAny(FILES.calendar);
       } catch(_){ /* ok si absent */ }
       
-let calendarDateRows = null;
+      let calendarDateRows = null;
       try {
         calendarDateRows = await parseCSVAny(FILES.calendar_dates);
       } catch(_){ /* ok si absent */ }
 
       activeServiceIds = computeActiveServiceSet(calendarRows, calendarDateRows);
       if (activeServiceIds && !tripsById.size) activeServiceIds = null;
-      
-      // Dessine les gares (GTFS)
-      const gares = [];
-      for (const s of stopsById.values()){ gares.push([s.lat, s.lon, s.name]); }
-      overlay.garesGTFS = L.layerGroup(
-        gares.map(([lat,lon,name])=>{
-          const m=L.circleMarker([lat,lon],{radius:3, color:'#a0ff00', weight:1});
-          m.bindTooltip(name, {permanent:false}); return m;
-        })
-      ).addTo(map);
 
       prepareStationMetadata();
       renderAxisStations();
@@ -1313,8 +1355,8 @@ let calendarDateRows = null;
   }
 
   // ---------- Filtre sillon & service du jour ----------
-  function tripPassesAxis(seq){
-    const names = seq.map(s=> (stopsById.get(s.stop_id)?.name || '').toLowerCase());
+  function tripPassesAxis(seq, lookup = stopsById){
+    const names = seq.map(s=> (lookup.get(s.stop_id)?.name || '').toLowerCase());
     const hits = names.filter(n=> AXIS_STOP_KEYWORDS.some(k=> n.includes(k))).length;
     return hits >= 2;
   }
