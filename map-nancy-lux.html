@@ -24,6 +24,10 @@
     .cow-marker{ display:flex; align-items:center; gap:6px; font-size:22px; text-shadow:0 0 4px #000; border:none; background:transparent; color:inherit; padding:0; margin:0; line-height:1; }
     .cow-marker:focus-visible{ outline:2px solid #a0ff00; outline-offset:2px; }
     .cow-marker .train-num{ font-size:13px; font-weight:600; padding:2px 5px; border-radius:6px; border:1px solid #2a3b55; background:rgba(14,23,38,0.9); color:#e0f0ff; white-space:nowrap; }
+    .station-marker{ display:inline-flex; align-items:center; justify-content:center; width:32px; height:32px; border-radius:50%; border:1px solid #314463; background:rgba(14,23,38,0.92); color:#d9f27f; font-size:18px; text-shadow:0 0 4px #000; box-shadow:0 0 8px rgba(0,0,0,0.35); cursor:pointer; padding:0; margin:0; line-height:1; }
+    .station-marker.station-major{ color:#ffe28a; border-color:#ffc857; box-shadow:0 0 10px rgba(255,200,87,0.45); }
+    .station-marker.station-regular{ color:#c5f36f; border-color:#5f8f2d; }
+    .station-marker:focus-visible{ outline:2px solid #a0ff00; outline-offset:2px; }
     .trip-panel{ position:fixed; top:96px; right:18px; width:320px; max-height:calc(100vh - 140px); background:rgba(11,15,26,0.95); border:1px solid #20324b; border-radius:14px; box-shadow:0 18px 36px rgba(0,0,0,0.35); padding:16px; display:flex; flex-direction:column; gap:12px; backdrop-filter:blur(6px); overflow:hidden; z-index:3000; }
     .trip-panel.hidden{ display:none; }
     .trip-panel-header{ display:flex; align-items:center; justify-content:space-between; gap:12px; }
@@ -37,6 +41,7 @@
     .trip-progress-bar-fill{ position:absolute; top:0; left:0; height:100%; background:linear-gradient(90deg,#00f0ff,#a0ff00); width:0%; transition:width 0.4s ease; }
     .trip-progress-text{ font-size:12px; color:#94a7c4; }
     .trip-stops{ flex:1; overflow:auto; padding-right:4px; display:flex; flex-direction:column; gap:10px; }
+    .trip-stops.station-mode{ gap:8px; }
     .trip-stops-title{ font-size:12px; color:#8093b5; text-transform:uppercase; letter-spacing:.08em; }
     .trip-stop{ position:relative; display:flex; gap:12px; align-items:flex-start; padding-left:12px; --connector-progress:0; }
     .trip-stop::before{ content:''; position:absolute; left:0; top:6px; width:10px; height:10px; border-radius:50%; background:#2a3b55; box-shadow:0 0 6px rgba(0,240,255,0.3); transition:transform 0.3s ease, box-shadow 0.3s ease; }
@@ -60,6 +65,16 @@
     .hidden{ display:none !important; }
     .leaflet-marker-icon { pointer-events: auto !important; }
     .cow-marker, .cow-marker * { pointer-events: auto; cursor: pointer; }
+    .station-event{ display:flex; gap:12px; align-items:flex-start; padding:10px 12px; border-radius:12px; border:1px solid #263752; background:rgba(22,34,51,0.7); box-shadow:0 6px 18px rgba(0,0,0,0.25); }
+    .station-event-main{ flex:1; display:flex; flex-direction:column; gap:4px; }
+    .station-event-title{ font-weight:600; color:#e0f0ff; font-size:14px; }
+    .station-event-note{ font-size:12px; color:#8fa1be; }
+    .station-event-times{ display:flex; flex-direction:column; gap:2px; font-size:12px; color:#d6e6ff; }
+    .station-event-status{ font-size:11px; color:#a0ff00; text-transform:uppercase; letter-spacing:.05em; }
+    .station-event.empty{ justify-content:center; color:#8fa1be; font-size:13px; padding:16px; text-align:center; }
+    .station-train-link{ display:inline-flex; align-items:center; gap:6px; border:1px solid #2a3b55; border-radius:8px; padding:6px 10px; background:rgba(11,15,26,0.8); color:#e0f0ff; font-size:12px; cursor:pointer; text-shadow:0 0 4px #000; }
+    .station-train-link:hover{ border-color:#5bd6ff; color:#a0ff00; }
+    .station-train-link:focus-visible{ outline:2px solid #a0ff00; outline-offset:2px; }
   </style>
 </head>
 <body>
@@ -89,11 +104,11 @@
     <div class="trip-panel-header">
       <div class="trip-panel-title">
         <span id="trip-panel-icon" class="trip-panel-icon" aria-hidden="true">🐄</span>
-        <span id="trip-panel-train">Sélectionnez un train</span>
+        <span id="trip-panel-train">Sélectionnez un train ou une gare</span>
       </div>
       <button id="trip-panel-close" class="trip-panel-close" type="button" aria-label="Fermer">×</button>
     </div>
-    <div id="trip-panel-summary" class="trip-panel-summary">Cliquez sur une icône vache pour afficher le détail du trajet.</div>
+    <div id="trip-panel-summary" class="trip-panel-summary">Cliquez sur une icône vache ou grange pour afficher le détail.</div>
     <div class="trip-progress hidden" id="trip-progress">
       <div class="trip-progress-bar"><div id="trip-progress-fill" class="trip-progress-bar-fill"></div></div>
       <div id="trip-progress-text" class="trip-progress-text"></div>
@@ -274,7 +289,16 @@ const WEEKDAY_FIELDS = ['sunday','monday','tuesday','wednesday','thursday','frid
     const base = `${String(hoursInDay).padStart(2,'0')}:${String(minutes).padStart(2,'0')}`;
     if (dayOffset > 0) return `${base} (+${dayOffset}j)`;
     return base;
-  }  
+  }
+
+  function fmtRelative(sec){
+    if (sec==null || !isFinite(sec)) return '';
+    if (Math.abs(sec) < 30) return 'maintenant';
+    const minutes = Math.round(Math.abs(sec) / 60);
+    if (minutes <= 1) return sec >= 0 ? 'dans ~1 min' : 'il y a ~1 min';
+    return sec >= 0 ? `dans ~${minutes} min` : `il y a ~${minutes} min`;
+  }
+  
 
   // ---------- État données ----------
   const stopsById = new Map();              // stop_id -> {stop_id,name,lat,lon}
@@ -286,13 +310,40 @@ const WEEKDAY_FIELDS = ['sunday','monday','tuesday','wednesday','thursday','frid
   // ---------- Leaflet ----------
   const map = L.map('map').setView([49.2, 6.15], 9);
   L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{ attribution:'© OpenStreetMap' }).addTo(map);
-  const overlay = { rfn:null, cfl:null, garesGTFS:null };
+  const overlay = { rfn:null, cfl:null, garesGTFS:null, axisStations:null };
   const trainMarkers = new Map();
   const trainCowById = new Map();
   const trainDataById = new Map();  
   const COW_EMOJIS = ['🐄','🐮','🐃','🐂','🐄'];
+  const stopChildrenByParent = new Map();
+
+  const AXIS_STATIONS = [
+    { id:'nancy', label:'Nancy', stopArea:'StopArea:OCE87141002', lat:48.689857, lon:6.174579, type:'major' },
+    { id:'champigneulles', label:'Champigneulles', stopArea:'StopArea:OCE87141085', lat:48.735025, lon:6.168952, type:'regular' },
+    { id:'frouard', label:'Frouard', stopArea:'StopArea:OCE87141077', lat:48.755428, lon:6.143927, type:'regular' },
+    { id:'pompey', label:'Pompey', stopArea:'StopArea:OCE87141788', lat:48.77304, lon:6.13061, type:'regular' },
+    { id:'pont-a-mousson', label:'Pont-à-Mousson', stopArea:'StopArea:OCE87141820', lat:48.900348, lon:6.051021, type:'regular' },
+    { id:'pagny-moselle', label:'Pagny-sur-Moselle', stopArea:'StopArea:OCE87192468', lat:48.9852, lon:6.025035, type:'regular' },
+    { id:'noveant', label:'Novéant-sur-Moselle', stopArea:'StopArea:OCE87192427', lat:49.028717, lon:6.052051, type:'regular' },
+    { id:'onville', label:'Onville', stopArea:'StopArea:OCE87192435', lat:49.013667, lon:5.979092, type:'regular' },
+    { id:'ars-sur-moselle', label:'Ars-sur-Moselle', stopArea:'StopArea:OCE87192401', lat:49.074475, lon:6.077646, type:'regular' },
+    { id:'metz', label:'Metz', stopArea:'StopArea:OCE87192039', lat:49.109466, lon:6.177052, type:'major' },
+    { id:'woippy', label:'Woippy', stopArea:'StopArea:OCE87192088', lat:49.148797, lon:6.155621, type:'regular' },
+    { id:'maizieres', label:'Maizières-lès-Metz', stopArea:'StopArea:OCE87191106', lat:49.215536, lon:6.158727, type:'regular' },
+    { id:'hagondange', label:'Hagondange', stopArea:'StopArea:OCE87191114', lat:49.25356, lon:6.16448, type:'regular' },
+    { id:'uckange', label:'Uckange', stopArea:'StopArea:OCE87191130', lat:49.303459, lon:6.1566, type:'regular' },
+    { id:'thionville', label:'Thionville', stopArea:'StopArea:OCE87191007', lat:49.353965, lon:6.168582, type:'major' },
+    { id:'hettange-grande', label:'Hettange-Grande', stopArea:'StopArea:OCE87191163', lat:49.407685, lon:6.156759, type:'regular' },
+    { id:'bettembourg', label:'Bettembourg', stopArea:'StopArea:OCE82006030', lat:49.516111, lon:6.101111, type:'major' },
+    { id:'howald', label:'Howald', stopArea:'StopArea:OCE82002501', lat:49.58032, lon:6.13232, type:'regular' },
+    { id:'luxembourg', label:'Luxembourg', stopArea:'StopArea:OCE82001000', lat:49.599722, lon:6.134722, type:'major' }
+  ];
+  const axisStationsById = new Map(AXIS_STATIONS.map(st=>[st.id, st]));  
 
     let activeTripId = null;
+  let activeStationId = null;
+
+  renderAxisStations();
   const tripPanelEl = document.getElementById('trip-panel');
   const tripPanelCloseBtn = document.getElementById('trip-panel-close');
   const tripPanelIconEl = document.getElementById('trip-panel-icon');
@@ -304,14 +355,19 @@ const WEEKDAY_FIELDS = ['sunday','monday','tuesday','wednesday','thursday','frid
   const tripStopsTitleEl = document.getElementById('trip-stops-title');
   const tripStopsEl = document.getElementById('trip-stops');
 
-  tripPanelCloseBtn.addEventListener('click', ()=>{
+  function clearActiveSelection(){
     activeTripId = null;
+    activeStationId = null;
+  }
+
+  tripPanelCloseBtn.addEventListener('click', ()=>{
+    clearActiveSelection();
     hideTripPanel();
   });
 
-  map.on('click', ()=>{
-    if (activeTripId){
-      activeTripId = null;
+  map.on('click', ()=>{  
+   if (activeTripId || activeStationId){
+      clearActiveSelection();
       hideTripPanel();
     }
   });
@@ -336,6 +392,20 @@ const WEEKDAY_FIELDS = ['sunday','monday','tuesday','wednesday','thursday','frid
       iconAnchor:[20,20]
     });
   }  
+    
+function iconForStation(station){
+    const emoji = station.type === 'major' ? '🏠' : '🏡';
+    const classes = `station-marker ${station.type === 'major' ? 'station-major' : 'station-regular'}`;
+    const safeId = escapeAttr(station.id);
+    const aria = escapeAttr(`Ouvrir la fiche de la gare ${station.label}${station.type === 'major' ? ' (principale)' : ''}`);
+    return L.divIcon({
+      className:'',
+      html:`<button type="button" class="${classes}" data-station-id="${safeId}" aria-label="${aria}">${emoji}</button>`,
+      iconSize:null,
+      iconAnchor:[16,16]
+    });
+  }
+  
 const mapContainerEl = map.getContainer();
   function handleTrainActivate(ev){
     const btn = ev.target.closest?.('.cow-marker');
@@ -346,14 +416,51 @@ const mapContainerEl = map.getContainer();
     if (id) openTripPanel(id);
   }
 
+  function handleStationActivate(ev){
+    const btn = ev.target.closest?.('.station-marker');
+    if (!btn) return;
+    ev.preventDefault();
+    ev.stopPropagation();
+    const id = btn.getAttribute('data-station-id');
+    if (id) openStationPanel(id);
+  }
+  
   mapContainerEl.addEventListener('pointerdown', handleTrainActivate, { passive:false });
   mapContainerEl.addEventListener('click', handleTrainActivate, { passive:false });
+  mapContainerEl.addEventListener('pointerdown', handleStationActivate, { passive:false });
+  mapContainerEl.addEventListener('click', handleStationActivate, { passive:false });  
   mapContainerEl.addEventListener('keydown', (ev)=>{
     const btn = ev.target.closest?.('.cow-marker');
-    if (!btn) return;
+    if (btn && (ev.key === 'Enter' || ev.key === ' ')){
+      ev.preventDefault();
+      ev.stopPropagation();
+      const id = btn.getAttribute('data-train-id');
+      if (id) openTripPanel(id);
+      return;
+    }
+    const stationBtn = ev.target.closest?.('.station-marker');
+    if (!stationBtn) return;
     if (ev.key === 'Enter' || ev.key === ' '){
       ev.preventDefault();
       ev.stopPropagation();
+      const id = stationBtn.getAttribute('data-station-id');
+      if (id) openStationPanel(id);
+    }
+  });
+
+  tripStopsEl.addEventListener('click', (ev)=>{
+    const btn = ev.target.closest?.('.station-train-link');
+    if (!btn) return;
+    ev.preventDefault();
+    const id = btn.getAttribute('data-train-id');
+    if (id) openTripPanel(id);
+  });
+
+  tripStopsEl.addEventListener('keydown', (ev)=>{
+    const btn = ev.target.closest?.('.station-train-link');
+    if (!btn) return;
+    if (ev.key === 'Enter' || ev.key === ' '){
+      ev.preventDefault();
       const id = btn.getAttribute('data-train-id');
       if (id) openTripPanel(id);
     }
@@ -363,27 +470,51 @@ const mapContainerEl = map.getContainer();
   function hideTripPanel(){
     tripPanelEl.classList.add('hidden');
     tripPanelIconEl.textContent = '🐄';
-    tripPanelTrainEl.textContent = 'Sélectionnez un train';
-    tripPanelSummaryEl.textContent = 'Cliquez sur une icône vache pour afficher le détail du trajet.';
+    tripPanelTrainEl.textContent = 'Sélectionnez un train ou une gare';
+    tripPanelSummaryEl.textContent = 'Cliquez sur une icône vache ou grange pour afficher le détail.';
     tripProgressWrapEl.classList.add('hidden');
     tripProgressFillEl.style.width = '0%';
     tripProgressTextEl.textContent = '';
     tripStopsTitleEl.classList.add('hidden');
     tripStopsTitleEl.textContent = 'Gares desservies';
     tripStopsEl.innerHTML = '';
+    tripStopsEl.classList.remove('station-mode');
   }
 
   function openTripPanel(trainId){
     activeTripId = trainId;
+    activeStationId = null;
     tripPanelEl.classList.remove('hidden');
-    renderTripPanel();
+    renderPanel();
+  }
+
+  function openStationPanel(stationId){
+    activeStationId = stationId;
+    activeTripId = null;
+    tripPanelEl.classList.remove('hidden');
+     renderPanel();
+  }
+
+  function renderPanel(){
+    if (activeStationId){
+      renderStationPanel();
+    } else if (activeTripId){
+      renderTripPanel();
+    } else {
+      hideTripPanel();
+    }
   }
 
   function renderTripPanel(){
     if (!activeTripId){ hideTripPanel(); return; }
     const data = trainDataById.get(activeTripId);
-    if (!data){ hideTripPanel(); return; }
+    if (!data){
+      activeTripId = null;
+      if (!activeStationId) hideTripPanel();
+      return;
+    }
 
+    tripStopsEl.classList.remove('station-mode');
     tripPanelIconEl.textContent = cowForTrain(activeTripId);
 
     if (data.number){
@@ -540,8 +671,168 @@ const mapContainerEl = map.getContainer();
     }).join('');
 
     tripStopsEl.innerHTML = stopsHtml || '<div class="trip-stop"><div class="stop-main"><div class="stop-name">Aucun arrêt disponible</div></div></div>';
-  }  
+  }
 
+  function renderStationPanel(){
+    if (!activeStationId){ hideTripPanel(); return; }
+    const station = axisStationsById.get(activeStationId);
+    if (!station){ hideTripPanel(); return; }
+
+    tripStopsEl.classList.add('station-mode');
+    const emoji = station.type === 'major' ? '🏠' : '🏡';
+    tripPanelIconEl.textContent = emoji;
+    tripPanelTrainEl.textContent = `Gare de ${station.label}`;
+
+    const classification = station.type === 'major'
+      ? 'Gare principale de l’axe Nancy ↔ Luxembourg'
+      : 'Gare intermédiaire Nancy ↔ Luxembourg';
+    const summaryParts = [escapeHTML(classification)];
+    if (isFinite(station.lat) && isFinite(station.lon)){
+      summaryParts.push(`<span class="muted">(${escapeHTML(station.lat.toFixed(3))} ; ${escapeHTML(station.lon.toFixed(3))})</span>`);
+    }
+    tripPanelSummaryEl.innerHTML = summaryParts.join('<br>');
+
+    tripProgressWrapEl.classList.add('hidden');
+    tripProgressFillEl.style.width = '0%';
+    tripProgressTextEl.textContent = '';
+
+    const events = computeStationEvents(station);
+    if (events.length){
+      tripStopsTitleEl.classList.remove('hidden');
+      tripStopsTitleEl.textContent = `Trains observés (${events.length})`;
+    } else {
+      tripStopsTitleEl.classList.remove('hidden');
+      tripStopsTitleEl.textContent = 'Trains observés';
+    }
+
+    if (!events.length){
+      tripStopsEl.innerHTML = '<div class="station-event empty">Aucun train en approche immédiate.</div>';
+      return;
+    }
+
+    const cards = events.map(ev=>{
+      const title = ev.number ? `Train ${ev.number}` : (ev.headsign || ev.displayName || ev.trainId);
+      const subtitle = [];
+      if (ev.headsign && (!ev.number || !title.includes(ev.headsign))){
+        subtitle.push(ev.headsign);
+      } else if (ev.displayName && ev.displayName !== title){
+        subtitle.push(ev.displayName);
+      }
+      const statusText = ev.state + (ev.diff!=null && isFinite(ev.diff) ? ` · ${fmtRelative(ev.diff)}` : '');
+      const arrLine = ev.arrSec!=null ? `<div>Arrivée : <strong>${escapeHTML(fmtHHMM(ev.arrSec))}</strong></div>` : '';
+      const depLine = ev.depSec!=null ? `<div>Départ : <strong>${escapeHTML(fmtHHMM(ev.depSec))}</strong></div>` : '';
+      const note = subtitle.length ? `<div class="station-event-note">${escapeHTML(subtitle.join(' — '))}</div>` : '';
+      const times = `<div class="station-event-times">${arrLine}${depLine}</div>`;
+      const btnId = escapeAttr(ev.trainId);
+      const btnLabel = escapeAttr(`Ouvrir le détail du ${ev.number ? `train ${ev.number}` : 'service'}`);
+      return `<div class="station-event"><div class="station-event-main"><div class="station-event-title">${escapeHTML(title)}</div><div class="station-event-status">${escapeHTML(statusText)}</div>${times}${note}</div><button type="button" class="station-train-link" data-train-id="${btnId}" aria-label="${btnLabel}">${ev.cow}<span>Détails</span></button></div>`;
+    }).join('');
+
+    tripStopsEl.innerHTML = cards;
+  }
+
+  function computeStationEvents(station){
+    const stopIds = station.stopSet || new Set(station.stopIds || []);
+    const now = nowSecLocal();
+    const events = [];
+
+    for (const [tripId, train] of trainDataById.entries()){
+      const seq = stopTimesByTrip.get(tripId);
+      if (!seq || !seq.length) continue;
+      let target = null;
+      for (const st of seq){
+        if (stopIds.has(st.stop_id)) { target = st; break; }
+        const meta = stopsById.get(st.stop_id);
+        if (meta?.parent_station && stopIds.has(meta.parent_station)){ target = st; break; }
+      }
+      if (!target) continue;
+
+      const arrSec = target.arrival;
+      const depSec = target.departure;
+      let state = null;
+      let focusSec = null;
+
+      if (arrSec!=null && depSec!=null && now >= arrSec && now <= depSec){
+        state = 'En gare';
+        focusSec = depSec;
+      } else if (arrSec!=null && arrSec >= now){
+        state = 'Arrivée';
+        focusSec = arrSec;
+      } else if (depSec!=null && depSec >= now){
+        state = 'Départ';
+        focusSec = depSec;
+      } else {
+        continue;
+      }
+
+      events.push({
+        trainId: tripId,
+        number: train.number,
+        headsign: train.headsign,
+        displayName: train.displayName || train.number || tripId,
+        arrSec,
+        depSec,
+        state,
+        focusSec,
+        diff: focusSec - now,
+        cow: cowForTrain(tripId)
+      });
+    }
+
+    events.sort((a,b)=>a.focusSec - b.focusSec);
+    return events.slice(0, 8);
+  }
+
+  function prepareStationMetadata(){
+    for (const station of AXIS_STATIONS){
+      const ids = new Set(station.stopIds || []);
+      if (station.stopArea){
+        ids.add(station.stopArea);
+        if (stopChildrenByParent.has(station.stopArea)){
+          for (const child of stopChildrenByParent.get(station.stopArea)){
+            ids.add(child.stop_id);
+          }
+        }
+      }
+      if (!isFinite(station.lat) || !isFinite(station.lon)){
+        if (station.stopArea && stopsById.has(station.stopArea)){
+          const meta = stopsById.get(station.stopArea);
+          station.lat = meta.lat;
+          station.lon = meta.lon;
+        } else {
+          for (const id of ids){
+            const meta = stopsById.get(id);
+            if (meta){ station.lat = meta.lat; station.lon = meta.lon; break; }
+          }
+        }
+      }
+      station.stopIds = Array.from(ids);
+      station.stopSet = new Set(station.stopIds);
+    }
+  }
+
+  function renderAxisStations(){
+    if (overlay.axisStations){
+      overlay.axisStations.removeFrom(map);
+      overlay.axisStations = null;
+    }
+    const markers = [];
+    for (const station of AXIS_STATIONS){
+      if (!isFinite(station.lat) || !isFinite(station.lon)) continue;
+      const marker = L.marker([station.lat, station.lon], {
+        icon: iconForStation(station),
+        keyboard:false,
+        interactive:true,
+        zIndexOffset:600
+      });
+      marker.bindTooltip(station.label, {permanent:false});
+      markers.push(marker);
+    }
+    if (markers.length){
+      overlay.axisStations = L.layerGroup(markers).addTo(map);
+    }
+  }
+  
    // ---------- Graphe réseau (pour suivre les voies) ----------
   const networkGraph = new Map();       // key -> { key, lat, lon, neighbors: Map<key, distance> }
   const networkNodes = [];              // liste des noeuds pour recherche voisinage
@@ -792,11 +1083,19 @@ const mapContainerEl = map.getContainer();
       stopNearestCache.clear();
       stopPathCache.clear();
       // stops
+     stopChildrenByParent.clear(); 
       const stops = await parseCSVAny(FILES.stops);
       for (const s of stops){
         const lat=parseFloat(s.stop_lat), lon=parseFloat(s.stop_lon);
         if (!isFinite(lat)||!isFinite(lon)) continue;
-        stopsById.set(s.stop_id, { stop_id:s.stop_id, name:s.stop_name, lat, lon });
+        const parent = s.parent_station || null;
+        const locationType = Number(s.location_type ?? 0) || 0;
+        const entry = { stop_id:s.stop_id, name:s.stop_name, lat, lon, parent_station:parent, location_type:locationType };
+        stopsById.set(s.stop_id, entry);
+        if (parent){
+          if (!stopChildrenByParent.has(parent)) stopChildrenByParent.set(parent, []);
+          stopChildrenByParent.get(parent).push(entry);
+        }
       }
 
       // stop_times -> groupés par trip
@@ -852,6 +1151,9 @@ let calendarDateRows = null;
           m.bindTooltip(name, {permanent:false}); return m;
         })
       ).addTo(map);
+
+      prepareStationMetadata();
+      renderAxisStations();
 
       let statusMsg = 'GTFS chargé — ' + stopsById.size + ' gares, ' + stopTimesByTrip.size + ' trips';
       if (activeServiceIds) statusMsg += ', ' + activeServiceIds.size + ' services actifs aujourd\'hui';
@@ -1012,13 +1314,17 @@ let calendarDateRows = null;
       trainDataById.delete(id);
       if (activeTripId === id){
         activeTripId = null;
-        hideTripPanel();
+        if (activeStationId){
+          renderPanel();
+        } else {
+          hideTripPanel();
+        }
       }
     }
   }
 
-  if (activeTripId && trainDataById.has(activeTripId)){
-    renderTripPanel();
+  if (activeStationId || (activeTripId && trainDataById.has(activeTripId))){
+    renderPanel();
   }
   document.getElementById('counts').textContent = `${list.length} train(s) actifs`;
   document.getElementById('clock').textContent = 'Heure locale : ' + new Date().toLocaleTimeString();
