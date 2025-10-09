@@ -1090,9 +1090,6 @@ table[data-snapshotting="true"] tbody tr:nth-child(even) {
     overflow-x: auto;
     -webkit-overflow-scrolling: touch; /* scroll fluide iOS */
   }
-  .table-scroll table {
-    min-width: 900px; /* élargit le tableau -> provoque le scroll horizontal */
-  }
   .scroll-hint {
     display: block;
     font-size: .8rem;
@@ -1127,11 +1124,6 @@ table[data-snapshotting="true"] tbody tr:nth-child(even) {
   margin-top: 8px;
   border: 1px solid #00f0ff33;
   border-radius: 8px;
-}
-
-/* Le tableau garde une largeur mini pour forcer le scroll si besoin */
-.table-scroll table {
-  min-width: 760px; /* ajuste si tu veux */
 }
 
 .table-toolbar{
@@ -4283,6 +4275,11 @@ function injectTableChunkedIntoTrainInfo(html, {chunk=200} = {}){
   const host = document.getElementById('trainInfo');
   if (!host) return;
 
+  if (host.__scrollHintCleanup) {
+    try { host.__scrollHintCleanup(); } catch (e) {}
+    host.__scrollHintCleanup = null;
+  }
+
   // parse hors DOM
   const tmp = document.createElement('div');
   tmp.innerHTML = html;
@@ -4293,9 +4290,16 @@ function injectTableChunkedIntoTrainInfo(html, {chunk=200} = {}){
   host.innerHTML = '<div class="table-toolbar"><button type="button" id="btnTableSnapshot" class="snapshot-btn" disabled title="Afficher une capture plein écran du tableau">🔍 Vue globale</button></div><div class="scroll-hint">← glisser →</div><div class="table-scroll"></div><div id="lastUpdated" class="last-updated" aria-live="polite"></div>';
   const scroller = host.querySelector('.table-scroll');
   const snapshotBtn = host.querySelector('#btnTableSnapshot');
+  const scrollHint = host.querySelector('.scroll-hint');
+  if (scrollHint) scrollHint.style.display = 'none';
 
   // table cible
   const tableDst = document.createElement('table');
+  const headerCells = tableSrc.querySelectorAll('thead tr:first-child th');
+  const trainColumns = Math.max(0, headerCells.length - 1);
+  const perTrainWidth = trainColumns <= 3 ? 60 : 90;
+  const estimatedMinWidth = Math.max(260, Math.round(180 + trainColumns * perTrainWidth));
+  tableDst.style.minWidth = estimatedMinWidth + 'px';
 
   // clone THEAD immédiatement
   const thead = tableSrc.querySelector('thead');
@@ -4308,6 +4312,16 @@ function injectTableChunkedIntoTrainInfo(html, {chunk=200} = {}){
   const rows = Array.from(srcBody.children);
   const dstBody = document.createElement('tbody');
   tableDst.appendChild(dstBody);
+
+  const refreshScrollHint = () => {
+    if (!scrollHint) return;
+    const hasOverflow = scroller && scroller.scrollWidth > scroller.clientWidth + 1;
+    scrollHint.style.display = hasOverflow ? 'block' : 'none';
+  };
+
+  const onResize = () => refreshScrollHint();
+  window.addEventListener('resize', onResize);
+  host.__scrollHintCleanup = () => window.removeEventListener('resize', onResize);
 
     if (snapshotBtn) {
     snapshotBtn.addEventListener('click', () => {
@@ -4329,7 +4343,8 @@ function injectTableChunkedIntoTrainInfo(html, {chunk=200} = {}){
     } else {
       // fin : hooks post-rendu
       setLastUpdated?.();
-      if (snapshotBtn) snapshotBtn.disabled = false;      
+      refreshScrollHint();
+      if (snapshotBtn) snapshotBtn.disabled = false;
       // GTFS-RT (non bloquant)
       setTimeout(()=> {
         if (window.retardsGTFS && (typeof isSelectedDateToday !== 'function' || isSelectedDateToday())){
