@@ -16,14 +16,17 @@
     .ctrl{ display:flex; align-items:center; gap:8px; }
     .ctrl input[type="range"]{ width:160px; }
     .legend-dot{ display:inline-block; width:10px; height:10px; border-radius:50%; margin-right:6px; }
-    .dot-train{ background:#00f0ff; }
-    .dot-gare{ background:#a0ff00; }
     .dot-rfn{ background:#00f0ff; }
     .dot-cfl{ background:#ff00e0; }
     .err{ color:#ffb4b4 }
     .cow-marker{ display:flex; align-items:center; gap:6px; font-size:22px; text-shadow:0 0 4px #000; border:none; background:transparent; color:inherit; padding:0; margin:0; line-height:1; }
     .cow-marker:focus-visible{ outline:2px solid #a0ff00; outline-offset:2px; }
     .cow-marker .train-num{ font-size:13px; font-weight:600; padding:2px 5px; border-radius:6px; border:1px solid #2a3b55; background:rgba(14,23,38,0.9); color:#e0f0ff; white-space:nowrap; }
+    .cow-marker .train-delay-badge{ display:inline-flex; align-items:center; justify-content:center; font-size:11px; font-weight:700; padding:2px 7px; border-radius:999px; margin-left:6px; border:1px solid rgba(255,196,128,0.7); background:rgba(120,72,16,0.85); color:#0b0f1a; white-space:nowrap; box-shadow:0 0 6px rgba(0,0,0,0.35); text-transform:none; letter-spacing:.01em; }
+    .cow-marker .train-delay-badge--moderate{ background:rgba(255,189,92,0.92); border-color:rgba(255,210,150,0.95); color:#101b2b; }
+    .cow-marker .train-delay-badge--major{ background:rgba(255,145,86,0.92); border-color:rgba(255,185,140,0.95); color:#0f1828; }
+    .cow-marker .train-delay-badge--severe{ background:rgba(255,86,86,0.94); border-color:rgba(255,160,160,0.96); color:#fff; }
+    .cow-marker .train-delay-badge--cancelled{ background:rgba(128,32,52,0.92); border-color:rgba(255,150,190,0.95); color:#ffe4ef; text-transform:uppercase; letter-spacing:.05em; }
     .station-marker{ display:inline-flex; align-items:center; justify-content:center; width:32px; height:32px; border-radius:50%; border:1px solid #314463; background:rgba(14,23,38,0.92); color:#d9f27f; font-size:18px; text-shadow:0 0 4px #000; box-shadow:0 0 8px rgba(0,0,0,0.35); cursor:pointer; padding:0; margin:0; line-height:1; }
     .station-marker.station-major{ color:#ffe28a; border-color:#ffc857; box-shadow:0 0 10px rgba(255,200,87,0.45); }
     .station-marker.station-regular{ color:#c5f36f; border-color:#5f8f2d; }
@@ -62,6 +65,12 @@
     .stop-name{ font-weight:600; font-size:14px; color:#e0f0ff; }
     .stop-note{ font-size:11px; color:#7f92b1; text-transform:uppercase; letter-spacing:.04em; }
     .stop-note strong{ color:#a0ff00; font-weight:600; }
+    .trip-panel-delay{ display:inline-flex; flex-direction:column; gap:2px; margin-top:8px; padding:6px 10px; border-radius:10px; border:1px solid rgba(255,200,120,0.55); background:rgba(46,32,12,0.55); color:#ffd8a0; font-size:12px; box-shadow:0 0 8px rgba(0,0,0,0.2); }
+    .trip-panel-delay.delay-moderate{ border-color:rgba(255,210,150,0.65); background:rgba(128,76,12,0.55); color:#ffddb0; }
+    .trip-panel-delay.delay-major{ border-color:rgba(255,170,120,0.7); background:rgba(128,52,12,0.55); color:#ffc7aa; }
+    .trip-panel-delay.delay-severe{ border-color:rgba(255,150,150,0.75); background:rgba(128,24,24,0.6); color:#ffb6b6; }
+    .trip-panel-delay.delay-cancelled{ border-color:rgba(255,150,190,0.75); background:rgba(120,24,52,0.58); color:#ffdce9; text-transform:uppercase; letter-spacing:.05em; }
+    .trip-panel-delay .trip-panel-delay-context{ font-size:11px; color:#c8d9f0; opacity:0.9; }
     .hidden{ display:none !important; }
     .leaflet-marker-icon { pointer-events: auto !important; }
     .cow-marker, .cow-marker * { pointer-events: auto; cursor: pointer; }
@@ -79,8 +88,8 @@
 </head>
 <body>
   <header>
-    <div style="font-weight:700">Nancy ↔ Luxembourg — Réseaux officiels + Gares + Trains (GTFS statique, sans shapes)</div>
-    <div class="muted">Trains placés par interpolation entre gares à partir de <code>stop_times.txt</code>. Tracé RFN (SNCF) + CFL en GeoJSON. Rafraîchissement réglable.</div>
+    <div style="font-weight:700">Nancy ↔ Luxembourg — Carte interactive des bétaillères et gares du sillon lorrain </div>
+    <div class="muted">Bétailléres placées par interpolation entre gares à partir des données opendata GTFS - Tracé SNCF + CFL en GeoJSON </div>
   </header>
 
   <div id="map"></div>
@@ -88,13 +97,17 @@
   <div class="panel">
     <span class="badge"><span class="legend-dot dot-rfn"></span>RFN</span>
     <span class="badge"><span class="legend-dot dot-cfl"></span>CFL</span>
-    <span class="badge"><span class="legend-dot dot-gare"></span>Gares</span>
-    <span class="badge"><span class="legend-dot dot-train"></span>Trains</span>
     <div class="ctrl">
       <label class="muted">Rafraîchissement: <span id="hz">10</span>s</label>
       <input id="period" type="range" min="1" max="30" step="1" value="10">
       <label class="muted"><input id="smooth" type="checkbox" checked> animation fluide</label>
     </div>
+    <div class="ctrl">
+      <span class="muted">Icônes :</span>
+      <label class="muted"><input id="toggle-major" type="checkbox" checked> gares prioritaires</label>
+      <label class="muted"><input id="toggle-regular" type="checkbox" checked> gares secondaires</label>
+      <label class="muted"><input id="toggle-trains" type="checkbox" checked> bétaillères</label>
+    </div> 
     <span id="clock" class="muted">—</span>
     <span id="counts" class="muted">—</span>
     <span id="status" class="muted"></span>
@@ -104,7 +117,7 @@
     <div class="trip-panel-header">
       <div class="trip-panel-title">
         <span id="trip-panel-icon" class="trip-panel-icon" aria-hidden="true">🐄</span>
-        <span id="trip-panel-train">Sélectionnez un train ou une gare</span>
+        <span id="trip-panel-train">Sélectionnez une bétaillère ou une gare</span>
       </div>
       <button id="trip-panel-close" class="trip-panel-close" type="button" aria-label="Fermer">×</button>
     </div>
@@ -132,7 +145,7 @@
   const FILES = {
     // réseaux (noms selon ton repo)
     rfn:    'lignes-du-rfn.geojson',
-    cfl:    'lignes_cfl.geojson',
+    cfl:    'lignes_cfl-ajusté.geojson',
 
     // GTFS requis / optionnels
     stops:        'stops.txt',
@@ -171,9 +184,39 @@
     });
   }
 
+   const statusState = { base:'', baseErr:false, realtime:'' };
+
+  function renderStatus(){
+    const el = document.getElementById('status');
+    if (!el) return;
+    const parts = [];
+    if (statusState.base) parts.push(statusState.base);
+    if (statusState.realtime) parts.push(statusState.realtime);
+    const message = parts.filter(Boolean).join(' — ');
+    if (!message){
+      el.textContent = '';
+      return;
+    }
+    if (statusState.baseErr){
+      el.innerHTML = '';
+      const span = document.createElement('span');
+      span.className = 'err';
+      span.textContent = message;
+      el.appendChild(span);
+    } else {
+      el.textContent = message;
+    }
+  }
+    
   function setStatus(msg, isErr=false){
-    const el=document.getElementById('status');
-    el.innerHTML = (isErr?'<span class="err">':'' ) + msg + (isErr?'</span>':'');
+    statusState.base = msg || '';
+    statusState.baseErr = !!isErr;
+    renderStatus();
+  }
+
+  function setRealtimeStatus(msg){
+    statusState.realtime = msg || '';
+    renderStatus();
   }
     
 function escapeHTML(str){
@@ -221,7 +264,287 @@ function escapeHTML(str){
     if (route?.long) return route.long;
     return tripId;
   }
-   
+
+  const luxTimeFormatter = new Intl.DateTimeFormat('fr-FR', {
+    timeZone:'Europe/Luxembourg',
+    hour:'2-digit', minute:'2-digit', second:'2-digit', hour12:false
+  });
+  function formatLuxTime(date){ return luxTimeFormatter.format(date); }
+
+  const stationNameNormalizeCache = new Map();
+  function normalizeStationName(name){
+    if (name == null) return '';
+    const raw = String(name);
+    if (stationNameNormalizeCache.has(raw)) return stationNameNormalizeCache.get(raw);
+    const normalized = raw
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .replace(/[\u2019]/g, "'")
+      .toLowerCase()
+      .replace(/\s+/g, ' ')
+      .trim();
+    stationNameNormalizeCache.set(raw, normalized);
+    return normalized;
+  }
+
+  const SAME_ORIGIN_GTFS_RT = (()=>{
+    const base = location.origin + location.pathname.replace(/\/[^\/]*$/, '/');
+    return base + 'retards_nancymetzlux.json';
+  })();
+  const GTFS_RT_CANDIDATES = [
+    SAME_ORIGIN_GTFS_RT,
+    'https://raw.githubusercontent.com/TekMaTe-lux/Assistant-train/main/Assistant-train/retards_nancymetzlux.json',
+    'https://cdn.jsdelivr.net/gh/TekMaTe-lux/Assistant-train@main/Assistant-train/retards_nancymetzlux.json'
+  ];
+  const GTFS_RT_REFRESH_INTERVAL_MS = 60000;
+
+  let trainDelayDataRaw = null;
+  let trainDelaysByNumber = new Map();
+  let trainDelaySourceLabel = '';
+  let trainDelaySourceRaw = '';
+  let trainDelayLastUpdated = null;
+  let trainDelayTooltipSuffix = '';
+  let gtfsRtRefreshTimer = null;
+  let pendingGtfsRtPromise = null;
+
+  function describeRealtimeSource(src){
+    if (!src) return '';
+    if (src === 'GitHub API') return 'GitHub API';
+    try {
+      const url = new URL(src, location.href);
+      const host = url.hostname;
+      if (host === location.hostname) return 'local';
+      if (/githubusercontent\.com$/i.test(host)) return 'GitHub raw';
+      if (/jsdelivr\.net$/i.test(host)) return 'jsDelivr';
+      return host;
+    } catch {
+      return src;
+    }
+  }
+
+  function updateRealtimeStatus({ error } = {}){
+    if (trainDelayLastUpdated){
+      const parts = ['Retards temps réel'];
+      if (trainDelaySourceLabel) parts.push(`via ${trainDelaySourceLabel}`);
+      parts.push(`MAJ ${formatLuxTime(new Date(trainDelayLastUpdated))}`);
+      if (error) parts.push(error);
+      setRealtimeStatus(parts.join(' — '));
+    } else {
+      setRealtimeStatus(error ? `Retards temps réel ${error}` : '');
+    }
+  }
+
+  function registerGtfsRetards(data, source){
+    if (!data || typeof data !== 'object') return;
+    trainDelayDataRaw = data;
+    trainDelaysByNumber = new Map();
+    trainDelaySourceRaw = source || '';
+    trainDelaySourceLabel = describeRealtimeSource(source);
+    for (const [trainNum, stations] of Object.entries(data)){
+      if (!stations || typeof stations !== 'object') continue;
+      const perStation = new Map();
+      for (const [stationName, value] of Object.entries(stations)){
+        const norm = normalizeStationName(stationName);
+        if (!norm) continue;
+        if (value == null){
+          perStation.set(norm, { original: stationName, value: null });
+        } else {
+          const num = Number(value);
+          if (!Number.isFinite(num)) continue;
+          perStation.set(norm, { original: stationName, value: num });
+        }
+      }
+      if (perStation.size){
+        trainDelaysByNumber.set(String(trainNum), perStation);
+      }
+    }
+    trainDelayLastUpdated = Date.now();
+    const suffixParts = [];
+    if (trainDelaySourceLabel) suffixParts.push(trainDelaySourceLabel);
+    suffixParts.push(`MAJ ${formatLuxTime(new Date(trainDelayLastUpdated))}`);
+    trainDelayTooltipSuffix = suffixParts.join(' · ');
+    updateRealtimeStatus();
+    try { tick(); } catch(_){}
+  }
+
+  function buildDelayInfo(entry){
+    if (!entry) return null;
+    if (entry.value == null){
+      const station = entry.original || null;
+      let title = station ? `Train supprimé à ${station}` : 'Train supprimé';
+      if (trainDelayTooltipSuffix) title += ` — ${trainDelayTooltipSuffix}`;
+      const panelText = station ? `Train supprimé à ${station}` : 'Train supprimé (temps réel)';
+      return {
+        label:'Supprimé',
+        minutes:null,
+        station,
+        severity:'cancelled',
+        badgeClass:'train-delay-badge train-delay-badge--cancelled',
+        title,
+        panelText,
+        panelContext: trainDelayTooltipSuffix ? `Source temps réel — ${trainDelayTooltipSuffix}` : '',
+        sourceLabel: trainDelaySourceLabel
+      };
+    }
+    const minutes = Number(entry.value);
+    if (!Number.isFinite(minutes) || minutes <= 0) return null;
+    const rounded = Math.round(minutes);
+    let severity = 'moderate';
+    if (rounded >= 15) severity = 'severe';
+    else if (rounded >= 10) severity = 'major';
+    const station = entry.original || null;
+    const label = `+${rounded} min`;
+    const where = station ? ` à ${station}` : '';
+    let title = `Retard estimé ${label}${where}`;
+    if (trainDelayTooltipSuffix) title += ` — ${trainDelayTooltipSuffix}`;
+    const panelText = `Retard ${label}${where}`;
+    return {
+      label,
+      minutes,
+      rounded,
+      station,
+      severity,
+      badgeClass:`train-delay-badge train-delay-badge--${severity}`,
+      title,
+      panelText,
+      panelContext: trainDelayTooltipSuffix ? `Source temps réel — ${trainDelayTooltipSuffix}` : '',
+      sourceLabel: trainDelaySourceLabel
+    };
+  }
+
+  function computeTrainDelayInfo(train){
+    if (!train || !trainDelaysByNumber.size) return null;
+    const numberKey = train.numberKey || extractTrainNumberCandidate(train.number) || null;
+    if (!numberKey) return null;
+    const perStation = trainDelaysByNumber.get(String(numberKey));
+    if (!perStation) return null;
+
+    const candidateOrder = [];
+    const seen = new Set();
+    const pushCandidate = (name)=>{
+      if (!name) return;
+      const norm = normalizeStationName(name);
+      if (!norm || seen.has(norm)) return;
+      seen.add(norm);
+      candidateOrder.push({ norm, original: name });
+    };
+
+    if (train.segmentProgress != null){
+      if (train.segmentProgress <= 0.25 && train.from) pushCandidate(train.from);
+      if (train.to) pushCandidate(train.to);
+      if (train.from) pushCandidate(train.from);
+    } else {
+      if (train.to) pushCandidate(train.to);
+      if (train.from) pushCandidate(train.from);
+    }
+
+    for (const candidate of candidateOrder){
+      const entry = perStation.get(candidate.norm);
+      if (!entry) continue;
+      if (entry.value == null){
+        return buildDelayInfo(entry);
+      }
+      const info = buildDelayInfo(entry);
+      if (info) return info;
+    }
+
+    let fallback = null;
+    for (const entry of perStation.values()){
+      if (fallback && fallback.severity === 'cancelled') break;
+      if (entry.value == null){
+        const info = buildDelayInfo(entry);
+        if (info) fallback = info;
+        continue;
+      }
+      const info = buildDelayInfo(entry);
+      if (!info) continue;
+      if (!fallback || (fallback.minutes != null && info.minutes > fallback.minutes)){
+        fallback = info;
+      }
+    }
+    return fallback;
+  }
+
+  async function fetchWithTimeoutNoHeaders(url, ms = 8000){
+    const ctrl = new AbortController();
+    const timeout = setTimeout(()=>ctrl.abort(), ms);
+    try {
+      return await fetch(url, { cache:'no-store', signal: ctrl.signal });
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
+  async function fetchFromGitHubAPI(){
+    const apiUrls = [
+      'https://api.github.com/repos/TekMaTe-lux/Assistant-train/contents/Assistant-train/retards_nancymetzlux.json',
+      'https://api.github.com/repos/TekMaTe-lux/Assistant-train/contents/retards_nancymetzlux.json'
+    ];
+    for (const apiUrl of apiUrls){
+      try {
+        const res = await fetch(apiUrl, {
+          cache:'no-store',
+          headers:{ 'Accept':'application/vnd.github+json' }
+        });
+        if (!res.ok) continue;
+        const meta = await res.json();
+        if (meta && meta.content){
+          const text = atob(String(meta.content).replace(/\n/g,''));
+          return JSON.parse(text);
+        }
+      } catch(_){}
+    }
+    throw new Error('GitHub API indisponible');
+  }
+
+  async function loadGtfsRetards({ forceFresh = false } = {}){
+    if (pendingGtfsRtPromise) return pendingGtfsRtPromise;
+    pendingGtfsRtPromise = (async()=>{
+      const withBuster = (u)=> u + (u.includes('?') ? '&' : '?') + 't=' + (forceFresh ? Date.now() : 'soft');
+      let lastErr = null;
+
+      for (const candidate of GTFS_RT_CANDIDATES){
+        const url = withBuster(candidate);
+        try {
+          console.log('[GTFS-RT] tentative:', url);
+          const res = await fetchWithTimeoutNoHeaders(url, 8000);
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          const ct = (res.headers.get('content-type') || '').toLowerCase();
+          let data;
+          if (ct.includes('application/json')){
+            data = await res.json();
+          } else {
+            data = JSON.parse(await res.text());
+          }
+          registerGtfsRetards(data, candidate);
+          console.log('[GTFS-RT] ✅ via', candidate);
+          return;
+        } catch(e){
+          console.warn('[GTFS-RT] échec sur', candidate, e);
+          lastErr = e;
+        }
+      }
+
+      try {
+        const data = await fetchFromGitHubAPI();
+        registerGtfsRetards(data, 'GitHub API');
+        console.log('[GTFS-RT] ✅ via GitHub API');
+        return;
+      } catch(e){
+        lastErr = e;
+      }
+
+      console.error('[GTFS-RT] ❌ impossible de charger les retards temps réel', lastErr);
+      updateRealtimeStatus({ error: trainDelayLastUpdated ? 'rafraîchissement en échec' : 'indisponibles' });
+      throw lastErr || new Error('Chargement GTFS-RT impossible');
+    })();
+
+    try {
+      await pendingGtfsRtPromise;
+    } finally {
+      pendingGtfsRtPromise = null;
+    }
+  }
     
 const WEEKDAY_FIELDS = ['sunday','monday','tuesday','wednesday','thursday','friday','saturday'];
 
@@ -310,7 +633,12 @@ const WEEKDAY_FIELDS = ['sunday','monday','tuesday','wednesday','thursday','frid
   // ---------- Leaflet ----------
   const map = L.map('map').setView([49.2, 6.15], 9);
   L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{ attribution:'© OpenStreetMap' }).addTo(map);
-  const overlay = { rfn:null, cfl:null, garesGTFS:null, axisStations:null };
+  const overlay = { rfn:null, cfl:null, axisStationsMajor:null, axisStationsRegular:null, trains:null };
+  const layerVisibility = {
+    stationsMajor: true,
+    stationsRegular: true,
+    trains: true
+  };
   const trainMarkers = new Map();
   const trainCowById = new Map();
   const trainDataById = new Map();  
@@ -322,13 +650,20 @@ const WEEKDAY_FIELDS = ['sunday','monday','tuesday','wednesday','thursday','frid
     { id:'champigneulles', label:'Champigneulles', stopArea:'StopArea:OCE87141085', lat:48.735025, lon:6.168952, type:'regular' },
     { id:'frouard', label:'Frouard', stopArea:'StopArea:OCE87141077', lat:48.755428, lon:6.143927, type:'regular' },
     { id:'pompey', label:'Pompey', stopArea:'StopArea:OCE87141788', lat:48.77304, lon:6.13061, type:'regular' },
+    { id:'marbache', label:'Marbache', stopArea:'StopArea:OCE87141796', lat:48.801156, lon:6.108779, type:'regular' },
+    { id:'belleville', label:'Belleville', stopArea:'StopArea:OCE87141804', lat:48.819245, lon:6.101779, type:'regular' },
+    { id:'dieulouard', label:'Dieulouard', stopArea:'StopArea:OCE87141812', lat:48.843826, lon:6.071505, type:'regular' },
     { id:'pont-a-mousson', label:'Pont-à-Mousson', stopArea:'StopArea:OCE87141820', lat:48.900348, lon:6.051021, type:'regular' },
+    { id:'vandieres', label:'Vandières', stopArea:'StopArea:OCE87192476', lat:48.951493, lon:6.039047, type:'regular' },
     { id:'pagny-moselle', label:'Pagny-sur-Moselle', stopArea:'StopArea:OCE87192468', lat:48.9852, lon:6.025035, type:'regular' },
     { id:'noveant', label:'Novéant-sur-Moselle', stopArea:'StopArea:OCE87192427', lat:49.028717, lon:6.052051, type:'regular' },
+    { id:'ancy-sur-moselle', label:'Ancy-sur-Moselle', stopArea:'StopArea:OCE87192419', lat:49.057714, lon:6.062342, type:'regular' },
     { id:'ars-sur-moselle', label:'Ars-sur-Moselle', stopArea:'StopArea:OCE87192401', lat:49.074475, lon:6.077646, type:'regular' },
     { id:'metz', label:'Metz', stopArea:'StopArea:OCE87192039', lat:49.109466, lon:6.177052, type:'major' },
+    { id:'metz-nord', label:'Metz Nord', stopArea:'StopArea:OCE87192070', lat:49.136865, lon:6.167538, type:'regular' },
     { id:'woippy', label:'Woippy', stopArea:'StopArea:OCE87192088', lat:49.148797, lon:6.155621, type:'regular' },
     { id:'maizieres', label:'Maizières-lès-Metz', stopArea:'StopArea:OCE87191106', lat:49.215536, lon:6.158727, type:'regular' },
+    { id:'walygator-parc', label:'Walygator parc', stopArea:'StopArea:OCE87191098', lat:49.22492, lon:6.15946, type:'regular' },
     { id:'hagondange', label:'Hagondange', stopArea:'StopArea:OCE87191114', lat:49.25356, lon:6.16448, type:'regular' },
     { id:'uckange', label:'Uckange', stopArea:'StopArea:OCE87191130', lat:49.303459, lon:6.1566, type:'regular' },
     { id:'thionville', label:'Thionville', stopArea:'StopArea:OCE87191007', lat:49.353965, lon:6.168582, type:'major' },
@@ -337,12 +672,15 @@ const WEEKDAY_FIELDS = ['sunday','monday','tuesday','wednesday','thursday','frid
     { id:'howald', label:'Howald', stopArea:'StopArea:OCE82002501', lat:49.58032, lon:6.13232, type:'regular' },
     { id:'luxembourg', label:'Luxembourg', stopArea:'StopArea:OCE82001000', lat:49.599722, lon:6.134722, type:'major' }
   ];
-  const axisStationsById = new Map(AXIS_STATIONS.map(st=>[st.id, st]));  
+  const axisStationsById = new Map(AXIS_STATIONS.map(st=>[st.id, st]));
+  const SILLON_BOUNDS = L.latLngBounds(AXIS_STATIONS.map(st=>[st.lat, st.lon]));
+  if (SILLON_BOUNDS.isValid()){
+    map.fitBounds(SILLON_BOUNDS.pad(0.18), { maxZoom: 11 });
+  }
 
     let activeTripId = null;
   let activeStationId = null;
 
-  renderAxisStations();
   const tripPanelEl = document.getElementById('trip-panel');
   const tripPanelCloseBtn = document.getElementById('trip-panel-close');
   const tripPanelIconEl = document.getElementById('trip-panel-icon');
@@ -353,6 +691,35 @@ const WEEKDAY_FIELDS = ['sunday','monday','tuesday','wednesday','thursday','frid
   const tripProgressTextEl = document.getElementById('trip-progress-text');
   const tripStopsTitleEl = document.getElementById('trip-stops-title');
   const tripStopsEl = document.getElementById('trip-stops');
+  const toggleMajorEl = document.getElementById('toggle-major');
+  const toggleRegularEl = document.getElementById('toggle-regular');
+  const toggleTrainsEl = document.getElementById('toggle-trains');
+
+  if (toggleMajorEl){
+    layerVisibility.stationsMajor = toggleMajorEl.checked;
+    toggleMajorEl.addEventListener('change', ()=>{
+      layerVisibility.stationsMajor = toggleMajorEl.checked;
+      applyLayerVisibility();
+    });
+  }
+
+  if (toggleRegularEl){
+    layerVisibility.stationsRegular = toggleRegularEl.checked;
+    toggleRegularEl.addEventListener('change', ()=>{
+      layerVisibility.stationsRegular = toggleRegularEl.checked;
+      applyLayerVisibility();
+    });
+  }
+
+  if (toggleTrainsEl){
+    layerVisibility.trains = toggleTrainsEl.checked;
+    toggleTrainsEl.addEventListener('change', ()=>{
+      layerVisibility.trains = toggleTrainsEl.checked;
+      applyLayerVisibility();
+    });
+  }
+
+  renderAxisStations();
 
   function clearActiveSelection(){
     activeTripId = null;
@@ -383,17 +750,30 @@ const WEEKDAY_FIELDS = ['sunday','monday','tuesday','wednesday','thursday','frid
     const cow = cowForTrain(train.id);
     const num = escapeHTML(train.number || train.id);
     const safeId = escapeAttr(train.id);
-    const aria = escapeAttr(`Voir le détail du ${train.number ? `train ${train.number}` : 'train'}`);
+    const delayInfo = train.delayInfo || computeTrainDelayInfo(train);
+    const ariaParts = [`Voir le détail du ${train.number ? `train ${train.number}` : 'train'}`];
+    if (delayInfo){
+      if (delayInfo.minutes == null){
+        ariaParts.push('train supprimé');
+      } else {
+        ariaParts.push(`retard ${Math.round(delayInfo.minutes)} minute${Math.round(delayInfo.minutes) > 1 ? 's' : ''}`);
+      }
+    }
+    const aria = escapeAttr(ariaParts.join(', '));
+    const badge = delayInfo
+      ? `<span class="${delayInfo.badgeClass}"${delayInfo.title ? ` title="${escapeAttr(delayInfo.title)}"` : ''}>${escapeHTML(delayInfo.label)}</span>`
+      : '';
+    const titleAttr = delayInfo?.title ? ` title="${escapeAttr(delayInfo.title)}"` : '';
     return L.divIcon({
       className:'',
-      html:`<button type="button" class="cow-marker" data-train-id="${safeId}" aria-label="${aria}">${cow}<span class="train-num">${num}</span></button>`,
+      html:`<button type="button" class="cow-marker" data-train-id="${safeId}" aria-label="${aria}"${titleAttr}>${cow}<span class="train-num">${num}</span>${badge}</button>`,
       iconSize:null,
       iconAnchor:[20,20]
     });
-  }  
-    
-function iconForStation(station){
-    const emoji = station.type === 'major' ? '🏠' : '🏡';
+  }
+
+  function iconForStation(station){
+    const emoji = station.type === 'major' ? '🏫' : '🛖';
     const classes = `station-marker ${station.type === 'major' ? 'station-major' : 'station-regular'}`;
     const safeId = escapeAttr(station.id);
     const aria = escapeAttr(`Ouvrir la fiche de la gare ${station.label}${station.type === 'major' ? ' (principale)' : ''}`);
@@ -469,7 +849,7 @@ const mapContainerEl = map.getContainer();
   function hideTripPanel(){
     tripPanelEl.classList.add('hidden');
     tripPanelIconEl.textContent = '🐄';
-    tripPanelTrainEl.textContent = 'Sélectionnez un train ou une gare';
+    tripPanelTrainEl.textContent = 'Sélectionnez une bétaillère ou une gare';
     tripPanelSummaryEl.textContent = 'Cliquez sur une icône vache ou grange pour afficher le détail.';
     tripProgressWrapEl.classList.add('hidden');
     tripProgressFillEl.style.width = '0%';
@@ -517,11 +897,11 @@ const mapContainerEl = map.getContainer();
     tripPanelIconEl.textContent = cowForTrain(activeTripId);
 
     if (data.number){
-      tripPanelTrainEl.textContent = `Train ${data.number}`;
+      tripPanelTrainEl.textContent = `Bétaillère ${data.number}`;
     } else if (data.headsign){
       tripPanelTrainEl.textContent = data.headsign;
     } else {
-      tripPanelTrainEl.textContent = data.id || 'Sélectionnez un train';
+      tripPanelTrainEl.textContent = data.id || 'Sélectionnez une bétaillère';
     }
 
     const seq = stopTimesByTrip.get(activeTripId);
@@ -596,7 +976,13 @@ const mapContainerEl = map.getContainer();
     const endName = stops.at(-1)?.name || '—';
     const summaryStartTime = data.startSec!=null ? fmtHHMM(data.startSec) : stops[0] ? stops[0].label : '—';
     const summaryEndTime = data.endSec!=null ? fmtHHMM(data.endSec) : stops.at(-1) ? stops.at(-1).label : '—';
-    tripPanelSummaryEl.innerHTML = `${escapeHTML(startName)} <strong>${escapeHTML(summaryStartTime)}</strong> → ${escapeHTML(endName)} <strong>${escapeHTML(summaryEndTime)}</strong>`;
+    let summaryHtml = `${escapeHTML(startName)} <strong>${escapeHTML(summaryStartTime)}</strong> → ${escapeHTML(endName)} <strong>${escapeHTML(summaryEndTime)}</strong>`;
+    if (data.delayInfo){
+      const severityClass = `trip-panel-delay delay-${data.delayInfo.severity}`;
+      const context = data.delayInfo.panelContext ? `<div class="trip-panel-delay-context">${escapeHTML(data.delayInfo.panelContext)}</div>` : '';
+      summaryHtml += `<div class="${severityClass}">${escapeHTML(data.delayInfo.panelText)}${context}</div>`;
+    }
+    tripPanelSummaryEl.innerHTML = summaryHtml;
 
     const totalStops = stops.length;
     if (totalStops > 0){
@@ -610,23 +996,40 @@ const mapContainerEl = map.getContainer();
       tripStopsTitleEl.textContent = 'Gares desservies';
     }
 
+    const segIdx = data.segmentIndex ?? -1;
+    const segProg = data.segmentProgress ?? 0;
+    const segFraction = Math.max(0, Math.min(1, segProg));
+    const nextStopName = (()=>{
+      if (segIdx >= 0){
+        if (segIdx + 1 < stops.length){
+          return stops[segIdx + 1].name;
+        }
+        if (segIdx >= stops.length - 1){
+          return null;
+        }
+      }
+      return data.to || null;
+    })();
+
     if (data.progress!=null && isFinite(data.progress)){
       const pct = Math.max(0, Math.min(1, data.progress));
       tripProgressWrapEl.classList.remove('hidden');
       tripProgressFillEl.style.width = `${(pct*100).toFixed(1)}%`;
       const pctText = Math.round(pct*100);
-      const segText = data.from && data.to ? `${data.from} → ${data.to}` : 'En circulation';
-      const etaText = isFinite(data.etaSec) ? `Arrivée dans ~${fmtMinSec(data.etaSec)}` : '';
-      tripProgressTextEl.textContent = `Progression ${pctText}% — ${segText}${etaText ? ' · '+etaText : ''}`;
+      const etaText = isFinite(data.etaSec) ? fmtMinSec(data.etaSec) : null;
+      let statusText;
+      if (nextStopName){
+        statusText = `prochain arrêt : ${nextStopName}`;
+        if (etaText) statusText += ` (dans ${etaText})`;
+      } else {
+        statusText = etaText ? `terminus dans ${etaText}` : 'TERMINUS';
+      }
+      tripProgressTextEl.textContent = `Progression ${pctText}% — ${statusText}`;
     } else {
       tripProgressWrapEl.classList.add('hidden');
       tripProgressFillEl.style.width = '0%';
       tripProgressTextEl.textContent = '';
     }
-
-    const segIdx = data.segmentIndex ?? -1;
-    const segProg = data.segmentProgress ?? 0;
-    const segFraction = Math.max(0, Math.min(1, segProg));
 
     const stopsHtml = stops.map((info, idx)=>{
       let status = 'upcoming';
@@ -654,9 +1057,9 @@ const mapContainerEl = map.getContainer();
 
       const noteParts = [];
       if (info.isFirst) noteParts.push('Départ');
-      if (info.isLast) noteParts.push('Arrivée finale');
+       if (info.isLast) noteParts.push('TERMINUS');
       if (segIdx >= 0){
-        if (idx === segIdx) noteParts.push('Dernier arrêt');
+        if (idx === segIdx) noteParts.push('Arrêt précédent');
         if (idx === segIdx + 1) noteParts.push('Prochain arrêt');
       }
       const note = noteParts.length ? `<div class="stop-note"><strong>${escapeHTML(noteParts.join(' · '))}</strong></div>` : '';
@@ -715,7 +1118,10 @@ const mapContainerEl = map.getContainer();
       if (ev.headsign && (!ev.number || !title.includes(ev.headsign))){
         subtitle.push(ev.headsign);
       } else if (ev.displayName && ev.displayName !== title){
-        subtitle.push(ev.displayName);
+        subtitle.push(ev.displayName); 
+      }
+      if (ev.delayInfo){
+        subtitle.push(ev.delayInfo.panelText);
       }
       const statusText = ev.state + (ev.diff!=null && isFinite(ev.diff) ? ` · ${fmtRelative(ev.diff)}` : '');
       const arrLine = ev.arrSec!=null ? `<div>Arrivée : <strong>${escapeHTML(fmtHHMM(ev.arrSec))}</strong></div>` : '';
@@ -774,7 +1180,8 @@ const mapContainerEl = map.getContainer();
         state,
         focusSec,
         diff: focusSec - now,
-        cow: cowForTrain(tripId)
+        cow: cowForTrain(tripId),
+        delayInfo: train.delayInfo || computeTrainDelayInfo(train)
       });
     }
 
@@ -809,13 +1216,43 @@ const mapContainerEl = map.getContainer();
       station.stopSet = new Set(station.stopIds);
     }
   }
-
-  function renderAxisStations(){
-    if (overlay.axisStations){
-      overlay.axisStations.removeFrom(map);
-      overlay.axisStations = null;
+function setLayerGroupVisibility(group, visible){
+    if (!group) return;
+    const onMap = map.hasLayer(group);
+    if (visible && !onMap){
+      group.addTo(map);
+    } else if (!visible && onMap){
+      group.removeFrom(map);
     }
-    const markers = [];
+  }
+
+  function applyLayerVisibility(){
+    setLayerGroupVisibility(overlay.axisStationsMajor, layerVisibility.stationsMajor);
+    setLayerGroupVisibility(overlay.axisStationsRegular, layerVisibility.stationsRegular);
+    setLayerGroupVisibility(overlay.trains, layerVisibility.trains);
+  }
+
+  function ensureTrainLayer(){
+    if (!overlay.trains){
+      overlay.trains = L.layerGroup();
+      if (layerVisibility.trains){
+        overlay.trains.addTo(map);
+      }
+    }
+    return overlay.trains;
+  }
+    
+  function renderAxisStations(){
+    if (overlay.axisStationsMajor){
+      overlay.axisStationsMajor.remove();
+      overlay.axisStationsMajor = null;
+    }
+    if (overlay.axisStationsRegular){
+      overlay.axisStationsRegular.remove();
+      overlay.axisStationsRegular = null;
+    }
+    const majorMarkers = [];
+    const regularMarkers = [];
     for (const station of AXIS_STATIONS){
       if (!isFinite(station.lat) || !isFinite(station.lon)) continue;
       const marker = L.marker([station.lat, station.lon], {
@@ -825,11 +1262,19 @@ const mapContainerEl = map.getContainer();
         zIndexOffset:600
       });
       marker.bindTooltip(station.label, {permanent:false});
-      markers.push(marker);
+      if (station.type === 'major'){
+        majorMarkers.push(marker);
+      } else {
+        regularMarkers.push(marker);
+      }
     }
-    if (markers.length){
-      overlay.axisStations = L.layerGroup(markers).addTo(map);
+    if (majorMarkers.length){
+      overlay.axisStationsMajor = L.layerGroup(majorMarkers);
     }
+    if (regularMarkers.length){
+      overlay.axisStationsRegular = L.layerGroup(regularMarkers);
+    }
+    applyLayerVisibility();
   }
   
    // ---------- Graphe réseau (pour suivre les voies) ----------
@@ -887,20 +1332,27 @@ const mapContainerEl = map.getContainer();
     }
   }
 
-   const MANUAL_CONNECTOR_SEGMENTS = [
+  const MANUAL_CONNECTOR_SEGMENTS = [
     [
       [49.46658076914014, 6.109331392744701],
       [49.46755304211354, 6.109018226768153],
-      [49.46931476747459, 6.1065390722530575],
-      [49.469567548081336, 6.106489521458154]
+      [49.470987657519295, 6.108052087802873],
+      [49.47186965380722, 6.107870598848106],
+      [49.47174049199803, 6.107837229130531],
+      [49.471561250728215, 6.10785928146085],
+      [49.471114767474596, 6.107939072253058]
     ],
     [
-      [49.59566960334967, 6.132002684138384],
-      [49.59630311920914, 6.13202748113627],
-      [49.596980429233994, 6.132399875022308],
-      [49.59757307502195, 6.132725730032224],
-      [49.59816571983299, 6.133051591553611],
-      [49.59958814769005, 6.133883041433622]
+      [49.51742762768063, 6.101569489369114],
+      [49.51740417509697, 6.101688948209521]
+    ],
+    [
+      [49.59684626924659, 6.132947671869363],
+      [49.596927050485505, 6.1327399450261035]
+    ],
+    [
+      [49.45545408844863, 6.129087542059966],
+      [49.45545408934669, 6.129087542114585]
     ]
   ];
 
@@ -1104,7 +1556,11 @@ const mapContainerEl = map.getContainer();
       stopNearestCache.clear();
       stopPathCache.clear();
 
-      map.fitBounds(bounds);
+      if (SILLON_BOUNDS && SILLON_BOUNDS.isValid()){
+        map.fitBounds(SILLON_BOUNDS.pad(0.18), { maxZoom: 11 });
+      } else {
+        map.fitBounds(bounds);
+      }
     } catch(e){
       setStatus('Erreur chargement réseaux: '+e.message, true);
     }
@@ -1115,8 +1571,14 @@ const mapContainerEl = map.getContainer();
     try {
       stopNearestCache.clear();
       stopPathCache.clear();
-      // stops
-     stopChildrenByParent.clear(); 
+      stopTimesByTrip.clear();
+      tripsById.clear();
+      routesById.clear();
+      stopsById.clear();
+      stopChildrenByParent.clear();
+
+      const rawStopsById = new Map();
+      const rawStopChildrenByParent = new Map();
       const stops = await parseCSVAny(FILES.stops);
       for (const s of stops){
         const lat=parseFloat(s.stop_lat), lon=parseFloat(s.stop_lon);
@@ -1124,10 +1586,10 @@ const mapContainerEl = map.getContainer();
         const parent = s.parent_station || null;
         const locationType = Number(s.location_type ?? 0) || 0;
         const entry = { stop_id:s.stop_id, name:s.stop_name, lat, lon, parent_station:parent, location_type:locationType };
-        stopsById.set(s.stop_id, entry);
+        rawStopsById.set(s.stop_id, entry);
         if (parent){
-          if (!stopChildrenByParent.has(parent)) stopChildrenByParent.set(parent, []);
-          stopChildrenByParent.get(parent).push(entry);
+          if (!rawStopChildrenByParent.has(parent)) rawStopChildrenByParent.set(parent, []);
+          rawStopChildrenByParent.get(parent).push(entry);
         }
       }
 
@@ -1145,11 +1607,60 @@ const mapContainerEl = map.getContainer();
       }
       for (const [k,v] of stopTimesByTrip) v.sort((a,b)=>a.seq-b.seq);
 
+       const axisStopIds = new Set();
+      const axisTripIds = new Set();
+
+      for (const [tripId, seq] of Array.from(stopTimesByTrip.entries())){
+        if (!tripPassesAxis(seq, rawStopsById)){
+          stopTimesByTrip.delete(tripId);
+          continue;
+        }
+        axisTripIds.add(tripId);
+        for (const st of seq){
+          const meta = rawStopsById.get(st.stop_id);
+          if (!meta) continue;
+          axisStopIds.add(meta.stop_id);
+          if (meta.parent_station){
+            axisStopIds.add(meta.parent_station);
+            if (rawStopChildrenByParent.has(meta.parent_station)){
+              for (const child of rawStopChildrenByParent.get(meta.parent_station)){
+                axisStopIds.add(child.stop_id);
+              }
+            }
+          }
+          if (rawStopChildrenByParent.has(meta.stop_id)){
+            for (const child of rawStopChildrenByParent.get(meta.stop_id)){
+              axisStopIds.add(child.stop_id);
+            }
+          }
+        }
+      }
+
+      for (const id of axisStopIds){
+        const meta = rawStopsById.get(id);
+        if (!meta) continue;
+        stopsById.set(id, meta);
+      }
+      for (const [parent, children] of rawStopChildrenByParent.entries()){
+        if (!axisStopIds.has(parent)) continue;
+        const filtered = children.filter(child=>axisStopIds.has(child.stop_id));
+        if (filtered.length){
+          stopChildrenByParent.set(parent, filtered);
+        }
+      }
+
+      rawStopsById.clear();
+      rawStopChildrenByParent.clear();
+
+      const axisRouteIds = new Set();
+
       // trips (optionnel)
       try {
         const trips = await parseCSVAny(FILES.trips);
         for (const t of trips){
+         if (axisTripIds.size && !axisTripIds.has(t.trip_id)) continue;
           tripsById.set(t.trip_id, { route_id:t.route_id, headsign:t.trip_headsign, service_id:t.service_id, trip_short_name:t.trip_short_name });
+          if (t.route_id) axisRouteIds.add(t.route_id);
         }
       } catch(_){ /* ok si absent */ }
 
@@ -1157,6 +1668,7 @@ const mapContainerEl = map.getContainer();
       try {
         const routes = await parseCSVAny(FILES.routes);
         for (const r of routes){
+          if (axisRouteIds.size && !axisRouteIds.has(r.route_id)) continue;
           routesById.set(r.route_id, { short:r.route_short_name, long:r.route_long_name });
         }
       } catch(_){ /* ok si absent */ }
@@ -1167,23 +1679,13 @@ const mapContainerEl = map.getContainer();
        calendarRows = await parseCSVAny(FILES.calendar);
       } catch(_){ /* ok si absent */ }
       
-let calendarDateRows = null;
+      let calendarDateRows = null;
       try {
         calendarDateRows = await parseCSVAny(FILES.calendar_dates);
       } catch(_){ /* ok si absent */ }
 
       activeServiceIds = computeActiveServiceSet(calendarRows, calendarDateRows);
       if (activeServiceIds && !tripsById.size) activeServiceIds = null;
-      
-      // Dessine les gares (GTFS)
-      const gares = [];
-      for (const s of stopsById.values()){ gares.push([s.lat, s.lon, s.name]); }
-      overlay.garesGTFS = L.layerGroup(
-        gares.map(([lat,lon,name])=>{
-          const m=L.circleMarker([lat,lon],{radius:3, color:'#a0ff00', weight:1});
-          m.bindTooltip(name, {permanent:false}); return m;
-        })
-      ).addTo(map);
 
       prepareStationMetadata();
       renderAxisStations();
@@ -1197,8 +1699,8 @@ let calendarDateRows = null;
   }
 
   // ---------- Filtre sillon & service du jour ----------
-  function tripPassesAxis(seq){
-    const names = seq.map(s=> (stopsById.get(s.stop_id)?.name || '').toLowerCase());
+  function tripPassesAxis(seq, lookup = stopsById){
+    const names = seq.map(s=> (lookup.get(s.stop_id)?.name || '').toLowerCase());
     const hits = names.filter(n=> AXIS_STOP_KEYWORDS.some(k=> n.includes(k))).length;
     return hits >= 2;
   }
@@ -1227,6 +1729,7 @@ let calendarDateRows = null;
       const trip = tripsById.get(trip_id) || {};
       const route = routesById.get(trip.route_id) || {};
       const number = trainNumberForTrip(trip, route, trip_id);
+      const numberKey = extractTrainNumberCandidate(number) || extractTrainNumberCandidate(trip_id) || null;
       const headsign = (()=>{
         if (trip.headsign && trip.headsign !== number) return trip.headsign;
         if (route.long && route.long !== number) return route.long;
@@ -1259,6 +1762,7 @@ let calendarDateRows = null;
           lon: stopMeta.lon,
           route_id: trip.route_id,
           number,
+          numberKey,
           startSec: start,
           endSec: end,
           progress: tripProgress,
@@ -1298,6 +1802,7 @@ let calendarDateRows = null;
           etaSec, lat, lon,
           route_id: trip.route_id,
           number,
+          numberKey,
           startSec: start,
           endSec: end,
           progress: tripProgress,
@@ -1313,55 +1818,62 @@ let calendarDateRows = null;
   }
 
   function renderTrains(list){
-  const seen = new Set();
+  const layer = ensureTrainLayer();
+    const seen = new Set();
 
-  for (const t of list){
-    seen.add(t.id);
-    trainDataById.set(t.id, t);
-    const displayName = t.number ? (t.headsign ? `${t.headsign} — Train ${t.number}` : `Train ${t.number}`) : (t.headsign || t.id);
-    t.displayName = displayName;
+    for (const t of list){
+      seen.add(t.id);
+      const delayInfo = computeTrainDelayInfo(t);
+      t.delayInfo = delayInfo;
+      const displayName = t.number ? (t.headsign ? `${t.headsign} — Train ${t.number}` : `Train ${t.number}`) : (t.headsign || t.id);
+      t.displayName = displayName;
+      trainDataById.set(t.id, t);
 
-    if (trainMarkers.has(t.id)){
-      const marker = trainMarkers.get(t.id);
-      marker.setLatLng([t.lat, t.lon]);
-      marker.setIcon(iconForTrain(t));
-      marker.setZIndexOffset(1000); // passer devant les couches vectorielles
-      if (marker.getPopup()) marker.unbindPopup();
-    } else {
-      const m = L.marker([t.lat, t.lon], {
-        icon: iconForTrain(t),
-        zIndexOffset: 1000,       // au-dessus des lignes RFN/CFL
-        riseOnHover: true,        // confort visuel
-        keyboard: false
-      }).addTo(map);
-      trainMarkers.set(t.id, m);
+      if (trainMarkers.has(t.id)){
+        const marker = trainMarkers.get(t.id);
+        marker.setLatLng([t.lat, t.lon]);
+        marker.setIcon(iconForTrain(t));
+        marker.setZIndexOffset(1000); // passer devant les couches vectorielles
+        if (marker.getPopup()) marker.unbindPopup();
+      } else {
+        const m = L.marker([t.lat, t.lon], {
+          icon: iconForTrain(t),
+          zIndexOffset: 1000,       // au-dessus des lignes RFN/CFL
+          riseOnHover: true,        // confort visuel
+          keyboard: false
+        });
+        layer.addLayer(m);
+        trainMarkers.set(t.id, m);
+      }
     }
-  }
 
-  // nettoyage des marqueurs disparus
-  for (const [id,mk] of trainMarkers.entries()){
-    if(!seen.has(id)){
-      map.removeLayer(mk);
-      trainMarkers.delete(id);
-      trainCowById.delete(id);
-      trainDataById.delete(id);
-      if (activeTripId === id){
-        activeTripId = null;
-        if (activeStationId){
-          renderPanel();
-        } else {
-          hideTripPanel();
+   // nettoyage des marqueurs disparus
+    for (const [id,mk] of trainMarkers.entries()){
+      if(!seen.has(id)){
+        if (overlay.trains){
+          overlay.trains.removeLayer(mk);
+        }
+        mk.remove();
+        trainMarkers.delete(id);
+        trainCowById.delete(id);
+        trainDataById.delete(id);
+        if (activeTripId === id){
+          activeTripId = null;
+          if (activeStationId){
+            renderPanel();
+          } else {
+            hideTripPanel();
+          }
         }
       }
     }
-  }
 
   if (activeStationId || (activeTripId && trainDataById.has(activeTripId))){
-    renderPanel();
+      renderPanel();
+    }
+    document.getElementById('counts').textContent = `${list.length} train(s) actifs`;
+    document.getElementById('clock').textContent = 'Heure locale : ' + new Date().toLocaleTimeString();
   }
-  document.getElementById('counts').textContent = `${list.length} train(s) actifs`;
-  document.getElementById('clock').textContent = 'Heure locale : ' + new Date().toLocaleTimeString();
-}
 
   // ---------- Boucle ----------
   let periodMs = 10000, nextTick = performance.now();
@@ -1377,10 +1889,27 @@ let calendarDateRows = null;
 
   // ---------- Boot ----------
   (async function boot(){
+    setRealtimeStatus('Retards temps réel : chargement…');
+    const realtimePromise = loadGtfsRetards({ forceFresh: true }).catch(err => {
+      console.error('[GTFS-RT] échec initial', err);
+      updateRealtimeStatus({ error: 'indisponibles' });
+    });
+
     await loadNetworks();
     await loadGTFS();
     tick();
     requestAnimationFrame(loop);
+
+    realtimePromise.finally(()=>{
+      if (gtfsRtRefreshTimer == null){
+        gtfsRtRefreshTimer = setInterval(()=>{
+          loadGtfsRetards({ forceFresh: true }).catch(err => {
+            console.warn('[GTFS-RT] rafraîchissement en échec', err);
+            updateRealtimeStatus({ error: trainDelayLastUpdated ? 'rafraîchissement en échec' : 'indisponibles' });
+          });
+        }, GTFS_RT_REFRESH_INTERVAL_MS);
+      }
+    });
   })().catch(e=> setStatus('Erreur initialisation: '+e.message, true));
   </script>
 </body>
