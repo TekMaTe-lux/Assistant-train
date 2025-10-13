@@ -1,0 +1,2389 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8"/>
+  <title>Carte Nancy ↔ Luxembourg — Réseaux + Gares + Trains (GTFS sans shapes)</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+  <style>
+    :root{ color-scheme: dark; }
+    body{ margin:0; background:#0b0f1a; color:#e0f0ff; font-family: system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif; }
+    header{ padding:10px 14px; background:#0e1726; border-bottom:1px solid #20324b; }
+    #map{ height: calc(100vh - 110px); }
+    .panel{ display:flex; gap:12px; align-items:center; padding:8px 14px; background:#0e1726; border-top:1px solid #20324b; flex-wrap:wrap;}
+    .badge{ padding:2px 6px; border:1px solid #2a3b55; border-radius:6px; font-size:12px; }
+    .muted{ opacity:.8; font-size:12px; }
+    .ctrl{ display:flex; align-items:center; gap:8px; }
+    .ctrl input[type="range"]{ width:160px; }
+    .legend-dot{ display:inline-block; width:10px; height:10px; border-radius:50%; margin-right:6px; }
+    .dot-rfn{ background:#00f0ff; }
+    .dot-cfl{ background:#ff00e0; }
+    .err{ color:#ffb4b4 }
+    .cow-marker{ display:flex; align-items:center; gap:6px; font-size:22px; text-shadow:0 0 4px #000; border:none; background:transparent; color:inherit; padding:0; margin:0; line-height:1; }
+    .cow-marker:focus-visible{ outline:2px solid #a0ff00; outline-offset:2px; }
+    .cow-marker .train-num{ font-size:13px; font-weight:600; padding:2px 5px; border-radius:6px; border:1px solid #2a3b55; background:rgba(14,23,38,0.9); color:#e0f0ff; white-space:nowrap; }
+    .cow-marker .train-delay{ display:inline-block; margin-left:4px; padding:1px 4px; border-radius:4px; background:rgba(160,255,0,0.08); color:#a0ff00; font-size:11px; font-weight:600; letter-spacing:.01em; }
+    .cow-marker .train-delay.ontime{ background:rgba(160,255,0,0.12); color:#c8ff9c; font-weight:500; }
+    .cow-marker .train-delay.partial{ background:rgba(255,174,0,0.15); color:#ffba47; }
+    .cow-marker .train-delay.cancelled{ background:rgba(255,82,82,0.18); color:#ff6b6b; }
+    .station-marker{ display:inline-flex; align-items:center; justify-content:center; width:32px; height:32px; border-radius:50%; border:1px solid #314463; background:rgba(14,23,38,0.92); color:#d9f27f; font-size:18px; text-shadow:0 0 4px #000; box-shadow:0 0 8px rgba(0,0,0,0.35); cursor:pointer; padding:0; margin:0; line-height:1; }
+    .station-marker.station-major{ color:#ffe28a; border-color:#ffc857; box-shadow:0 0 10px rgba(255,200,87,0.45); }
+    .station-marker.station-regular{ color:#c5f36f; border-color:#5f8f2d; }
+    .station-marker:focus-visible{ outline:2px solid #a0ff00; outline-offset:2px; }
+    .trip-panel{ position:fixed; top:96px; right:18px; width:320px; max-height:calc(100vh - 140px); background:rgba(11,15,26,0.95); border:1px solid #20324b; border-radius:14px; box-shadow:0 18px 36px rgba(0,0,0,0.35); padding:16px; display:flex; flex-direction:column; gap:12px; backdrop-filter:blur(6px); overflow:hidden; z-index:3000; }
+    .trip-panel.hidden{ display:none; }
+    .trip-panel-header{ display:flex; align-items:center; justify-content:space-between; gap:12px; }
+    .trip-panel-title{ display:flex; align-items:center; gap:8px; font-weight:700; font-size:16px; }
+    .trip-panel-icon{ font-size:20px; filter: drop-shadow(0 0 4px rgba(0,0,0,0.6)); }
+    .trip-panel-close{ border:none; background:rgba(32,50,75,0.6); color:#e0f0ff; font-size:18px; width:28px; height:28px; border-radius:50%; cursor:pointer; display:flex; align-items:center; justify-content:center; }
+    .trip-panel-close:hover{ background:rgba(160,255,0,0.25); color:#0b0f1a; }
+    .trip-panel-summary{ font-size:13px; line-height:1.4; color:#aabbd1; }
+    .trip-panel-summary .trip-status{ display:block; margin-top:6px; color:#ffba47; font-weight:600; }
+    .trip-progress{ display:flex; flex-direction:column; gap:6px; }
+    .trip-progress-bar{ position:relative; height:6px; width:100%; background:#162233; border-radius:999px; overflow:hidden; }
+    .trip-progress-bar-fill{ position:absolute; top:0; left:0; height:100%; background:linear-gradient(90deg,#00f0ff,#a0ff00); width:0%; transition:width 0.4s ease; }
+    .trip-progress-text{ font-size:12px; color:#94a7c4; }
+    .trip-stops{ flex:1; overflow:auto; padding-right:4px; display:flex; flex-direction:column; gap:10px; }
+    .trip-stops.station-mode{ gap:8px; }
+    .trip-stops-title{ font-size:12px; color:#8093b5; text-transform:uppercase; letter-spacing:.08em; }
+    .trip-stop{ position:relative; display:flex; gap:12px; align-items:flex-start; padding-left:12px; --connector-progress:0; }
+    .trip-stop::before{ content:''; position:absolute; left:0; top:6px; width:10px; height:10px; border-radius:50%; background:#2a3b55; box-shadow:0 0 6px rgba(0,240,255,0.3); transition:transform 0.3s ease, box-shadow 0.3s ease; }
+    .trip-stop.passed::before{ background:#2c8bff; opacity:0.6; box-shadow:none; }
+    .trip-stop.current::before{ background:#00f0ff; box-shadow:0 0 10px rgba(0,240,255,0.8); }
+    .trip-stop.enroute::before{ transform:scale(1.05); box-shadow:0 0 14px rgba(0,240,255,0.85); }
+    .trip-stop.upcoming::before{ background:#243249; }
+    .trip-stop.approaching::before{ background:#1e3049; box-shadow:0 0 8px rgba(0,240,255,0.45); }
+    .trip-stop.passed{ --connector-progress:1; }
+    .trip-stop:not(:last-child)::after{ content:''; position:absolute; left:4px; top:16px; bottom:-10px; width:2px; background:linear-gradient(180deg, rgba(0,240,255,0.55) 0%, rgba(0,240,255,0.55) calc(var(--connector-progress, 0) * 100%), rgba(36,50,73,0.6) calc(var(--connector-progress, 0) * 100%), rgba(36,50,73,0.6) 100%); transition:background 0.3s ease; }
+    .trip-stop:last-child::after{ display:none; }
+    .stop-time{ display:flex; flex-direction:column; gap:2px; align-items:flex-end; font-size:12px; color:#90a1b8; min-width:86px; font-variant-numeric:tabular-nums; }
+    .stop-time .time-entry{ line-height:1.1; padding:0; margin:0; }
+    .stop-time .time-arr{ color:#8fa1be; }
+    .stop-time .time-dep{ color:#d6e6ff; font-weight:600; }
+    .stop-time .time-neutral{ color:#90a1b8; }
+    .stop-time .time-base{ color:#7f8fa8; text-decoration:line-through; margin-right:4px; display:inline-block; }
+    .stop-time .time-new{ color:#ffba47; font-weight:600; }
+    .stop-time .time-delay{ color:#ffba47; font-size:11px; font-weight:600; margin-left:4px; }
+    .stop-main{ display:flex; flex-direction:column; gap:3px; }
+    .stop-name{ font-weight:600; font-size:14px; color:#e0f0ff; }
+    .stop-note{ font-size:11px; color:#7f92b1; text-transform:uppercase; letter-spacing:.04em; }
+    .stop-note strong{ color:#a0ff00; font-weight:600; }
+    .hidden{ display:none !important; }
+    .leaflet-marker-icon { pointer-events: auto !important; }
+    .cow-marker, .cow-marker * { pointer-events: auto; cursor: pointer; }
+    .station-event{ display:flex; gap:12px; align-items:flex-start; padding:10px 12px; border-radius:12px; border:1px solid #263752; background:rgba(22,34,51,0.7); box-shadow:0 6px 18px rgba(0,0,0,0.25); }
+    .station-event-main{ flex:1; display:flex; flex-direction:column; gap:4px; }
+    .station-event-title{ font-weight:600; color:#e0f0ff; font-size:14px; }
+    .station-event-note{ font-size:12px; color:#8fa1be; }
+    .station-event-times{ display:flex; flex-direction:column; gap:2px; font-size:12px; color:#d6e6ff; }
+    .station-event-status{ font-size:11px; color:#a0ff00; text-transform:uppercase; letter-spacing:.05em; }
+    .station-event.empty{ justify-content:center; color:#8fa1be; font-size:13px; padding:16px; text-align:center; }
+    .station-train-link{ display:inline-flex; align-items:center; gap:6px; border:1px solid #2a3b55; border-radius:8px; padding:6px 10px; background:rgba(11,15,26,0.8); color:#e0f0ff; font-size:12px; cursor:pointer; text-shadow:0 0 4px #000; }
+    .station-train-link:hover{ border-color:#5bd6ff; color:#a0ff00; }
+    .station-train-link:focus-visible{ outline:2px solid #a0ff00; outline-offset:2px; }
+  </style>
+</head>
+<body>
+  <header>
+    <div style="font-weight:700">Nancy ↔ Luxembourg — Carte interactive des bétaillères et gares du sillon lorrain </div>
+    <div class="muted">Bétailléres placées par interpolation entre gares à partir des données opendata GTFS - Tracé SNCF + CFL en GeoJSON </div>
+  </header>
+
+  <div id="map"></div>
+
+  <div class="panel">
+    <span class="badge"><span class="legend-dot dot-rfn"></span>RFN</span>
+    <span class="badge"><span class="legend-dot dot-cfl"></span>CFL</span>
+    <div class="ctrl">
+      <label class="muted">Rafraîchissement: <span id="hz">10</span>s</label>
+      <input id="period" type="range" min="1" max="30" step="1" value="10">
+      <label class="muted"><input id="smooth" type="checkbox" checked> animation fluide</label>
+    </div>
+    <div class="ctrl">
+      <span class="muted">Icônes :</span>
+      <label class="muted"><input id="toggle-major" type="checkbox" checked> gares prioritaires</label>
+      <label class="muted"><input id="toggle-regular" type="checkbox" checked> gares secondaires</label>
+      <label class="muted"><input id="toggle-trains" type="checkbox" checked> bétaillères</label>
+    </div>
+    <div class="ctrl">
+      <span class="muted">Retards :</span>
+      <label class="muted"><input id="toggle-sncf" type="checkbox" checked> API SNCF</label>
+      <label class="muted"><input id="toggle-gtfs" type="checkbox" checked> GTFS statique</label>
+    </div>
+    <span id="clock" class="muted">—</span>
+    <span id="counts" class="muted">—</span>
+    <span id="status" class="muted"></span>
+    <span id="delay-status" class="muted"></span>
+  </div>
+
+  <div id="trip-panel" class="trip-panel hidden" aria-live="polite">
+    <div class="trip-panel-header">
+      <div class="trip-panel-title">
+        <span id="trip-panel-icon" class="trip-panel-icon" aria-hidden="true">🐄</span>
+        <span id="trip-panel-train">Sélectionnez une bétaillère ou une gare</span>
+      </div>
+      <button id="trip-panel-close" class="trip-panel-close" type="button" aria-label="Fermer">×</button>
+    </div>
+    <div id="trip-panel-summary" class="trip-panel-summary">Cliquez sur une icône vache ou grange pour afficher le détail.</div>
+    <div class="trip-progress hidden" id="trip-progress">
+      <div class="trip-progress-bar"><div id="trip-progress-fill" class="trip-progress-bar-fill"></div></div>
+      <div id="trip-progress-text" class="trip-progress-text"></div>
+    </div>
+    <div id="trip-stops-title" class="trip-stops-title hidden">Gares desservies</div>
+    <div id="trip-stops" class="trip-stops"></div>
+  </div>
+  
+  <!-- libs -->
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://unpkg.com/papaparse@5.4.1/papaparse.min.js"></script>
+
+  <script>
+  // ---------- Bases: 1) local /data/ , 2) GitHub RAW ----------
+  const BASES = [
+    location.origin + '/data/',
+    'https://raw.githubusercontent.com/TekMaTe-lux/Assistant-train/main/data/'
+  ];
+
+  // ---------- Fichiers attendus ----------
+  const FILES = {
+    // réseaux (noms selon ton repo)
+    rfn:    'lignes-du-rfn.geojson',
+    cfl:    'lignes_cfl-ajusté.geojson',
+
+    // GTFS requis / optionnels
+    stops:        'stops.txt',
+    stop_times:   'stop_times.txt',
+    trips:        'trips.txt',          // optionnel
+    routes:       'routes.txt',         // optionnel (pour labels)
+    calendar:     'calendar.txt',       // optionnel (jours de circulation)
+    calendar_dates: 'calendar_dates.txt'// optionnel (exceptions jour)
+  };
+
+  // ---------- Helpers fetch multi-bases ----------
+  function urlFor(name, baseIndex=0){ return BASES[baseIndex] + name; }
+
+  async function fetchJSONAny(name){
+    for (let i=0;i<BASES.length;i++){
+      try { const r = await fetch(urlFor(name,i), {mode:'cors'}); if (r.ok) return await r.json(); } catch(_) {}
+    }
+    throw new Error('Introuvable: '+name);
+  }
+
+  async function fetchTextAny(name){
+    for (let i=0;i<BASES.length;i++){
+      try { const r = await fetch(urlFor(name,i), {mode:'cors'}); if (r.ok) return await r.text(); } catch(_) {}
+    }
+    throw new Error('Introuvable: '+name);
+  }
+
+  function parseCSVAny(name){
+    return new Promise(async (resolve, reject) => {
+      try {
+        const csv = await fetchTextAny(name);
+        Papa.parse(csv, { header:true, dynamicTyping:false, skipEmptyLines:true,
+          complete: (res)=>resolve(res.data), error: reject
+        });
+      } catch(e){ reject(e); }
+    });
+  }
+
+  function setStatus(msg, isErr=false){
+    const el=document.getElementById('status');
+    el.innerHTML = (isErr?'<span class="err">':'' ) + msg + (isErr?'</span>':'');
+  }
+    
+function escapeHTML(str){
+    return String(str ?? '').replace(/[&<>"']/g, c=>({
+      '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;'
+    })[c]);
+  }
+  function escapeAttr(str){
+    return String(str ?? '').replace(/[&<>"']/g, c=>({
+      '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;'
+    })[c]);
+  }
+ function extractTrainNumberCandidate(value){
+    if (value == null) return null;
+    const raw = String(value).trim();
+    if (!raw) return null;
+    const probes = [raw.split(':')[0], raw];
+    for (const probe of probes){
+      if (!probe) continue;
+      const big = probe.match(/\d{4,}/);
+      if (big) return big[0];
+    }
+    for (const probe of probes){
+      if (!probe) continue;
+      const mid = probe.match(/\d{3,}/);
+      if (mid) return mid[0];
+    }
+    return null;
+  }
+
+  function trainNumberForTrip(trip, route, tripId){
+    const candidates = [
+      trip?.trip_short_name,
+      trip?.headsign,
+      tripId ? tripId.split(':')[0] : null,
+      route?.short
+    ];
+    for (const candidate of candidates){
+      const num = extractTrainNumberCandidate(candidate);
+      if (num) return num;
+    }
+    if (trip?.trip_short_name) return trip.trip_short_name;
+    if (trip?.headsign) return trip.headsign;
+    if (route?.short) return route.short;
+    if (route?.long) return route.long;
+    return tripId;
+  }
+   
+    
+const WEEKDAY_FIELDS = ['sunday','monday','tuesday','wednesday','thursday','friday','saturday'];
+
+  function todayYMD(){
+    const d=new Date();
+    const y=d.getFullYear();
+    const m=String(d.getMonth()+1).padStart(2,'0');
+    const day=String(d.getDate()).padStart(2,'0');
+    return { ymd:`${y}${m}${day}`, weekday:WEEKDAY_FIELDS[d.getDay()] };
+  }
+
+  function computeActiveServiceSet(calendarRows, calendarDateRows){
+    const hasCalendar = Array.isArray(calendarRows) && calendarRows.length;
+    const hasDates = Array.isArray(calendarDateRows) && calendarDateRows.length;
+    if (!hasCalendar && !hasDates) return null;
+
+    const { ymd, weekday } = todayYMD();
+    const active = new Set();
+
+    if (hasCalendar){
+      for (const row of calendarRows){
+        if (!row) continue;
+        const svc = row.service_id;
+        if (!svc) continue;
+        const start=row.start_date, end=row.end_date;
+        if (start && start > ymd) continue;
+        if (end && end < ymd) continue;
+        const runs = row[weekday];
+        if (runs === '1' || runs === 1) active.add(svc);
+      }
+    }
+
+    if (hasDates){
+      for (const row of calendarDateRows){
+        if (!row || row.date !== ymd) continue;
+        const svc = row.service_id;
+        if (!svc) continue;
+        const type = String(row.exception_type);
+        if (type === '1'){ active.add(svc); }
+        else if (type === '2'){ active.delete(svc); }
+      }
+    }
+
+    return active;
+  }
+    
+
+  // ---------- Maths géo (approx) ----------
+  const R = 6371000;
+  function toXY(lat, lon, lat0){ const x=(lon*Math.PI/180)*Math.cos(lat0*Math.PI/180), y=(lat*Math.PI/180); return {x,y}; }
+  function distLL(a,b){ const lat0=(a.lat+b.lat)/2; const A=toXY(a.lat,a.lon,lat0), B=toXY(b.lat,b.lon,lat0); const dx=B.x-A.x, dy=B.y-A.y; return Math.sqrt(dx*dx+dy*dy)*R; }
+  function lerp(a,b,t){ return a + (b-a)*t; }
+
+  // ---------- Temps ----------
+  function gtfsTimeToSec(t){ if(!t) return null; const [H,M,S]=t.split(':').map(Number); return H*3600+M*60+(S||0); }
+  function nowSecLocal(){ const d=new Date(); return d.getHours()*3600 + d.getMinutes()*60 + d.getSeconds(); }
+  function fmtMinSec(s){ const m=Math.floor(s/60), r=s%60; return `${m}m${String(r).padStart(2,'0')}s`; }
+  function fmtHHMM(sec){
+    if (sec==null || !isFinite(sec)) return '—';
+    const totalMinutes = Math.floor(sec/60);
+    const totalHours = Math.floor(totalMinutes/60);
+    const minutes = totalMinutes % 60;
+    const hoursInDay = ((totalHours % 24) + 24) % 24;
+    const dayOffset = Math.floor(totalHours / 24);
+    const base = `${String(hoursInDay).padStart(2,'0')}:${String(minutes).padStart(2,'0')}`;
+    if (dayOffset > 0) return `${base} (+${dayOffset}j)`;
+    return base;
+  }
+
+  function fmtRelative(sec){
+    if (sec==null || !isFinite(sec)) return '';
+    if (Math.abs(sec) < 30) return 'maintenant';
+    const minutes = Math.round(Math.abs(sec) / 60);
+    if (minutes <= 1) return sec >= 0 ? 'dans ~1 min' : 'il y a ~1 min';
+    return sec >= 0 ? `dans ~${minutes} min` : `il y a ~${minutes} min`;
+  }
+  const luxTimeFormatter = new Intl.DateTimeFormat('fr-FR', {
+    timeZone:'Europe/Luxembourg',
+    hour:'2-digit', minute:'2-digit', second:'2-digit', hour12:false
+  });
+  function formatLuxTime(date){ return luxTimeFormatter.format(date); }
+
+  // ---------- Retards API SNCF ----------
+  const SNCF_REFRESH_MS = 2 * 60 * 1000; // 2 minutes
+  const sncfRealtimeCache = new Map();
+  const sncfRealtimePending = new Map();
+
+  function normalizeStopName(name){
+    if (!name) return null;
+    return String(name)
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .replace(/[^a-z0-9]/gi, '')
+      .toLowerCase() || null;
+  }
+
+  function navitiaTimeToSec(raw){
+    if (!raw) return null;
+    const str = String(raw);
+    const match = str.match(/(\d{2})(\d{2})(\d{2})$/);
+    if (match){
+      const h = Number(match[1]);
+      const m = Number(match[2]);
+      const s = Number(match[3]);
+      if (!Number.isFinite(h) || !Number.isFinite(m) || !Number.isFinite(s)) return null;
+      return h*3600 + m*60 + s;
+    }
+    const clean = str.replace(/\D/g, '');
+    if (clean.length < 4) return null;
+    const h = Number(clean.slice(0,2));
+    const m = Number(clean.slice(2,4));
+    const s = clean.length >=6 ? Number(clean.slice(4,6)) : 0;
+    if (!Number.isFinite(h) || !Number.isFinite(m) || !Number.isFinite(s)) return null;
+    return h*3600 + m*60 + s;
+  }
+
+  function mergeRealtimeStopEntry(base, extra){
+    const res = Object.assign({}, base || {});
+    if (extra == null) return res;
+    const fields = ['arrOffsetSec','depOffsetSec','arrStatus','depStatus','stopTimeEffect','arrAmendedSec','depAmendedSec','arrBaseSec','depBaseSec','stopPointName','normName'];
+    for (const key of fields){
+      if (extra[key] !== undefined && extra[key] !== null){
+        res[key] = extra[key];
+      }
+    }
+    const arrivalDeleted = extra.arrStatus === 'deleted' || extra.arrStatus === 'skipped';
+    const departureDeleted = extra.depStatus === 'deleted' || extra.depStatus === 'skipped';
+    const effectDeleted = extra.stopTimeEffect === 'deleted';
+    const effectAdded = extra.stopTimeEffect === 'added' || extra.arrStatus === 'added' || extra.depStatus === 'added';
+    res.isDeletedStop = res.isDeletedStop || effectDeleted || (arrivalDeleted && departureDeleted);
+    res.isAddedStop = res.isAddedStop || effectAdded;
+    return res;
+  }
+
+  function parseSncfRealtimePayload(number, payload){
+    const now = Date.now();
+    const train = payload?.vehicle_journeys?.[0];
+    if (!train){
+      return { fetchedAt: now, number, error: 'Train introuvable' };
+    }
+
+    const stopTimes = Array.isArray(train.stop_times) ? train.stop_times : [];
+    const navStops = stopTimes.map(st => {
+      const name = st.stop_point?.name || '';
+      return {
+        id: st.stop_point?.id || null,
+        name,
+        norm: normalizeStopName(name)
+      };
+    });
+
+    const navById = new Map();
+    const navByNorm = new Map();
+    for (const info of navStops){
+      if (info.id) navById.set(info.id, info);
+      if (info.norm) navByNorm.set(info.norm, info);
+    }
+
+    const disruptions = Array.isArray(payload?.disruptions) ? payload.disruptions : [];
+    const disruptionCauses = [];
+    const impactedById = new Map();
+    const perStopById = new Map();
+    const perStopByNorm = new Map();
+    const deletedNorms = new Set();
+    const delayCandidates = [];
+
+    for (const disruption of disruptions){
+      if (disruption?.cause && !disruptionCauses.includes(disruption.cause)){
+        disruptionCauses.push(disruption.cause);
+      }
+      for (const obj of disruption?.impacted_objects || []){
+        for (const stop of obj?.impacted_stops || []){
+          const stopPoint = stop?.stop_point || {};
+          const stopId = stopPoint.id || null;
+          const normName = normalizeStopName(stopPoint.name) || (stopId && navById.get(stopId)?.norm) || null;
+          const arrBaseSec = navitiaTimeToSec(stop.base_arrival_time);
+          const arrAmendedSec = navitiaTimeToSec(stop.amended_arrival_time);
+          const depBaseSec = navitiaTimeToSec(stop.base_departure_time);
+          const depAmendedSec = navitiaTimeToSec(stop.amended_departure_time);
+          const entry = {
+            stopPointId: stopId,
+            stopPointName: stopPoint.name || navById.get(stopId)?.name || '',
+            normName,
+            arrOffsetSec: (arrBaseSec!=null && arrAmendedSec!=null) ? arrAmendedSec - arrBaseSec : null,
+            depOffsetSec: (depBaseSec!=null && depAmendedSec!=null) ? depAmendedSec - depBaseSec : null,
+            arrStatus: stop.arrival_status || null,
+            depStatus: stop.departure_status || null,
+            stopTimeEffect: stop.stop_time_effect || null,
+            arrAmendedSec,
+            depAmendedSec,
+            arrBaseSec,
+            depBaseSec
+          };
+          impactedById.set(stopId, stop);
+          if (stopId){
+            const prev = perStopById.get(stopId);
+            perStopById.set(stopId, mergeRealtimeStopEntry(prev, entry));
+          }
+          if (normName){
+            const prev = perStopByNorm.get(normName);
+            perStopByNorm.set(normName, mergeRealtimeStopEntry(prev, entry));
+          }
+          if (entry.arrOffsetSec != null) delayCandidates.push(entry.arrOffsetSec);
+          if (entry.depOffsetSec != null) delayCandidates.push(entry.depOffsetSec);
+          if ((entry.isDeletedStop || entry.stopTimeEffect === 'deleted') && normName){
+            deletedNorms.add(normName);
+          }
+        }
+      }
+    }
+
+    const originalFirstId = stopTimes[0]?.stop_point?.id || null;
+    const originalLastId = stopTimes.at(-1)?.stop_point?.id || null;
+
+    let newStartId = null;
+    for (const st of stopTimes){
+      const id = st.stop_point?.id;
+      const imp = impactedById.get(id);
+      const departureDeleted = imp?.departure_status === 'deleted' || imp?.stop_time_effect === 'deleted';
+      const arrivalDeleted = imp?.arrival_status === 'deleted' || imp?.stop_time_effect === 'deleted';
+      const hasDeparture = !!st.departure_time;
+      const hasArrival = !!st.arrival_time;
+      if ((hasDeparture && !departureDeleted) || (hasArrival && !arrivalDeleted) || (!imp && (hasArrival || hasDeparture))){
+        newStartId = id;
+        break;
+      }
+    }
+
+    let newEndId = null;
+    for (let i = stopTimes.length - 1; i >= 0; i--){
+      const st = stopTimes[i];
+      const id = st.stop_point?.id;
+      const imp = impactedById.get(id);
+      const arrivalDeleted = imp?.arrival_status === 'deleted' || imp?.stop_time_effect === 'deleted';
+      const departureDeleted = imp?.departure_status === 'deleted' || imp?.stop_time_effect === 'deleted';
+      const hasArrival = !!st.arrival_time;
+      const hasDeparture = !!st.departure_time;
+      const served = (hasArrival && !arrivalDeleted) || (hasDeparture && !departureDeleted) || (!imp && (hasArrival || hasDeparture));
+      if (served){
+        newEndId = id;
+        break;
+      }
+    }
+
+    if (!newStartId){
+      for (const st of stopTimes){
+        const id = st.stop_point?.id;
+        const imp = impactedById.get(id);
+        const hasDeparture = !!st.departure_time;
+        const departureDeleted = imp?.departure_status === 'deleted' || imp?.stop_time_effect === 'deleted';
+        if (hasDeparture && !departureDeleted){
+          newStartId = id;
+          break;
+        }
+      }
+    }
+
+    if (!newEndId){
+      for (const st of stopTimes){
+        const id = st.stop_point?.id;
+        const imp = impactedById.get(id);
+        const arrivalDeleted = imp?.arrival_status === 'deleted' || imp?.stop_time_effect === 'deleted';
+        const departureDeleted = imp?.departure_status === 'deleted' || imp?.stop_time_effect === 'deleted';
+        const hasArrival = !!st.arrival_time;
+        const hasDeparture = !!st.departure_time;
+        if ((hasArrival && !arrivalDeleted) || (hasDeparture && !departureDeleted) || (!imp && (hasArrival || hasDeparture))){
+          newEndId = id;
+        }
+      }
+    }
+
+    const newStartNorm = newStartId ? (navById.get(newStartId)?.norm || null) : null;
+    const newEndNorm = newEndId ? (navById.get(newEndId)?.norm || null) : null;
+
+    const positiveDelays = delayCandidates.filter(d => Number.isFinite(d) && d > 0);
+    const defaultDelaySec = positiveDelays.length ? Math.max(...positiveDelays) : 0;
+    const delayMinutes = defaultDelaySec / 60;
+    const isFullCancellation = disruptions.some(d => ['NO_SERVICE','CANCELLATION'].includes(d?.severity?.effect));
+    const isPartialStart = newStartId && originalFirstId && newStartId !== originalFirstId;
+    const isPartialEnd = newEndId && originalLastId && newEndId !== originalLastId;
+
+    let statusLabel = '';
+    if (isFullCancellation){
+      statusLabel = 'Train supprimé (API SNCF)';
+    } else if (isPartialStart || isPartialEnd){
+      statusLabel = 'Suppression partielle (API SNCF)';
+    } else if (defaultDelaySec > 0){
+      statusLabel = `Retard estimé +${Math.round(delayMinutes)} min`;
+    } else {
+      statusLabel = 'À l’heure';
+    }
+
+    return {
+      fetchedAt: now,
+      number,
+      train,
+      disruptions,
+      disruptionCauses,
+      impactedById,
+      perStopById,
+      perStopByNorm,
+      deletedNorms,
+      defaultDelaySec,
+      delayMinutes,
+      newStartId,
+      newEndId,
+      newStartNorm,
+      newEndNorm,
+      isPartialStart,
+      isPartialEnd,
+      isFullCancellation,
+      statusLabel
+    };
+  }
+
+  async function fetchSncfRealtime(number){
+    if (!number) return { fetchedAt: Date.now(), number, error: 'Numéro absent' };
+    const { ymd } = todayYMD();
+    const url = `https://assistant-train-cx5u.vercel.app/api/train?id=vehicle_journeys/vehicle_journey:SNCF:${ymd}:${number}:1187:Train`;
+    try {
+      const resp = await fetch(url, { mode:'cors' });
+      if (!resp.ok){
+        throw new Error(`HTTP ${resp.status}`);
+      }
+      const data = await resp.json();
+      return parseSncfRealtimePayload(number, data);
+    } catch (err){
+      return { fetchedAt: Date.now(), number, error: err?.message || String(err || 'Erreur API SNCF') };
+    }
+  }
+
+  function scheduleSncfRealtimeFetch(number){
+    if (!number) return;
+    const now = Date.now();
+    const cached = sncfRealtimeCache.get(number);
+    if (cached && now - cached.fetchedAt < SNCF_REFRESH_MS) return;
+    if (sncfRealtimePending.has(number)) return;
+    const promise = fetchSncfRealtime(number).then(res => {
+      sncfRealtimePending.delete(number);
+      sncfRealtimeCache.set(number, res);
+      return res;
+    }).catch(err => {
+      sncfRealtimePending.delete(number);
+      const entry = { fetchedAt: Date.now(), number, error: err?.message || String(err) };
+      sncfRealtimeCache.set(number, entry);
+      return entry;
+    });
+    sncfRealtimePending.set(number, promise);
+  }
+
+  function getSncfRealtime(number){
+    if (!number) return null;
+    const entry = sncfRealtimeCache.get(number);
+    if (!entry || entry.error) return null;
+    return entry;
+  }
+
+  function findIndexByNorm(seq, norm){
+    if (!norm) return -1;
+    for (let i=0;i<seq.length;i++){
+      const meta = stopsById.get(seq[i].stop_id);
+      const candidate = normalizeStopName(meta?.name || seq[i].stop_id || '');
+      if (candidate && candidate === norm) return i;
+    }
+    return -1;
+  }
+
+  function realtimeEntryForStop(realtime, stop, meta){
+    if (!realtime) return null;
+    if (stop?.stop_id && realtime.perStopById?.has(stop.stop_id)){
+      return realtime.perStopById.get(stop.stop_id);
+    }
+    const norm = normalizeStopName(meta?.name || stop?.stop_id || '');
+    if (norm && realtime.perStopByNorm?.has(norm)){
+      return realtime.perStopByNorm.get(norm);
+    }
+    return null;
+  }
+
+  function computeEffectiveStopTimes(stop, meta, realtime){
+    const arrBase = stop?.arrival ?? null;
+    const depBase = stop?.departure ?? null;
+    const entry = realtimeEntryForStop(realtime, stop, meta);
+    const defaultDelay = realtime && realtime.defaultDelaySec > 0 ? realtime.defaultDelaySec : 0;
+    let arrOffset = entry?.arrOffsetSec;
+    let depOffset = entry?.depOffsetSec;
+    if (arrOffset == null && defaultDelay && arrBase != null) arrOffset = defaultDelay;
+    if (depOffset == null && defaultDelay && depBase != null) depOffset = defaultDelay;
+    const arrEffective = (arrBase!=null && arrOffset!=null) ? arrBase + arrOffset : arrBase;
+    const depEffective = (depBase!=null && depOffset!=null) ? depBase + depOffset : depBase;
+    const arrDelaySec = arrOffset != null ? arrOffset : (arrEffective!=null && arrBase!=null ? arrEffective - arrBase : null);
+    const depDelaySec = depOffset != null ? depOffset : (depEffective!=null && depBase!=null ? depEffective - depBase : null);
+    const isDeletedStop = Boolean(entry?.isDeletedStop) || Boolean(meta?.name && realtime?.deletedNorms?.has(normalizeStopName(meta.name)));
+    const isAddedStop = Boolean(entry?.isAddedStop);
+    const arrStatus = entry?.arrStatus || null;
+    const depStatus = entry?.depStatus || null;
+    return { arrBase, depBase, arrEffective, depEffective, arrDelaySec, depDelaySec, isDeletedStop, isAddedStop, arrStatus, depStatus };
+  }
+
+    // ---------- Retards statiques GTFS (retards_nancymetzlux.json) ----------
+  const realtimeSettings = { useSncf:true, useGtfs:true };
+  const stationNameNormalizeCache = new Map();
+  function normalizeStationLabel(name){
+    if (name == null) return '';
+    const raw = String(name);
+    if (stationNameNormalizeCache.has(raw)) return stationNameNormalizeCache.get(raw);
+    const normalized = raw
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .replace(/[\u2019]/g, "'")
+      .toLowerCase()
+      .replace(/\s+/g, ' ')
+      .trim();
+    stationNameNormalizeCache.set(raw, normalized);
+    return normalized;
+  }
+
+  const SAME_ORIGIN_GTFS_STATIC = (()=>{
+    const base = location.origin + location.pathname.replace(/\/[^\/]*$/, '/');
+    return base + 'retards_nancymetzlux.json';
+  })();
+  const GTFS_STATIC_CANDIDATES = [
+    SAME_ORIGIN_GTFS_STATIC,
+    'https://raw.githubusercontent.com/TekMaTe-lux/Assistant-train/main/Assistant-train/retards_nancymetzlux.json',
+    'https://cdn.jsdelivr.net/gh/TekMaTe-lux/Assistant-train@main/Assistant-train/retards_nancymetzlux.json'
+  ];
+  const GTFS_STATIC_REFRESH_MS = 60000;
+
+  let gtfsStaticDataRaw = null;
+  let gtfsStaticDelaysByNumber = new Map();
+  let gtfsStaticSourceLabel = '';
+  let gtfsStaticSourceRaw = '';
+  let gtfsStaticLastUpdated = null;
+  let gtfsStaticTooltipSuffix = '';
+  let pendingGtfsStaticPromise = null;
+  let gtfsStaticRefreshTimer = null;
+
+  let delayStatusEl = null;
+
+  function describeGtfsStaticSource(src){
+    if (!src) return '';
+    if (src === 'GitHub API') return 'GitHub API';
+    try {
+      const url = new URL(src, location.href);
+      const host = url.hostname;
+      if (host === location.hostname) return 'local';
+      if (/githubusercontent\.com$/i.test(host)) return 'GitHub raw';
+      if (/jsdelivr\.net$/i.test(host)) return 'jsDelivr';
+      return host;
+    } catch {
+      return src;
+    }
+  }
+
+  function setDelayStatus(msg){ if (delayStatusEl) delayStatusEl.textContent = msg || ''; }
+
+  function updateGtfsDelayStatus({ error } = {}){
+    if (!realtimeSettings.useGtfs){
+      setDelayStatus('Retards GTFS statique désactivés');
+      return;
+    }
+    if (!gtfsStaticLastUpdated){
+      setDelayStatus(error ? `Retards GTFS statique ${error}` : 'Retards GTFS statique : chargement…');
+      return;
+    }
+    const parts = ['Retards GTFS statique'];
+    if (gtfsStaticSourceLabel) parts.push(`via ${gtfsStaticSourceLabel}`);
+    parts.push(`MAJ ${formatLuxTime(new Date(gtfsStaticLastUpdated))}`);
+    if (error) parts.push(error);
+    setDelayStatus(parts.join(' — '));
+  }
+
+  function registerGtfsStaticDelays(data, source){
+    if (!data || typeof data !== 'object') return;
+    gtfsStaticDataRaw = data;
+    gtfsStaticDelaysByNumber = new Map();
+    gtfsStaticSourceRaw = source || '';
+    gtfsStaticSourceLabel = describeGtfsStaticSource(source);
+    for (const [trainNum, stations] of Object.entries(data)){
+      if (!stations || typeof stations !== 'object') continue;
+      const perStation = new Map();
+      for (const [stationName, value] of Object.entries(stations)){
+        const norm = normalizeStationLabel(stationName);
+        if (!norm) continue;
+        if (value == null){
+          perStation.set(norm, { original: stationName, value: null });
+        } else {
+          const num = Number(value);
+          if (!Number.isFinite(num)) continue;
+          perStation.set(norm, { original: stationName, value: num });
+        }
+      }
+      if (perStation.size){
+        gtfsStaticDelaysByNumber.set(String(trainNum), perStation);
+      }
+    }
+    gtfsStaticLastUpdated = Date.now();
+    const suffixParts = [];
+    if (gtfsStaticSourceLabel) suffixParts.push(gtfsStaticSourceLabel);
+    suffixParts.push(`MAJ ${formatLuxTime(new Date(gtfsStaticLastUpdated))}`);
+    gtfsStaticTooltipSuffix = suffixParts.join(' · ');
+    updateGtfsDelayStatus();
+    try { tick(); } catch(_){}
+  }
+
+  function buildGtfsStaticDelayInfo(entry){
+    if (!entry) return null;
+    if (entry.value == null){
+      const station = entry.original || null;
+      let label = 'SUPPR';
+      let title = station ? `Train supprimé à ${station}` : 'Train supprimé';
+      if (gtfsStaticTooltipSuffix) title += ` — ${gtfsStaticTooltipSuffix}`;
+      return {
+        label,
+        minutes:null,
+        rounded:null,
+        station,
+        isCancelled:true,
+        title,
+        summary: station ? `Train supprimé à ${station} (GTFS statique)` : 'Train supprimé (GTFS statique)'
+      };
+    }
+    const minutes = Number(entry.value);
+    if (!Number.isFinite(minutes) || minutes <= 0) return null;
+    const rounded = Math.round(minutes);
+    const station = entry.original || null;
+    const label = `+${rounded}′`;
+    let title = `Retard estimé ${label}`;
+    if (station) title += ` à ${station}`;
+    if (gtfsStaticTooltipSuffix) title += ` — ${gtfsStaticTooltipSuffix}`;
+    return {
+      label,
+      minutes,
+      rounded,
+      station,
+      isCancelled:false,
+      title,
+      summary: station ? `Retard ${label} à ${station} (GTFS statique)` : `Retard ${label} (GTFS statique)`
+    };
+  }
+
+  function computeGtfsStaticDelayInfo({ number, from, to, segmentProgress, startName, endName }){
+    if (!number) return null;
+    const numberKey = extractTrainNumberCandidate(number);
+    if (!numberKey) return null;
+    const perStation = gtfsStaticDelaysByNumber.get(String(numberKey));
+    if (!perStation || !perStation.size) return null;
+
+    const candidateOrder = [];
+    const seen = new Set();
+    const pushCandidate = (name)=>{
+      if (!name) return;
+      const norm = normalizeStationLabel(name);
+      if (!norm || seen.has(norm)) return;
+      seen.add(norm);
+      candidateOrder.push({ norm, original:name });
+    };
+
+    if (segmentProgress != null){
+      if (segmentProgress <= 0.25 && from) pushCandidate(from);
+      if (to) pushCandidate(to);
+      if (from) pushCandidate(from);
+    } else {
+      if (to) pushCandidate(to);
+      if (from) pushCandidate(from);
+    }
+    pushCandidate(startName);
+    pushCandidate(endName);
+
+    for (const candidate of candidateOrder){
+      const entry = perStation.get(candidate.norm);
+      if (!entry) continue;
+      const info = buildGtfsStaticDelayInfo(entry);
+      if (info) return info;
+    }
+
+    let fallback = null;
+    for (const entry of perStation.values()){
+      if (fallback && fallback.isCancelled) break;
+      const info = buildGtfsStaticDelayInfo(entry);
+      if (!info) continue;
+      if (!fallback || (fallback.minutes != null && info.minutes > fallback.minutes)){
+        fallback = info;
+      }
+    }
+    return fallback;
+  }
+
+  async function fetchWithTimeoutNoHeaders(url, ms = 8000){
+    const ctrl = new AbortController();
+    const timeout = setTimeout(()=>ctrl.abort(), ms);
+    try {
+      return await fetch(url, { cache:'no-store', signal: ctrl.signal });
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
+  async function fetchGtfsStaticFromGitHubAPI(){
+    const apiUrls = [
+      'https://api.github.com/repos/TekMaTe-lux/Assistant-train/contents/Assistant-train/retards_nancymetzlux.json',
+      'https://api.github.com/repos/TekMaTe-lux/Assistant-train/contents/retards_nancymetzlux.json'
+    ];
+    for (const apiUrl of apiUrls){
+      try {
+        const res = await fetch(apiUrl, {
+          cache:'no-store',
+          headers:{ 'Accept':'application/vnd.github+json' }
+        });
+        if (!res.ok) continue;
+        const meta = await res.json();
+        if (meta && meta.content){
+          const text = atob(String(meta.content).replace(/\n/g,''));
+          return JSON.parse(text);
+        }
+      } catch(_){}
+    }
+    throw new Error('GitHub API indisponible');
+  }
+
+  async function loadGtfsStaticDelays({ forceFresh = false } = {}){
+    if (pendingGtfsStaticPromise) return pendingGtfsStaticPromise;
+    pendingGtfsStaticPromise = (async()=>{
+      const withBuster = (u)=> u + (u.includes('?') ? '&' : '?') + 't=' + (forceFresh ? Date.now() : 'soft');
+      let lastErr = null;
+
+      for (const candidate of GTFS_STATIC_CANDIDATES){
+        const url = withBuster(candidate);
+        try {
+          const res = await fetchWithTimeoutNoHeaders(url, 8000);
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          const ct = (res.headers.get('content-type') || '').toLowerCase();
+          let data;
+          if (ct.includes('application/json')){
+            data = await res.json();
+          } else {
+            data = JSON.parse(await res.text());
+          }
+          registerGtfsStaticDelays(data, candidate);
+          return;
+        } catch(e){
+          lastErr = e;
+        }
+      }
+
+      try {
+        const data = await fetchGtfsStaticFromGitHubAPI();
+        registerGtfsStaticDelays(data, 'GitHub API');
+        return;
+      } catch(e){
+        lastErr = e;
+      }
+
+      updateGtfsDelayStatus({ error: lastErr ? 'indisponibles' : 'indisponibles' });
+      throw lastErr || new Error('Chargement retards GTFS impossible');
+    })();
+
+    try {
+      await pendingGtfsStaticPromise;
+    } finally {
+      pendingGtfsStaticPromise = null;
+    }
+  }
+
+    
+  // ---------- État données ----------
+  const stopsById = new Map();              // stop_id -> {stop_id,name,lat,lon}
+  const stopTimesByTrip = new Map();        // trip_id -> [ {stop_id, arr, dep, seq} ] trié
+  const tripsById = new Map();              // (optionnel) trip_id -> {route_id, headsign, service_id}
+  const routesById = new Map();             // (optionnel) route_id -> {route_short_name, route_long_name}
+  let activeServiceIds = null;              // Set<string> services actifs aujourd'hui (calendar/calendar_dates)
+
+  // ---------- Leaflet ----------
+  const map = L.map('map').setView([49.2, 6.15], 9);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{ attribution:'© OpenStreetMap' }).addTo(map);
+  const overlay = { rfn:null, cfl:null, axisStationsMajor:null, axisStationsRegular:null, trains:null };
+  const layerVisibility = {
+    stationsMajor: true,
+    stationsRegular: true,
+    trains: true
+  };
+  const trainMarkers = new Map();
+  const trainCowById = new Map();
+  const trainDataById = new Map();  
+  const COW_EMOJIS = ['🐄','🐮','🐃','🐂','🐄'];
+  const stopChildrenByParent = new Map();
+
+  const AXIS_STATIONS = [
+    { id:'nancy', label:'Nancy', stopArea:'StopArea:OCE87141002', lat:48.689857, lon:6.174579, type:'major' },
+    { id:'champigneulles', label:'Champigneulles', stopArea:'StopArea:OCE87141085', lat:48.735025, lon:6.168952, type:'regular' },
+    { id:'frouard', label:'Frouard', stopArea:'StopArea:OCE87141077', lat:48.755428, lon:6.143927, type:'regular' },
+    { id:'pompey', label:'Pompey', stopArea:'StopArea:OCE87141788', lat:48.77304, lon:6.13061, type:'regular' },
+    { id:'marbache', label:'Marbache', stopArea:'StopArea:OCE87141796', lat:48.801156, lon:6.108779, type:'regular' },
+    { id:'belleville', label:'Belleville', stopArea:'StopArea:OCE87141804', lat:48.819245, lon:6.101779, type:'regular' },
+    { id:'dieulouard', label:'Dieulouard', stopArea:'StopArea:OCE87141812', lat:48.843826, lon:6.071505, type:'regular' },
+    { id:'pont-a-mousson', label:'Pont-à-Mousson', stopArea:'StopArea:OCE87141820', lat:48.900348, lon:6.051021, type:'regular' },
+    { id:'vandieres', label:'Vandières', stopArea:'StopArea:OCE87192476', lat:48.951493, lon:6.039047, type:'regular' },
+    { id:'pagny-moselle', label:'Pagny-sur-Moselle', stopArea:'StopArea:OCE87192468', lat:48.9852, lon:6.025035, type:'regular' },
+    { id:'noveant', label:'Novéant-sur-Moselle', stopArea:'StopArea:OCE87192427', lat:49.028717, lon:6.052051, type:'regular' },
+    { id:'ancy-sur-moselle', label:'Ancy-sur-Moselle', stopArea:'StopArea:OCE87192419', lat:49.057714, lon:6.062342, type:'regular' },
+    { id:'ars-sur-moselle', label:'Ars-sur-Moselle', stopArea:'StopArea:OCE87192401', lat:49.074475, lon:6.077646, type:'regular' },
+    { id:'metz', label:'Metz', stopArea:'StopArea:OCE87192039', lat:49.109466, lon:6.177052, type:'major' },
+    { id:'metz-nord', label:'Metz Nord', stopArea:'StopArea:OCE87192070', lat:49.136865, lon:6.167538, type:'regular' },
+    { id:'woippy', label:'Woippy', stopArea:'StopArea:OCE87192088', lat:49.148797, lon:6.155621, type:'regular' },
+    { id:'maizieres', label:'Maizières-lès-Metz', stopArea:'StopArea:OCE87191106', lat:49.215536, lon:6.158727, type:'regular' },
+    { id:'walygator-parc', label:'Walygator parc', stopArea:'StopArea:OCE87191098', lat:49.22492, lon:6.15946, type:'regular' },
+    { id:'hagondange', label:'Hagondange', stopArea:'StopArea:OCE87191114', lat:49.25356, lon:6.16448, type:'regular' },
+    { id:'uckange', label:'Uckange', stopArea:'StopArea:OCE87191130', lat:49.303459, lon:6.1566, type:'regular' },
+    { id:'thionville', label:'Thionville', stopArea:'StopArea:OCE87191007', lat:49.353965, lon:6.168582, type:'major' },
+    { id:'hettange-grande', label:'Hettange-Grande', stopArea:'StopArea:OCE87191163', lat:49.407685, lon:6.156759, type:'regular' },
+    { id:'bettembourg', label:'Bettembourg', stopArea:'StopArea:OCE82006030', lat:49.516111, lon:6.101111, type:'major' },
+    { id:'howald', label:'Howald', stopArea:'StopArea:OCE82002501', lat:49.58032, lon:6.13232, type:'regular' },
+    { id:'luxembourg', label:'Luxembourg', stopArea:'StopArea:OCE82001000', lat:49.599722, lon:6.134722, type:'major' }
+  ];
+  const axisStationsById = new Map(AXIS_STATIONS.map(st=>[st.id, st]));
+  const SILLON_BOUNDS = L.latLngBounds(AXIS_STATIONS.map(st=>[st.lat, st.lon]));
+  if (SILLON_BOUNDS.isValid()){
+    map.fitBounds(SILLON_BOUNDS.pad(0.18), { maxZoom: 11 });
+  }
+
+    let activeTripId = null;
+  let activeStationId = null;
+
+  const tripPanelEl = document.getElementById('trip-panel');
+  const tripPanelCloseBtn = document.getElementById('trip-panel-close');
+  const tripPanelIconEl = document.getElementById('trip-panel-icon');
+  const tripPanelTrainEl = document.getElementById('trip-panel-train');
+  const tripPanelSummaryEl = document.getElementById('trip-panel-summary');
+  const tripProgressWrapEl = document.getElementById('trip-progress');
+  const tripProgressFillEl = document.getElementById('trip-progress-fill');
+  const tripProgressTextEl = document.getElementById('trip-progress-text');
+  const tripStopsTitleEl = document.getElementById('trip-stops-title');
+  const tripStopsEl = document.getElementById('trip-stops');
+  const toggleMajorEl = document.getElementById('toggle-major');
+  const toggleRegularEl = document.getElementById('toggle-regular');
+  const toggleTrainsEl = document.getElementById('toggle-trains');
+  const toggleSncfEl = document.getElementById('toggle-sncf');
+  const toggleGtfsEl = document.getElementById('toggle-gtfs');
+  delayStatusEl = document.getElementById('delay-status');
+
+  if (toggleSncfEl){
+    realtimeSettings.useSncf = toggleSncfEl.checked;
+    toggleSncfEl.addEventListener('change', ()=>{
+      realtimeSettings.useSncf = toggleSncfEl.checked;
+      tick();
+    });
+  }
+
+  if (toggleGtfsEl){
+    realtimeSettings.useGtfs = toggleGtfsEl.checked;
+    updateGtfsDelayStatus();
+    toggleGtfsEl.addEventListener('change', ()=>{
+      realtimeSettings.useGtfs = toggleGtfsEl.checked;
+      updateGtfsDelayStatus();
+      if (realtimeSettings.useGtfs && !gtfsStaticLastUpdated){
+        loadGtfsStaticDelays({ forceFresh:true }).catch(err => {
+          console.warn('[GTFS statique] échec chargement', err);
+          updateGtfsDelayStatus({ error:'indisponibles' });
+        });
+      }
+      tick();
+    });
+  } else {
+    updateGtfsDelayStatus();
+  }
+
+  if (toggleMajorEl){
+    layerVisibility.stationsMajor = toggleMajorEl.checked;
+    toggleMajorEl.addEventListener('change', ()=>{
+      layerVisibility.stationsMajor = toggleMajorEl.checked;
+      applyLayerVisibility();
+    });
+  }
+
+  if (toggleRegularEl){
+    layerVisibility.stationsRegular = toggleRegularEl.checked;
+    toggleRegularEl.addEventListener('change', ()=>{
+      layerVisibility.stationsRegular = toggleRegularEl.checked;
+      applyLayerVisibility();
+    });
+  }
+
+  if (toggleTrainsEl){
+    layerVisibility.trains = toggleTrainsEl.checked;
+    toggleTrainsEl.addEventListener('change', ()=>{
+      layerVisibility.trains = toggleTrainsEl.checked;
+      applyLayerVisibility();
+    });
+  }
+
+  renderAxisStations();
+
+  function clearActiveSelection(){
+    activeTripId = null;
+    activeStationId = null;
+  }
+
+  tripPanelCloseBtn.addEventListener('click', ()=>{
+    clearActiveSelection();
+    hideTripPanel();
+  });
+
+  map.on('click', ()=>{  
+   if (activeTripId || activeStationId){
+      clearActiveSelection();
+      hideTripPanel();
+    }
+  });
+
+  function cowForTrain(id){
+    if (!trainCowById.has(id)){
+      const cow = COW_EMOJIS[Math.floor(Math.random()*COW_EMOJIS.length)] || '🐄';
+      trainCowById.set(id, cow);
+    }
+    return trainCowById.get(id);
+  }
+
+  function iconForTrain(train){
+    const cow = cowForTrain(train.id);
+    const num = escapeHTML(train.number || train.id);
+    const safeId = escapeAttr(train.id);
+    const badgeHtml = (()=>{
+      if (train.isCancelled) return '<span class="train-delay cancelled">SUPPR</span>';
+      if (train.isPartial) return '<span class="train-delay partial">PART</span>';
+      const gtfsInfo = realtimeSettings.useGtfs ? train.gtfsDelayInfo : null;
+      if (gtfsInfo?.isCancelled) return '<span class="train-delay cancelled">SUPPR</span>';
+      const delayMin = Math.round(train.delayMinutes || 0);
+      if (realtimeSettings.useSncf && train.realtime && delayMin > 0) return `<span class="train-delay">+${delayMin}′</span>`;
+      if ((!realtimeSettings.useSncf || !train.realtime) && gtfsInfo?.rounded){
+        return `<span class="train-delay">+${gtfsInfo.rounded}′</span>`;
+      }
+      if (delayMin > 0) return `<span class="train-delay">+${delayMin}′</span>`;
+      return '<span class="train-delay ontime">À l’heure</span>';
+    })();
+    const statusInfo = (train.statusLabel && train.statusLabel !== 'À l’heure') ? ` (${train.statusLabel})` : (train.isCancelled ? ' (Train supprimé)' : '');
+    const aria = escapeAttr(`Voir le détail du ${train.number ? `train ${train.number}` : 'train'}${statusInfo}`);
+    return L.divIcon({
+      className:'',
+      html:`<button type="button" class="cow-marker" data-train-id="${safeId}" aria-label="${aria}">${cow}<span class="train-num">${num}${badgeHtml}</span></button>`,
+      iconSize:null,
+      iconAnchor:[20,20]
+    });
+  }  
+    
+function iconForStation(station){
+    const emoji = station.type === 'major' ? '🏫' : '🛖';
+    const classes = `station-marker ${station.type === 'major' ? 'station-major' : 'station-regular'}`;
+    const safeId = escapeAttr(station.id);
+    const aria = escapeAttr(`Ouvrir la fiche de la gare ${station.label}${station.type === 'major' ? ' (principale)' : ''}`);
+    return L.divIcon({
+      className:'',
+      html:`<button type="button" class="${classes}" data-station-id="${safeId}" aria-label="${aria}">${emoji}</button>`,
+      iconSize:null,
+      iconAnchor:[16,16]
+    });
+  }
+  
+const mapContainerEl = map.getContainer();
+  function handleTrainActivate(ev){
+    const btn = ev.target.closest?.('.cow-marker');
+    if (!btn) return;
+    ev.preventDefault();
+    ev.stopPropagation();
+    const id = btn.getAttribute('data-train-id');
+    if (id) openTripPanel(id);
+  }
+
+  function handleStationActivate(ev){
+    const btn = ev.target.closest?.('.station-marker');
+    if (!btn) return;
+    ev.preventDefault();
+    ev.stopPropagation();
+    const id = btn.getAttribute('data-station-id');
+    if (id) openStationPanel(id);
+  }
+  
+  mapContainerEl.addEventListener('pointerdown', handleTrainActivate, { passive:false });
+  mapContainerEl.addEventListener('click', handleTrainActivate, { passive:false });
+  mapContainerEl.addEventListener('pointerdown', handleStationActivate, { passive:false });
+  mapContainerEl.addEventListener('click', handleStationActivate, { passive:false });  
+  mapContainerEl.addEventListener('keydown', (ev)=>{
+    const btn = ev.target.closest?.('.cow-marker');
+    if (btn && (ev.key === 'Enter' || ev.key === ' ')){
+      ev.preventDefault();
+      ev.stopPropagation();
+      const id = btn.getAttribute('data-train-id');
+      if (id) openTripPanel(id);
+      return;
+    }
+    const stationBtn = ev.target.closest?.('.station-marker');
+    if (!stationBtn) return;
+    if (ev.key === 'Enter' || ev.key === ' '){
+      ev.preventDefault();
+      ev.stopPropagation();
+      const id = stationBtn.getAttribute('data-station-id');
+      if (id) openStationPanel(id);
+    }
+  });
+
+  tripStopsEl.addEventListener('click', (ev)=>{
+    const btn = ev.target.closest?.('.station-train-link');
+    if (!btn) return;
+    ev.preventDefault();
+    const id = btn.getAttribute('data-train-id');
+    if (id) openTripPanel(id);
+  });
+
+  tripStopsEl.addEventListener('keydown', (ev)=>{
+    const btn = ev.target.closest?.('.station-train-link');
+    if (!btn) return;
+    if (ev.key === 'Enter' || ev.key === ' '){
+      ev.preventDefault();
+      const id = btn.getAttribute('data-train-id');
+      if (id) openTripPanel(id);
+    }
+  });
+  
+
+  function hideTripPanel(){
+    tripPanelEl.classList.add('hidden');
+    tripPanelIconEl.textContent = '🐄';
+    tripPanelTrainEl.textContent = 'Sélectionnez une bétaillère ou une gare';
+    tripPanelSummaryEl.textContent = 'Cliquez sur une icône vache ou grange pour afficher le détail.';
+    tripProgressWrapEl.classList.add('hidden');
+    tripProgressFillEl.style.width = '0%';
+    tripProgressTextEl.textContent = '';
+    tripStopsTitleEl.classList.add('hidden');
+    tripStopsTitleEl.textContent = 'Gares desservies';
+    tripStopsEl.innerHTML = '';
+    tripStopsEl.classList.remove('station-mode');
+  }
+
+  function openTripPanel(trainId){
+    activeTripId = trainId;
+    activeStationId = null;
+    tripPanelEl.classList.remove('hidden');
+    renderPanel();
+  }
+
+  function openStationPanel(stationId){
+    activeStationId = stationId;
+    activeTripId = null;
+    tripPanelEl.classList.remove('hidden');
+     renderPanel();
+  }
+
+  function renderPanel(){
+    if (activeStationId){
+      renderStationPanel();
+    } else if (activeTripId){
+      renderTripPanel();
+    } else {
+      hideTripPanel();
+    }
+  }
+
+  function renderTripPanel(){
+    if (!activeTripId){ hideTripPanel(); return; }
+    const data = trainDataById.get(activeTripId);
+    if (!data){
+      activeTripId = null;
+      if (!activeStationId) hideTripPanel();
+      return;
+    }
+
+    tripStopsEl.classList.remove('station-mode');
+    tripPanelIconEl.textContent = cowForTrain(activeTripId);
+
+    if (data.number){
+      tripPanelTrainEl.textContent = `Bétaillère ${data.number}`;
+    } else if (data.headsign){
+      tripPanelTrainEl.textContent = data.headsign;
+    } else {
+      tripPanelTrainEl.textContent = data.id || 'Sélectionnez une bétaillère';
+    }
+
+    const seq = stopTimesByTrip.get(activeTripId);
+    if (!seq || !seq.length){
+      tripPanelSummaryEl.textContent = 'Données de trajet indisponibles pour ce service.';
+      tripProgressWrapEl.classList.add('hidden');
+      tripStopsTitleEl.classList.add('hidden');
+      tripStopsEl.innerHTML = '';
+      return;
+    }
+
+    const realtime = data.realtime || null;
+    const gtfsInfo = realtimeSettings.useGtfs ? (data.gtfsDelayInfo || null) : null;
+    const stops = seq.map((st, idx)=>{
+      const stopMeta = stopsById.get(st.stop_id);
+      const name = stopMeta?.name || st.stop_id;
+      const info = computeEffectiveStopTimes(st, stopMeta, realtime);
+      const isFirst = idx === 0;
+      const isLast = idx === seq.length - 1;
+      const makeEntry = (type, baseSec, effectiveSec, delaySec)=>{
+        const cls = type === 'arr' ? 'time-arr' : type === 'dep' ? 'time-dep' : 'time-neutral';
+        if (baseSec!=null && effectiveSec!=null && effectiveSec !== baseSec){
+          const baseText = fmtHHMM(baseSec);
+          const effText = fmtHHMM(effectiveSec);
+          const delayMin = Math.round((effectiveSec - baseSec) / 60);
+          const delaySuffix = delayMin ? `<span class="time-delay">(${delayMin>0?'+':''}${delayMin}′)</span>` : '';
+          return `<div class="time-entry ${cls}"><span class="time-base">${escapeHTML(baseText)}</span><span class="time-new">${escapeHTML(effText)}</span>${delaySuffix}</div>`;
+        }
+     const chosenSec = effectiveSec != null ? effectiveSec : baseSec;
+        if (chosenSec == null){
+          return `<div class="time-entry ${cls}">—</div>`; 
+        }
+       const text = fmtHHMM(chosenSec);
+        const delayMin = (delaySec!=null && delaySec !== 0 && Number.isFinite(delaySec)) ? Math.round(delaySec / 60) : 0;
+        const delaySuffix = delayMin ? `<span class="time-delay">(${delayMin>0?'+':''}${delayMin}′)</span>` : '';
+        return `<div class="time-entry ${cls}">${escapeHTML(text)}${delaySuffix}</div>`;
+      };
+
+      const entries = [];
+      if (isFirst){
+        const base = info.depBase ?? info.arrBase;
+        const effective = info.depEffective ?? info.arrEffective ?? base;
+        const staticDelaySec = gtfsInfo?.minutes != null ? Math.round(gtfsInfo.minutes * 60) : null;
+        const fallbackDelay = info.depDelaySec ?? info.arrDelaySec ?? realtime?.defaultDelaySec ?? staticDelaySec ?? null;
+        entries.push(makeEntry(info.depBase!=null || info.depEffective!=null ? 'dep' : 'arr', base, effective, fallbackDelay));
+      } else if (isLast){
+        const base = info.arrBase ?? info.depBase;
+        const effective = info.arrEffective ?? info.depEffective ?? base;
+        const staticDelaySec = gtfsInfo?.minutes != null ? Math.round(gtfsInfo.minutes * 60) : null;
+        const fallbackDelay = info.arrDelaySec ?? info.depDelaySec ?? realtime?.defaultDelaySec ?? staticDelaySec ?? null;
+        entries.push(makeEntry(info.arrBase!=null || info.arrEffective!=null ? 'arr' : 'dep', base, effective, fallbackDelay));  
+      } else {
+       if (info.arrBase!=null || info.arrEffective!=null){
+          entries.push(makeEntry('arr', info.arrBase, info.arrEffective, info.arrDelaySec ?? (gtfsInfo?.minutes != null ? Math.round(gtfsInfo.minutes * 60) : null)));
+        }
+        if (info.depBase!=null || info.depEffective!=null){
+          const sameTime = (info.arrEffective ?? info.arrBase) === (info.depEffective ?? info.depBase);
+          if (!(sameTime && entries.length)){
+            entries.push(makeEntry('dep', info.depBase, info.depEffective, info.depDelaySec ?? (gtfsInfo?.minutes != null ? Math.round(gtfsInfo.minutes * 60) : null)));
+          }
+        }
+      if (!entries.length){
+          entries.push(makeEntry('neutral', null, null, null));
+        }
+      }
+      
+      const displayRef = info.depEffective ?? info.depBase ?? info.arrEffective ?? info.arrBase;
+      const label = displayRef!=null ? fmtHHMM(displayRef) : '—';
+
+      return { name, isFirst, isLast, entries, info, label };
+    });
+
+    const startName = stops[0]?.name || '—';
+    const endName = stops.at(-1)?.name || '—';
+    const summaryStartTime = data.startSec!=null ? fmtHHMM(data.startSec) : stops[0] ? stops[0].label : '—';
+    const summaryEndTime = data.endSec!=null ? fmtHHMM(data.endSec) : stops.at(-1) ? stops.at(-1).label : '—';
+   let summaryHtml = `${escapeHTML(startName)} <strong>${escapeHTML(summaryStartTime)}</strong> → ${escapeHTML(endName)} <strong>${escapeHTML(summaryEndTime)}</strong>`;
+
+    const statusParts = [];
+    let realtimeDelayMin = null;
+    if (realtime){
+      if (realtime.isFullCancellation){
+        statusParts.push('🚫 Train supprimé (API SNCF)');
+      } else {
+        const delayMin = Number.isFinite(data.delaySec) ? Math.round(data.delaySec / 60) : (Number.isFinite(realtime.defaultDelaySec) ? Math.round(realtime.defaultDelaySec / 60) : 0);
+        if (Number.isFinite(delayMin)) realtimeDelayMin = delayMin;
+        if (realtime.isPartialStart || realtime.isPartialEnd){
+          statusParts.push('⚠️ Suppression partielle (API SNCF)');
+        }
+        if (delayMin > 0){
+          statusParts.push(`⏰ Retard estimé +${delayMin} min`);
+        }
+      }
+      if (Array.isArray(realtime.disruptionCauses) && realtime.disruptionCauses.length){
+        statusParts.push(`Cause : ${escapeHTML(realtime.disruptionCauses.join(', '))}`);
+      }
+    }
+    if (gtfsInfo){
+      const suffix = gtfsStaticTooltipSuffix ? ` — ${escapeHTML(gtfsStaticTooltipSuffix)}` : '';
+      if (gtfsInfo.isCancelled){
+        if (!(realtime && realtime.isFullCancellation)){
+          statusParts.push(`🚫 Train supprimé (GTFS statique${suffix})`);
+        }
+      } else if (gtfsInfo.rounded){
+        if (realtimeDelayMin == null || gtfsInfo.rounded !== realtimeDelayMin){
+          statusParts.push(`⏰ Retard estimé +${gtfsInfo.rounded} min (GTFS statique${suffix})`);
+        }
+      }
+    }
+    if (statusParts.length){
+      summaryHtml += `<span class="trip-status">${statusParts.join(' — ')}</span>`;
+    }
+    tripPanelSummaryEl.innerHTML = summaryHtml;
+
+    const totalStops = stops.length;
+    if (totalStops > 0){
+      const plural = totalStops > 1 ? 's' : '';
+      const intermediates = Math.max(0, totalStops - 2);
+      const interText = intermediates > 0 ? ` — ${intermediates} intermédiaire${intermediates>1?'s':''}` : '';
+      tripStopsTitleEl.classList.remove('hidden');
+      tripStopsTitleEl.textContent = `Gares desservies (${totalStops} arrêt${plural})${interText}`;
+    } else {
+      tripStopsTitleEl.classList.add('hidden');
+      tripStopsTitleEl.textContent = 'Gares desservies';
+    }
+
+    const segIdx = data.segmentIndex ?? -1;
+    const segProg = data.segmentProgress ?? 0;
+    const segFraction = Math.max(0, Math.min(1, segProg));
+    const nextStopName = (()=>{
+      if (segIdx >= 0){
+        if (segIdx + 1 < stops.length){
+          return stops[segIdx + 1].name;
+        }
+        if (segIdx >= stops.length - 1){
+          return null;
+        }
+      }
+      return data.to || null;
+    })();
+
+    if (data.progress!=null && isFinite(data.progress)){
+      const pct = Math.max(0, Math.min(1, data.progress));
+      tripProgressWrapEl.classList.remove('hidden');
+      tripProgressFillEl.style.width = `${(pct*100).toFixed(1)}%`;
+      const pctText = Math.round(pct*100);
+      const etaText = isFinite(data.etaSec) ? fmtMinSec(data.etaSec) : null;
+      let statusText;
+      if (nextStopName){
+        statusText = `prochain arrêt : ${nextStopName}`;
+        if (etaText) statusText += ` (dans ${etaText})`;
+      } else {
+        statusText = etaText ? `terminus dans ${etaText}` : 'TERMINUS';
+      }
+      tripProgressTextEl.textContent = `Progression ${pctText}% — ${statusText}`;
+    } else {
+      tripProgressWrapEl.classList.add('hidden');
+      tripProgressFillEl.style.width = '0%';
+      tripProgressTextEl.textContent = '';
+    }
+
+    const stopsHtml = stops.map((info, idx)=>{
+      let status = 'upcoming';
+      let connectorProgress = 0;
+      const extraClasses = [];
+      if (segIdx >= 0){
+        if (idx < segIdx){
+          status = 'passed';
+          connectorProgress = 1;
+        } else if (idx === segIdx){
+          status = 'current';
+          connectorProgress = segFraction;
+          if (segFraction > 0.05){
+            extraClasses.push('enroute');
+          }
+        } else if (idx === segIdx + 1){
+          status = 'approaching';
+        }
+      } else if (data.nowSec!=null){
+        const ref = info.isFirst ? (seq[idx].departure ?? seq[idx].arrival) : (seq[idx].arrival ?? seq[idx].departure);
+        if (ref!=null){
+          status = data.nowSec >= ref ? 'passed' : 'upcoming';
+        }
+      }
+
+      const noteParts = [];
+      if (info.isFirst) noteParts.push('Départ');
+       if (info.isLast) noteParts.push('TERMINUS');
+      if (info.info?.isDeletedStop) noteParts.push('Supprimé (API SNCF)');
+      if (info.info?.isAddedStop) noteParts.push('Ajouté (API SNCF)');
+      if (segIdx >= 0){
+        if (idx === segIdx) noteParts.push('Arrêt précédent');
+        if (idx === segIdx + 1) noteParts.push('Prochain arrêt');
+      }
+      const note = noteParts.length ? `<div class="stop-note"><strong>${escapeHTML(noteParts.join(' · '))}</strong></div>` : '';
+      const timesHtml = info.entries.join('');
+      const classes = [status, ...extraClasses].filter(Boolean).join(' ');
+      const styleAttr = connectorProgress > 0 && !info.isLast ? ` style="--connector-progress:${connectorProgress.toFixed(3)}"` : '';
+      return `<div class="trip-stop ${classes}"${styleAttr}><div class="stop-time">${timesHtml}</div><div class="stop-main"><div class="stop-name">${escapeHTML(info.name)}</div>${note}</div></div>`;
+    }).join('');
+
+    tripStopsEl.innerHTML = stopsHtml || '<div class="trip-stop"><div class="stop-main"><div class="stop-name">Aucun arrêt disponible</div></div></div>';
+  }
+
+  function renderStationPanel(){
+    if (!activeStationId){ hideTripPanel(); return; }
+    const station = axisStationsById.get(activeStationId);
+    if (!station){ hideTripPanel(); return; }
+
+    tripStopsEl.classList.add('station-mode');
+    const emoji = station.type === 'major' ? '🏠' : '🏡';
+    tripPanelIconEl.textContent = emoji;
+    tripPanelTrainEl.textContent = `Gare de ${station.label}`;
+
+    const classification = station.type === 'major'
+      ? 'Gare principale de l’axe Nancy ↔ Luxembourg'
+      : 'Gare intermédiaire Nancy ↔ Luxembourg';
+    const summaryParts = [escapeHTML(classification)];
+    if (isFinite(station.lat) && isFinite(station.lon)){
+      summaryParts.push(`<span class="muted">(${escapeHTML(station.lat.toFixed(3))} ; ${escapeHTML(station.lon.toFixed(3))})</span>`);
+    }
+    tripPanelSummaryEl.innerHTML = summaryParts.join('<br>');
+
+    tripProgressWrapEl.classList.add('hidden');
+    tripProgressFillEl.style.width = '0%';
+    tripProgressTextEl.textContent = '';
+
+    const events = computeStationEvents(station);
+    if (events.length){
+      tripStopsTitleEl.classList.remove('hidden');
+      tripStopsTitleEl.textContent = `Trains observés (${events.length})`;
+    } else {
+      tripStopsTitleEl.classList.remove('hidden');
+      tripStopsTitleEl.textContent = 'Trains observés';
+    }
+
+    if (!events.length){
+      tripStopsEl.innerHTML = '<div class="station-event empty">Aucun train en approche immédiate.</div>';
+      return;
+    }
+
+    const cards = events.map(ev=>{
+      const title = ev.number ? `Train ${ev.number}` : (ev.headsign || ev.displayName || ev.trainId);
+      const subtitle = [];
+      if (ev.headsign && (!ev.number || !title.includes(ev.headsign))){
+        subtitle.push(ev.headsign);
+      } else if (ev.displayName && ev.displayName !== title){
+        subtitle.push(ev.displayName);
+      }
+      let statusText = ev.state;
+      if (!ev.isCancelled && ev.diff!=null && isFinite(ev.diff)){
+        statusText += ` · ${fmtRelative(ev.diff)}`;
+      }
+      if (ev.delayMinutes && ev.delayMinutes > 0){
+        statusText += ` · +${Math.round(ev.delayMinutes)} min`;
+      }
+      const arrLine = ev.arrSec!=null ? `<div>Arrivée : <strong>${escapeHTML(fmtHHMM(ev.arrSec))}</strong></div>` : '';
+      const depLine = ev.depSec!=null ? `<div>Départ : <strong>${escapeHTML(fmtHHMM(ev.depSec))}</strong></div>` : '';
+      const note = subtitle.length ? `<div class="station-event-note">${escapeHTML(subtitle.join(' — '))}</div>` : '';
+      const times = `<div class="station-event-times">${arrLine}${depLine}</div>`;
+      const btnId = escapeAttr(ev.trainId);
+      const btnLabel = escapeAttr(`Ouvrir le détail du ${ev.number ? `train ${ev.number}` : 'service'}`);
+      return `<div class="station-event"><div class="station-event-main"><div class="station-event-title">${escapeHTML(title)}</div><div class="station-event-status">${escapeHTML(statusText)}</div>${times}${note}</div><button type="button" class="station-train-link" data-train-id="${btnId}" aria-label="${btnLabel}">${ev.cow}<span>Détails</span></button></div>`;
+    }).join('');
+
+    tripStopsEl.innerHTML = cards;
+  }
+
+  function computeStationEvents(station){
+    const stopIds = station.stopSet || new Set(station.stopIds || []);
+    const now = nowSecLocal();
+    const events = [];
+
+    for (const [tripId, train] of trainDataById.entries()){
+      const seq = stopTimesByTrip.get(tripId);
+      if (!seq || !seq.length) continue;
+      let target = null;
+      for (const st of seq){
+        if (stopIds.has(st.stop_id)) { target = st; break; }
+        const meta = stopsById.get(st.stop_id);
+        if (meta?.parent_station && stopIds.has(meta.parent_station)){ target = st; break; }
+      }
+      if (!target) continue;
+
+      const stopMeta = stopsById.get(target.stop_id);
+      const info = computeEffectiveStopTimes(target, stopMeta, train.realtime);
+      if (info.isDeletedStop) continue;
+      const arrSec = info.arrEffective ?? info.arrBase;
+      const depSec = info.depEffective ?? info.depBase;
+      let state = null;
+      let focusSec = null;
+
+      if (train.isCancelled){
+        state = 'Supprimé';
+        focusSec = now;
+      } else if (arrSec!=null && depSec!=null && now >= arrSec && now <= depSec){
+        state = 'En gare';
+        focusSec = depSec;
+      } else if (arrSec!=null && arrSec >= now){
+        state = 'Arrivée';
+        focusSec = arrSec;
+      } else if (depSec!=null && depSec >= now){
+        state = 'Départ';
+        focusSec = depSec;
+      } else {
+        continue;
+      }
+
+      events.push({
+        trainId: tripId,
+        number: train.number,
+        headsign: train.headsign,
+        displayName: train.displayName || train.number || tripId,
+        arrSec,
+        depSec,
+        state,
+        focusSec,
+        diff: focusSec!=null ? focusSec - now : null,
+        cow: cowForTrain(tripId),
+        delayMinutes: train.delayMinutes || 0,
+        isCancelled: !!train.isCancelled
+      });
+    }
+
+    events.sort((a,b)=>a.focusSec - b.focusSec);
+    return events.slice(0, 8);
+  }
+
+  function prepareStationMetadata(){
+    for (const station of AXIS_STATIONS){
+      const ids = new Set(station.stopIds || []);
+      if (station.stopArea){
+        ids.add(station.stopArea);
+        if (stopChildrenByParent.has(station.stopArea)){
+          for (const child of stopChildrenByParent.get(station.stopArea)){
+            ids.add(child.stop_id);
+          }
+        }
+      }
+      if (!isFinite(station.lat) || !isFinite(station.lon)){
+        if (station.stopArea && stopsById.has(station.stopArea)){
+          const meta = stopsById.get(station.stopArea);
+          station.lat = meta.lat;
+          station.lon = meta.lon;
+        } else {
+          for (const id of ids){
+            const meta = stopsById.get(id);
+            if (meta){ station.lat = meta.lat; station.lon = meta.lon; break; }
+          }
+        }
+      }
+      station.stopIds = Array.from(ids);
+      station.stopSet = new Set(station.stopIds);
+    }
+  }
+function setLayerGroupVisibility(group, visible){
+    if (!group) return;
+    const onMap = map.hasLayer(group);
+    if (visible && !onMap){
+      group.addTo(map);
+    } else if (!visible && onMap){
+      group.removeFrom(map);
+    }
+  }
+
+  function applyLayerVisibility(){
+    setLayerGroupVisibility(overlay.axisStationsMajor, layerVisibility.stationsMajor);
+    setLayerGroupVisibility(overlay.axisStationsRegular, layerVisibility.stationsRegular);
+    setLayerGroupVisibility(overlay.trains, layerVisibility.trains);
+  }
+
+  function ensureTrainLayer(){
+    if (!overlay.trains){
+      overlay.trains = L.layerGroup();
+      if (layerVisibility.trains){
+        overlay.trains.addTo(map);
+      }
+    }
+    return overlay.trains;
+  }
+    
+  function renderAxisStations(){
+    if (overlay.axisStationsMajor){
+      overlay.axisStationsMajor.remove();
+      overlay.axisStationsMajor = null;
+    }
+    if (overlay.axisStationsRegular){
+      overlay.axisStationsRegular.remove();
+      overlay.axisStationsRegular = null;
+    }
+    const majorMarkers = [];
+    const regularMarkers = [];
+    for (const station of AXIS_STATIONS){
+      if (!isFinite(station.lat) || !isFinite(station.lon)) continue;
+      const marker = L.marker([station.lat, station.lon], {
+        icon: iconForStation(station),
+        keyboard:false,
+        interactive:true,
+        zIndexOffset:600
+      });
+      marker.bindTooltip(station.label, {permanent:false});
+      if (station.type === 'major'){
+        majorMarkers.push(marker);
+      } else {
+        regularMarkers.push(marker);
+      }
+    }
+    if (majorMarkers.length){
+      overlay.axisStationsMajor = L.layerGroup(majorMarkers);
+    }
+    if (regularMarkers.length){
+      overlay.axisStationsRegular = L.layerGroup(regularMarkers);
+    }
+    applyLayerVisibility();
+  }
+  
+   // ---------- Graphe réseau (pour suivre les voies) ----------
+  const networkGraph = new Map();       // key -> { key, lat, lon, neighbors: Map<key, distance> }
+  const networkNodes = [];              // liste des noeuds pour recherche voisinage
+  const stopNearestCache = new Map();   // stop_id -> { node, dist }
+  const stopPathCache = new Map();      // "stopA|stopB" -> chemin pré-calculé
+
+  function coordKey(lat, lon){ return `${Math.round(lat*1e6)},${Math.round(lon*1e6)}`; }
+
+  function ensureNetworkNode(lat, lon){
+    const key = coordKey(lat, lon);
+    if (!networkGraph.has(key)){
+      networkGraph.set(key, { key, lat, lon, neighbors: new Map() });
+      networkNodes.push(networkGraph.get(key));
+    }
+    return networkGraph.get(key);
+  }
+
+  function addNetworkEdge(latA, lonA, latB, lonB){
+    const nodeA = ensureNetworkNode(latA, lonA);
+    const nodeB = ensureNetworkNode(latB, lonB);
+    const d = distLL({lat:latA, lon:lonA}, {lat:latB, lon:lonB});
+    if (!isFinite(d) || d <= 0) return;
+    if (!nodeA.neighbors.has(nodeB.key) || nodeA.neighbors.get(nodeB.key) > d){
+      nodeA.neighbors.set(nodeB.key, d);
+    }
+    if (!nodeB.neighbors.has(nodeA.key) || nodeB.neighbors.get(nodeA.key) > d){
+      nodeB.neighbors.set(nodeA.key, d);
+    }
+  }
+
+  function ingestGeoJSONNetwork(data){
+    if (!data) return;
+    const features = data.type === 'FeatureCollection' ? data.features : [data];
+    for (const feat of features){
+      if (!feat || !feat.geometry) continue;
+      const geom = feat.geometry;
+      const type = geom.type;
+      if (type === 'LineString'){
+        processLineStringCoords(geom.coordinates);
+      } else if (type === 'MultiLineString'){
+        for (const coords of geom.coordinates){ processLineStringCoords(coords); }
+      }
+    }
+  }
+
+  function processLineStringCoords(coords){
+    if (!Array.isArray(coords)) return;
+    for (let i=1;i<coords.length;i++){
+      const [lonA, latA] = coords[i-1];
+      const [lonB, latB] = coords[i];
+      if (!isFinite(latA) || !isFinite(lonA) || !isFinite(latB) || !isFinite(lonB)) continue;
+      addNetworkEdge(latA, lonA, latB, lonB);
+    }
+  }
+
+  const MANUAL_CONNECTOR_SEGMENTS = [
+    [
+      [49.46658076914014, 6.109331392744701],
+      [49.46755304211354, 6.109018226768153],
+      [49.470987657519295, 6.108052087802873],
+      [49.47186965380722, 6.107870598848106],
+      [49.47174049199803, 6.107837229130531],
+      [49.471561250728215, 6.10785928146085],
+      [49.471114767474596, 6.107939072253058]
+    ],
+    [
+      [49.51742762768063, 6.101569489369114],
+      [49.51740417509697, 6.101688948209521]
+    ],
+    [
+      [49.59684626924659, 6.132947671869363],
+      [49.596927050485505, 6.1327399450261035]
+    ],
+    [
+      [49.45545408844863, 6.129087542059966],
+      [49.45545408934669, 6.129087542114585]
+    ]
+  ];
+
+  function applyManualConnectors(){
+    for (const segment of MANUAL_CONNECTOR_SEGMENTS){
+      if (!Array.isArray(segment) || segment.length < 2) continue;
+      for (let i=1;i<segment.length;i++){
+        const prev = segment[i-1];
+        const curr = segment[i];
+        if (!prev || !curr) continue;
+        const [latA, lonA] = prev;
+        const [latB, lonB] = curr;
+        if (!isFinite(latA) || !isFinite(lonA) || !isFinite(latB) || !isFinite(lonB)) continue;
+        addNetworkEdge(latA, lonA, latB, lonB);
+      }
+    }
+  }
+ 
+  function nearestNetworkNode(stop){
+    if (!stop) return null;
+    if (stopNearestCache.has(stop.stop_id)) return stopNearestCache.get(stop.stop_id);
+    let best = null, bestDist = Infinity;
+    for (const node of networkNodes){
+      const d = distLL({lat:stop.lat, lon:stop.lon}, {lat:node.lat, lon:node.lon});
+      if (d < bestDist){ bestDist = d; best = node; }
+    }
+    const res = best ? { node: best, dist: bestDist } : null;
+    stopNearestCache.set(stop.stop_id, res);
+    return res;
+  }
+
+  function shortestPathNodes(startKey, endKey){
+    if (!networkGraph.has(startKey) || !networkGraph.has(endKey)) return null;
+    if (startKey === endKey) return [networkGraph.get(startKey)];
+
+    const distMap = new Map([[startKey, 0]]);
+    const prevMap = new Map();
+    const visited = new Set();
+    const queue = [{ key: startKey, dist: 0 }];
+
+    while (queue.length){
+      queue.sort((a,b)=>a.dist-b.dist);
+      const { key, dist } = queue.shift();
+      if (visited.has(key)) continue;
+      visited.add(key);
+      if (key === endKey) break;
+      const node = networkGraph.get(key);
+      if (!node) continue;
+      for (const [nextKey, weight] of node.neighbors){
+        if (visited.has(nextKey)) continue;
+        const newDist = dist + weight;
+        if (newDist < (distMap.get(nextKey) ?? Infinity)){
+          distMap.set(nextKey, newDist);
+          prevMap.set(nextKey, key);
+          queue.push({ key: nextKey, dist: newDist });
+        }
+      }
+    }
+
+    if (!distMap.has(endKey)) return null;
+    const keys = [];
+    let cur = endKey;
+    while (cur){
+      keys.push(cur);
+      if (cur === startKey) break;
+      cur = prevMap.get(cur);
+      if (cur === undefined) return null;
+    }
+    keys.reverse();
+    return keys.map(k=>networkGraph.get(k)).filter(Boolean);
+  }
+
+  function makePath(rawCoords, isFallback){
+    const coords = [];
+    const cum = [];
+    let total = 0;
+    for (let i=0;i<rawCoords.length;i++){
+      const c = rawCoords[i];
+      if (!Array.isArray(c) || c.length<2) continue;
+      if (!coords.length){
+        coords.push(c);
+        cum.push(0);
+        continue;
+      }
+      const prev = coords[coords.length-1];
+      const d = distLL({lat:prev[0], lon:prev[1]}, {lat:c[0], lon:c[1]});
+      if (!isFinite(d)) continue;
+      if (d < 0.5){
+        if (i === rawCoords.length-1 && (prev[0] !== c[0] || prev[1] !== c[1])){
+          coords.push(c);
+          cum.push(total);
+        }
+        continue;
+      }
+      total += d;
+      coords.push(c);
+      cum.push(total);
+    }
+    if (coords.length < 2 && rawCoords.length){
+      const last = rawCoords[rawCoords.length-1];
+      if (last && (coords.length === 0 || coords[coords.length-1][0] !== last[0] || coords[coords.length-1][1] !== last[1])){
+        coords.push(last);
+        cum.push(total);
+      }
+    }
+    if (!coords.length){
+      coords.push([0,0]);
+      cum.push(0);
+    } else if (coords.length === 1){
+      coords.push(coords[0]);
+      cum.push(total);
+    }
+    return { coords, cumDistances: cum, totalDist: total, isFallback: !!isFallback };
+  }
+
+  function directPathBetweenStops(stopA, stopB){
+    return makePath([[stopA.lat, stopA.lon],[stopB.lat, stopB.lon]], true);
+  }
+
+  function computeStopPath(stopA, stopB){
+    const direct = directPathBetweenStops(stopA, stopB);
+    if (!networkNodes.length) return direct;
+    const anchorA = nearestNetworkNode(stopA);
+    const anchorB = nearestNetworkNode(stopB);
+    if (!anchorA || !anchorB) return direct;
+    const pathNodes = shortestPathNodes(anchorA.node.key, anchorB.node.key);
+    if (!pathNodes || !pathNodes.length) return direct;
+
+    const coords = [[stopA.lat, stopA.lon]];
+    const firstNode = pathNodes[0];
+    if (firstNode) coords.push([firstNode.lat, firstNode.lon]);
+    for (let i=1;i<pathNodes.length-1;i++){
+      const node = pathNodes[i];
+      coords.push([node.lat, node.lon]);
+    }
+    const lastNode = pathNodes[pathNodes.length-1];
+    if (lastNode) coords.push([lastNode.lat, lastNode.lon]);
+    coords.push([stopB.lat, stopB.lon]);
+
+    const path = makePath(coords, false);
+    if (!path.totalDist) return direct;
+    return path;
+  }
+
+  function pathBetweenStops(stopA, stopB){
+    if (!stopA || !stopB) return null;
+    const key = `${stopA.stop_id}|${stopB.stop_id}`;
+    if (stopPathCache.has(key)) return stopPathCache.get(key);
+    const path = computeStopPath(stopA, stopB);
+    stopPathCache.set(key, path);
+    const revKey = `${stopB.stop_id}|${stopA.stop_id}`;
+    if (!stopPathCache.has(revKey) && path){
+      const revCoords = [...path.coords].map(c=>[c[0], c[1]]).reverse();
+      stopPathCache.set(revKey, makePath(revCoords, path.isFallback));
+    }
+    return path;
+  }
+
+  function positionAlongPath(path, ratio){
+    if (!path) return null;
+    const target = Math.max(0, Math.min(1, ratio)) * (path.totalDist || 0);
+    const cum = path.cumDistances;
+    const coords = path.coords;
+    if (!coords || coords.length === 0) return null;
+    if (coords.length === 1) return { lat: coords[0][0], lon: coords[0][1] };
+    for (let i=1;i<cum.length;i++){
+      if (target <= cum[i]){
+        const segLen = cum[i] - cum[i-1];
+        const t = segLen > 0 ? (target - cum[i-1]) / segLen : 0;
+        const [latA, lonA] = coords[i-1];
+        const [latB, lonB] = coords[i];
+        return { lat: lerp(latA, latB, t), lon: lerp(lonA, lonB, t) };
+      }
+    }
+    const last = coords[coords.length-1];
+    return { lat: last[0], lon: last[1] };
+  } 
+
+  // zones d'intérêt (filtre "sillon" simple)
+  const AXIS_STOP_KEYWORDS = ['nancy','pont-','metz','hagondange','thionville','bettembourg','luxembourg'];
+
+  // ---------- Chargement réseaux ----------
+  async function loadNetworks(){
+    try {
+      const rfn = await fetchJSONAny(FILES.rfn);
+      ingestGeoJSONNetwork(rfn);
+      overlay.rfn = L.geoJSON(rfn, { style:{ color:'#00f0ff', weight:3, opacity:0.6 } }).addTo(map);
+      let bounds = overlay.rfn.getBounds();
+
+      try {
+        const cfl = await fetchJSONAny(FILES.cfl);
+        ingestGeoJSONNetwork(cfl);
+        overlay.cfl = L.geoJSON(cfl, { style:{ color:'#ff00e0', weight:3, opacity:0.6 } }).addTo(map);
+        bounds.extend(overlay.cfl.getBounds());
+      } catch(e){
+        setStatus('RFN chargé — CFL introuvable (ok si en cours de conversion)', true);
+      }
+
+      applyManualConnectors();
+
+      stopNearestCache.clear();
+      stopPathCache.clear();
+
+      if (SILLON_BOUNDS && SILLON_BOUNDS.isValid()){
+        map.fitBounds(SILLON_BOUNDS.pad(0.18), { maxZoom: 11 });
+      } else {
+        map.fitBounds(bounds);
+      }
+    } catch(e){
+      setStatus('Erreur chargement réseaux: '+e.message, true);
+    }
+  }
+
+  // ---------- Chargement GTFS (sans shapes) ----------
+  async function loadGTFS(){
+    try {
+      stopNearestCache.clear();
+      stopPathCache.clear();
+      stopTimesByTrip.clear();
+      tripsById.clear();
+      routesById.clear();
+      stopsById.clear();
+      stopChildrenByParent.clear();
+
+      const rawStopsById = new Map();
+      const rawStopChildrenByParent = new Map();
+      const stops = await parseCSVAny(FILES.stops);
+      for (const s of stops){
+        const lat=parseFloat(s.stop_lat), lon=parseFloat(s.stop_lon);
+        if (!isFinite(lat)||!isFinite(lon)) continue;
+        const parent = s.parent_station || null;
+        const locationType = Number(s.location_type ?? 0) || 0;
+        const entry = { stop_id:s.stop_id, name:s.stop_name, lat, lon, parent_station:parent, location_type:locationType };
+        rawStopsById.set(s.stop_id, entry);
+        if (parent){
+          if (!rawStopChildrenByParent.has(parent)) rawStopChildrenByParent.set(parent, []);
+          rawStopChildrenByParent.get(parent).push(entry);
+        }
+      }
+
+      // stop_times -> groupés par trip
+      const stop_times = await parseCSVAny(FILES.stop_times);
+      for (const st of stop_times){
+        const tid = st.trip_id; if(!tid) continue;
+        if (!stopTimesByTrip.has(tid)) stopTimesByTrip.set(tid, []);
+        stopTimesByTrip.get(tid).push({
+          stop_id: st.stop_id,
+          arrival: gtfsTimeToSec(st.arrival_time),
+          departure: gtfsTimeToSec(st.departure_time),
+          seq: Number(st.stop_sequence)
+        });
+      }
+      for (const [k,v] of stopTimesByTrip) v.sort((a,b)=>a.seq-b.seq);
+
+       const axisStopIds = new Set();
+      const axisTripIds = new Set();
+
+      for (const [tripId, seq] of Array.from(stopTimesByTrip.entries())){
+        if (!tripPassesAxis(seq, rawStopsById)){
+          stopTimesByTrip.delete(tripId);
+          continue;
+        }
+        axisTripIds.add(tripId);
+        for (const st of seq){
+          const meta = rawStopsById.get(st.stop_id);
+          if (!meta) continue;
+          axisStopIds.add(meta.stop_id);
+          if (meta.parent_station){
+            axisStopIds.add(meta.parent_station);
+            if (rawStopChildrenByParent.has(meta.parent_station)){
+              for (const child of rawStopChildrenByParent.get(meta.parent_station)){
+                axisStopIds.add(child.stop_id);
+              }
+            }
+          }
+          if (rawStopChildrenByParent.has(meta.stop_id)){
+            for (const child of rawStopChildrenByParent.get(meta.stop_id)){
+              axisStopIds.add(child.stop_id);
+            }
+          }
+        }
+      }
+
+      for (const id of axisStopIds){
+        const meta = rawStopsById.get(id);
+        if (!meta) continue;
+        stopsById.set(id, meta);
+      }
+      for (const [parent, children] of rawStopChildrenByParent.entries()){
+        if (!axisStopIds.has(parent)) continue;
+        const filtered = children.filter(child=>axisStopIds.has(child.stop_id));
+        if (filtered.length){
+          stopChildrenByParent.set(parent, filtered);
+        }
+      }
+
+      rawStopsById.clear();
+      rawStopChildrenByParent.clear();
+
+      const axisRouteIds = new Set();
+
+      // trips (optionnel)
+      try {
+        const trips = await parseCSVAny(FILES.trips);
+        for (const t of trips){
+         if (axisTripIds.size && !axisTripIds.has(t.trip_id)) continue;
+          tripsById.set(t.trip_id, { route_id:t.route_id, headsign:t.trip_headsign, service_id:t.service_id, trip_short_name:t.trip_short_name });
+          if (t.route_id) axisRouteIds.add(t.route_id);
+        }
+      } catch(_){ /* ok si absent */ }
+
+      // routes (optionnel)
+      try {
+        const routes = await parseCSVAny(FILES.routes);
+        for (const r of routes){
+          if (axisRouteIds.size && !axisRouteIds.has(r.route_id)) continue;
+          routesById.set(r.route_id, { short:r.route_short_name, long:r.route_long_name });
+        }
+      } catch(_){ /* ok si absent */ }
+
+      // calendar + calendar_dates (optionnels)
+      let calendarRows = null;
+      try {
+       calendarRows = await parseCSVAny(FILES.calendar);
+      } catch(_){ /* ok si absent */ }
+      
+      let calendarDateRows = null;
+      try {
+        calendarDateRows = await parseCSVAny(FILES.calendar_dates);
+      } catch(_){ /* ok si absent */ }
+
+      activeServiceIds = computeActiveServiceSet(calendarRows, calendarDateRows);
+      if (activeServiceIds && !tripsById.size) activeServiceIds = null;
+
+      prepareStationMetadata();
+      renderAxisStations();
+
+      let statusMsg = 'GTFS chargé — ' + stopsById.size + ' gares, ' + stopTimesByTrip.size + ' trips';
+      if (activeServiceIds) statusMsg += ', ' + activeServiceIds.size + ' services actifs aujourd\'hui';
+      setStatus(statusMsg + '.');
+    } catch(e){
+      setStatus('Erreur chargement GTFS: '+e.message, true);
+    }
+  }
+
+  // ---------- Filtre sillon & service du jour ----------
+  function tripPassesAxis(seq, lookup = stopsById){
+    const names = seq.map(s=> (lookup.get(s.stop_id)?.name || '').toLowerCase());
+    const hits = names.filter(n=> AXIS_STOP_KEYWORDS.some(k=> n.includes(k))).length;
+    return hits >= 2;
+  }
+
+  function serviceAllowed(trip_id){
+    if (!activeServiceIds) return true;
+    const trip = tripsById.get(trip_id);
+    if (!trip || !trip.service_id) return false;
+    return activeServiceIds.has(trip.service_id);
+  }
+
+  // ---------- Calcul positions (interpolation arrêt→arrêt) ----------
+  function trainsAt(nowSec){
+    const items = [];
+    for (const [trip_id, seq] of stopTimesByTrip.entries()){
+      if (seq.length < 2) continue;
+      if (!tripPassesAxis(seq)) continue;
+      if (!serviceAllowed(trip_id)) continue;
+
+      const trip = tripsById.get(trip_id) || {};
+      const route = routesById.get(trip.route_id) || {};
+      const number = trainNumberForTrip(trip, route, trip_id);
+      const headsign = (()=>{
+        if (trip.headsign && trip.headsign !== number) return trip.headsign;
+        if (route.long && route.long !== number) return route.long;
+        if (route.short && route.short !== number) return route.short;
+        return '';
+      })();
+
+     if (number) scheduleSncfRealtimeFetch(number);
+      const realtime = (realtimeSettings.useSncf && number) ? getSncfRealtime(number) : null;
+
+      const stopMetas = seq.map(st => stopsById.get(st.stop_id));
+      let startIdx = realtime ? findIndexByNorm(seq, realtime.newStartNorm) : -1;
+      if (startIdx < 0) startIdx = 0;
+      let endIdx = realtime ? findIndexByNorm(seq, realtime.newEndNorm) : -1;
+      if (endIdx < 0) endIdx = seq.length - 1;
+      if (startIdx > endIdx) continue;
+
+      const startInfo = computeEffectiveStopTimes(seq[startIdx], stopMetas[startIdx], realtime);
+      const endInfo = computeEffectiveStopTimes(seq[endIdx], stopMetas[endIdx], realtime);
+      const startEffective = startInfo.depEffective ?? startInfo.arrEffective ?? startInfo.depBase ?? startInfo.arrBase;
+      const endEffective = endInfo.arrEffective ?? endInfo.depEffective ?? endInfo.arrBase ?? endInfo.depBase;
+      if (startEffective == null || endEffective == null) continue;
+
+      const tripStartName = stopMetas[startIdx]?.name || seq[startIdx]?.stop_id || null;
+      const tripEndName = stopMetas[endIdx]?.name || seq[endIdx]?.stop_id || null;
+      const baseStaticInfo = realtimeSettings.useGtfs ? computeGtfsStaticDelayInfo({
+        number,
+        from: tripStartName,
+        to: tripEndName,
+        segmentProgress: null,
+        startName: tripStartName,
+        endName: tripEndName
+      }) : null;
+
+      let isCancelled = (realtime?.isFullCancellation || false) || (baseStaticInfo?.isCancelled ?? false);
+      if (!isCancelled && (nowSec < startEffective || nowSec > endEffective)) continue;
+
+      const totalSpan = endEffective - startEffective;
+      const tripProgress = (!isCancelled && totalSpan > 0) ? (nowSec - startEffective) / totalSpan : null;
+
+      let defaultDelaySec = realtime && Number.isFinite(realtime.defaultDelaySec) ? realtime.defaultDelaySec : 0;
+      if ((!Number.isFinite(defaultDelaySec) || defaultDelaySec <= 0) && baseStaticInfo?.minutes != null){
+        defaultDelaySec = Math.round(baseStaticInfo.minutes * 60);
+      }
+      if (!Number.isFinite(defaultDelaySec)) defaultDelaySec = 0;
+      let isPartial = !isCancelled && (realtime ? (realtime.isPartialStart || realtime.isPartialEnd) : false);
+
+        let positioned = false;
+
+        const pushItem = (extra)=>{
+        let gtfsDelayInfo = null;
+        if (realtimeSettings.useGtfs){
+          gtfsDelayInfo = computeGtfsStaticDelayInfo({
+            number,
+            from: extra?.from,
+            to: extra?.to,
+            segmentProgress: extra?.segmentProgress ?? null,
+            startName: tripStartName,
+            endName: tripEndName
+          }) || baseStaticInfo || null;
+        }
+
+        let delaySec = Number.isFinite(extra?.delaySec) ? extra.delaySec : defaultDelaySec;
+        if ((!realtime || !realtimeSettings.useSncf) && gtfsDelayInfo && gtfsDelayInfo.minutes != null){
+          const staticDelaySec = Math.round(gtfsDelayInfo.minutes * 60);
+          if (!Number.isFinite(delaySec) || delaySec <= 0) delaySec = staticDelaySec;
+          else if (staticDelaySec > delaySec) delaySec = staticDelaySec;
+        }
+        if (!Number.isFinite(delaySec)) delaySec = 0;
+
+        if (gtfsDelayInfo?.isCancelled){
+          isCancelled = true;
+          isPartial = false;
+        }
+
+        const finalIsCancelled = isCancelled || (gtfsDelayInfo?.isCancelled ?? false);
+        const finalIsPartial = !finalIsCancelled && isPartial;
+          
+        items.push(Object.assign({
+          id: trip_id,
+          headsign,
+          route_id: trip.route_id,
+          number,
+          startSec: startEffective,
+          endSec: endEffective,
+          progress: !finalIsCancelled ? tripProgress : null,
+          nowSec,
+           stopsCount: seq.length,
+          realtime,
+          delaySec,
+          delayMinutes: delaySec ? delaySec / 60 : 0,
+          isCancelled: finalIsCancelled,
+          isPartial: finalIsPartial,
+          statusLabel: realtime?.statusLabel || null,
+          gtfsDelayInfo
+        }, extra));
+      };
+
+      if (!isCancelled){
+        for (let i=startIdx; i<=endIdx; i++){
+          const stop = seq[i];
+          const meta = stopMetas[i];
+          if (!meta || !isFinite(meta?.lat) || !isFinite(meta?.lon)) continue;
+          const info = computeEffectiveStopTimes(stop, meta, realtime);
+          if (info.isAddedStop || info.isDeletedStop) continue;
+          const arr = info.arrEffective ?? info.arrBase;
+          const dep = info.depEffective ?? info.depBase;
+          if (arr==null && dep==null) continue;
+          const windowStart = arr ?? dep;
+          const windowEnd = dep ?? arr;
+          if (windowStart==null || windowEnd==null) continue;
+          if (windowStart > nowSec || windowEnd < nowSec) continue;
+
+          const etaSec = dep!=null ? Math.max(0, Math.round(dep - nowSec)) : null;
+          pushItem({
+            from: meta.name || stop.stop_id,
+            to: meta.name || stop.stop_id,
+            lat: meta.lat,
+            lon: meta.lon,
+            etaSec,
+            segmentIndex: i,
+            segmentProgress: null,
+            delaySec: info.depDelaySec ?? info.arrDelaySec ?? defaultDelaySec
+          });
+          positioned = true;
+          break;
+        }
+      }
+
+      if (!positioned && !isCancelled){
+        for (let i=startIdx; i<endIdx; i++){
+          const stopA = seq[i];
+          const stopB = seq[i+1];
+          const metaA = stopMetas[i];
+          const metaB = stopMetas[i+1];
+          if (!metaA || !metaB) continue;
+          const infoA = computeEffectiveStopTimes(stopA, metaA, realtime);
+          const infoB = computeEffectiveStopTimes(stopB, metaB, realtime);
+          if (infoA.isAddedStop || infoB.isAddedStop) continue;
+          if (infoA.isDeletedStop || infoB.isDeletedStop) continue;
+          const tA = infoA.depEffective ?? infoA.arrEffective ?? infoA.depBase ?? infoA.arrBase;
+          const tB = infoB.arrEffective ?? infoB.depEffective ?? infoB.arrBase ?? infoB.depBase;
+          if (tA==null || tB==null || tB <= tA) continue;
+          if (nowSec < tA || nowSec > tB) continue;
+
+          const r = (nowSec - tA) / (tB - tA);
+          const path = pathBetweenStops(metaA, metaB);
+          const pos = positionAlongPath(path, r) || { lat: lerp(metaA.lat, metaB.lat, r), lon: lerp(metaA.lon, metaB.lon, r) };
+          const etaSec = Math.max(0, Math.round(tB - nowSec));
+          pushItem({
+            from: metaA.name || stopA.stop_id,
+            to: metaB.name || stopB.stop_id,
+            lat: pos.lat,
+            lon: pos.lon,
+            etaSec,
+            segmentIndex: i,
+            segmentProgress: r,
+            delaySec: Math.max(infoA.depDelaySec ?? defaultDelaySec, infoB.arrDelaySec ?? defaultDelaySec)
+          });
+          positioned = true;
+          break;
+        }
+      }
+
+      if (!positioned && isCancelled){
+        const anchorMeta = stopMetas[startIdx] || stopMetas.find(m => m && isFinite(m.lat) && isFinite(m.lon));
+        if (anchorMeta && isFinite(anchorMeta.lat) && isFinite(anchorMeta.lon)){
+          pushItem({
+            from: anchorMeta.name || seq[startIdx].stop_id,
+            to: stopMetas[endIdx]?.name || seq[endIdx].stop_id,
+            lat: anchorMeta.lat,
+            lon: anchorMeta.lon,
+            etaSec: null,
+            segmentIndex: null,
+            segmentProgress: null,
+            delaySec: defaultDelaySec
+          });
+          positioned = true;
+        }
+      }
+    }
+    return items;
+  }
+
+  function renderTrains(list){
+  const layer = ensureTrainLayer();
+    const seen = new Set();
+
+    for (const t of list){
+      seen.add(t.id);
+      const gtfsInfo = realtimeSettings.useGtfs ? (t.gtfsDelayInfo || null) : null;
+      let delaySec = Number.isFinite(t.delaySec) ? t.delaySec : null;
+      if (!Number.isFinite(delaySec) && realtimeSettings.useSncf && t.realtime && Number.isFinite(t.realtime.defaultDelaySec)){
+        delaySec = t.realtime.defaultDelaySec;
+      }
+      if ((!realtimeSettings.useSncf || !t.realtime || !Number.isFinite(delaySec) || delaySec <= 0) && gtfsInfo && gtfsInfo.minutes != null){
+        const staticDelaySec = Math.round(gtfsInfo.minutes * 60);
+        delaySec = Number.isFinite(delaySec) ? Math.max(delaySec, staticDelaySec) : staticDelaySec;
+      }
+      if (!Number.isFinite(delaySec) || delaySec < 0) delaySec = 0;
+      t.delaySec = delaySec;
+      t.delayMinutes = delaySec ? delaySec / 60 : 0;
+      if (gtfsInfo && gtfsInfo.isCancelled){
+        t.isCancelled = true;
+        t.isPartial = false;
+      } else {
+        t.isCancelled = !!t.isCancelled;
+        t.isPartial = !!t.isPartial;
+      }
+      t.gtfsDelayInfo = gtfsInfo;
+      if (!t.statusLabel && t.realtime?.statusLabel){
+        t.statusLabel = t.realtime.statusLabel;
+      }
+      if (!t.statusLabel){
+        if (gtfsInfo?.isCancelled){
+          t.statusLabel = 'Train supprimé (GTFS statique)';
+        } else if (gtfsInfo?.rounded){
+          t.statusLabel = `Retard estimé +${gtfsInfo.rounded} min (GTFS statique)`;
+        } else {
+          t.statusLabel = delaySec > 0 ? `Retard estimé +${Math.round(delaySec/60)} min` : 'À l’heure';
+        }
+      }
+      const displayName = t.number ? (t.headsign ? `${t.headsign} — Train ${t.number}` : `Train ${t.number}`) : (t.headsign || t.id);
+      t.displayName = displayName;
+      trainDataById.set(t.id, t);
+      
+      if (trainMarkers.has(t.id)){
+        const marker = trainMarkers.get(t.id);
+        marker.setLatLng([t.lat, t.lon]);
+        marker.setIcon(iconForTrain(t));
+        marker.setZIndexOffset(1000); // passer devant les couches vectorielles
+        if (marker.getPopup()) marker.unbindPopup();
+      } else {
+        const m = L.marker([t.lat, t.lon], {
+          icon: iconForTrain(t),
+          zIndexOffset: 1000,       // au-dessus des lignes RFN/CFL
+          riseOnHover: true,        // confort visuel
+          keyboard: false
+        });
+        layer.addLayer(m);
+        trainMarkers.set(t.id, m);
+      }
+    }
+
+   // nettoyage des marqueurs disparus
+    for (const [id,mk] of trainMarkers.entries()){
+      if(!seen.has(id)){
+        if (overlay.trains){
+          overlay.trains.removeLayer(mk);
+        }
+        mk.remove();
+        trainMarkers.delete(id);
+        trainCowById.delete(id);
+        trainDataById.delete(id);
+        if (activeTripId === id){
+          activeTripId = null;
+          if (activeStationId){
+            renderPanel();
+          } else {
+            hideTripPanel();
+          }
+        }
+      }
+    }
+
+  if (activeStationId || (activeTripId && trainDataById.has(activeTripId))){
+      renderPanel();
+    }
+    document.getElementById('counts').textContent = `${list.length} train(s) actifs`;
+    document.getElementById('clock').textContent = 'Heure locale : ' + new Date().toLocaleTimeString();
+  }
+
+  // ---------- Boucle ----------
+  let periodMs = 10000, nextTick = performance.now();
+  const periodEl = document.getElementById('period'), hzEl=document.getElementById('hz'), smoothEl=document.getElementById('smooth');
+  periodEl.addEventListener('input', ()=>{ hzEl.textContent=periodEl.value; periodMs=Number(periodEl.value)*1000; nextTick=performance.now(); });
+
+  function tick(){ renderTrains(trainsAt(nowSecLocal())); }
+  function loop(ts){
+    if (ts >= nextTick){ tick(); nextTick = ts + periodMs; }
+    if (smoothEl.checked) tick();
+    requestAnimationFrame(loop);
+  }
+
+ // ---------- Boot ----------
+  (async function boot(){
+    const gtfsStaticInitial = realtimeSettings.useGtfs
+      ? loadGtfsStaticDelays({ forceFresh:true }).catch(err => {
+          console.error('[GTFS statique] échec initial', err);
+          updateGtfsDelayStatus({ error:'indisponibles' });
+        })
+      : Promise.resolve();
+
+    await loadNetworks();
+    await loadGTFS();
+    tick();
+    requestAnimationFrame(loop);
+
+    gtfsStaticInitial.finally(()=>{
+      if (gtfsStaticRefreshTimer == null){
+        gtfsStaticRefreshTimer = setInterval(()=>{
+          if (!realtimeSettings.useGtfs) return;
+          loadGtfsStaticDelays({ forceFresh:true }).catch(err => {
+            console.warn('[GTFS statique] rafraîchissement en échec', err);
+            updateGtfsDelayStatus({ error:'rafraîchissement en échec' });
+          });
+        }, GTFS_STATIC_REFRESH_MS);
+      }
+    });
+  })().catch(e=> setStatus('Erreur initialisation: '+e.message, true));
+  </script>
+</body>
+</html>
