@@ -1,0 +1,256 @@
+<!doctype html>
+<html lang="fr">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Civilisation émergente</title>
+    <!-- React via CDN + Babel pour JSX dans le navigateur -->
+    <script src="https://unpkg.com/react@18/umd/react.development.js" crossorigin></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js" crossorigin></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <style>
+      html,body{margin:0;padding:0;background:#f6f7f9;font-family:ui-sans-serif,system-ui,Segoe UI,Roboto}
+      .card{background:#fff;border:1px solid #e5e7eb;border-radius:16px;box-shadow:0 1px 2px rgba(0,0,0,.04)}
+      .btn{padding:.5rem .75rem;border-radius:9999px;background:white;border:1px solid #e5e7eb;box-shadow:0 1px 1px rgba(0,0,0,.03);cursor:pointer}
+      label{display:flex;flex-direction:column;gap:.25rem}
+      input[type="range"]{width:100%}
+      .grid{display:grid;grid-template-columns:1fr 350px;gap:1rem}
+      @media (max-width: 900px){.grid{grid-template-columns:1fr}}
+      canvas{width:100%;height:auto}
+      .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono","Courier New",monospace}
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+      const {useEffect,useMemo,useRef,useState}=React;
+
+      const randInt=(min,max)=>Math.floor(Math.random()*(max-min+1))+min;
+      const clamp=(v,a,b)=>v<a?a:v>b?b:v;
+
+      function useAnimationFrame(callback, running){
+        const reqRef=useRef(); const lastRef=useRef(0);
+        useEffect(()=>{
+          function loop(t){
+            const last=lastRef.current||t;
+            const dt=(t-last)/1000; lastRef.current=t;
+            if(running) callback(dt);
+            reqRef.current=requestAnimationFrame(loop);
+          }
+          reqRef.current=requestAnimationFrame(loop);
+          return ()=>cancelAnimationFrame(reqRef.current);
+        },[callback,running]);
+      }
+
+      function App(){
+        return <SugarCivilization/>;
+      }
+
+      function SugarCivilization(){
+        const [width,setWidth]=useState(120);
+        const [height,setHeight]=useState(80);
+        const [cellSize,setCellSize]=useState(8);
+        const [initialAgents,setInitialAgents]=useState(200);
+        const [vision,setVision]=useState(5);
+        const [metabolism,setMetabolism]=useState(2);
+        const [regenRate,setRegenRate]=useState(0.02);
+        const [maxSugar,setMaxSugar]=useState(4);
+        const [speed,setSpeed]=useState(1);
+        const [reproThreshold,setReproThreshold]=useState(20);
+        const [buildThreshold,setBuildThreshold]=useState(30);
+        const [villageBoost,setVillageBoost]=useState(0.05);
+        const [showGrid,setShowGrid]=useState(false);
+        const [running,setRunning]=useState(false);
+        const [tick,setTick]=useState(0);
+
+        const sugarRef=useRef(); const regenRef=useRef(); const villageRef=useRef(); const agentsRef=useRef([]);
+        const canvasRef=useRef(null);
+
+        useEffect(()=>{ const c=canvasRef.current; if(!c) return; c.width=width*cellSize; c.height=height*cellSize; },[width,height,cellSize]);
+        const idx=(x,y)=>y*width+x;
+
+        function resetWorld(){
+          const sugar=new Float32Array(width*height);
+          const regen=new Float32Array(width*height);
+          const village=new Float32Array(width*height);
+          const peaks=6;
+          const centers=Array.from({length:peaks},()=>({x:randInt(0,width-1),y:randInt(0,height-1),r:randInt(8,20)}));
+          for(let y=0;y<height;y++){
+            for(let x=0;x<width;x++){
+              let base=0;
+              for(const c of centers){
+                const dx=x-c.x, dy=y-c.y; const d=Math.hypot(dx,dy);
+                base+=Math.max(0,1-d/c.r);
+              }
+              base=clamp(base,0,1);
+              sugar[idx(x,y)]=base*maxSugar;
+              regen[idx(x,y)]=regenRate*(0.5+base);
+              village[idx(x,y)]=0;
+            }
+          }
+          const agents=[];
+          for(let i=0;i<initialAgents;i++){
+            agents.push({
+              x:randInt(0,width-1),
+              y:randInt(0,height-1),
+              energy:randInt(5,15),
+              vision:Math.max(1,Math.round(vision+(Math.random()-0.5)*2)),
+              metab:Math.max(1,Math.round(metabolism+(Math.random()-0.5)*1)),
+              age:0,
+            });
+          }
+          sugarRef.current=sugar; regenRef.current=regen; villageRef.current=village; agentsRef.current=agents;
+          setTick(0);
+        }
+
+        useEffect(()=>{ resetWorld(); },[]);
+        useEffect(()=>{ if(!running) resetWorld(); },[width,height,maxSugar,regenRate,initialAgents]);
+
+        const step=useMemo(()=> (dt)=>{
+          const sugar=sugarRef.current, regen=regenRef.current, villages=villageRef.current, agents=agentsRef.current;
+          if(!sugar||!agents) return;
+          const substeps=Math.max(1,Math.floor(speed));
+          const frac=speed-Math.floor(speed);
+
+          const doStep=()=>{
+            for(let i=0;i<sugar.length;i++){
+              const boost=1+villages[i]*villageBoost;
+              sugar[i]=Math.min(maxSugar, sugar[i]+regen[i]*boost);
+            }
+            for(let a=0;a<agents.length;a++){
+              const ag=agents[a];
+              let bestX=ag.x, bestY=ag.y, bestS=sugar[idx(ag.x,ag.y)];
+              const R=ag.vision;
+              for(let dy=-R; dy<=R; dy++){
+                for(let dx=-R; dx<=R; dx++){
+                  const nx=ag.x+dx, ny=ag.y+dy;
+                  if(nx<0||ny<0||nx>=width||ny>=height) continue;
+                  const s=sugar[idx(nx,ny)];
+                  if(s>bestS){ bestS=s; bestX=nx; bestY=ny; }
+                }
+              }
+              const mx=Math.sign(bestX-ag.x), my=Math.sign(bestY-ag.y);
+              ag.x=clamp(ag.x+mx,0,width-1);
+              ag.y=clamp(ag.y+my,0,height-1);
+              const id=idx(ag.x,ag.y);
+              ag.energy+=sugar[id]; sugar[id]=0;
+              if(ag.energy>buildThreshold){ villages[id]=Math.min(1, villages[id]+0.02); }
+              ag.energy-=ag.metab; ag.age+=1;
+            }
+            const next=[];
+            for(const ag of agents){
+              if(ag.energy>0) next.push(ag);
+              if(ag.energy>reproThreshold && next.length<width*height){
+                const child={
+                  x:clamp(ag.x+randInt(-1,1),0,width-1),
+                  y:clamp(ag.y+randInt(-1,1),0,height-1),
+                  energy:ag.energy*0.5,
+                  vision:Math.max(1, ag.vision + (Math.random()<0.2 ? (Math.random()<0.5?-1:1):0)),
+                  metab:Math.max(1, ag.metab + (Math.random()<0.2 ? (Math.random()<0.5?-1:1):0)),
+                  age:0,
+                };
+                ag.energy*=0.5; next.push(child);
+              }
+            }
+            agentsRef.current=next;
+          };
+
+          for(let i=0;i<substeps;i++) doStep();
+          if(Math.random()<frac) doStep();
+          setTick(t=>t+1);
+        },[maxSugar,villageBoost,buildThreshold,reproThreshold,speed,width,height]);
+
+        useAnimationFrame(step, running);
+
+        useEffect(()=>{
+          const c=canvasRef.current; if(!c) return; const ctx=c.getContext('2d',{alpha:false});
+          const sugar=sugarRef.current, villages=villageRef.current, agents=agentsRef.current;
+          if(!sugar||!agents) return;
+          const w=width, h=height, cs=cellSize;
+
+          const img=ctx.createImageData(w,h);
+          for(let i=0;i<sugar.length;i++){
+            const s=sugar[i]/maxSugar;
+            const v=villages[i];
+            const base=Math.round(255*s);
+            const r=clamp(base+Math.round(200*v),0,255);
+            const g=base, b=base;
+            const o=i*4; img.data[o]=r; img.data[o+1]=g; img.data[o+2]=b; img.data[o+3]=255;
+          }
+          const tmp=document.createElement('canvas'); tmp.width=w; tmp.height=h;
+          const tctx=tmp.getContext('2d'); tctx.putImageData(img,0,0);
+          ctx.imageSmoothingEnabled=false;
+          ctx.drawImage(tmp,0,0,w,h,0,0,w*cs,h*cs);
+
+          if(showGrid){
+            ctx.globalAlpha=0.1; ctx.beginPath();
+            for(let x=0;x<=w;x++){ ctx.moveTo(x*cs+0.5,0); ctx.lineTo(x*cs+0.5,h*cs); }
+            for(let y=0;y<=h;y++){ ctx.moveTo(0,y*cs+0.5); ctx.lineTo(w*cs,y*cs+0.5); }
+            ctx.strokeStyle='#000'; ctx.stroke(); ctx.globalAlpha=1;
+          }
+
+          ctx.fillStyle='#111';
+          for(const ag of agents){
+            ctx.fillRect(ag.x*cs+1, ag.y*cs+1, Math.max(1,cs-2), Math.max(1,cs-2));
+          }
+        },[tick,cellSize,showGrid,maxSugar,width,height]);
+
+        const population=agentsRef.current?.length||0;
+
+        return (
+          <div style={{minHeight:'100vh',padding:'1rem',display:'flex',flexDirection:'column',gap:'1rem'}}>
+            <h1 style={{fontSize:'1.5rem',fontWeight:700}}>Civilisation émergente — règles simples → dynamiques complexes</h1>
+
+            <div style={{display:'flex',flexWrap:'wrap',alignItems:'center',gap:'.5rem',fontSize:'.9rem'}}>
+              <button className="btn" onClick={()=>setRunning(r=>!r)}>{running?'Pause':'Démarrer'}</button>
+              <button className="btn" onClick={resetWorld}>Réinitialiser</button>
+              <span className="mono">Tick: {tick}</span>
+              <span className="mono">Population: {population}</span>
+            </div>
+
+            <div className="grid">
+              <canvas ref={canvasRef} className="card" />
+              <div className="card" style={{padding:'0.75rem',display:'flex',flexDirection:'column',gap:'.75rem'}}>
+                <h2 style={{fontWeight:600}}>Paramètres</h2>
+                <Slider label="Largeur" value={width} set={setWidth} min={40} max={200} />
+                <Slider label="Hauteur" value={height} set={setHeight} min={40} max={200} />
+                <Slider label="Taille cellule (px)" value={cellSize} set={setCellSize} min={4} max={16} />
+                <Slider label="Agents initiaux" value={initialAgents} set={setInitialAgents} min={10} max={1200} />
+                <Slider label="Vision (portée)" value={vision} set={(v)=>{setVision(v)}} min={1} max={12} />
+                <Slider label="Métabolisme" value={metabolism} set={setMetabolism} min={1} max={6} />
+                <Slider label="Sucre max/tuile" value={maxSugar} set={setMaxSugar} min={1} max={8} step={1} />
+                <Slider label="Vitesse (ticks/frame)" value={speed} set={setSpeed} min={0.2} max={8} step={0.2} />
+                <Slider label="Seuil reproduction" value={reproThreshold} set={setReproThreshold} min={8} max={80} />
+                <Slider label="Seuil construction" value={buildThreshold} set={setBuildThreshold} min={10} max={100} />
+                <Slider label="Boost villages" value={villageBoost} set={setVillageBoost} min={0} max={0.2} step={0.01} />
+                <label style={{flexDirection:'row',alignItems:'center',gap:'.5rem',fontSize:'.9rem'}}><input type="checkbox" checked={showGrid} onChange={e=>setShowGrid(e.target.checked)} /> Afficher la grille</label>
+                <div style={{fontSize:'.85rem',color:'#374151',lineHeight:1.4}}>
+                  <p><strong>Règles</strong> :</p>
+                  <ul>
+                    <li>Chaque tuile possède une ressource (sucre) qui repousse jusqu'à un maximum.</li>
+                    <li>Les agents visent la case la plus riche dans leur rayon de vision, récoltent puis paient le métabolisme.</li>
+                    <li>Énergie ≤ 0 → mort ; énergie ≥ seuil → reproduction (avec légère mutation).</li>
+                    <li>Au-delà d’un second seuil, ils “investissent” : la tuile gagne un niveau de village qui accélère la repousse.</li>
+                  </ul>
+                </div>
+              </div>
+            </div>
+          </div>
+        );
+      }
+
+      function Slider({label,value,set,min,max,step=1}){
+        return (
+          <label>
+            <div style={{display:'flex',justifyContent:'space-between'}}><span>{label}</span><span className="mono">{typeof value==='number' ? (step<1?value.toFixed(2):Math.round(value)):value}</span></div>
+            <input type="range" min={min} max={max} step={step} value={value} onChange={e=>set(Number(e.target.value))}/>
+          </label>
+        );
+      }
+
+      const root=ReactDOM.createRoot(document.getElementById('root'));
+      root.render(<App/>);
+    </script>
+  </body>
+</html>
