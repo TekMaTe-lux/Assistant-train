@@ -100,7 +100,7 @@
     <div class="ctrl">
       <label class="muted">Rafraîchissement: <span id="hz">10</span>s</label>
       <input id="period" type="range" min="1" max="30" step="1" value="10">
-      <label class="muted"><input id="toggle-realtime" type="checkbox" checked> temps réel</label>
+      <label class="muted"><input id="smooth" type="checkbox" checked> animation fluide</label>
     </div>
     <div class="ctrl">
       <span class="muted">Icônes :</span>
@@ -224,17 +224,10 @@ function escapeHTML(str){
       '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;'
     })[c]);
   }
-   
   function escapeAttr(str){
     return String(str ?? '').replace(/[&<>"']/g, c=>({
       '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;'
     })[c]);
-  }
-
-    function clamp01(v){
-    if (v <= 0) return 0;
-    if (v >= 1) return 1;
-    return v;
   }
  function extractTrainNumberCandidate(value){
     if (value == null) return null;
@@ -313,8 +306,6 @@ function escapeHTML(str){
   let trainDelayTooltipSuffix = '';
   let gtfsRtRefreshTimer = null;
   let pendingGtfsRtPromise = null;
-  let realtimeEnabled = true;
-  let lastRealtimeError = null;  
 
   function describeRealtimeSource(src){
     if (!src) return '';
@@ -332,22 +323,14 @@ function escapeHTML(str){
   }
 
   function updateRealtimeStatus({ error } = {}){
-    if (typeof error !== 'undefined'){
-      lastRealtimeError = error;
-    }
-    if (!realtimeEnabled){
-      setRealtimeStatus('Temps réel désactivé');
-      return;
-    }
-    const effectiveError = lastRealtimeError;
     if (trainDelayLastUpdated){
       const parts = ['Retards temps réel'];
       if (trainDelaySourceLabel) parts.push(`via ${trainDelaySourceLabel}`);
       parts.push(`MAJ ${formatLuxTime(new Date(trainDelayLastUpdated))}`);
-      if (effectiveError) parts.push(effectiveError);
+      if (error) parts.push(error);
       setRealtimeStatus(parts.join(' — '));
     } else {
-      setRealtimeStatus(effectiveError ? `Retards temps réel ${effectiveError}` : '');
+      setRealtimeStatus(error ? `Retards temps réel ${error}` : '');
     }
   }
 
@@ -376,7 +359,6 @@ function escapeHTML(str){
       }
     }
     trainDelayLastUpdated = Date.now();
-    lastRealtimeError = null;
     const suffixParts = [];
     if (trainDelaySourceLabel) suffixParts.push(trainDelaySourceLabel);
     suffixParts.push(`MAJ ${formatLuxTime(new Date(trainDelayLastUpdated))}`);
@@ -431,7 +413,6 @@ function escapeHTML(str){
   }
 
   function computeTrainDelayInfo(train){
-    if (!realtimeEnabled) return null;
     if (!train || !trainDelaysByNumber.size) return null;
     const numberKey = train.numberKey || extractTrainNumberCandidate(train.number) || null;
     if (!numberKey) return null;
@@ -713,7 +694,6 @@ const WEEKDAY_FIELDS = ['sunday','monday','tuesday','wednesday','thursday','frid
   const toggleMajorEl = document.getElementById('toggle-major');
   const toggleRegularEl = document.getElementById('toggle-regular');
   const toggleTrainsEl = document.getElementById('toggle-trains');
-  const toggleRealtimeEl = document.getElementById('toggle-realtime');  
 
   if (toggleMajorEl){
     layerVisibility.stationsMajor = toggleMajorEl.checked;
@@ -738,22 +718,7 @@ const WEEKDAY_FIELDS = ['sunday','monday','tuesday','wednesday','thursday','frid
       applyLayerVisibility();
     });
   }
-    
-if (toggleRealtimeEl){
-    realtimeEnabled = toggleRealtimeEl.checked;
-    toggleRealtimeEl.addEventListener('change', ()=>{
-      realtimeEnabled = toggleRealtimeEl.checked;
-      updateRealtimeStatus();
-      if (realtimeEnabled){
-        loadGtfsRetards({ forceFresh: true }).catch(err => {
-          console.warn('[GTFS-RT] réactivation en échec', err);
-          updateRealtimeStatus({ error: 'indisponibles' });
-        });
-      }
-      tick();
-    });
-  }
-    
+
   renderAxisStations();
 
   function clearActiveSelection(){
@@ -1159,12 +1124,8 @@ const mapContainerEl = map.getContainer();
         subtitle.push(ev.delayInfo.panelText);
       }
       const statusText = ev.state + (ev.diff!=null && isFinite(ev.diff) ? ` · ${fmtRelative(ev.diff)}` : '');
-       const arrTime = ev.arrSecReal ?? ev.arrSec;
-      const depTime = ev.depSecReal ?? ev.depSec;
-      const arrScheduled = ev.arrSec;
-      const depScheduled = ev.depSec;
-      const arrLine = arrTime!=null ? `<div>Arrivée : <strong>${escapeHTML(fmtHHMM(arrTime))}</strong>${arrScheduled!=null && arrTime!==arrScheduled ? ` <span class="muted">(théorique ${escapeHTML(fmtHHMM(arrScheduled))})</span>` : ''}</div>` : '';
-      const depLine = depTime!=null ? `<div>Départ : <strong>${escapeHTML(fmtHHMM(depTime))}</strong>${depScheduled!=null && depTime!==depScheduled ? ` <span class="muted">(théorique ${escapeHTML(fmtHHMM(depScheduled))})</span>` : ''}</div>` : '';
+      const arrLine = ev.arrSec!=null ? `<div>Arrivée : <strong>${escapeHTML(fmtHHMM(ev.arrSec))}</strong></div>` : '';
+      const depLine = ev.depSec!=null ? `<div>Départ : <strong>${escapeHTML(fmtHHMM(ev.depSec))}</strong></div>` : '';
       const note = subtitle.length ? `<div class="station-event-note">${escapeHTML(subtitle.join(' — '))}</div>` : '';
       const times = `<div class="station-event-times">${arrLine}${depLine}</div>`;
       const btnId = escapeAttr(ev.trainId);
@@ -1209,11 +1170,6 @@ const mapContainerEl = map.getContainer();
         continue;
       }
 
-      const delaySeconds = train.delaySeconds || 0;
-      const arrSecReal = arrSec!=null ? arrSec + delaySeconds : null;
-      const depSecReal = depSec!=null ? depSec + delaySeconds : null;
-      const focusSecReal = focusSec!=null ? focusSec + delaySeconds : null;
-      
       events.push({
         trainId: tripId,
         number: train.number,
@@ -1221,24 +1177,15 @@ const mapContainerEl = map.getContainer();
         displayName: train.displayName || train.number || tripId,
         arrSec,
         depSec,
-        arrSecReal,
-        depSecReal,
         state,
         focusSec,
         diff: focusSec - now,
-        focusSecReal,
-        diff: focusSecReal!=null ? focusSecReal - now : (focusSec!=null ? focusSec - now : null),
         cow: cowForTrain(tripId),
-        delayInfo: train.delayInfo || computeTrainDelayInfo(train),
-        delaySeconds
+        delayInfo: train.delayInfo || computeTrainDelayInfo(train)
       });
     }
 
-    events.sort((a,b)=>{
-      const aKey = a.focusSecReal ?? a.focusSec ?? Infinity;
-      const bKey = b.focusSecReal ?? b.focusSec ?? Infinity;
-      return aKey - bKey;
-    });
+    events.sort((a,b)=>a.focusSec - b.focusSec);
     return events.slice(0, 8);
   }
 
@@ -1803,12 +1750,14 @@ function setLayerGroupVisibility(group, visible){
         if (!stopMeta) continue;
 
         const nextStop = seq[i+1] ? stopsById.get(seq[i+1].stop_id) : null;
-        const entry = {
+        const etaSec = Math.max(0, Math.round(dep - nowSec));
+
+        items.push({
           id: trip_id,
           headsign,
           from: stopMeta.name || stop.stop_id,
           to: nextStop?.name || stopMeta.name || stop.stop_id,
-          etaSec: Math.max(0, Math.round(dep - nowSec)),
+          etaSec,
           lat: stopMeta.lat,
           lon: stopMeta.lon,
           route_id: trip.route_id,
@@ -1820,24 +1769,8 @@ function setLayerGroupVisibility(group, visible){
           segmentIndex: i,
           segmentProgress: 0,
           nowSec,
-          stopsCount: seq.length,
-          delayInfo: null,
-          delaySeconds: 0
-        };
-
-        const delayInfo = computeTrainDelayInfo(entry);
-        entry.delayInfo = delayInfo;
-        if (delayInfo && delayInfo.minutes != null && delayInfo.minutes > 0){
-          const delaySec = Math.max(0, Math.round(delayInfo.minutes * 60));
-          entry.delaySeconds = delaySec;
-          entry.etaSec = Math.max(0, Math.round((dep + delaySec) - nowSec));
-          if (entry.progress != null && isFinite(entry.progress) && totalSpan > 0){
-            const effectiveNow = nowSec - delaySec;
-            entry.progress = clamp01((effectiveNow - start) / totalSpan);
-          }
-        }
-
-        items.push(entry);
+          stopsCount: seq.length
+        });
         positioned = true;
         break;
       }
@@ -1855,16 +1788,18 @@ function setLayerGroupVisibility(group, visible){
       if (tA==null || tB==null || tB<=tA) continue;
         if (nowSec < tA || nowSec > tB) continue;  
 
-        const baseRatio = clamp01((nowSec - tA) / (tB - tA));
+        const r=(nowSec - tA)/(tB - tA); // 0..1
         const path = pathBetweenStops(sA, sB);
-        const entry = {
+        const pos = positionAlongPath(path, r) || { lat: lerp(sA.lat, sB.lat, r), lon: lerp(sA.lon, sB.lon, r) };
+        const { lat, lon } = pos;
+        const etaSec = Math.max(0, Math.round(tB - nowSec));
+
+        items.push({
           id: trip_id,
           headsign,
           from: sA.name || A.stop_id,
           to: sB.name || B.stop_id,
-          etaSec: Math.max(0, Math.round(tB - nowSec)),
-          lat: 0,
-          lon: 0,
+          etaSec, lat, lon,
           route_id: trip.route_id,
           number,
           numberKey,
@@ -1872,35 +1807,10 @@ function setLayerGroupVisibility(group, visible){
           endSec: end,
           progress: tripProgress,
           segmentIndex: i,
-          segmentProgress: baseRatio,
+          segmentProgress: r,
           nowSec,
-          stopsCount: seq.length,
-          delayInfo: null,
-          delaySeconds: 0
-        };
-
-        const delayInfo = computeTrainDelayInfo(entry);
-        entry.delayInfo = delayInfo;
-        if (delayInfo && delayInfo.minutes != null && delayInfo.minutes > 0){
-          const delaySec = Math.max(0, Math.round(delayInfo.minutes * 60));
-          entry.delaySeconds = delaySec;
-          const effectiveNow = nowSec - delaySec;
-          const delayedRatio = clamp01((effectiveNow - tA) / (tB - tA));
-          entry.segmentProgress = delayedRatio;
-          entry.etaSec = Math.max(0, Math.round((tB + delaySec) - nowSec));
-          if (entry.progress != null && isFinite(entry.progress) && totalSpan > 0){
-            entry.progress = clamp01((effectiveNow - start) / totalSpan);
-          }
-        }
-
-        const pos = positionAlongPath(path, entry.segmentProgress) || {
-          lat: lerp(sA.lat, sB.lat, entry.segmentProgress),
-          lon: lerp(sA.lon, sB.lon, entry.segmentProgress)
-        };
-        entry.lat = pos.lat;
-        entry.lon = pos.lon;
-
-        items.push(entry);
+          stopsCount: seq.length
+        });
         break;
       }
     }
@@ -1913,7 +1823,7 @@ function setLayerGroupVisibility(group, visible){
 
     for (const t of list){
       seen.add(t.id);
-      const delayInfo = t.delayInfo || computeTrainDelayInfo(t);
+      const delayInfo = computeTrainDelayInfo(t);
       t.delayInfo = delayInfo;
       const displayName = t.number ? (t.headsign ? `${t.headsign} — Train ${t.number}` : `Train ${t.number}`) : (t.headsign || t.id);
       t.displayName = displayName;
@@ -1979,11 +1889,7 @@ function setLayerGroupVisibility(group, visible){
 
   // ---------- Boot ----------
   (async function boot(){
-    if (realtimeEnabled){
-      setRealtimeStatus('Retards temps réel : chargement…');
-    } else {
-      updateRealtimeStatus();
-    }
+    setRealtimeStatus('Retards temps réel : chargement…');
     const realtimePromise = loadGtfsRetards({ forceFresh: true }).catch(err => {
       console.error('[GTFS-RT] échec initial', err);
       updateRealtimeStatus({ error: 'indisponibles' });
