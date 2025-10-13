@@ -61,6 +61,10 @@
     .stop-time .time-arr{ color:#8fa1be; }
     .stop-time .time-dep{ color:#d6e6ff; font-weight:600; }
     .stop-time .time-neutral{ color:#90a1b8; }
+    .stop-time .time-entry-rt{ color:#ffd8a0; font-weight:600; }
+    .time-delay-badge{ display:inline-flex; align-items:center; justify-content:center; gap:4px; padding:1px 6px; border-radius:999px; border:1px solid rgba(255,200,128,0.55); background:rgba(128,76,12,0.35); color:#ffd8a0; font-weight:600; font-size:11px; letter-spacing:.01em; }
+    .stop-time .time-entry-rt .time-delay-badge{ margin-left:6px; }
+    .time-inline-rt{ margin-left:6px; font-size:12px; color:#ffd8a0; font-weight:500; }
     .stop-main{ display:flex; flex-direction:column; gap:3px; }
     .stop-name{ font-weight:600; font-size:14px; color:#e0f0ff; }
     .stop-note{ font-size:11px; color:#7f92b1; text-transform:uppercase; letter-spacing:.04em; }
@@ -286,7 +290,159 @@ function escapeHTML(str){
     stationNameNormalizeCache.set(raw, normalized);
     return normalized;
   }
+function minFinite(...values){
+    let best = Infinity;
+    for (const value of values){
+      if (value == null) continue;
+      const num = Number(value);
+      if (!Number.isFinite(num)) continue;
+      if (num < best) best = num;
+    }
+    return best !== Infinity ? best : null;
+  }
 
+  function maxFinite(...values){
+    let best = -Infinity;
+    for (const value of values){
+      if (value == null) continue;
+      const num = Number(value);
+      if (!Number.isFinite(num)) continue;
+      if (num > best) best = num;
+    }
+    return best !== -Infinity ? best : null;
+  }
+
+  function firstFinite(...values){
+    for (const value of values){
+      if (value == null) continue;
+      const num = Number(value);
+      if (Number.isFinite(num)) return num;
+    }
+    return null;
+  }
+
+  function hasSignificantDelay(realSec, scheduledSec){
+    if (realSec == null || scheduledSec == null) return false;
+    return Math.abs(realSec - scheduledSec) >= 30; // >= 30s ~ 1/2 min
+  }
+
+  function formatDelayMinutesValue(minutes){
+    if (minutes == null || !Number.isFinite(minutes)) return '';
+    const rounded = Math.round(minutes);
+    if (!rounded) return '';
+    return `${rounded > 0 ? '+' : ''}${rounded}’`;
+  }
+
+  function collectStationNameCandidates(stopMeta){
+    if (!stopMeta) return [];
+    const seen = new Set();
+    const out = [];
+    const push = (name)=>{
+      if (!name) return;
+      const raw = String(name).trim();
+      if (!raw) return;
+      if (seen.has(raw)) return;
+      seen.add(raw);
+      out.push(raw);
+    };
+    push(stopMeta.name);
+    if (stopMeta.stop_name && stopMeta.stop_name !== stopMeta.name){
+      push(stopMeta.stop_name);
+    }
+    if (stopMeta.parent_station){
+      const parent = stopsById.get(stopMeta.parent_station);
+      if (parent){
+        push(parent.name);
+        if (parent.stop_name && parent.stop_name !== parent.name){
+          push(parent.stop_name);
+        }
+      }
+    }
+    for (const station of AXIS_STATIONS){
+      if (!station.stopSet) continue;
+      if (station.stopSet.has(stopMeta.stop_id) || (stopMeta.parent_station && station.stopSet.has(stopMeta.parent_station))){
+        push(station.label);
+      }
+    }
+    return out;
+  }
+
+  function findDelayEntryForStop(perStation, stopMeta){
+    if (!perStation || !stopMeta) return null;
+    const candidates = collectStationNameCandidates(stopMeta);
+    for (const candidate of candidates){
+      const norm = normalizeStationName(candidate);
+      if (!norm) continue;
+      if (perStation.has(norm)) return perStation.get(norm);
+    }
+    return null;
+  }
+
+  function computeRealtimeSchedule(seq, numberKey){
+    const perStation = numberKey ? trainDelaysByNumber.get(String(numberKey)) : null;
+    const realtimeStops = [];
+    let lastDelayMinutes = 0;
+    let sawRealtime = false;
+    let maxDelayMinutes = 0;
+    let cancelledIndex = null;
+
+    for (let idx=0; idx<seq.length; idx++){
+      const stop = seq[idx];
+      const stopMeta = stopsById.get(stop.stop_id);
+      const entry = perStation ? findDelayEntryForStop(perStation, stopMeta) : null;
+      let delayMinutes = lastDelayMinutes;
+      let hasRealtime = false;
+      let cancelled = false;
+
+      if (entry){
+        if (entry.value == null){
+          cancelled = true;
+        } else {
+          delayMinutes = Number(entry.value) || 0;
+          lastDelayMinutes = delayMinutes;
+          hasRealtime = true;
+          sawRealtime = true;
+          if (Math.abs(delayMinutes) > Math.abs(maxDelayMinutes)){
+            maxDelayMinutes = delayMinutes;
+          }
+        }
+      }
+
+      const arrRealtime = stop.arrival != null ? stop.arrival + delayMinutes * 60 : null;
+      const depRealtime = stop.departure != null ? stop.departure + delayMinutes * 60 : null;
+
+      if (cancelled && cancelledIndex == null){
+        cancelledIndex = idx;
+      }
+
+      realtimeStops.push({
+        index: idx,
+        stop,
+        stopMeta,
+        delayMinutes,
+        hasRealtime,
+        arrRealtime,
+        depRealtime,
+        cancelled
+      });
+    }
+
+    const firstStopRT = realtimeStops.find(st=> st.depRealtime != null || st.arrRealtime != null) || null;
+    const lastStopRT = [...realtimeStops].reverse().find(st=> st.arrRealtime != null || st.depRealtime != null) || null;
+    const startRealtimeSec = firstStopRT ? firstFinite(firstStopRT.depRealtime, firstStopRT.arrRealtime) : null;
+    const endRealtimeSec = lastStopRT ? firstFinite(lastStopRT.arrRealtime, lastStopRT.depRealtime) : null;
+
+    return {
+      stops: realtimeStops,
+      startRealtimeSec,
+      endRealtimeSec,
+      lastDelayMinutes,
+      maxDelayMinutes,
+      hasRealtime,
+      cancelledIndex
+    };
+  }
+  
   const SAME_ORIGIN_GTFS_RT = (()=>{
     const base = location.origin + location.pathname.replace(/\/[^\/]*$/, '/');
     return base + 'retards_nancymetzlux.json';
@@ -922,8 +1078,15 @@ const mapContainerEl = map.getContainer();
       const isLast = idx === seq.length - 1;
       const arrTxt = arrival!=null ? fmtHHMM(arrival) : null;
       const depTxt = departure!=null ? fmtHHMM(departure) : null;
+      const rtStop = data.realtimeStops?.[idx] || null;
+      const arrRealtime = rtStop?.arrRealtime ?? null;
+      const depRealtime = rtStop?.depRealtime ?? null;
       const timeParts = [];
       let label;
+
+      const addPart = (type, text, kind='scheduled', delayLabel='')=>{
+        addPart(type, baseTxt, 'scheduled');
+      };
       
       if (isFirst){
         const base = departure ?? arrival;
@@ -935,21 +1098,21 @@ const mapContainerEl = map.getContainer();
         }
       } else if (isLast){
         const base = arrival ?? departure;
-       const baseTxt = base!=null ? fmtHHMM(base) : null;
+        const baseTxt = base!=null ? fmtHHMM(base) : null;
         if (baseTxt){
           const type = arrival!=null ? 'arr' : 'dep';
-          timeParts.push({ type, text: baseTxt });
+          addPart(type, baseTxt, 'scheduled');
           label = baseTxt;
         }
       } else {
         if (arrTxt){
-          timeParts.push({ type:'arr', text: arrTxt });
+          addPart('arr', arrTxt, 'scheduled');
         }
         if (depTxt){
           if (depTxt !== arrTxt){
-            timeParts.push({ type:'dep', text: depTxt });
+            addPart('dep', depTxt, 'scheduled');
           } else if (!arrTxt){
-            timeParts.push({ type:'dep', text: depTxt });
+            addPart('dep', depTxt, 'scheduled');
           }
         }
       }
@@ -957,26 +1120,58 @@ const mapContainerEl = map.getContainer();
       if (!timeParts.length){
         const fallback = arrTxt || depTxt;
         if (fallback){
-          timeParts.push({ type: arrTxt ? 'arr' : depTxt ? 'dep' : 'neutral', text: fallback });
+          const fallbackType = arrTxt ? 'arr' : depTxt ? 'dep' : 'neutral';
+          addPart(fallbackType, fallback, 'scheduled');
           label = fallback;
         } else {
-          timeParts.push({ type:'neutral', text:'—' });
+          addPart('neutral', '—', 'scheduled');
           label = '—';
         }
+      }
+
+     const arrDelayLabel = hasSignificantDelay(arrRealtime, arrival)
+        ? formatDelayMinutesValue((arrRealtime - arrival) / 60)
+        : '';
+      if (arrRealtime != null && (arrDelayLabel || arrival == null)){
+        addPart('arr', fmtHHMM(arrRealtime), 'realtime', arrDelayLabel);
+      }
+      const depDelayLabel = hasSignificantDelay(depRealtime, departure)
+        ? formatDelayMinutesValue((depRealtime - departure) / 60)
+        : '';
+      if (depRealtime != null && (depDelayLabel || departure == null)){
+        addPart('dep', fmtHHMM(depRealtime), 'realtime', depDelayLabel);
       }
       
       if (!label){
         label = timeParts[0]?.text ?? '—';
       }
 
-      return { name, arrival, departure, isFirst, isLast, label, timeParts };
+      return { name, arrival, departure, arrRealtime, depRealtime, delayMinutes: rtStop?.delayMinutes ?? null, isFirst, isLast, label, timeParts };
     });
 
     const startName = stops[0]?.name || '—';
     const endName = stops.at(-1)?.name || '—';
-    const summaryStartTime = data.startSec!=null ? fmtHHMM(data.startSec) : stops[0] ? stops[0].label : '—';
-    const summaryEndTime = data.endSec!=null ? fmtHHMM(data.endSec) : stops.at(-1) ? stops.at(-1).label : '—';
-    let summaryHtml = `${escapeHTML(startName)} <strong>${escapeHTML(summaryStartTime)}</strong> → ${escapeHTML(endName)} <strong>${escapeHTML(summaryEndTime)}</strong>`;
+    const startScheduledSec = data.startSec ?? stops[0]?.departure ?? stops[0]?.arrival ?? null;
+    const endScheduledSec = data.endSec ?? stops.at(-1)?.arrival ?? stops.at(-1)?.departure ?? null;
+    const startRealtimeSec = firstFinite(data.startRealtimeSec, stops[0]?.depRealtime, stops[0]?.arrRealtime);
+    const endRealtimeSec = firstFinite(data.endRealtimeSec, stops.at(-1)?.arrRealtime, stops.at(-1)?.depRealtime);
+    const summaryStartTime = startScheduledSec!=null ? fmtHHMM(startScheduledSec) : '—';
+    const summaryEndTime = endScheduledSec!=null ? fmtHHMM(endScheduledSec) : '—';
+    const startDelayLabel = (startRealtimeSec!=null && startScheduledSec!=null && hasSignificantDelay(startRealtimeSec, startScheduledSec))
+      ? formatDelayMinutesValue((startRealtimeSec - startScheduledSec)/60)
+      : '';
+    const endDelayLabel = (endRealtimeSec!=null && endScheduledSec!=null && hasSignificantDelay(endRealtimeSec, endScheduledSec))
+      ? formatDelayMinutesValue((endRealtimeSec - endScheduledSec)/60)
+      : '';
+    const startRealtimeText = startRealtimeSec!=null ? fmtHHMM(startRealtimeSec) : null;
+    const endRealtimeText = endRealtimeSec!=null ? fmtHHMM(endRealtimeSec) : null;
+    const startRealtimeHtml = (startRealtimeText && (startDelayLabel || startScheduledSec == null))
+      ? ` <span class="time-inline-rt">${escapeHTML(startRealtimeText)}${startDelayLabel ? ` <span class="time-delay-badge">${escapeHTML(startDelayLabel)}</span>` : ''}</span>`
+      : '';
+    const endRealtimeHtml = (endRealtimeText && (endDelayLabel || endScheduledSec == null))
+      ? ` <span class="time-inline-rt">${escapeHTML(endRealtimeText)}${endDelayLabel ? ` <span class="time-delay-badge">${escapeHTML(endDelayLabel)}</span>` : ''}</span>`
+      : '';
+    let summaryHtml = `${escapeHTML(startName)} <strong>${escapeHTML(summaryStartTime)}</strong>${startRealtimeHtml} → ${escapeHTML(endName)} <strong>${escapeHTML(summaryEndTime)}</strong>${endRealtimeHtml}`;
     if (data.delayInfo){
       const severityClass = `trip-panel-delay delay-${data.delayInfo.severity}`;
       const context = data.delayInfo.panelContext ? `<div class="trip-panel-delay-context">${escapeHTML(data.delayInfo.panelContext)}</div>` : '';
@@ -1049,7 +1244,9 @@ const mapContainerEl = map.getContainer();
           status = 'approaching';
         }
       } else if (data.nowSec!=null){
-        const ref = info.isFirst ? (seq[idx].departure ?? seq[idx].arrival) : (seq[idx].arrival ?? seq[idx].departure);
+        const ref = info.isFirst
+          ? firstFinite(info.depRealtime, info.arrRealtime, seq[idx].departure, seq[idx].arrival)
+          : firstFinite(info.arrRealtime, info.depRealtime, seq[idx].arrival, seq[idx].departure);
         if (ref!=null){
           status = data.nowSec >= ref ? 'passed' : 'upcoming';
         }
@@ -1064,8 +1261,20 @@ const mapContainerEl = map.getContainer();
       }
       const note = noteParts.length ? `<div class="stop-note"><strong>${escapeHTML(noteParts.join(' · '))}</strong></div>` : '';
       const timesHtml = info.timeParts.map(part=>{
-        const cls = part.type === 'arr' ? 'time-arr' : part.type === 'dep' ? 'time-dep' : 'time-neutral';
-        return `<div class="time-entry ${cls}">${escapeHTML(part.text)}</div>`;
+        let cls;
+        if (part.kind === 'realtime'){
+          cls = 'time-entry time-entry-rt';
+        } else if (part.type === 'arr'){
+          cls = 'time-entry time-arr';
+        } else if (part.type === 'dep'){
+          cls = 'time-entry time-dep';
+        } else {
+          cls = 'time-entry time-neutral';
+        }
+        const delayBadge = part.kind === 'realtime' && part.delayLabel
+          ? ` <span class="time-delay-badge">${escapeHTML(part.delayLabel)}</span>`
+          : '';
+        return `<div class="${cls}">${escapeHTML(part.text)}${delayBadge}</div>`;
       }).join('');
       const classes = [status, ...extraClasses].filter(Boolean).join(' ');
       const styleAttr = connectorProgress > 0 && !info.isLast ? ` style="--connector-progress:${connectorProgress.toFixed(3)}"` : '';
@@ -1145,15 +1354,18 @@ const mapContainerEl = map.getContainer();
       const seq = stopTimesByTrip.get(tripId);
       if (!seq || !seq.length) continue;
       let target = null;
-      for (const st of seq){
-        if (stopIds.has(st.stop_id)) { target = st; break; }
+      let targetIdx = -1;
+      for (let idx=0; idx<seq.length; idx++){
+        const st = seq[idx];
+        if (stopIds.has(st.stop_id)) { target = st; targetIdx = idx; break; }
         const meta = stopsById.get(st.stop_id);
-        if (meta?.parent_station && stopIds.has(meta.parent_station)){ target = st; break; }
+        if (meta?.parent_station && stopIds.has(meta.parent_station)){ target = st; targetIdx = idx; break; }
       }
       if (!target) continue;
 
-      const arrSec = target.arrival;
-      const depSec = target.departure;
+      const rtInfo = train.realtimeStops?.[targetIdx] || null;
+      const arrSec = rtInfo?.arrRealtime ?? target.arrival;
+      const depSec = rtInfo?.depRealtime ?? target.departure;
       let state = null;
       let focusSec = null;
 
@@ -1714,17 +1926,11 @@ function setLayerGroupVisibility(group, visible){
 
   // ---------- Calcul positions (interpolation arrêt→arrêt) ----------
   function trainsAt(nowSec){
-    const items=[];
+    const items = [];
     for (const [trip_id, seq] of stopTimesByTrip.entries()){
-      if (seq.length<2) continue;
+      if (seq.length < 2) continue;
       if (!tripPassesAxis(seq)) continue;
       if (!serviceAllowed(trip_id)) continue;
-
-      const start = seq[0].departure ?? seq[0].arrival;
-      const end   = seq.at(-1).arrival ?? seq.at(-1).departure;
-      if (start==null || end==null || nowSec<start || nowSec>end) continue;
-      const totalSpan = end - start;
-      const tripProgress = totalSpan > 0 ? (nowSec - start) / totalSpan : null;
 
       const trip = tripsById.get(trip_id) || {};
       const route = routesById.get(trip.route_id) || {};
@@ -1737,81 +1943,189 @@ function setLayerGroupVisibility(group, visible){
         return '';
       })();
 
+      const realtime = computeRealtimeSchedule(seq, numberKey);
+      if (realtime.cancelledIndex != null){
+        continue;
+      }
+
+      const startScheduled = seq[0].departure ?? seq[0].arrival;
+      const endScheduled = seq.at(-1).arrival ?? seq.at(-1).departure;
+      const startRealtime = realtime.startRealtimeSec;
+      const endRealtime = realtime.endRealtimeSec;
+      const startWindow = minFinite(startScheduled, startRealtime);
+      const endWindow = maxFinite(endScheduled, endRealtime);
+      if (startWindow != null && nowSec < startWindow) continue;
+      if (endWindow != null && nowSec > endWindow) continue;
+
+      const progressStart = firstFinite(startRealtime, startScheduled);
+      const progressEnd = firstFinite(endRealtime, endScheduled);
+      const totalSpan = (progressStart != null && progressEnd != null) ? (progressEnd - progressStart) : null;
+      const rawProgress = totalSpan > 0 ? (nowSec - progressStart) / totalSpan : null;
+      const tripProgress = rawProgress != null ? Math.max(0, Math.min(1, rawProgress)) : null;
+
       let positioned = false;
 
-      for (let i=0;i<seq.length;i++){
+      for (let i=0; i<seq.length; i++){
         const stop = seq[i];
-        const arr = stop.arrival;
-        const dep = stop.departure;
-        if (arr==null || dep==null || dep<=arr) continue;
-        if (nowSec < arr || nowSec > dep) continue;
-
         const stopMeta = stopsById.get(stop.stop_id);
         if (!stopMeta) continue;
+        const rtStop = realtime.stops[i];
+        const arrScheduled = stop.arrival;
+        const depScheduled = stop.departure;
+        const arrRealtime = rtStop?.arrRealtime;
+        const depRealtime = rtStop?.depRealtime;
+        const windowStart = firstFinite(arrRealtime, depRealtime, arrScheduled, depScheduled);
+        const windowEnd = firstFinite(depRealtime, arrRealtime, depScheduled, arrScheduled);
+        if (windowStart == null || windowEnd == null) continue;
+        if (windowEnd < windowStart) continue;
+        if (nowSec < windowStart || nowSec > windowEnd) continue;
 
-        const nextStop = seq[i+1] ? stopsById.get(seq[i+1].stop_id) : null;
-        const etaSec = Math.max(0, Math.round(dep - nowSec));
+        const nextStopMeta = seq[i+1] ? stopsById.get(seq[i+1].stop_id) : null;
+        const etaSec = Math.max(0, Math.round(windowEnd - nowSec));
 
         items.push({
           id: trip_id,
           headsign,
           from: stopMeta.name || stop.stop_id,
-          to: nextStop?.name || stopMeta.name || stop.stop_id,
+          to: nextStopMeta?.name || stopMeta.name || stop.stop_id,
           etaSec,
           lat: stopMeta.lat,
           lon: stopMeta.lon,
           route_id: trip.route_id,
           number,
           numberKey,
-          startSec: start,
-          endSec: end,
+          startSec: startScheduled,
+          endSec: endScheduled,
+          startRealtimeSec: progressStart,
+          endRealtimeSec: progressEnd,
           progress: tripProgress,
           segmentIndex: i,
           segmentProgress: 0,
           nowSec,
-          stopsCount: seq.length
+          stopsCount: seq.length,
+          realtimeStops: realtime.stops,
+          realtimeDelayMinutes: rtStop?.delayMinutes ?? realtime.lastDelayMinutes ?? 0
         });
         positioned = true;
         break;
       }
 
-      if (positioned) continue;
+      if (positioned){
+        continue;
+      }
 
-      for (let i=0;i<seq.length-1;i++){
-        const A=seq[i], B=seq[i+1];
-        const tA = A.departure ?? A.arrival;
-        const tB = B.arrival   ?? B.departure;
-
-        const sA = stopsById.get(A.stop_id), sB = stopsById.get(B.stop_id);
+        for (let i=0; i<seq.length-1; i++){
+        const A = seq[i];
+        const B = seq[i+1];
+        const sA = stopsById.get(A.stop_id);
+        const sB = stopsById.get(B.stop_id);
         if (!sA || !sB) continue;
 
-      if (tA==null || tB==null || tB<=tA) continue;
-        if (nowSec < tA || nowSec > tB) continue;  
+        const rtA = realtime.stops[i];
+        const rtB = realtime.stops[i+1];
+        const tA = firstFinite(rtA?.depRealtime, rtA?.arrRealtime, A.departure, A.arrival);
+        const tB = firstFinite(rtB?.arrRealtime, rtB?.depRealtime, B.arrival, B.departure);
+        if (tA == null || tB == null || tB <= tA) continue;
+        if (nowSec < tA || nowSec > tB) continue;
 
-        const r=(nowSec - tA)/(tB - tA); // 0..1
+        const span = tB - tA;
+        const r = span > 0 ? (nowSec - tA) / span : 0;
+        const clampedR = Math.max(0, Math.min(1, r));
         const path = pathBetweenStops(sA, sB);
-        const pos = positionAlongPath(path, r) || { lat: lerp(sA.lat, sB.lat, r), lon: lerp(sA.lon, sB.lon, r) };
+        const pos = positionAlongPath(path, clampedR) || { lat: lerp(sA.lat, sB.lat, clampedR), lon: lerp(sA.lon, sB.lon, clampedR) };
         const { lat, lon } = pos;
         const etaSec = Math.max(0, Math.round(tB - nowSec));
+        const delayForSegment = rtB?.delayMinutes ?? rtA?.delayMinutes ?? realtime.lastDelayMinutes ?? 0;  
 
         items.push({
           id: trip_id,
           headsign,
           from: sA.name || A.stop_id,
           to: sB.name || B.stop_id,
-          etaSec, lat, lon,
+          etaSec,
+          lat,
+          lon,
           route_id: trip.route_id,
           number,
           numberKey,
-          startSec: start,
-          endSec: end,
+          startSec: startScheduled,
+          endSec: endScheduled,
+          startRealtimeSec: progressStart,
+          endRealtimeSec: progressEnd,
           progress: tripProgress,
           segmentIndex: i,
-          segmentProgress: r,
+          segmentProgress: clampedR,
           nowSec,
-          stopsCount: seq.length
+          stopsCount: seq.length,
+          realtimeStops: realtime.stops,
+          realtimeDelayMinutes: delayForSegment
         });
+        positioned = true;
         break;
+      }
+      if (positioned){
+        continue;
+      }
+
+      const firstStopMeta = stopsById.get(seq[0].stop_id);
+      const firstRt = realtime.stops[0];
+      const departureReal = firstFinite(firstRt?.depRealtime, firstRt?.arrRealtime, startScheduled);
+      if (firstStopMeta && departureReal != null && nowSec < departureReal){
+        const etaSec = Math.max(0, Math.round(departureReal - nowSec));
+        items.push({
+          id: trip_id,
+          headsign,
+          from: firstStopMeta.name || seq[0].stop_id,
+          to: firstStopMeta.name || seq[0].stop_id,
+          etaSec,
+          lat: firstStopMeta.lat,
+          lon: firstStopMeta.lon,
+          route_id: trip.route_id,
+          number,
+          numberKey,
+          startSec: startScheduled,
+          endSec: endScheduled,
+          startRealtimeSec: progressStart,
+          endRealtimeSec: progressEnd,
+          progress: tripProgress != null ? Math.max(0, tripProgress) : null,
+          segmentIndex: 0,
+          segmentProgress: 0,
+          nowSec,
+          stopsCount: seq.length,
+          realtimeStops: realtime.stops,
+          realtimeDelayMinutes: firstRt?.delayMinutes ?? realtime.lastDelayMinutes ?? 0
+        });
+        continue;
+      }
+
+      const lastIndex = seq.length - 1;
+      const lastStopMeta = stopsById.get(seq[lastIndex].stop_id);
+      const lastRt = realtime.stops[lastIndex];
+      const arrivalReal = firstFinite(lastRt?.arrRealtime, lastRt?.depRealtime, endScheduled);
+      if (lastStopMeta && arrivalReal != null && nowSec >= arrivalReal){
+        items.push({
+          id: trip_id,
+          headsign,
+          from: lastStopMeta.name || seq[lastIndex].stop_id,
+          to: lastStopMeta.name || seq[lastIndex].stop_id,
+          etaSec: 0,
+          lat: lastStopMeta.lat,
+          lon: lastStopMeta.lon,
+          route_id: trip.route_id,
+          number,
+          numberKey,
+          startSec: startScheduled,
+          endSec: endScheduled,
+          startRealtimeSec: progressStart,
+          endRealtimeSec: progressEnd,
+          progress: tripProgress != null ? Math.min(1, Math.max(0, tripProgress)) : null,
+          segmentIndex: lastIndex,
+          segmentProgress: 1,
+          nowSec,
+          stopsCount: seq.length,
+          realtimeStops: realtime.stops,
+          realtimeDelayMinutes: lastRt?.delayMinutes ?? realtime.lastDelayMinutes ?? 0
+        });
       }
     }
     return items;
