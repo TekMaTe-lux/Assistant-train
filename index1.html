@@ -4719,6 +4719,220 @@ const FORCE_VIA_METZ = false;                // correspondances à Metz uniqueme
 const KEEP_ONLY_EARLIEST_TRANSFER = true;   // n’afficher que la 1ʳᵉ correspondance la plus proche
 const STRICT_CALENDAR = false;              // 🔴 ne PAS filtrer avec calendar_dates seul
 
+const HAFAS_ACCESS_ID = '58ef9a71-6837-4405-bd5d-23beaf92864c';
+const REALTIME_TRANSFER_STATIONS = [
+  {
+    name: 'Bettembourg',
+    hafasIds: ['000220102018', '220102018'],
+    cacheMs: 60_000
+  }
+];
+const HAFAS_DEPARTURE_CACHE = new Map();
+
+function normalizeLabelLite(str){
+  return String(str || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/['’]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
+}
+
+function ymdToIsoDate(ymd){
+  if (!ymd || typeof ymd !== 'string' || ymd.length !== 8) return null;
+  return `${ymd.slice(0,4)}-${ymd.slice(4,6)}-${ymd.slice(6,8)}`;
+}
+
+function minutesToHafasClock(min){
+  const clock = minutesToClock(min);
+  return clock ? `${clock}:00` : null;
+}
+
+function extractFlexibleTrainNumber(value){
+  const m = String(value || '').match(/\b\d{3,6}\b/);
+  return m ? m[0] : null;
+}
+
+async function fetchHafasDepartureBoard({ stopId, dateStr, timeStr, duration = 120, maxJourneys = 30, cacheMs = 60_000 }){
+  if (!stopId || !dateStr || !timeStr) return { departures: [] };
+  const key = `${stopId}|${dateStr}|${timeStr}|${duration}|${maxJourneys}`;
+  const now = Date.now();
+  const cached = HAFAS_DEPARTURE_CACHE.get(key);
+  if (cached && (now - cached.fetchedAt) < cacheMs) return cached.payload;
+
+  const params = new URLSearchParams({
+    accessId: HAFAS_ACCESS_ID,
+    id: stopId,
+    date: dateStr,
+    time: timeStr,
+    duration: String(duration),
+    maxJourneys: String(maxJourneys),
+    format: 'json'
+  });
+  const url = `https://cdt.hafas.de/opendata/apiserver/departureBoard?${params.toString()}`;
+
+  const payload = { departures: [] };
+  try {
+    const res = await fetch(url, { cache: 'no-store' });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const json = await res.json();
+    const list = Array.isArray(json?.Departure) ? json.Departure : [];
+    payload.departures = list.map(dep => {
+      const plannedRaw = String(dep.time || '').slice(0, 5);
+      const realtimeRaw = dep.rtTime ? String(dep.rtTime).slice(0, 5) : null;
+      const plannedMin = plannedRaw ? rawHHMMToMinutes(plannedRaw.replace(':', '')) : null;
+      const realtimeMin = realtimeRaw ? rawHHMMToMinutes(realtimeRaw.replace(':', '')) : null;
+      const direction = String(dep.direction || dep.Product?.direction || '').replace(/,?\s*Gare$/i, '').trim();
+      const directionNorm = normalizeLabelLite(direction);
+      const number = extractFlexibleTrainNumber(dep.name) || extractFlexibleTrainNumber(dep.Product?.name) || extractFlexibleTrainNumber(dep.Product?.line);
+      return {
+        planned: plannedRaw || null,
+        plannedMin,
+        realtime: realtimeRaw,
+        realtimeMin,
+        direction,
+        directionNorm,
+        number,
+        track: dep.rtTrack || dep.track || null,
+        cancelled: !!(dep.cancelled || dep.status === 'deleted'),
+        raw: dep
+      };
+    });
+  } catch (err) {
+    console.warn('[HAFAS] depart board failed', err);
+  }
+
+  HAFAS_DEPARTURE_CACHE.set(key, { fetchedAt: now, payload });
+  return payload;
+}
+
+function buildRealtimeLookup(entry){
+  const byMinute = new Map();
+  const byNumber = new Map();
+  for (const dep of entry.departures){
+    if (Number.isFinite(dep.plannedMin)){
+      if (!byMinute.has(dep.plannedMin)) byMinute.set(dep.plannedMin, []);
+      byMinute.get(dep.plannedMin).push(dep);
+    }
+    if (dep.number){
+      if (!byNumber.has(dep.number)) byNumber.set(dep.number, []);
+      byNumber.get(dep.number).push(dep);
+    }
+  }
+  entry.byMinute = byMinute;
+  entry.byNumber = byNumber;
+  return entry;
+}
+
+async function getRealtimeTransferDepartures({ ymd, fromMin, toMin, maxTransferMin }){
+  const out = new Map();
+  const isoDate = ymdToIsoDate(ymd);
+  if (!isoDate) return out;
+
+  const searchStart = Math.max(0, Math.min(fromMin, toMin) - 30);
+  const searchEnd = Math.max(fromMin, toMin) + Math.max(60, maxTransferMin || 0);
+  const duration = Math.min(240, Math.max(30, searchEnd - searchStart));
+  const timeStr = minutesToHafasClock(searchStart);
+  if (!timeStr) return out;
+
+  for (const cfg of REALTIME_TRANSFER_STATIONS){
+    const ids = getIdsForName(cfg.name);
+    if (!ids || !ids.size) continue;
+
+    let board = null;
+    for (const stopId of cfg.hafasIds){
+      const data = await fetchHafasDepartureBoard({
+        stopId,
+        dateStr: isoDate,
+        timeStr,
+        duration,
+        maxJourneys: 40,
+        cacheMs: cfg.cacheMs ?? 60_000
+      });
+      if (data.departures && data.departures.length){
+        board = { name: cfg.name, stopId, departures: data.departures.slice() };
+        break;
+      }
+      if (!board) board = { name: cfg.name, stopId, departures: data.departures.slice() };
+    }
+
+    if (!board) continue;
+    const entry = buildRealtimeLookup(board);
+    ids.forEach(id => out.set(id, entry));
+  }
+
+  return out;
+}
+
+function matchRealtimeDeparture(entry, { depMin, num, normDest }){
+  if (!entry) return null;
+  const minutesToTry = [];
+  if (Number.isFinite(depMin)){
+    for (let delta = -2; delta <= 2; delta++) minutesToTry.push(depMin + delta);
+  }
+  const tryMatch = (list, strictTime) => {
+    if (!Array.isArray(list)) return null;
+    for (const item of list){
+      if (num && item.number && item.number !== num) continue;
+      if (!strictTime && num && item.number && item.number === num) return item;
+      if (normDest){
+        const dir = item.directionNorm || normalizeLabelLite(item.direction);
+        if (dir){
+          if (dir === normDest) return item;
+          if (dir.includes(normDest) || normDest.includes(dir)) return item;
+        }
+      } else {
+        return item;
+      }
+    }
+    return null;
+  };
+
+  for (const minute of minutesToTry){
+    const list = entry.byMinute?.get(minute);
+    const match = tryMatch(list, true);
+    if (match) return match;
+  }
+
+  if (num && entry.byNumber){
+    const list = entry.byNumber.get(num);
+    const match = tryMatch(list, false);
+    if (match) return match;
+  }
+
+  // dernier recours : toute la liste
+  if (Array.isArray(entry.departures)){
+    const match = tryMatch(entry.departures, false);
+    if (match) return match;
+  }
+
+  return null;
+}
+
+function attachRealtimeToTransfer(transfer, { viaStopId, dep2Sec, arr1Sec, destName, num2, realtimeMap }){
+  if (!(realtimeMap instanceof Map) || !realtimeMap.size) return true;
+  const entry = realtimeMap.get(viaStopId);
+  if (!entry) return true;
+
+  const depMin = Number.isFinite(dep2Sec) ? Math.floor(dep2Sec / 60) : null;
+  const normDest = destName ? normalizeLabelLite(destName) : null;
+  const normalizedNum = num2 && /\d/.test(num2) ? num2 : null;
+  const match = matchRealtimeDeparture(entry, { depMin, num: normalizedNum, normDest });
+  if (!match) return false;
+
+  transfer.cflRealtime = true;
+  transfer.cflCancelled = !!match.cancelled;
+  transfer.cflTrack = match.track || null;
+  transfer.dep2rt = match.realtime || match.planned || transfer.dep2;
+  transfer.dep2Realtime = match.realtime || null;
+  if (Number.isFinite(arr1Sec) && Number.isFinite(match.realtimeMin)){
+    transfer.waitMinReal = Math.max(0, Math.round((match.realtimeMin * 60 - arr1Sec)/60));
+  }
+  transfer.realtimeMeta = match;
+  return true;
+}    
+
     const $allow = $('#allowTransfer');
 if ($allow.length) $allow.prop('checked', false);
 
@@ -5221,7 +5435,7 @@ function ensureTransferIndexesBuilt(){
     for (const r of sts){
       if (r.depS==null) continue;
       if (!depsByStop.has(r.stop_id)) depsByStop.set(r.stop_id, []);
-      depsByStop.get(r.stop_id).push({ trip_id, depS: r.depS, seq: r.seq });
+      depsByStop.get(r.stop_id).push({ trip_id, depS: r.depS, seq: r.seq, stop_id: r.stop_id });
     }
   });
   for (const list of depsByStop.values()) list.sort((a,b)=>a.depS-b.depS);
@@ -5394,9 +5608,14 @@ function findOneTransferItineraries({
   maxTransferMin = 45,
   ymd,
   allowedInterchanges = null,
-  maxResults = 40
+  maxResults = 40,
+  realtimeDepartures = null
 }){
   ensureTransferIndexesBuilt(); buildStationGroups();
+
+  const realtimeMap = (realtimeDepartures instanceof Map && realtimeDepartures.size)
+    ? realtimeDepartures
+    : null;
 
   const depStart = t0Min * 60;
   const depEnd   = t1Min * 60;
@@ -5474,6 +5693,12 @@ function findOneTransferItineraries({
         const d2 = depsFromInter[k];
         if (d2.depS > latest) break;               // ❗ respecte délai max
 
+        if (inter.stop_id && d2.stop_id && inter.stop_id !== d2.stop_id){
+          const viaNorm = normalizeLabelLite(GTFS.idToName.get(inter.stop_id) || '');
+          const depNorm = normalizeLabelLite(GTFS.idToName.get(d2.stop_id) || '');
+          if (viaNorm && depNorm && viaNorm !== depNorm) continue;
+        }
+
         const trip2 = d2.trip_id;
 
         // 🚫 1) pas de correspondance sur le même voyage (trip_id)
@@ -5490,17 +5715,29 @@ function findOneTransferItineraries({
         const num2 = extractTrainNumber(GTFS._tripById.get(trip2)?.trip_short_name) || extractTrainNumber(trip2) || '—';
         if (num1 && num2 && num1 === num2) continue;
 
+        const destName = GTFS.idToName.get(toDest.stop_id) || '';
+        const dep2Sec = st2[idxInter2].depS;
+
         best = {
           viaId:   inter.stop_id,
           viaName: GTFS.idToName.get(inter.stop_id) || 'Metz',
           num1, num2,
           dep1:    toHHMM(dep1S),
           arr1:    toHHMM(inter.arrS),
-          dep2:    toHHMM(st2[idxInter2].depS),
+          dep2:    toHHMM(dep2Sec),
           arr2:    toHHMM(toDest.arrS),
           waitMin: Math.max(0, Math.round((st2[idxInter2].depS - inter.arrS)/60)),
           durMin:  Math.max(0, Math.round((toDest.arrS - dep1S)/60))
         };
+        const ok = attachRealtimeToTransfer(best, {
+          viaStopId: inter.stop_id,
+          dep2Sec,
+          arr1Sec: inter.arrS,
+          destName,
+          num2,
+          realtimeMap
+        });
+        if (!ok){ best = null; continue; }
         break; // on ne garde que la plus proche
       }
     } else {
@@ -5542,17 +5779,28 @@ function findOneTransferItineraries({
           const num2 = extractTrainNumber(GTFS._tripById.get(trip2)?.trip_short_name) || extractTrainNumber(trip2) || '—';
           if (num1 && num2 && num1 === num2) continue;
 
+          const destName = GTFS.idToName.get(toDest.stop_id) || '';
+          const dep2Sec = st2[idxInter2].depS;
           best = {
             viaId:   interJ.stop_id,
             viaName: GTFS.idToName.get(interJ.stop_id) || '',
             num1, num2,
             dep1:    toHHMM(dep1S),
             arr1:    toHHMM(interJ.arrS),
-            dep2:    toHHMM(st2[idxInter2].depS),
+            dep2:    toHHMM(dep2Sec),
             arr2:    toHHMM(toDest.arrS),
             waitMin: Math.max(0, Math.round((st2[idxInter2].depS - interJ.arrS)/60)),
             durMin:  Math.max(0, Math.round((toDest.arrS - dep1S)/60))
           };
+          const ok = attachRealtimeToTransfer(best, {
+            viaStopId: interJ.stop_id,
+            dep2Sec,
+            arr1Sec: interJ.arrS,
+            destName,
+            num2,
+            realtimeMap
+          });
+          if (!ok){ best = null; continue; }
           break;
         }
       }
@@ -5588,8 +5836,9 @@ function renderTransferCards(transfers, startName, endName){
         <div class="chip transfer" data-num1="${t.num1}" data-num2="${t.num2}">
           <div style="display:flex;flex-direction:column;gap:2px">
             <div><b>${startName}</b> ${t.dep1} → <b>${t.viaName}</b> ${t.arr1} — Train ${t.num1}</div>
-            <div>Attente: ${t.waitMin} min</div>
+            <div>Attente: ${t.cflRealtime && Number.isFinite(t.waitMinReal) ? `${t.waitMin} min (réel: ${t.waitMinReal} min)` : `${t.waitMin} min`}</div>
             <div><b>${t.viaName}</b> ${t.dep2} → <b>${endName}</b> ${t.arr2} — Train ${t.num2}</div>
+            ${t.cflRealtime ? `<div class="transfer-realtime" style="font-size:0.92em;opacity:0.85">Temps réel CFL : départ ${t.dep2rt || t.dep2}${t.dep2Realtime && t.dep2Realtime !== t.dep2 ? ` (prévu ${t.dep2})` : ''}${t.cflTrack ? ` — Voie ${t.cflTrack}` : ''}${t.cflCancelled ? ` — <strong style="color:#ff6b6b;">Supprimé</strong>` : ''}</div>` : ''}
             <div style="opacity:.8">Durée totale: ${t.durMin} min</div>
           </div>
         </div>
@@ -5672,7 +5921,30 @@ async function computeItineraryProposals({
   if (allowTransfers){
     const minTransferMin = Math.max(1, Number(document.getElementById('minTransfer')?.value || 5));
     const maxTransferMin = Math.max(minTransferMin, Number(document.getElementById('maxTransfer')?.value || 45));
-    const allowedSet = getIdsForName('Metz');
+    const allowedSet = new Set();
+    const metzIds = getIdsForName('Metz');
+    metzIds.forEach(id => allowedSet.add(id));
+
+    let realtimeDepartures = null;
+    const todayYmd = todayYMDLux().replace(/-/g, '');
+    REALTIME_TRANSFER_STATIONS.forEach(cfg => {
+      const ids = getIdsForName(cfg.name);
+      ids.forEach(id => allowedSet.add(id));
+    });
+
+    if (REALTIME_TRANSFER_STATIONS.length && targetYMD === todayYmd){
+      try {
+        realtimeDepartures = await getRealtimeTransferDepartures({
+          ymd: targetYMD,
+          fromMin,
+          toMin,
+          maxTransferMin
+        });
+      } catch (err) {
+        console.warn('[HAFAS] realtime transfers failed', err);
+      }
+    }
+    
     const raw = findOneTransferItineraries({
       originIds,
       destIds,
@@ -5682,7 +5954,8 @@ async function computeItineraryProposals({
       maxTransferMin,
       ymd: targetYMD,
       allowedInterchanges: allowedSet,
-      maxResults: 200
+      maxResults: 200,
+      realtimeDepartures
     });
     transfers = uniqTransfers(keepFirstTransferPerFirstLeg(raw));
   }
