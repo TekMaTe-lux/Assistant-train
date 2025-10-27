@@ -1,24 +1,13 @@
-export default async function handler(req, res) {
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+import { createSncfProxyHandler } from './sncfProxy.js';
 
-  if (req.method === 'OPTIONS') {
-    return res.status(200).end();
+function resolveApiUrl(req) {
+  const { id } = req.query || {};
+  if (!id) {
+    const error = new Error('Paramètre "id" requis');
+    error.statusCode = 400;
+    throw error;
   }
-
-  const { id } = req.query;
-
-  const apiKey = process.env.SNCF_KEY;
-  const auth = Buffer.from(`${apiKey}:`).toString("base64");
-
-  const response = await fetch(
-    `https://api.sncf.com/v1/coverage/sncf/vehicle_journeys/${id}`,
-    {
-      headers: { Authorization: `Basic ${auth}` }
-    }
-  );
-
-  const data = await response.json();
-  res.status(200).json(data);
+ return `https://api.sncf.com/v1/coverage/sncf/vehicle_journeys/${id}`;
 }
+
+export default createSncfProxyHandler({ resolveApiUrl });
