@@ -424,6 +424,13 @@ function createSncfProxyHandler({ resolveApiUrl }) {
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+    res.setHeader('Access-Control-Expose-Headers', [
+      'X-SNCF-Cache',
+      'X-SNCF-Fetched-At',
+      'X-SNCF-Next-Snapshot',
+      'X-SNCF-Next-Snapshot-Seconds',
+      'X-SNCF-Train'
+    ].join(', '));
 
     if (req.method === 'OPTIONS') {
       return res.status(200).end();
