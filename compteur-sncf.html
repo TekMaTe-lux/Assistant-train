@@ -274,8 +274,12 @@
     const statusTextEl = document.getElementById('statusText');
     const lastRefreshEl = document.getElementById('lastRefresh');
     const errorMessageEl = document.getElementById('errorMessage');
+    const autoRefreshEl = document.getElementById('autoRefresh');
 
     const REFRESH_INTERVAL = 30000;
+    const FALLBACK_RETRY_INTERVAL = 120000;
+    const PLATFORM_LIMIT_MESSAGE = "Quota plateforme atteint, temporisation en cours…";
+    let refreshTimer = null;
 
     function formatNumber(value) {
       if (typeof value !== 'number' || Number.isNaN(value)) {
@@ -324,6 +328,34 @@
       } else {
         element.classList.remove('danger');
       }
+    }
+
+    function formatDelay(ms) {
+      const totalSeconds = Math.max(1, Math.round(ms / 1000));
+      if (totalSeconds < 60) {
+        return `${totalSeconds} s`;
+      }
+      const minutes = Math.floor(totalSeconds / 60);
+      const seconds = totalSeconds % 60;
+      if (minutes >= 60) {
+        const hours = Math.floor(minutes / 60);
+        const remainingMinutes = minutes % 60;
+        if (remainingMinutes === 0) {
+          return `${hours} h`;
+        }
+        return `${hours} h ${remainingMinutes} min`;
+      }
+      if (seconds === 0) {
+        return `${minutes} min`;
+      }
+      return `${minutes} min ${seconds} s`;
+    }
+
+    function scheduleNextRefresh(delay) {
+      if (refreshTimer) {
+        clearTimeout(refreshTimer);
+      }
+      refreshTimer = setTimeout(loadStats, delay);
     }
 
     function updateUI(stats, meta = {}) {
@@ -389,6 +421,46 @@ const SNCF_STATS_HOST = (() => {
       return primary === fallback ? [primary] : [primary, fallback];
     }
 
+    function parseRetryAfter(headerValue) {
+      if (!headerValue) return null;
+      const numeric = Number.parseFloat(headerValue);
+      if (Number.isFinite(numeric) && numeric >= 0) {
+        return numeric;
+      }
+      const date = Date.parse(headerValue);
+      if (!Number.isNaN(date)) {
+        const diff = Math.round((date - Date.now()) / 1000);
+        return diff > 0 ? diff : null;
+      }
+      return null;
+    }
+
+    async function buildHttpError(response, url) {
+      const error = new Error(`Statut ${response.status}`);
+      error.status = response.status;
+      error.url = url;
+      const retryAfterHeader = response.headers.get('retry-after');
+      const retryAfterSeconds = parseRetryAfter(retryAfterHeader);
+      if (retryAfterSeconds != null) {
+        error.retryAfterSeconds = retryAfterSeconds;
+      }
+      const contentType = response.headers.get('content-type') || '';
+      if (contentType.includes('application/json')) {
+        try {
+          error.payload = await response.json();
+        } catch (parseErr) {
+          console.warn('Impossible d\'analyser la réponse JSON', parseErr);
+        }
+      } else {
+        try {
+          error.body = await response.text();
+        } catch (textErr) {
+          console.warn('Impossible de lire la réponse texte', textErr);
+        }
+      }
+      return error;
+    }
+
     async function fetchStatsWithFallback() {
       const endpoints = getStatsEndpoints();
       let lastError = null;
@@ -396,7 +468,8 @@ const SNCF_STATS_HOST = (() => {
         try {
           const response = await fetch(url, { cache: 'no-store' });
           if (!response.ok) {
-            throw new Error(`Statut ${response.status}`);
+            lastError = await buildHttpError(response, url);
+            continue;
           }
           return { payload: await response.json(), url };
         } catch (err) {
@@ -404,6 +477,49 @@ const SNCF_STATS_HOST = (() => {
         }
       }
       throw lastError || new Error('Aucun point de terminaison API disponible');
+    }
+
+    function describeHostFromUrl(url) {
+      if (!url) return null;
+      try {
+        const parsed = new URL(url, window.location.href);
+        return parsed.host;
+      } catch (err) {
+        return null;
+      }
+    }
+
+    function buildErrorMessage(err) {
+      if (!err) return 'Dernière tentative échouée, nouvel essai automatique…';
+      const parts = [];
+      if (err.status) {
+        parts.push(`Réponse HTTP ${err.status}`);
+      }
+      if (err.payload && typeof err.payload.error === 'string') {
+        parts.push(err.payload.error);
+      } else if (err.body) {
+        parts.push(err.body.slice(0, 160));
+      }
+      const host = describeHostFromUrl(err.url);
+      if (host) {
+        parts.push(`(${host})`);
+      }
+      if (err.status === 429 && (!err.payload || !err.payload.policy)) {
+        parts.push('Limite Vercel atteinte (100 requêtes / jour).');
+      }
+      const message = parts.filter(Boolean).join(' — ');
+      return message || 'Dernière tentative échouée, nouvel essai automatique…';
+    }
+
+    function computeRetryDelay(err) {
+      if (!err) return REFRESH_INTERVAL;
+      if (err.retryAfterSeconds != null) {
+        return Math.max(err.retryAfterSeconds * 1000, REFRESH_INTERVAL);
+      }
+      if (err.status === 429) {
+        return FALLBACK_RETRY_INTERVAL;
+      }
+      return REFRESH_INTERVAL;
     }
     
     async function loadStats() {
@@ -413,16 +529,26 @@ const SNCF_STATS_HOST = (() => {
         updateUI(payload, { endpoint: url });
         statusTextEl.textContent = 'En ligne';
         errorMessageEl.textContent = '';
+        autoRefreshEl.textContent = `Actualisation automatique : ${formatDelay(REFRESH_INTERVAL)}`;
+        scheduleNextRefresh(REFRESH_INTERVAL);
       } catch (err) {
         console.error('Impossible de charger les stats SNCF', err);
         statusTextEl.textContent = 'Erreur';
-        const detail = err && err.message ? ` (${err.message})` : '';
-        errorMessageEl.textContent = `Dernière tentative échouée${detail}, nouvel essai automatique…`;
+        const retryDelay = computeRetryDelay(err);
+        errorMessageEl.textContent = buildErrorMessage(err);
+        if (retryDelay !== REFRESH_INTERVAL) {
+          autoRefreshEl.textContent = `Nouvel essai dans ${formatDelay(retryDelay)}`;
+        } else {
+          autoRefreshEl.textContent = `Actualisation automatique : ${formatDelay(REFRESH_INTERVAL)}`;
+        }
+        if (err && err.status === 429 && (!err.payload || !err.payload.policy)) {
+          errorMessageEl.textContent += ` ${PLATFORM_LIMIT_MESSAGE}`;
+        }
+        scheduleNextRefresh(retryDelay);
       }
     }
 
     loadStats();
-    setInterval(loadStats, REFRESH_INTERVAL);
   </script>
 </body>
 </html>
