@@ -525,3 +525,22 @@ export function createSncfProxyHandler({ resolveApiUrl }) {
     }
   };
 }
+
+export function getSncfProxyStats() {
+  const now = new Date();
+  const nowInfo = getLocalInfo(now);
+  resetCountersIfNeeded(nowInfo.dayKey);
+
+  return {
+    dayKey: state.counters.dayKey,
+    timezone: TIMEZONE,
+    generatedAt: now.toISOString(),
+    dailyLimit: DAILY_LIMIT,
+    total: state.counters.total,
+    remaining: Math.max(DAILY_LIMIT - state.counters.total, 0),
+    longTermLimit: LONG_TERM_LIMIT,
+    longTerm: state.counters.longTerm,
+    longTermRemaining: Math.max(LONG_TERM_LIMIT - state.counters.longTerm, 0),
+    cacheSize: state.cache.size
+  };
+}
