@@ -7653,8 +7653,12 @@ scheduleWeatherAfterTableSettled();
 
   // *** Appliquer GTFS-RT juste après l'injection (sécurisé DOM) ***
     setTimeout(tryApplyGtfsToCurrentTable, 0);
-      } finally {
+    } finally {
       GTFSLoadingUI.hide();
+      const pendingInfo = document.getElementById('lastUpdated');
+      if (pendingInfo && pendingInfo.textContent === 'Requêtes SNCF en cours…') {
+        setLastUpdated();
+      }
     }
     // ===== FIN handler "#loadTrains"
   });
@@ -7830,8 +7834,20 @@ function summariseSncfFetch(entries) {
   if (!Array.isArray(entries) || entries.length === 0) return null;
   let liveCount = 0;
   let cacheCount = 0;
+  let errorCount = 0;
   let unknownCount = 0;
   let newestTs = null;
+  const errorReasons = new Map();
+
+  const normaliseReason = (raw) => {
+    if (!raw) return null;
+    const httpMatch = String(raw).match(/^HTTP_(\d{3})$/i);
+    if (httpMatch) return `HTTP ${httpMatch[1]}`;
+    if (raw === 'network-error' || raw === 'network') return 'erreur réseau';
+    if (raw === 'quota') return 'quota atteint';
+    if (raw === 'awaiting-snapshot') return 'snapshot en attente';
+    return String(raw).replace(/[-_]/g, ' ');
+  };
 
   entries.forEach(entry => {
     const status = String(entry?.cache?.status || '').toUpperCase();
@@ -7839,6 +7855,12 @@ function summariseSncfFetch(entries) {
       liveCount += 1;
     } else if (status === 'HIT') {
       cacheCount += 1;
+    } else if (status === 'ERROR') {
+      errorCount += 1;
+      const label = normaliseReason(entry?.cache?.reason);
+      if (label) {
+        errorReasons.set(label, (errorReasons.get(label) || 0) + 1);
+      }  
     } else {
       unknownCount += 1;
     }
@@ -7852,17 +7874,31 @@ function summariseSncfFetch(entries) {
 
   const total = entries.length;
   const parts = [];
-  if (liveCount === total && total > 0) {
+  const detail = [];
+
+  if (total > 0 && errorCount === total && liveCount === 0 && cacheCount === 0) {
+    parts.push('Données SNCF indisponibles');
+  } else if (liveCount === total && total > 0) {
     parts.push('Données SNCF actualisées en direct');
   } else if (cacheCount === total && total > 0) {
     parts.push('Données SNCF servies depuis le cache');
   } else {
     parts.push('Données SNCF mixtes');
-    const detail = [];
-    if (liveCount) detail.push(`${liveCount} en direct`);
-    if (cacheCount) detail.push(`${cacheCount} via cache`);
-    if (unknownCount) detail.push(`${unknownCount} statut inconnu`);
-    if (detail.length) parts.push(`(${detail.join(', ')})`);
+  }
+
+  if (liveCount) detail.push(`${liveCount} en direct`);
+  if (cacheCount) detail.push(`${cacheCount} via cache`);
+  if (errorCount) {
+    const reasonBits = Array.from(errorReasons.entries()).map(([label, count]) => {
+      return count > 1 ? `${label} ×${count}` : label;
+    });
+    const reasonText = reasonBits.length ? ` (${reasonBits.join(', ')})` : '';
+    detail.push(`${errorCount} en erreur${reasonText}`);
+  }
+  if (unknownCount) detail.push(`${unknownCount} statut inconnu`);
+
+  if (detail.length) {
+    parts.push(`(${detail.join(', ')})`);
   }
 
   if (newestTs != null) {
@@ -7870,7 +7906,10 @@ function summariseSncfFetch(entries) {
     if (formatted) parts.push(`— dernière requête SNCF : ${formatted}`);
   }
 
-  return { text: parts.join(' '), counts: { live: liveCount, cache: cacheCount, unknown: unknownCount } };
+  return {
+    text: parts.join(' '),
+    counts: { live: liveCount, cache: cacheCount, error: errorCount, unknown: unknownCount }
+  };
 }
     
 /* ---------- TIMESTAMP ---------- */
