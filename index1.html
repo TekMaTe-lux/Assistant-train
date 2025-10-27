@@ -822,6 +822,47 @@ table[data-snapshotting="true"] tbody tr:nth-child(even) {
       font-weight: 600;
       font-size: 0.9em;
     }
+  .gtfs-fallback-cell {
+    background: rgba(0, 240, 255, 0.08);
+    box-shadow: inset 0 0 14px rgba(0, 240, 255, 0.08);
+  }
+  .fallback-pill {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    margin-left: 8px;
+    padding: 2px 8px;
+    border-radius: 999px;
+    font-size: 0.6rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    background: rgba(0, 240, 255, 0.15);
+    border: 1px solid rgba(0, 240, 255, 0.5);
+    color: #00f0ff;
+    white-space: nowrap;
+  }
+  .sncf-fallback-banner {
+    margin-bottom: 12px;
+    padding: 12px 16px;
+    border-radius: 14px;
+    border: 1px solid rgba(255, 196, 87, 0.6);
+    background: linear-gradient(135deg, rgba(255, 196, 87, 0.12), rgba(255, 120, 0, 0.12));
+    color: #ffdca8;
+    font-size: 0.95rem;
+    line-height: 1.5;
+  }
+  .sncf-fallback-banner strong {
+    color: #ffcd73;
+    display: inline-block;
+    margin-bottom: 6px;
+  }
+  .sncf-fallback-banner ul {
+    margin: 8px 0 0 18px;
+    padding: 0;
+  }
+  .sncf-fallback-banner li {
+    margin-bottom: 4px;
+  }  
     @keyframes blinkRedStrike {
   0%, 100% {
     color: #ff4c4c;      /* rouge vif */
@@ -5047,7 +5088,7 @@ async function ensureGTFSLoaded(){
       GTFSLoadingUI.message('Chargement des trajets…');
       const relevantServiceIds = new Set();
       const trips = await fetchAndParseCSV('trips.txt', {
-        keepColumns: ['trip_id','service_id','route_id','trip_short_name'],
+        keepColumns: ['trip_id','service_id','route_id','trip_short_name','trip_headsign'],
         filterRow: row => {
           if (!relevantTripIds.has(row.trip_id)) return false;
           if (row.service_id) relevantServiceIds.add(row.service_id);
@@ -5211,6 +5252,139 @@ function serviceActiveForDate(trip_id, ymd){
   // Fallback ultra-rare si calendar_dates est vide: on laisse passer pour ne pas tout cacher
   return true;
 }
+
+function ensureStopTimesByTripIndex(){
+  if (GTFS._stopTimesByTrip) return;
+  if (!Array.isArray(GTFS.stopTimes)) return;
+  const map = new Map();
+  for (const row of GTFS.stopTimes){
+    if (!row || !row.trip_id) continue;
+    if (!map.has(row.trip_id)) map.set(row.trip_id, []);
+    map.get(row.trip_id).push(row);
+  }
+  map.forEach(list => list.sort((a, b) => Number(a.stop_sequence) - Number(b.stop_sequence)));
+  GTFS._stopTimesByTrip = map;
+}
+
+function ensureTripsByNumberIndex(){
+  if (GTFS._tripsByNumber) return;
+  if (!Array.isArray(GTFS.trips)) return;
+  const index = new Map();
+  for (const trip of GTFS.trips){
+    if (!trip) continue;
+    const numbers = new Set();
+    const headsign = extractTrainNumber(trip.trip_headsign || '');
+    const shortName = extractTrainNumber(trip.trip_short_name || '');
+    const fromId = extractTrainNumber(trip.trip_id || '');
+    if (headsign) numbers.add(headsign);
+    if (shortName) numbers.add(shortName);
+    if (fromId) numbers.add(fromId);
+    numbers.forEach(num => {
+      if (!index.has(num)) index.set(num, new Set());
+      index.get(num).add(trip.trip_id);
+    });
+  }
+  const normalized = new Map();
+  index.forEach((set, num) => normalized.set(num, Array.from(set)));
+  GTFS._tripsByNumber = normalized;
+}
+
+function escapeHtml(str){
+  return String(str ?? '').replace(/[&<>"']/g, ch => ({
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    '"': '&quot;',
+    "'": '&#39;'
+  })[ch] || ch);
+}
+
+async function buildGtfsFallbackResult(number, { ymd } = {}){
+  const normalized = extractTrainNumber(number);
+  if (!normalized) return null;
+  const targetYmd = (ymd && /^\d{8}$/.test(ymd)) ? ymd : null;
+  try {
+    await ensureGTFSLoaded();
+  } catch (err) {
+    console.error('[GTFS] Impossible de charger les données statiques pour le fallback', err);
+    return null;
+  }
+
+  ensureTripsByNumberIndex();
+  ensureStopTimesByTripIndex();
+  buildStationGroups();
+
+  const index = GTFS._tripsByNumber;
+  if (!index) return null;
+  const tripIds = index.get(normalized);
+  if (!tripIds || !tripIds.length) return null;
+  const uniqueTripIds = Array.from(new Set(tripIds));
+
+  let chosenTripId = null;
+  if (targetYmd) {
+    chosenTripId = uniqueTripIds.find(id => serviceActiveForDate(id, targetYmd));
+  }
+  if (!chosenTripId) {
+    chosenTripId = uniqueTripIds[0];
+  }
+  if (!chosenTripId) return null;
+
+  const tripData = GTFS.tripById?.get(chosenTripId);
+  const stopRows = GTFS._stopTimesByTrip?.get(chosenTripId);
+  if (!tripData || !stopRows || !stopRows.length) return null;
+
+  const idToStop = GTFS.idToStop || new Map((GTFS.stops || []).map(s => [s.stop_id, s]));
+  const toHHMMRaw = value => value ? String(value).replace(/:/g, '') : null;
+  const stopTimes = stopRows.map(st => {
+    const stop = idToStop.get(st.stop_id) || {};
+    return {
+      stop_point: {
+        id: st.stop_id,
+        name: stop.stop_name || st.stop_id
+      },
+      arrival_time: toHHMMRaw(st.arrival_time),
+      departure_time: toHHMMRaw(st.departure_time)
+    };
+  });
+
+  if (!stopTimes.length) return null;
+
+  return {
+    train: {
+      stop_times: stopTimes,
+      display_informations: {
+        commercial_mode: 'GTFS statique',
+        physical_mode: 'GTFS statique'
+      },
+      _gtfsFallback: true
+    },
+    impacted: {},
+    newStart: null,
+    newEnd: null,
+    disruptions: [],
+    disruptionCauses: [],
+    gtfsFallback: true,
+    tripId: chosenTripId
+  };
+}
+
+function formatSncfApiError(err){
+  if (!err) return 'API SNCF indisponible';
+  const status = Number(err.status);
+  const statusText = typeof err.statusText === 'string' ? err.statusText.trim() : '';
+  if (status === 429) return 'Limite de requêtes API SNCF atteinte (HTTP 429)';
+  if (status === 503) return 'Service API SNCF indisponible (HTTP 503)';
+  if (status === 502) return 'Passerelle API SNCF en erreur (HTTP 502)';
+  if (status === 500) return 'Erreur interne côté API SNCF (HTTP 500)';
+  if (status && statusText) return `Réponse API SNCF inattendue (HTTP ${status} ${statusText})`;
+  if (status) return `Réponse API SNCF inattendue (HTTP ${status})`;
+  const apiMessage = err?.responseJSON?.message || err?.responseText;
+  if (typeof apiMessage === 'string' && apiMessage.trim()) {
+    return `API SNCF indisponible (${apiMessage.trim()})`;
+  }
+  if (err.message) return `API SNCF indisponible (${err.message})`;
+  return 'API SNCF indisponible';
+}    
     
 /************  RECHERCHE ITINÉRAIRES 1 CORRESPONDANCE (jamais dans le même train)  ************/
 function findOneTransferItineraries({
@@ -6328,6 +6502,7 @@ function addManualTrain(){
 
     const date = $('#trainDate').val();
     const numbers = $('#trainNumbers').val().split(',').map(s => s.trim()).filter(Boolean);
+    const ymdDate = dateInputToYMD(date);
 
     if (!numbers.length || !date) {
       $('#trainInfo').html('<p class="deleted">Veuillez indiquer au moins un numéro de train et une date.</p>');
@@ -6355,7 +6530,13 @@ function addManualTrain(){
       /* On supprime totalement le panneau de propositions */
       document.getElementById('propositions')?.replaceChildren();
 
-     const results = {};
+     const sncfFallback = {
+        used: false,
+        numbers: new Set(),
+        reasons: new Set(),
+        details: new Map()
+      };
+      const results = {};
 
       /* 1) Récupération des données API pour chaque train */
     for (const num of numbers) {
@@ -6363,7 +6544,24 @@ function addManualTrain(){
       try {
         const res = await $.ajax({ url });
         const train = res.vehicle_journeys?.[0];
-        if (!train) { results[num] = { error: 'Non trouvé' }; continue; }
+        if (!train) {
+          const fallback = await buildGtfsFallbackResult(num, { ymd: ymdDate });
+          if (fallback) {
+            const reason = "Train introuvable dans l'API SNCF";
+            fallback.fallbackDetails = {
+              reason,
+              tooltip: `${reason} — Horaires théoriques (GTFS)`
+            };
+            sncfFallback.used = true;
+            sncfFallback.numbers.add(num);
+            sncfFallback.reasons.add(reason);
+            sncfFallback.details.set(num, reason);
+            results[num] = fallback;
+            continue;
+          }
+          results[num] = { error: 'Non trouvé' };
+          continue;
+        }
 
         const disruptions = res.disruptions || [];
         const impacted = {};
@@ -6419,6 +6617,21 @@ if (!newStart) {
         
         results[num] = { train, impacted, newStart, newEnd, disruptions, disruptionCauses };
       } catch (e) {
+        const fallback = await buildGtfsFallbackResult(num, { ymd: ymdDate });
+        if (fallback) {
+          const reason = formatSncfApiError(e);
+          fallback.fallbackDetails = {
+            reason,
+            tooltip: `${reason} — Horaires théoriques (GTFS)`
+          };
+          sncfFallback.used = true;
+          sncfFallback.numbers.add(num);
+          sncfFallback.reasons.add(reason);
+          sncfFallback.details.set(num, reason);
+          console.warn(`[SNCF] Fallback GTFS pour le train ${num}: ${reason}`);
+          results[num] = fallback;
+          continue;
+        }
         console.error("Erreur lors de la requête API:", e);
         results[num] = { error: 'Erreur API' };
       }
@@ -6466,7 +6679,9 @@ if (!newStart) {
     numbers.forEach(num => {
   const composition = (typeof compoData !== 'undefined' && compoData) ? compoData[num] : '';
   const compClass   = getCompoClass(composition, true); // ← force blanc si inconnu
-  html += `<th class="train-header ${compClass}" data-train-number="${num}">${num}</th>`;
+  const result = results[num];
+  const fallbackAttr = result?.gtfsFallback ? ' data-gtfs-fallback="1"' : '';
+  html += `<th class="train-header ${compClass}" data-train-number="${num}"${fallbackAttr}>${num}</th>`;
 });
     html += '</tr><tr><th></th>';
 
@@ -6476,6 +6691,9 @@ if (!newStart) {
       let icon = '', title = '';
       if (!result || result.error) {
         icon = '❌'; title = result?.error || 'Erreur';
+      } else if (result.gtfsFallback) {
+        icon = 'ℹ️';
+        title = result.fallbackDetails?.tooltip || 'Horaires théoriques (GTFS)';  
       } else {
         const disruptions = result.disruptions || [];
         const impacted = result.impacted || {};
@@ -6525,6 +6743,10 @@ if (!newStart) {
           continue;
         }
 
+        const cellClasses = [];
+        if (result.gtfsFallback) cellClasses.push('gtfs-fallback-cell');
+        const classAttr = cellClasses.length ? ` class="${cellClasses.join(' ')}"` : '';
+        
         // (a) stop théorique (dans le trip de base)
         let stop = result.train.stop_times.find(s => s.stop_point.name === stopName);
 
@@ -6571,13 +6793,13 @@ if (!newStart) {
           (imp?.stop_time_effect === 'added' || imp?.departure_status === 'added' || imp?.arrival_status === 'added');
 
         if (isAddedStop) {
-          html += `<td><span class="added-stop" title="Arrêt exceptionnel">${ft(amended)}</span></td>`;
+          html += `<td${classAttr}><span class="added-stop" title="Arrêt exceptionnel">${ft(amended)}</span></td>`;
           continue;
         }
 
         // === cas normal ===
         if (!base) {
-          html += `<td>-</td>`;
+          html += `<td${classAttr}>-</td>`;
           continue;
         }
 
@@ -6618,7 +6840,7 @@ if (!newStart) {
         }
 
        const baseAttr = base ? ` data-base-time="${base}"` : '';
-        html += `<td${baseAttr}>${content}</td>`;
+        html += `<td${classAttr}${baseAttr}>${content}</td>`;
       }
 
       html += '</tr>';
@@ -6628,6 +6850,44 @@ if (!newStart) {
 
     // 6) Injection + hooks + liens (NOUVEL ORDRE)
 injectTableChunkedIntoTrainInfo(html, { chunk: 180 });
+
+   if (sncfFallback.used) {
+      const host = document.getElementById('trainInfo');
+      if (host) {
+        const table = host.querySelector('table');
+        if (table) {
+          sncfFallback.details.forEach((reason, num) => {
+            const th = table.querySelector(`th[data-train-number="${num}"]`);
+            if (th) {
+              th.dataset.gtfsFallback = '1';
+              if (reason) th.dataset.gtfsFallbackReason = reason;
+            }
+          });
+        }
+
+        const banner = document.createElement('div');
+        banner.className = 'sncf-fallback-banner';
+        banner.setAttribute('role', 'alert');
+        banner.setAttribute('aria-live', 'polite');
+        const fallbackNumbers = Array.from(sncfFallback.numbers).sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+        let trainsLabel = 'certains trains demandés';
+        if (fallbackNumbers.length === numbers.length && numbers.length > 0) {
+          trainsLabel = 'tous les trains demandés';
+        } else if (fallbackNumbers.length === 1) {
+          trainsLabel = `le train ${fallbackNumbers[0]}`;
+        } else if (fallbackNumbers.length > 1) {
+          trainsLabel = `les trains ${fallbackNumbers.join(', ')}`;
+        }
+        const reasonItems = Array.from(sncfFallback.reasons).map(r => `<li>${escapeHtml(r)}</li>`).join('');
+        banner.innerHTML = `
+          <strong>⚠️ Données temps réel SNCF indisponibles.</strong>
+          Horaires théoriques (GTFS statique) affichés pour ${trainsLabel}.
+          ${reasonItems ? `<ul>${reasonItems}</ul>` : ''}
+        `;
+        host.insertBefore(banner, host.firstChild);
+      }
+    }
+   
 
 // 6.1 — Liens (idempotent, compatible injection par paquets)
 function linkifyGaresAndTrains(root){
@@ -6656,6 +6916,14 @@ function linkifyGaresAndTrains(root){
     const url = `https://www.sncf-voyageurs.com/fr/voyagez-avec-nous/horaires-et-itineraires/recherche-de-train/detail-train/?numeroCirculation=${numero}&dateCirculation=${dateCirculation}`;
     if (already) { already.href = url; already.textContent = numero; }
     else { th.innerHTML = `<a href="${url}" target="_blank" rel="noopener" class="train-link">${numero}</a>`; }
+    if (th.dataset.gtfsFallback === '1' && !th.querySelector('.fallback-pill')) {
+      const pill = document.createElement('span');
+      pill.className = 'fallback-pill';
+      pill.textContent = 'GTFS';
+      const reason = th.dataset.gtfsFallbackReason;
+      pill.title = reason ? `${reason} — horaires théoriques (GTFS)` : 'Horaires théoriques (GTFS)';
+      th.appendChild(pill);
+    }
   });
 }
 
