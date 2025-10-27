@@ -353,6 +353,12 @@ function respondWithData(res, data, policy, meta = {}) {
   if (meta.reason) headerParts.push(`reason=${meta.reason}`);
   if (meta.targetDate) headerParts.push(`target=${meta.targetDate}`);
   res.setHeader('X-SNCF-Cache', headerParts.join(';'));
+  if (meta.fetchedAt) {
+    const value = typeof meta.fetchedAt === 'string'
+      ? meta.fetchedAt
+      : new Date(meta.fetchedAt).toISOString();
+    res.setHeader('X-SNCF-Fetched-At', value);
+  }
   if (policy.nextSnapshotLocal) {
     res.setHeader('X-SNCF-Next-Snapshot', policy.nextSnapshotLocal);
     if (typeof policy.nextSnapshotSeconds === 'number') {
@@ -371,7 +377,8 @@ function respondFromCache(res, entry, policy, meta = {}) {
     status: meta.status || 'HIT',
     reason: meta.reason,
     targetDate: entry.targetDate,
-    trainNumber: entry.trainNumber
+    trainNumber: entry.trainNumber,
+    fetchedAt: entry.fetchedAt
   };
   if (meta.stale) {
     res.setHeader('Warning', '110 - "Réponse en cache potentiellement obsolète"');
@@ -506,7 +513,8 @@ function createSncfProxyHandler({ resolveApiUrl }) {
         status: cacheEntry ? 'REFRESH' : 'MISS',
         reason: decision.reason,
         targetDate: targetInfo.date || null,
-        trainNumber: targetInfo.trainNumber || null
+        trainNumber: targetInfo.trainNumber || null,
+        fetchedAt: entry.fetchedAt
       });
     } catch (err) {
       console.error('[SNCF proxy] Erreur réseau', err);
