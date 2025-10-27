@@ -1883,11 +1883,17 @@ table[data-snapshotting="true"] tbody tr:nth-child(even) {
 }
 
    #lastUpdated {
-  font-size: 0.8em;     
-  margin-top: 6px;   
-  color: #bbb;          
-  font-style: italic;  
-  text-align: right;    
+  font-size: 0.8em;
+  margin-top: 6px;
+  color: #bbb;
+  font-style: italic;
+  text-align: right;
+}
+  #lastUpdated .sncf-validity {
+  display: inline-block;
+  margin-top: 4px;
+  color: #9ddcff;
+  font-style: normal;
 }
    /* Modale */
 .table-modal{
@@ -3755,7 +3761,8 @@ if (container && !container.querySelector('.disruption-box')) {
   container.style.display = 'block';
 }
     
- let mainTableRendered = false;   
+ let mainTableRendered = false;
+let lastSncfFetchSummary = null; 
 
 /* ---------- BOUTON BLAGUES ---------- */
 $('#btnBingo').click(function() {
@@ -6782,9 +6789,12 @@ function addManualTrain(){
       return;
     }
 
-   GTFSLoadingUI.show('Chargement des Bétaillères…'); 
+   GTFSLoadingUI.show('Chargement des Bétaillères…');
 
     $('#trainInfo').html('<p>Chargement de vos bétaillères…</p>');
+    lastSncfFetchSummary = null;
+    const pendingInfo = document.getElementById('lastUpdated');
+    if (pendingInfo) pendingInfo.textContent = 'Requêtes SNCF en cours…';
 
     try {
       await loadCompoData();
@@ -6809,13 +6819,31 @@ function addManualTrain(){
         reasons: new Set(),
         details: new Map()
       };
+      const sncfFetchInfos = [];
       const results = {};
 
       /* 1) Récupération des données API pour chaque train */
     for (const num of numbers) {
       const url = `https://assistant-train-cx5u.vercel.app/api/train?id=vehicle_journeys/vehicle_journey:SNCF:${date}:${num}:1187:Train`;
       try {
-        const res = await $.ajax({ url });
+        const response = await fetch(url, { cache: 'no-store' });
+        if (!response.ok) {
+          const err = new Error(`HTTP ${response.status}`);
+          err.status = response.status;
+          err.statusText = response.statusText;
+          const raw = await response.text();
+          try {
+            err.responseJSON = JSON.parse(raw);
+          } catch {
+            err.responseText = raw;
+          }
+          throw err;
+        }
+        const res = await response.json();
+        const cacheMeta = parseSncfCacheHeader(response.headers.get('X-SNCF-Cache'));
+        const fetchedAtHeader = response.headers.get('X-SNCF-Fetched-At') || null;
+        const sncfMeta = { cache: cacheMeta, fetchedAt: fetchedAtHeader };
+        sncfFetchInfos.push(sncfMeta);
         const train = res.vehicle_journeys?.[0];
         if (!train) {
           const fallback = await buildGtfsFallbackResult(num, { ymd: ymdDate });
@@ -6890,6 +6918,7 @@ if (!newStart) {
         
         results[num] = { train, impacted, newStart, newEnd, disruptions, disruptionCauses };
       } catch (e) {
+        sncfFetchInfos.push({ cache: { status: 'ERROR', reason: e?.status ? `HTTP_${e.status}` : 'network', raw: '' }, fetchedAt: null });
         const fallback = await buildGtfsFallbackResult(num, { ymd: ymdDate });
         if (fallback) {
           const reason = formatSncfApiError(e);
@@ -7411,6 +7440,7 @@ scheduleWeatherAfterTableSettled();
       console.log("Les retards GTFS ne sont pas encore chargés");
     }
 
+    lastSncfFetchSummary = summariseSncfFetch(sncfFetchInfos);  
     setLastUpdated();
 
   // *** Appliquer GTFS-RT juste après l'injection (sécurisé DOM) ***
@@ -7560,7 +7590,81 @@ function tryApplyGtfsToCurrentTable() {
   resetGtfsRetards(table);
   if (typeof applyRetardsFromGTFS === 'function') applyRetardsFromGTFS(window.retardsGTFS);
 }
+function parseSncfCacheHeader(header) {
+  const raw = String(header || '').trim();
+  if (!raw) {
+    return { raw: '', status: 'UNKNOWN', policy: null, reason: null, target: null };
+  }
+  const parts = raw.split(';').map(part => part.trim()).filter(Boolean);
+  const status = parts.shift() || 'UNKNOWN';
+  const meta = { raw, status, policy: null, reason: null, target: null };
+  for (const part of parts) {
+    const [key, value] = part.split('=').map(token => token.trim());
+    if (!key || !value) continue;
+    if (key === 'policy') meta.policy = value;
+    else if (key === 'reason') meta.reason = value;
+    else if (key === 'target') meta.target = value;
+  }
+  return meta;
+}
 
+function formatLuxDateTime(date) {
+  if (!(date instanceof Date) || Number.isNaN(date.getTime())) return null;
+  return new Intl.DateTimeFormat('fr-FR', {
+    timeZone: 'Europe/Luxembourg',
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit',
+    hour12: false
+  }).format(date).replace(',', ' à');
+}
+
+function summariseSncfFetch(entries) {
+  if (!Array.isArray(entries) || entries.length === 0) return null;
+  let liveCount = 0;
+  let cacheCount = 0;
+  let unknownCount = 0;
+  let newestTs = null;
+
+  entries.forEach(entry => {
+    const status = String(entry?.cache?.status || '').toUpperCase();
+    if (status === 'MISS' || status === 'REFRESH') {
+      liveCount += 1;
+    } else if (status === 'HIT') {
+      cacheCount += 1;
+    } else {
+      unknownCount += 1;
+    }
+    const fetchedAt = entry?.fetchedAt ? Date.parse(entry.fetchedAt) : NaN;
+    if (Number.isFinite(fetchedAt)) {
+      if (newestTs == null || fetchedAt > newestTs) {
+        newestTs = fetchedAt;
+      }
+    }
+  });
+
+  const total = entries.length;
+  const parts = [];
+  if (liveCount === total && total > 0) {
+    parts.push('Données SNCF actualisées en direct');
+  } else if (cacheCount === total && total > 0) {
+    parts.push('Données SNCF servies depuis le cache');
+  } else {
+    parts.push('Données SNCF mixtes');
+    const detail = [];
+    if (liveCount) detail.push(`${liveCount} en direct`);
+    if (cacheCount) detail.push(`${cacheCount} via cache`);
+    if (unknownCount) detail.push(`${unknownCount} statut inconnu`);
+    if (detail.length) parts.push(`(${detail.join(', ')})`);
+  }
+
+  if (newestTs != null) {
+    const formatted = formatLuxDateTime(new Date(newestTs));
+    if (formatted) parts.push(`— dernière requête SNCF : ${formatted}`);
+  }
+
+  return { text: parts.join(' '), counts: { live: liveCount, cache: cacheCount, unknown: unknownCount } };
+}
+    
 /* ---------- TIMESTAMP ---------- */
 function setLastUpdated() {
   const el = document.getElementById('lastUpdated');
@@ -7577,7 +7681,11 @@ function setLastUpdated() {
     const [y, m, day] = d.split('-');
     validTxt = `${day}/${m}/${y}`;
   }
-  el.innerHTML = `Généré le ${nowTxt} — Données valables le <strong>${validTxt}</strong>`;
+  let html = `Généré le ${nowTxt} — Données valables le <strong>${validTxt}</strong>`;
+  if (lastSncfFetchSummary && lastSncfFetchSummary.text) {
+    html += `<br><span class="sncf-validity">${escapeHtml(lastSncfFetchSummary.text)}</span>`;
+  }
+  el.innerHTML = html;
 }
 function todayYMDLux(){
   const parts = new Intl.DateTimeFormat('en-CA', {
