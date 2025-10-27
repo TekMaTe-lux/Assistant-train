@@ -403,22 +403,55 @@
       document.title = `SNCF ${formatNumber(total)} / ${formatNumber(dailyLimit)}`;
     }
 const SNCF_STATS_HOST = (() => {
-      const { hostname, origin } = window.location;
+      const params = new URLSearchParams(window.location.search);
+      const forcedHost = params.get('host');
+      if (forcedHost) {
+        try {
+          const coerced = new URL(forcedHost, window.location.origin);
+          return coerced.origin;
+        } catch (err) {
+          console.warn('Paramètre "host" invalide, ignoré.', err);
+        }
+      }
+
+      const { hostname, origin, protocol } = window.location;
+      const normaliseOrigin = candidate => {
+        if (!candidate) return '';
+        try {
+          const url = new URL(candidate, `${protocol}//${hostname}`);
+          return url.origin;
+        } catch (err) {
+          console.warn('Origine invalide pour les stats SNCF', candidate, err);
+          return '';
+        }
+      };
       if (hostname === 'localhost' || hostname === '127.0.0.1') {
         return origin;
       }
-      if (hostname.endsWith('.vercel.app')) {
-        return '';
+
+      if (hostname.endsWith('labetaillere.fr')) {
+        return origin;
       }
-      return 'https://assistant-train-cx5u.vercel.app';
+
+      if (hostname.endsWith('.github.io')) {
+        return 'https://labetaillere.fr';
+      }
+      if (hostname.endsWith('.vercel.app')) {
+        return origin;
+      }
+      return normaliseOrigin('https://labetaillere.fr');
     })();
 
     function getStatsEndpoints() {
       const primary = SNCF_STATS_HOST
         ? `${SNCF_STATS_HOST.replace(/\/$/, '')}/api/sncf-stats`
         : '/api/sncf-stats';
-      const fallback = 'https://assistant-train-cx5u.vercel.app/api/sncf-stats';
-      return primary === fallback ? [primary] : [primary, fallback];
+      const fallbacks = [
+        'https://labetaillere.fr/api/sncf-stats',
+        'https://assistant-train-cx5u.vercel.app/api/sncf-stats'
+      ];
+      const unique = new Set([primary, ...fallbacks]);
+      return Array.from(unique).filter(Boolean);
     }
 
     function parseRetryAfter(headerValue) {
