@@ -408,7 +408,7 @@ function respondQuotaExceeded(res, policy) {
   });
 }
 
-export function createSncfProxyHandler({ resolveApiUrl }) {
+function createSncfProxyHandler({ resolveApiUrl }) {
   if (typeof resolveApiUrl !== 'function') {
     throw new Error('resolveApiUrl option manquant');
   }
@@ -526,7 +526,7 @@ export function createSncfProxyHandler({ resolveApiUrl }) {
   };
 }
 
-export function getSncfProxyStats() {
+function getSncfProxyStats() {
   const now = new Date();
   const nowInfo = getLocalInfo(now);
   resetCountersIfNeeded(nowInfo.dayKey);
@@ -544,3 +544,8 @@ export function getSncfProxyStats() {
     cacheSize: state.cache.size
   };
 }
+
+module.exports = {
+  createSncfProxyHandler,
+  getSncfProxyStats
+};
