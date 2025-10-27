@@ -1,4 +1,4 @@
-import { createSncfProxyHandler } from './sncfProxy.js';
+const { createSncfProxyHandler } = require('./sncfProxy.js');
 
 function resolveApiUrl(req) {
   const { id, url } = req.query || {};
@@ -21,4 +21,4 @@ function resolveApiUrl(req) {
   throw error;
 }
 
-export default createSncfProxyHandler({ resolveApiUrl });
+module.exports = createSncfProxyHandler({ resolveApiUrl });
