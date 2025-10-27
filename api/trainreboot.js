@@ -1,4 +1,4 @@
-import { createSncfProxyHandler } from './sncfProxy.js';
+const { createSncfProxyHandler } = require('./sncfProxy.js');
 
 function resolveApiUrl(req) {
   const { id } = req.query || {};
@@ -10,4 +10,4 @@ function resolveApiUrl(req) {
  return `https://api.sncf.com/v1/coverage/sncf/vehicle_journeys/${id}`;
 }
 
-export default createSncfProxyHandler({ resolveApiUrl });
+module.exports = createSncfProxyHandler({ resolveApiUrl });
