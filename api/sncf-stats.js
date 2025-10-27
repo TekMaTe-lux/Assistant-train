@@ -1,6 +1,6 @@
-import { getSncfProxyStats } from './sncfProxy.js';
+const { getSncfProxyStats } = require('./sncfProxy.js');
 
-export default function handler(req, res) {
+module.exports = function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
@@ -21,4 +21,4 @@ export default function handler(req, res) {
     console.error('[SNCF proxy] Impossible de récupérer les statistiques', err);
     return res.status(500).json({ error: 'Impossible de récupérer les statistiques actuelles.' });
   }
-}
+};
