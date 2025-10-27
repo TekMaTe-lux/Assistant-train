@@ -326,7 +326,8 @@
       }
     }
 
-    function updateUI(stats) {
+    function updateUI(stats, meta = {}) {
+      const { endpoint } = meta;
       const { dailyLimit, total, remaining, longTermLimit, longTerm, longTermRemaining, cacheSize, dayKey: key, generatedAt: instant, timezone } = stats;
 
       dailyUsageEl.textContent = `${formatNumber(total)} / ${formatNumber(dailyLimit)}`;
@@ -348,29 +349,75 @@
         second: '2-digit'
       });
       resetTimeEl.textContent = computeResetTime(key, timezone);
-      lastRefreshEl.textContent = `Dernière mise à jour — ${formatDateTime(Date.now(), {
+      const endpointHost = (() => {
+        if (!endpoint) return null;
+        try {
+          const parsed = new URL(endpoint, window.location.href);
+          return parsed.host === window.location.host ? 'origine locale' : parsed.host;
+        } catch (err) {
+          return null;
+        }
+      })();
+
+      const timeLabel = formatDateTime(Date.now(), {
         hour: '2-digit',
         minute: '2-digit',
         second: '2-digit'
-      })}`;
-      statusTextEl.textContent = 'En ligne';
-      errorMessageEl.textContent = '';
+      });
+
+      lastRefreshEl.textContent = endpointHost
+        ? `Dernière mise à jour — ${timeLabel} (${endpointHost})`
+        : `Dernière mise à jour — ${timeLabel}`;
       document.title = `SNCF ${formatNumber(total)} / ${formatNumber(dailyLimit)}`;
     }
+const SNCF_STATS_HOST = (() => {
+      const { hostname, origin } = window.location;
+      if (hostname === 'localhost' || hostname === '127.0.0.1') {
+        return origin;
+      }
+      if (hostname.endsWith('.vercel.app')) {
+        return '';
+      }
+      return 'https://assistant-train-cx5u.vercel.app';
+    })();
 
+    function getStatsEndpoints() {
+      const primary = SNCF_STATS_HOST
+        ? `${SNCF_STATS_HOST.replace(/\/$/, '')}/api/sncf-stats`
+        : '/api/sncf-stats';
+      const fallback = 'https://assistant-train-cx5u.vercel.app/api/sncf-stats';
+      return primary === fallback ? [primary] : [primary, fallback];
+    }
+
+    async function fetchStatsWithFallback() {
+      const endpoints = getStatsEndpoints();
+      let lastError = null;
+      for (const url of endpoints) {
+        try {
+          const response = await fetch(url, { cache: 'no-store' });
+          if (!response.ok) {
+            throw new Error(`Statut ${response.status}`);
+          }
+          return { payload: await response.json(), url };
+        } catch (err) {
+          lastError = err;
+        }
+      }
+      throw lastError || new Error('Aucun point de terminaison API disponible');
+    }
+    
     async function loadStats() {
       try {
         statusTextEl.textContent = 'Mise à jour…';
-        const response = await fetch('/api/sncf-stats');
-        if (!response.ok) {
-          throw new Error(`Statut ${response.status}`);
-        }
-        const payload = await response.json();
-        updateUI(payload);
+        const { payload, url } = await fetchStatsWithFallback();
+        updateUI(payload, { endpoint: url });
+        statusTextEl.textContent = 'En ligne';
+        errorMessageEl.textContent = '';
       } catch (err) {
         console.error('Impossible de charger les stats SNCF', err);
         statusTextEl.textContent = 'Erreur';
-        errorMessageEl.textContent = 'Dernière tentative échouée, nouvel essai automatique…';
+        const detail = err && err.message ? ` (${err.message})` : '';
+        errorMessageEl.textContent = `Dernière tentative échouée${detail}, nouvel essai automatique…`;
       }
     }
 
