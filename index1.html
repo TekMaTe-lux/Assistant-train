@@ -3384,7 +3384,7 @@ function renderRowsChunked(htmlRows, tbody, chunk=200){
         </div>
       </div>
     </div>
-  </details>
+</details>
 
   <!-- 2) GÉNÉRATION PERSONNALISÉE -->
   <details class="console-section">
@@ -3504,10 +3504,15 @@ function renderRowsChunked(htmlRows, tbody, chunk=200){
             <input id="maxTransfer" type="number" value="25" min="1" step="1" style="width:4.5rem;">
             <span>min</span>
           </div>
+          <label for="includeCflTransfers" style="display:flex;align-items:center;gap:8px;">
+            <input id="includeCflTransfers" type="checkbox">
+            <span>Ajouter les trains CFL (Bettembourg)</span>
+          </label>
+          <div id="includeCflTransfersStatus" style="flex-basis:100%;font-size:0.82em;color:#7de;display:none;"></div>
         </div>
       </div>
     </div>
-</details>
+  </details>
   
   <!-- Bouton don -->
 <div style="text-align: center;">
@@ -5008,17 +5013,24 @@ function uniqTransfers(list){
 
 /************ CHARGEMENT GTFS (stops/stop_times/trips/calendar_dates only) ************/
 
-let GTFS = { 
-  stops:null, 
-  stopTimes:null, 
-  trips:null, 
-  tripById:null, 
-  stopNameToId:null, 
-  allowedByDate:null, 
-  removedByDate:null 
+let GTFS = {
+  stops: null,
+  stopTimes: null,
+  trips: null,
+  tripById: null,
+  stopNameToId: null,
+  allowedByDate: null,
+  removedByDate: null,
+  calendarDates: null,
+  sources: { sncf: false, cfl: false }
 };
     
+let GTFS_PRIMARY_DATA = null;
+let CFL_GTFS_DATA = null;
+let INCLUDE_CFL_TRANSFERS = false;
+    
 let GTFS_LOADING_PROMISE = null;
+let CFL_GTFS_LOADING_PROMISE = null;
 
 const __yieldToBrowser = () => (typeof setTimeout === 'function')
   ? new Promise(resolve => setTimeout(resolve, 0))
@@ -5071,6 +5083,13 @@ const GTFS_BASES = [
   'https://raw.githubusercontent.com/TekMaTe-lux/Assistant-train/main/Assistant-train/data/',
   'https://cdn.jsdelivr.net/gh/TekMaTe-lux/Assistant-train@main/Assistant-train/data/'
 ];
+
+const CFL_GTFS_BASES = [
+  new URL('CFL/', location.href).href,
+  new URL('Assistant-train/CFL/', location.href).href,
+  'https://raw.githubusercontent.com/TekMaTe-lux/Assistant-train/main/CFL/',
+  'https://cdn.jsdelivr.net/gh/TekMaTe-lux/Assistant-train@main/CFL/'
+];   
 
 function createCSVCollector(opt = {}){
   const keepColumns = Array.isArray(opt.keepColumns) && opt.keepColumns.length ? opt.keepColumns : null;
@@ -5253,17 +5272,19 @@ async function parseCSVFromStream(stream, opt = {}){
 
 async function fetchAndParseCSV(filename, opt = {}){
   let lastErr;
-  for (const base of GTFS_BASES){
+  const { baseList, setSourceFlag = true, ...collectorOpt } = opt || {};
+  const bases = Array.isArray(baseList) && baseList.length ? baseList : GTFS_BASES;
+  for (const base of bases){
     const url = base + filename;
     try {
       const resp = await fetch(url, { cache: 'no-store' });
       if (!resp.ok) throw new Error('HTTP '+resp.status+' on '+url);
-      window.GTFS_STATIC_SOURCE = base; // debug
+      if (setSourceFlag && baseList == null) window.GTFS_STATIC_SOURCE = base; // debug
       if (resp.body && typeof resp.body.getReader === 'function' && typeof TextDecoder === 'function'){
-        return await parseCSVFromStream(resp.body, opt);
+        return await parseCSVFromStream(resp.body, collectorOpt);
       }
       const txt = await resp.text();
-      return parseCSV(txt, opt);
+      return parseCSV(txt, collectorOpt);
     } catch(e){
       lastErr = e;
 // essaie la base suivante
@@ -5271,7 +5292,111 @@ async function fetchAndParseCSV(filename, opt = {}){
   }
   throw lastErr || new Error('Impossible de charger '+filename);
 }
+async function fetchCsvWithAlternates(filenames, opt = {}){
+  let lastErr;
+  for (const name of filenames){
+    try {
+      return await fetchAndParseCSV(name, opt);
+    } catch (err) {
+      lastErr = err;
+    }
+  }
+  throw lastErr || new Error('Impossible de charger '+(filenames[0] || 'fichier'));
+}
 
+function rebuildActiveGtfs(){
+  const sources = [];
+  if (GTFS_PRIMARY_DATA) sources.push(GTFS_PRIMARY_DATA);
+  if (INCLUDE_CFL_TRANSFERS && CFL_GTFS_DATA) sources.push(CFL_GTFS_DATA);
+
+  if (!sources.length){
+    GTFS = {
+      stops: [],
+      stopTimes: [],
+      trips: [],
+      tripById: new Map(),
+      stopNameToId: new Map(),
+      allowedByDate: new Map(),
+      removedByDate: new Map(),
+      calendarDates: [],
+      sources: { sncf: false, cfl: false }
+    };
+    return;
+  }
+
+  const stops = [];
+  const stopTimes = [];
+  const trips = [];
+  const calendarDates = [];
+
+  for (const src of sources){
+    if (Array.isArray(src.stops)) stops.push(...src.stops);
+    if (Array.isArray(src.stopTimes)) stopTimes.push(...src.stopTimes);
+    if (Array.isArray(src.trips)) trips.push(...src.trips);
+    if (Array.isArray(src.calendarDates)) calendarDates.push(...src.calendarDates);
+  }
+
+  const stopNameToId = new Map();
+  stops.forEach(s => {
+    if (!s) return;
+    const name = s.stop_name;
+    if (name && s.stop_id && !stopNameToId.has(name)){
+      stopNameToId.set(name, s.stop_id);
+    }
+  });
+
+  const tripById = new Map();
+  trips.forEach(t => {
+    if (t?.trip_id) tripById.set(t.trip_id, t);
+  });
+
+  const allowedByDate = new Map();
+  const removedByDate = new Map();
+  const addCalendarRow = row => {
+    if (!row) return;
+    const ymd = row.date;
+    const serviceId = row.service_id;
+    const exc = Number(row.exception_type);
+    if (!ymd || !serviceId || Number.isNaN(exc)) return;
+    if (exc === 1){
+      if (!allowedByDate.has(ymd)) allowedByDate.set(ymd, new Set());
+      allowedByDate.get(ymd).add(serviceId);
+    } else if (exc === 2){
+      if (!removedByDate.has(ymd)) removedByDate.set(ymd, new Set());
+      removedByDate.get(ymd).add(serviceId);
+    }
+  };
+  calendarDates.forEach(addCalendarRow);
+
+  GTFS = {
+    stops,
+    stopTimes,
+    trips,
+    tripById,
+    stopNameToId,
+    allowedByDate,
+    removedByDate,
+    calendarDates,
+    sources: {
+      sncf: !!GTFS_PRIMARY_DATA,
+      cfl: INCLUDE_CFL_TRANSFERS && !!CFL_GTFS_DATA
+    }
+  };
+
+  GTFS._stopTimesByTripSec = null;
+  GTFS._depsByStop = null;
+  GTFS._tripById = tripById;
+  GTFS._stopTimesByTrip = null;
+  GTFS._tripsByNumber = null;
+  GTFS.nameToIds = null;
+  GTFS.idToName = null;
+  GTFS.idToStop = null;
+
+  try {
+    window.dispatchEvent?.(new CustomEvent('gtfs:sources-changed', { detail: GTFS.sources }));
+  } catch {}
+}
+    
 async function ensureGTFSLoaded(){
   if (GTFS.stops && GTFS.stopTimes && GTFS.trips && GTFS.tripById && GTFS.stopNameToId && GTFS.allowedByDate) return;
     if (GTFS_LOADING_PROMISE) {
@@ -5328,44 +5453,13 @@ async function ensureGTFSLoaded(){
       GTFSLoadingUI.message('Organisation des données…');
       await __yieldToBrowser();
 
-      const stopNameToId = new Map();
-      stops.forEach(s => {
-        if (s.stop_name && s.stop_id)
-          if(!stopNameToId.has(s.stop_name)) stopNameToId.set(s.stop_name, s.stop_id);
-      });
-
-      const tripById = new Map();
-      trips.forEach(t => {
-        if (t.trip_id) tripById.set(t.trip_id, t);
-      });
-
-      // yyyymmdd -> Set(service_id) ajoutés ; et yyyymmdd -> Set(service_id) supprimés
-      const allowedByDate = new Map();
-      const removedByDate = new Map();
-      calendarDates.forEach(row => {
-        const ymd = row.date, serviceId = row.service_id, exc = Number(row.exception_type);
-        if (!ymd || !serviceId) return;
-        if (exc === 1) {
-          if (!allowedByDate.has(ymd)) allowedByDate.set(ymd, new Set());
-          allowedByDate.get(ymd).add(serviceId);
-        } else if (exc === 2) {
-          if (!removedByDate.has(ymd)) removedByDate.set(ymd, new Set());
-          removedByDate.get(ymd).add(serviceId);
-        }
-      });
-
-      GTFS = {
+     GTFS_PRIMARY_DATA = { 
         stops,
         stopTimes,
         trips,
-        tripById,
-        stopNameToId,
-        allowedByDate,
-        removedByDate,
-        relevantStopIds,
-        relevantTripIds,
-        relevantServiceIds
+        calendarDates
       };
+      rebuildActiveGtfs();
     } finally {
       GTFSLoadingUI.hide();
       }
@@ -5377,6 +5471,120 @@ async function ensureGTFSLoaded(){
     GTFS_LOADING_PROMISE = null;
   }
 }
+ async function ensureCflGtfsLoaded(){
+  if (CFL_GTFS_DATA) return;
+  if (CFL_GTFS_LOADING_PROMISE){
+    try {
+      await CFL_GTFS_LOADING_PROMISE;
+    } finally {
+      CFL_GTFS_LOADING_PROMISE = null;
+    }
+    return;
+  }
+
+  CFL_GTFS_LOADING_PROMISE = (async () => {
+    GTFSLoadingUI.show('Chargement des arrêts CFL…');
+    try {
+      await __yieldToBrowser();
+
+      let stops = await fetchCsvWithAlternates(
+        ['stops%5B1%5D.txt', 'stops[1].txt'],
+        {
+          keepColumns: ['stop_id','stop_name','parent_station','stop_lat','stop_lon'],
+          baseList: CFL_GTFS_BASES,
+          setSourceFlag: false
+        }
+      );
+      const relevantStopIds = computeRelevantStopIds(stops);
+      stops = stops.filter(s => relevantStopIds.has(s.stop_id));
+      await __yieldToBrowser();
+
+      GTFSLoadingUI.message('Chargement des horaires CFL…');
+      const relevantTripIds = new Set();
+      const stopTimes = await fetchCsvWithAlternates(
+        ['stop_times%5B1%5D.txt', 'stop_times[1].txt'],
+        {
+          keepColumns: ['trip_id','arrival_time','departure_time','stop_id','stop_sequence'],
+          baseList: CFL_GTFS_BASES,
+          setSourceFlag: false,
+          filterRow: row => {
+            if (!relevantStopIds.has(row.stop_id)) return false;
+            if (row.trip_id) relevantTripIds.add(row.trip_id);
+            return true;
+          }
+        }
+      );
+      await __yieldToBrowser();
+
+      GTFSLoadingUI.message('Chargement des trajets CFL…');
+      const relevantServiceIds = new Set();
+      const trips = await fetchCsvWithAlternates(
+        ['trips%5B1%5D.txt', 'trips[1].txt'],
+        {
+          keepColumns: ['trip_id','service_id','route_id','trip_short_name','trip_headsign'],
+          baseList: CFL_GTFS_BASES,
+          setSourceFlag: false,
+          filterRow: row => {
+            if (!relevantTripIds.has(row.trip_id)) return false;
+            if (row.service_id) relevantServiceIds.add(row.service_id);
+            return true;
+          }
+        }
+      );
+      await __yieldToBrowser();
+
+      GTFSLoadingUI.message('Chargement du calendrier CFL…');
+      const calendarDates = await fetchCsvWithAlternates(
+        ['calendar_dates%5B1%5D.txt', 'calendar_dates[1].txt'],
+        {
+          keepColumns: ['service_id','date','exception_type'],
+          baseList: CFL_GTFS_BASES,
+          setSourceFlag: false,
+          filterRow: row => !row.service_id || relevantServiceIds.has(row.service_id)
+        }
+      );
+      await __yieldToBrowser();
+
+      CFL_GTFS_DATA = {
+        stops,
+        stopTimes,
+        trips,
+        calendarDates
+      };
+    } finally {
+      GTFSLoadingUI.hide();
+    }
+  })();
+
+  try {
+    await CFL_GTFS_LOADING_PROMISE;
+  } finally {
+    CFL_GTFS_LOADING_PROMISE = null;
+  }
+}
+
+async function setIncludeCflTransfers(enabled){
+  await ensureGTFSLoaded();
+  if (enabled){
+    try {
+      await ensureCflGtfsLoaded();
+      INCLUDE_CFL_TRANSFERS = true;
+    } catch (err) {
+      INCLUDE_CFL_TRANSFERS = false;
+      rebuildActiveGtfs();
+      throw err;
+    }
+  } else {
+    INCLUDE_CFL_TRANSFERS = false;
+  }
+
+  rebuildActiveGtfs();
+
+  try {
+    if (enabled) localStorage.setItem('includeCflTransfers', '1');
+    else localStorage.removeItem('includeCflTransfers');
+  } catch {}
+}   
    
 /************  GROUPES DE STOPS PAR GARE (stop_name/parent_station)  ************/
 function buildStationGroups(){
@@ -8165,6 +8373,68 @@ document.addEventListener('DOMContentLoaded', () => {
       document.getElementById(tab.dataset.tab).classList.add("active");
     });
   });
+
+  const cflToggle = document.getElementById('includeCflTransfers');
+  const cflStatus = document.getElementById('includeCflTransfersStatus');
+  const showCflStatus = (message, type = 'info') => {
+    if (!cflStatus) return;
+    if (!message){
+      cflStatus.style.display = 'none';
+      cflStatus.textContent = '';
+      return;
+    }
+    cflStatus.textContent = message;
+    cflStatus.style.display = 'block';
+    cflStatus.style.color = type === 'error' ? '#ff9b9b' : '#7de';
+  };
+
+  const refreshProposalsAfterToggle = () => {
+    try {
+      if (proposerTrainsOD?.lastRequest){
+        proposerTrainsOD({ ...proposerTrainsOD.lastRequest });
+      } else if (typeof scheduleCustomProposalRefresh === 'function') {
+        scheduleCustomProposalRefresh();
+      }
+    } catch (err) {
+      console.warn('[CFL] rafraîchissement propositions impossible', err);
+    }
+  };
+
+  if (cflToggle){
+    const saved = (() => {
+      try { return localStorage.getItem('includeCflTransfers'); }
+      catch { return null; }
+    })();
+
+    if (saved === '1'){
+      cflToggle.checked = true;
+      setIncludeCflTransfers(true)
+        .then(() => showCflStatus('Trains CFL actifs pour Bettembourg.', 'info'))
+        .catch(err => {
+          console.error('[CFL] chargement initial échoué', err);
+          cflToggle.checked = false;
+          showCflStatus('Impossible de charger les trains CFL.', 'error');
+        });
+    }
+
+    cflToggle.addEventListener('change', async () => {
+      const enabled = cflToggle.checked;
+      cflToggle.disabled = true;
+      showCflStatus(enabled ? 'Chargement des trains CFL…' : 'Retour aux trains SNCF…', 'info');
+      try {
+        await setIncludeCflTransfers(enabled);
+        if (enabled) showCflStatus('Trains CFL actifs pour Bettembourg.', 'info');
+        else showCflStatus('', 'info');
+        refreshProposalsAfterToggle();
+      } catch (err) {
+        console.error('[CFL] bascule échouée', err);
+        cflToggle.checked = !enabled;
+        showCflStatus('Échec du chargement des trains CFL.', 'error');
+      } finally {
+        cflToggle.disabled = false;
+      }
+    });
+  }
 
   // ----------------------
   // PARTIE TRAINS
