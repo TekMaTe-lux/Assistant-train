@@ -341,6 +341,30 @@ function encodeFilename(filename) {
       return stop.stop_name || stop.stop_id;
     }
 
+    function normalizeText(value) {
+      if (typeof value !== "string") {
+        return "";
+      }
+
+      return value
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "")
+        .toLowerCase();
+    }
+
+    function isTrainStationName(name) {
+      if (!name) {
+        return false;
+      }
+
+      const normalized = normalizeText(name);
+      if (normalized.includes("gare routiere")) {
+        return false;
+      }
+
+      return /\bgare\b/.test(normalized);
+    }
+
     function groupBy(array, keyFn) {
       const map = new Map();
       for (const item of array) {
@@ -487,10 +511,23 @@ function encodeFilename(filename) {
         const stopTimesByTrip = groupBy(stopTimes, (item) => item.trip_id);
 
         const stopById = new Map(stops.map((stop) => [stop.stop_id, stop]));
+        const trainStationIds = new Set();
+
+        for (const stop of stops) {
+          const stationId = stop.parent_station || stop.stop_id;
+          const namesToCheck = [stop.stop_name, buildStopDisplayName(stop, stopById)];
+          if (namesToCheck.some((name) => isTrainStationName(name))) {
+            trainStationIds.add(stationId);
+          }
+        }
         const stationMap = new Map();
 
         for (const stop of stops) {
           const stationId = stop.parent_station || stop.stop_id;
+          if (!trainStationIds.has(stationId)) {
+            continue;
+          }
+
           let station = stationMap.get(stationId);
           if (!station) {
             station = {
