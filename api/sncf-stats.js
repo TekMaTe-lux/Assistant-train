@@ -1,42 +1,5 @@
+const { getSncfProxyStats } = require('./sncfProxy.js');
 const { loadSncfStatsSnapshot } = require('./sncfStatsSnapshot.js');
-
-async function forwardToTrainStats(req, res) {
-  const headers = req.headers || {};
-  const proto = headers['x-forwarded-proto'] || headers['x-real-proto'] || 'https';
-  const host = headers['x-forwarded-host'] || headers.host || process.env.VERCEL_URL;
-  if (!host) {
-    return null;
-  }
-
-const base = `${proto}://${host}`.replace(/\/$/, '');
-  const url = `${base}/api/train?stats=1`;
-
-
-const response = await fetch(url, {
-    headers: {
-      'X-SNCF-Stats-Forward': 'sncf-stats'
-    }
-   });
-
-  const contentType = response.headers.get('content-type') || 'application/json; charset=utf-8';
-  const payload = contentType.includes('application/json')
-    ? await response.json()
-    : await response.text();
-
-  res.setHeader('Cache-Control', response.headers.get('cache-control') || 'no-store, max-age=0');
-  res.setHeader('Content-Type', contentType);
-  if (contentType.includes('application/json') && typeof payload === 'object') {
-    return res.status(response.status).json(payload);
-  }
-  
-  if (typeof res.send === 'function') {
-    return res.status(response.status).send(payload);
-  }
-
-  res.statusCode = response.status;
-  res.end(payload);
-  return res;
-}
 
 module.exports = async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -52,12 +15,11 @@ module.exports = async function handler(req, res) {
   }
 
   try {
-   const forwarded = await forwardToTrainStats(req, res);
-    if (forwarded != null) {
-      return forwarded;
-    }
+   const stats = getSncfProxyStats();
+    res.setHeader('Cache-Control', 'no-store, max-age=0');
+    return res.status(200).json(stats);
    } catch (err) {
-    console.error('[SNCF proxy] Redirection vers /api/train?stats=1 impossible', err);
+    console.error('[SNCF proxy] Impossible de récupérer les statistiques dynamiques', err);
   }
 
   const snapshot = loadSncfStatsSnapshot();
