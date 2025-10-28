@@ -22,6 +22,17 @@
     .mainline { font-size:15px; font-weight:500; color:#e0f0ff; margin-bottom:4px; }
     .details { font-size:13px; color:#7a8cae; }
     .loading { font-size:15px; color:#7a8cae; }
+    .resultsIntro { font-size:14px; color:#7a8cae; margin-bottom:8px; }
+    .card.expanded { box-shadow:0 12px 32px rgba(0,0,0,0.75); }
+    .card .detailPanel { margin-top:8px; border-top:1px solid #2e374f; padding-top:8px; }
+    .card .detailPanel[hidden] { display:none; }
+    .toggleDetails { margin-top:8px; background:transparent; color:#e0f0ff; border:1px solid #2e374f; border-radius:6px; padding:6px 10px; font-size:14px; font-weight:600; cursor:pointer; transition:background 0.2s ease, color 0.2s ease; }
+    .toggleDetails:hover, .toggleDetails:focus { background:#e0f0ff; color:#0b0f1a; outline:none; }
+    .detailTitle { font-size:13px; color:#9aaad3; text-transform:uppercase; letter-spacing:0.05em; margin-bottom:6px; }
+    .stopsList { list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:6px; }
+    .stopsList li { display:flex; justify-content:space-between; align-items:flex-start; gap:12px; font-size:13px; color:#c3d2f1; }
+    .stopName { font-weight:500; flex:1; }
+    .stopTimes { min-width:140px; text-align:right; color:#9aaad3; }
   </style>
 </head>
 <body>
@@ -635,6 +646,69 @@
     }
 
     // 5. rendu UI
+    function buildStopTimesText(stop, index, totalStops) {
+      const arrMinutes = Number.isFinite(stop.arr) ? stop.arr : null;
+      const depMinutes = Number.isFinite(stop.dep) ? stop.dep : null;
+      const arrText = arrMinutes !== null ? minutesToHHMM(arrMinutes) : null;
+      const depText = depMinutes !== null ? minutesToHHMM(depMinutes) : null;
+      const isFirst = index === 0;
+      const isLast = index === totalStops - 1;
+
+      if (isFirst && isLast) {
+        if (depText) {
+          return `Départ ${depText}`;
+        }
+        if (arrText) {
+          return `Arrivée ${arrText}`;
+        }
+        return 'Horaire indisponible';
+      }
+
+      if (isFirst) {
+        if (depText) {
+          return `Départ ${depText}`;
+        }
+        if (arrText) {
+          return `Départ ${arrText}`;
+        }
+      } else if (isLast) {
+        if (arrText) {
+          return `Arrivée ${arrText}`;
+        }
+        if (depText) {
+          return `Arrivée ${depText}`;
+        }
+      } else {
+        const parts = [];
+        if (arrText) {
+          parts.push(`Arrivée ${arrText}`);
+        }
+        if (depMinutes !== null && depMinutes !== arrMinutes && depText) {
+          parts.push(`Départ ${depText}`);
+        }
+        if (!parts.length && depText) {
+          parts.push(`Départ ${depText}`);
+        }
+        if (!parts.length && arrText) {
+          parts.push(`Passage ${arrText}`);
+        }
+        if (parts.length) {
+          return parts.join(' · ');
+        }
+      }
+
+      if (depText && arrText && depMinutes === arrMinutes) {
+        return `Passage ${depText}`;
+      }
+      if (depText) {
+        return `Départ ${depText}`;
+      }
+      if (arrText) {
+        return `Arrivée ${arrText}`;
+      }
+      return 'Horaire indisponible';
+    }
+
     function renderResults(container, results) {
       container.innerHTML = '';
       if (!Array.isArray(results) || results.length === 0) {
@@ -645,8 +719,24 @@
         return;
       }
 
-      for (let i = 0; i < results.length; i++) {
-        const result = results[i];
+      const totalCount = results.length;
+      const intro = document.createElement('div');
+      intro.className = 'resultsIntro';
+      const introPrefix = totalCount === 1 ? '1 trajet direct trouvé.' : `${totalCount} trajets directs trouvés.`;
+      intro.textContent = `${introPrefix} Cliquez sur un trajet pour voir les détails.`;
+      container.appendChild(intro);
+
+      const MAX_RESULTS = 30;
+      const limitedResults = results.slice(0, MAX_RESULTS);
+      if (totalCount > MAX_RESULTS) {
+        const note = document.createElement('div');
+        note.className = 'resultsIntro';
+        note.textContent = `Affichage des ${MAX_RESULTS} premiers résultats sur ${totalCount}. Ajustez l'heure pour affiner la recherche.`;
+        container.appendChild(note);
+      }
+
+      for (let i = 0; i < limitedResults.length; i++) {
+        const result = limitedResults[i];
         const card = document.createElement('div');
         card.className = 'card';
 
@@ -668,21 +758,84 @@
         mainline.textContent = `${result.depart_station} ${minutesToHHMM(result.depart_time_min)} → ${result.arrive_station} ${minutesToHHMM(result.arrive_time_min)} (${result.duration_min} min)`;
         card.appendChild(mainline);
 
-        if (Array.isArray(result.intermediate_stops) && result.intermediate_stops.length) {
-          const details = document.createElement('div');
-          details.className = 'details';
+        const stopsArray = Array.isArray(result.intermediate_stops) ? result.intermediate_stops : [];
+        if (stopsArray.length) {
+          const quickDetails = document.createElement('div');
+          quickDetails.className = 'details';
           const seenNames = new Set();
           const names = [];
-          for (let j = 0; j < result.intermediate_stops.length; j++) {
-            const stop = result.intermediate_stops[j];
-            if (!seenNames.has(stop.name)) {
+          for (let j = 0; j < stopsArray.length; j++) {
+            const stop = stopsArray[j];
+            if (stop && stop.name && !seenNames.has(stop.name)) {
               seenNames.add(stop.name);
               names.push(stop.name);
             }
           }
-          details.textContent = `Dessert : ${names.join(' · ')}`;
-          card.appendChild(details);
+          quickDetails.textContent = `Dessert : ${names.join(' · ')}`;
+          card.appendChild(quickDetails);
         }
+
+        const toggleBtn = document.createElement('button');
+        toggleBtn.type = 'button';
+        toggleBtn.className = 'toggleDetails';
+        toggleBtn.textContent = 'Voir les détails du trajet';
+        card.appendChild(toggleBtn);
+
+        const detailPanel = document.createElement('div');
+        detailPanel.className = 'detailPanel';
+        detailPanel.setAttribute('hidden', '');
+        const detailId = `trip-${result.trip_id}`;
+        detailPanel.id = detailId;
+        toggleBtn.setAttribute('aria-controls', detailId);
+        toggleBtn.setAttribute('aria-expanded', 'false');
+
+        const detailTitle = document.createElement('div');
+        detailTitle.className = 'detailTitle';
+        detailTitle.textContent = 'Arrêts desservis';
+        detailPanel.appendChild(detailTitle);
+
+        const stopsList = document.createElement('ul');
+        stopsList.className = 'stopsList';
+        for (let j = 0; j < stopsArray.length; j++) {
+          const stop = stopsArray[j];
+          const listItem = document.createElement('li');
+
+          const nameSpan = document.createElement('span');
+          nameSpan.className = 'stopName';
+          nameSpan.textContent = stop.name;
+          listItem.appendChild(nameSpan);
+
+          const timesSpan = document.createElement('span');
+          timesSpan.className = 'stopTimes';
+          timesSpan.textContent = buildStopTimesText(stop, j, stopsArray.length);
+          listItem.appendChild(timesSpan);
+
+          stopsList.appendChild(listItem);
+        }
+        detailPanel.appendChild(stopsList);
+
+        const tripMeta = document.createElement('div');
+        tripMeta.className = 'details';
+        tripMeta.textContent = `Identifiant du trajet : ${result.trip_id}`;
+        detailPanel.appendChild(tripMeta);
+
+        card.appendChild(detailPanel);
+
+        toggleBtn.addEventListener('click', (event) => {
+          event.stopPropagation();
+          const isHidden = detailPanel.hasAttribute('hidden');
+          if (isHidden) {
+            detailPanel.removeAttribute('hidden');
+            card.classList.add('expanded');
+            toggleBtn.textContent = 'Masquer les détails';
+            toggleBtn.setAttribute('aria-expanded', 'true');
+          } else {
+            detailPanel.setAttribute('hidden', '');
+            card.classList.remove('expanded');
+            toggleBtn.textContent = 'Voir les détails du trajet';
+            toggleBtn.setAttribute('aria-expanded', 'false');
+          }
+        });
 
         container.appendChild(card);
       }
