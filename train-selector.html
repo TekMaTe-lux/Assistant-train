@@ -352,17 +352,79 @@ function encodeFilename(filename) {
         .toLowerCase();
     }
 
+    function stripParenthetical(text) {
+      return text.replace(/\s*\([^)]*\)\s*/g, " ");
+    }
+
+    function tailAfterComma(name) {
+      const cleaned = stripParenthetical(name).replace(/\s+/g, " ").trim();
+      if (!cleaned) {
+        return "";
+      }
+      const parts = cleaned.split(",");
+      return parts[parts.length - 1].trim();
+    }
+
     function isTrainStationName(name) {
       if (!name) {
         return false;
       }
 
-      const normalized = normalizeText(name);
-      if (normalized.includes("gare routiere")) {
+      const normalizedFull = normalizeText(name);
+      if (!normalizedFull.includes("gare")) {
         return false;
       }
 
-      return /\bgare\b/.test(normalized);
+      const disallowedFragments = [
+        "gare routiere",
+        "routiere",
+        "op der gare",
+        "bei der gare",
+        "avenue de la gare",
+        "rue de la gare",
+        "croisement gare",
+        "luxexpo",
+        "rocade",
+        "pont rouge",
+        "tram",
+        "bus",
+        "ltett",
+        "p+r"
+      ];
+
+      if (disallowedFragments.some((fragment) => normalizedFull.includes(fragment))) {
+        return false;
+      }
+
+      const tail = normalizeText(tailAfterComma(name));
+
+      if (!tail.includes("gare")) {
+        return false;
+      }
+
+      if (tail === "gare" || tail === "gare centrale") {
+        return true;
+      }
+
+      if (tail.startsWith("gare-")) {
+        return true;
+      }
+
+      if (tail.startsWith("gare ")) {
+        const qualifier = tail.slice("gare ".length);
+        if (
+          qualifier &&
+          !/(centre|luxexpo|rocade|pont rouge|routiere|tram|bus)/.test(qualifier)
+        ) {
+          return true;
+        }
+      }
+
+      if (tail.endsWith(" gare")) {
+        return true;
+      }
+
+      return false;
     }
 
     function groupBy(array, keyFn) {
@@ -554,16 +616,26 @@ function encodeFilename(filename) {
           times.forEach((time) => trainStopIds.add(time.stop_id));
         }
         
-        const stationList = Array.from(stationMap.values())
-          .filter((station) => {
-            for (const stopId of station.stopIds) {
-              if (trainStopIds.has(stopId)) {
-                return true;
-              }
+        let stationList = Array.from(stationMap.values());
+
+        const stationsWithTrips = stationList.filter((station) => {
+          for (const stopId of station.stopIds) {
+            if (trainStopIds.has(stopId)) {
+              return true;
             }
-            return false;
-          })
-          .sort((a, b) => a.name.localeCompare(b.name, "fr"));
+          }
+          return false;
+        });
+
+        if (stationsWithTrips.length > 0) {
+          stationList = stationsWithTrips;
+        } else if (stationList.length > 0) {
+          console.warn(
+            "Aucun stop_time ne correspond aux gares détectées. Utilisation de la liste heuristique complète des gares."
+          );
+        }
+
+        stationList.sort((a, b) => a.name.localeCompare(b.name, "fr"));
 
 
         const stationById = new Map(stationList.map((station) => [station.stationId, station]));
