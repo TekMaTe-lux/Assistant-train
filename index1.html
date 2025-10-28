@@ -3887,6 +3887,24 @@ const garesParLigne = [
 
 const LINE_STOP_NAMES = new Set(garesParLigne.map(g => g.nom));
 
+function matchesLineStopName(rawName){
+  const name = (rawName || '').trim();
+  if (!name) return false;
+  if (LINE_STOP_NAMES.has(name)) return true;
+
+  const commaIndex = name.indexOf(',');
+  const baseName = (commaIndex >= 0 ? name.slice(0, commaIndex) : name)
+    .replace(/\s+Gare.*$/i, '')
+    .trim();
+
+  if (!baseName || !LINE_STOP_NAMES.has(baseName)) return false;
+  if (/routi[eè]re/i.test(name)) return false;
+  if (/\bgare\b/i.test(name)) return true;
+  if (/\bhalte\b/i.test(name)) return true;
+  if (/\bstation\b/i.test(name)) return true;
+  return false;
+}
+
 function computeRelevantStopIds(stops){
   const idToStop = new Map();
   const childrenByParent = new Map();
@@ -3904,8 +3922,8 @@ function computeRelevantStopIds(stops){
   const queue = [];
 
   stops.forEach(s => {
-    const name = (s.stop_name || '').trim();
-    if (name && LINE_STOP_NAMES.has(name)){
+    const name = s?.stop_name;
+    if (matchesLineStopName(name)){
       if (!relevant.has(s.stop_id)){
         relevant.add(s.stop_id);
         queue.push(s.stop_id);
@@ -5501,7 +5519,7 @@ async function ensureGTFSLoaded(){
 
       GTFSLoadingUI.message('Chargement des horaires CFL…');
       const relevantTripIds = new Set();
-      const stopTimes = await fetchCsvWithAlternates(
+      let stopTimes = await fetchCsvWithAlternates(
         ['stop_times%5B1%5D.txt', 'stop_times[1].txt'],
         {
           keepColumns: ['trip_id','arrival_time','departure_time','stop_id','stop_sequence'],
@@ -5517,8 +5535,8 @@ async function ensureGTFSLoaded(){
       await __yieldToBrowser();
 
       GTFSLoadingUI.message('Chargement des trajets CFL…');
-      const relevantServiceIds = new Set();
-      const trips = await fetchCsvWithAlternates(
+      const routeIds = new Set();
+      let trips = await fetchCsvWithAlternates(
         ['trips%5B1%5D.txt', 'trips[1].txt'],
         {
           keepColumns: ['trip_id','service_id','route_id','trip_short_name','trip_headsign'],
@@ -5526,12 +5544,50 @@ async function ensureGTFSLoaded(){
           setSourceFlag: false,
           filterRow: row => {
             if (!relevantTripIds.has(row.trip_id)) return false;
-            if (row.service_id) relevantServiceIds.add(row.service_id);
+            if (row.route_id) routeIds.add(row.route_id);
             return true;
           }
         }
       );
       await __yieldToBrowser();
+
+      GTFSLoadingUI.message('Chargement des lignes CFL…');
+      let allowedTripIds = null;
+      if (routeIds.size){
+        const routes = await fetchCsvWithAlternates(
+          ['routes%5B1%5D.txt', 'routes[1].txt'],
+          {
+            keepColumns: ['route_id','route_type'],
+            baseList: CFL_GTFS_BASES,
+            setSourceFlag: false,
+            filterRow: row => routeIds.has(row.route_id)
+          }
+        );
+        const allowedRouteIds = new Set(
+          routes
+            .filter(r => Number(r.route_type) === 2)
+            .map(r => r.route_id)
+        );
+        if (allowedRouteIds.size){
+          const tmpTripIds = new Set();
+          trips = trips.filter(t => {
+            const keep = allowedRouteIds.has(t.route_id);
+            if (keep && t.trip_id) tmpTripIds.add(t.trip_id);
+            return keep;
+          });
+          if (tmpTripIds.size) allowedTripIds = tmpTripIds;
+        }
+        await __yieldToBrowser();
+      }
+
+      if (allowedTripIds){
+        stopTimes = stopTimes.filter(st => allowedTripIds.has(st.trip_id));
+      }
+
+      const relevantServiceIds = new Set();
+      trips.forEach(t => {
+        if (t?.service_id) relevantServiceIds.add(t.service_id);
+      });
 
       GTFSLoadingUI.message('Chargement du calendrier CFL…');
       const calendarDates = await fetchCsvWithAlternates(
@@ -5544,6 +5600,11 @@ async function ensureGTFSLoaded(){
         }
       );
       await __yieldToBrowser();
+
+      if (stopTimes.length){
+        const usedStopIds = new Set(stopTimes.map(st => st.stop_id));
+        stops = stops.filter(s => usedStopIds.has(s.stop_id));
+      }
 
       CFL_GTFS_DATA = {
         stops,
