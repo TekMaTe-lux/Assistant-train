@@ -43,6 +43,10 @@
       </select>
     </div>
     <div>
+      <label for="travelDate">Date du voyage :</label>
+      <input id="travelDate" type="date" required>
+    </div>
+    <div>
       <label for="minTime">Départ après :</label>
       <input id="minTime" type="time" required>
     </div>
@@ -162,6 +166,73 @@
       return trimmed.endsWith(', Gare');
     }
 
+    const WEEKDAY_NAMES = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+
+    function dateInputToYYYYMMDD(value) {
+      if (!value) {
+        return null;
+      }
+      const parts = value.split('-');
+      if (parts.length !== 3) {
+        return null;
+      }
+      const [year, month, day] = parts;
+      if (year.length !== 4 || month.length !== 2 || day.length !== 2) {
+        return null;
+      }
+      return `${year}${month}${day}`;
+    }
+
+    function yyyymmddToISO(value) {
+      if (!value || value.length !== 8) {
+        return null;
+      }
+      const year = value.slice(0, 4);
+      const month = value.slice(4, 6);
+      const day = value.slice(6, 8);
+      return `${year}-${month}-${day}`;
+    }
+
+    function yyyymmddToDate(value) {
+      if (!value || value.length !== 8) {
+        return null;
+      }
+      const year = parseInt(value.slice(0, 4), 10);
+      const month = parseInt(value.slice(4, 6), 10);
+      const day = parseInt(value.slice(6, 8), 10);
+      if ([year, month, day].some((num) => Number.isNaN(num))) {
+        return null;
+      }
+      return new Date(Date.UTC(year, month - 1, day));
+    }
+
+    function dateToYYYYMMDD(dateObj) {
+      if (!(dateObj instanceof Date) || Number.isNaN(dateObj.getTime())) {
+        return null;
+      }
+      const year = dateObj.getUTCFullYear();
+      const month = String(dateObj.getUTCMonth() + 1).padStart(2, '0');
+      const day = String(dateObj.getUTCDate()).padStart(2, '0');
+      return `${year}${month}${day}`;
+    }
+
+    function addDaysToYYYYMMDD(value, days) {
+      const dateObj = yyyymmddToDate(value);
+      if (!dateObj) {
+        return null;
+      }
+      dateObj.setUTCDate(dateObj.getUTCDate() + days);
+      return dateToYYYYMMDD(dateObj);
+    }
+
+    function getWeekdayIndexFromYYYYMMDD(value) {
+      const dateObj = yyyymmddToDate(value);
+      if (!dateObj) {
+        return null;
+      }
+      return dateObj.getUTCDay();
+    }
+
     // 2. chargement et parsing GTFS
     async function loadGTFSData() {
       const pagePath = (window.location && typeof window.location.pathname === 'string')
@@ -190,12 +261,22 @@
         throw new Error(`Chargement impossible pour ${file}`);
       };
 
-      const [routesText, stopsText, tripsText, stopTimes1Text, stopTimes2Text] = await Promise.all([
+      const [
+        routesText,
+        stopsText,
+        tripsText,
+        stopTimes1Text,
+        stopTimes2Text,
+        calendarText,
+        calendarDatesText
+      ] = await Promise.all([
         fetchText('routes[1].txt'),
         fetchText('stops[1].txt'),
         fetchText('trips[1].txt'),
         fetchText('stop_times[1].txt'),
-        fetchText('stop_times[2].txt')
+        fetchText('stop_times[2].txt'),
+        fetchText('calendar[1].txt'),
+        fetchText('calendar_dates[1].txt')
       ]);
 
       const routesRows = parseCSV(routesText);
@@ -203,11 +284,14 @@
       const tripsRows = parseCSV(tripsText);
       const stopTimesRows = parseCSV(stopTimes1Text).concat(parseCSV(stopTimes2Text));
 
-      return buildCFLData(routesRows, stopsRows, tripsRows, stopTimesRows);
+      const calendarRows = parseCSV(calendarText);
+      const calendarDatesRows = parseCSV(calendarDatesText);
+
+      return buildCFLData(routesRows, stopsRows, tripsRows, stopTimesRows, calendarRows, calendarDatesRows);
     }
 
     // 3. construction des index (routesById, stopsById, tripsById, tripsStops)
-    function buildCFLData(routesRows, stopsRows, tripsRows, stopTimesRows) {
+    function buildCFLData(routesRows, stopsRows, tripsRows, stopTimesRows, calendarRows, calendarDatesRows) {
       const allowedRouteIds = new Set(['302', '301', '300', '299', '297']);
       const routesById = {};
       for (let i = 0; i < routesRows.length; i++) {
@@ -244,6 +328,7 @@
         }
         tripsById[trip.trip_id] = {
           route_id: trip.route_id,
+          service_id: trip.service_id || '',
           headsign: trip.trip_headsign || '',
           shortName: trip.trip_short_name || '',
           direction: trip.direction_id || ''
@@ -299,19 +384,154 @@
         }
       }
 
+      const serviceCalendars = {};
+      for (let i = 0; i < calendarRows.length; i++) {
+        const row = calendarRows[i];
+        const serviceId = row.service_id;
+        if (!serviceId) {
+          continue;
+        }
+        serviceCalendars[serviceId] = {
+          startDate: row.start_date || '',
+          endDate: row.end_date || '',
+          days: {
+            monday: Number(row.monday) === 1 ? 1 : 0,
+            tuesday: Number(row.tuesday) === 1 ? 1 : 0,
+            wednesday: Number(row.wednesday) === 1 ? 1 : 0,
+            thursday: Number(row.thursday) === 1 ? 1 : 0,
+            friday: Number(row.friday) === 1 ? 1 : 0,
+            saturday: Number(row.saturday) === 1 ? 1 : 0,
+            sunday: Number(row.sunday) === 1 ? 1 : 0
+          }
+        };
+      }
+
+      const serviceExceptions = {};
+      for (let i = 0; i < calendarDatesRows.length; i++) {
+        const row = calendarDatesRows[i];
+        if (!row.service_id || !row.date) {
+          continue;
+        }
+        if (!serviceExceptions[row.service_id]) {
+          serviceExceptions[row.service_id] = {};
+        }
+        serviceExceptions[row.service_id][row.date] = row.exception_type || '';
+      }
+
       return {
         routesById,
         stopsById,
         tripsById: filteredTripsById,
-        tripsStops
+        tripsStops,
+        serviceCalendars,
+        serviceExceptions
       };
     }
 
+    // 3b. disponibilité des services (calendriers et exceptions)
+    function isServiceActiveForDate(data, tripInfo, targetDate, weekdayName) {
+      if (!tripInfo || !tripInfo.service_id || !targetDate) {
+        return false;
+      }
+
+      const serviceId = tripInfo.service_id;
+      const exceptions = data.serviceExceptions && data.serviceExceptions[serviceId];
+      if (exceptions && Object.prototype.hasOwnProperty.call(exceptions, targetDate)) {
+        return exceptions[targetDate] === '1';
+      }
+
+      const calendar = data.serviceCalendars && data.serviceCalendars[serviceId];
+      if (!calendar || !calendar.startDate || !calendar.endDate) {
+        return false;
+      }
+
+      if (targetDate < calendar.startDate || targetDate > calendar.endDate) {
+        return false;
+      }
+
+      if (!weekdayName) {
+        return false;
+      }
+
+      return calendar.days && calendar.days[weekdayName] === 1;
+    }
+
+    function computeEarliestServiceDateISO(data) {
+      let candidate = null;
+      const pushCandidate = (dateStr) => {
+        if (!dateStr || dateStr.length !== 8) {
+          return;
+        }
+        if (!candidate || dateStr < candidate) {
+          candidate = dateStr;
+        }
+      };
+
+      if (data && data.serviceExceptions) {
+        const exceptionEntries = Object.values(data.serviceExceptions);
+        for (let i = 0; i < exceptionEntries.length; i++) {
+          const record = exceptionEntries[i];
+          const dates = Object.keys(record || {});
+          for (let j = 0; j < dates.length; j++) {
+            const dateKey = dates[j];
+            if (record[dateKey] === '1') {
+              pushCandidate(dateKey);
+            }
+          }
+        }
+      }
+
+      if (data && data.serviceCalendars) {
+        const calendarList = Object.values(data.serviceCalendars);
+        for (let i = 0; i < calendarList.length; i++) {
+          const calendar = calendarList[i];
+          if (!calendar || !calendar.startDate || !calendar.endDate) {
+            continue;
+          }
+          const startDate = calendar.startDate;
+          const startWeekdayIndex = getWeekdayIndexFromYYYYMMDD(startDate);
+          if (startWeekdayIndex === null) {
+            pushCandidate(startDate);
+            continue;
+          }
+          for (let offset = 0; offset < 7; offset++) {
+            const weekdayIndex = (startWeekdayIndex + offset) % 7;
+            const weekdayName = WEEKDAY_NAMES[weekdayIndex];
+            if (calendar.days && calendar.days[weekdayName] === 1) {
+              const possibleDate = addDaysToYYYYMMDD(startDate, offset);
+              if (possibleDate && possibleDate <= calendar.endDate) {
+                pushCandidate(possibleDate);
+              }
+              break;
+            }
+          }
+        }
+      }
+
+      if (candidate) {
+        return yyyymmddToISO(candidate);
+      }
+
+      const today = new Date();
+      const todayUTC = new Date(Date.UTC(today.getFullYear(), today.getMonth(), today.getDate()));
+      return yyyymmddToISO(dateToYYYYMMDD(todayUTC));
+    }
+
     // 4. moteur findDirectTrains
-    function findDirectTrains(data, fromStopName, toStopName, minDepartureMinutes) {
-      if (!data || !fromStopName || !toStopName) {
+    function findDirectTrains(data, fromStopName, toStopName, minDepartureMinutes, travelDateISO) {
+      if (!data || !fromStopName || !toStopName || !travelDateISO) {
         return [];
       }
+
+      const targetDate = dateInputToYYYYMMDD(travelDateISO);
+      if (!targetDate) {
+        return [];
+      }
+      const weekdayIndex = getWeekdayIndexFromYYYYMMDD(targetDate);
+      if (weekdayIndex === null) {
+        return [];
+      }
+      const weekdayName = WEEKDAY_NAMES[weekdayIndex];
 
       const allFromStopIds = new Set();
       const allToStopIds = new Set();
@@ -340,6 +560,9 @@
 
         const tripInfo = data.tripsById?.[tripId];
         if (!tripInfo) {
+          continue;
+        }
+        if (!isServiceActiveForDate(data, tripInfo, targetDate, weekdayName)) {
           continue;
         }
         const routeInfo = data.routesById?.[tripInfo.route_id];
@@ -511,22 +734,34 @@
       input.value = hours + ':' + minutes;
     }
 
+    function setTodayDefaultDate(input) {
+      const today = new Date();
+      const iso = today.toISOString().slice(0, 10);
+      input.value = iso;
+    }
+
     // 6. wiring des events
     document.addEventListener('DOMContentLoaded', () => {
       const fromSelect = document.getElementById('fromStation');
       const toSelect = document.getElementById('toStation');
       const minTimeInput = document.getElementById('minTime');
+      const travelDateInput = document.getElementById('travelDate');
       const searchBtn = document.getElementById('searchBtn');
       const form = document.getElementById('searchForm');
       const resultsContainer = document.getElementById('results');
       const errorEl = document.getElementById('formError');
 
       setCurrentTimeDefault(minTimeInput);
+      setTodayDefaultDate(travelDateInput);
 
       loadGTFSData()
         .then((data) => {
           window.CFL_DATA = data;
           populateStationSelects(data.stopsById, [fromSelect, toSelect]);
+          const suggestedDate = computeEarliestServiceDateISO(data);
+          if (suggestedDate) {
+            travelDateInput.value = suggestedDate;
+          }
           searchBtn.disabled = false;
           resultsContainer.classList.remove('loading');
           resultsContainer.textContent = '';
@@ -542,6 +777,7 @@
         errorEl.textContent = '';
         const fromName = fromSelect.value;
         const toName = toSelect.value;
+        const travelDate = travelDateInput.value;
         if (!fromName || !toName) {
           errorEl.textContent = 'Veuillez sélectionner une gare de départ et d\'arrivée.';
           return;
@@ -550,12 +786,16 @@
           errorEl.textContent = 'La gare de départ doit être différente de la gare d\'arrivée.';
           return;
         }
+        if (!travelDate) {
+          errorEl.textContent = 'Veuillez choisir une date de voyage.';
+          return;
+        }
         if (!window.CFL_DATA) {
           errorEl.textContent = 'Les données ne sont pas encore chargées.';
           return;
         }
         const minMinutes = hhmmToMinutes(minTimeInput.value);
-        const results = findDirectTrains(window.CFL_DATA, fromName, toName, minMinutes);
+        const results = findDirectTrains(window.CFL_DATA, fromName, toName, minMinutes, travelDate);
         renderResults(resultsContainer, results);
       });
     });
