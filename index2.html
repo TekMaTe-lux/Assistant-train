@@ -5498,6 +5498,12 @@ async function loadCflGtfs(){
         })
       ]);
       const stopTimes = stopTimesChunks.flat();
+      const stopTimesByTrip = new Map();
+      for (const row of stopTimes) {
+        if (!row || !row.trip_id) continue;
+        if (!stopTimesByTrip.has(row.trip_id)) stopTimesByTrip.set(row.trip_id, []);
+        stopTimesByTrip.get(row.trip_id).push(row);
+      }
       await __yieldToBrowser();
 
       GTFSLoadingUI.message('Chargement des routes CFL…');
@@ -5537,14 +5543,53 @@ async function loadCflGtfs(){
       const trips = await fetchAndParseCFLCSV('trips[1].txt', {
         keepColumns: ['trip_id','service_id','route_id','trip_short_name','trip_headsign'],
         filterRow: row => {
-          if (!relevantTripIds.has(row.trip_id)) return false;
           if (row.route_id && !allowedRouteIds.has(row.route_id)) return false;
           if (row.service_id) relevantServiceIds.add(row.service_id);
           return true;
         }
       });
-      const allowedTripIds = new Set(trips.map(t => t.trip_id));
-      const filteredStopTimes = stopTimes.filter(st => allowedTripIds.has(st.trip_id));
+     const tripById = new Map();
+      trips.forEach(t => { if (t.trip_id) tripById.set(t.trip_id, t); });
+
+      const headsignMeta = new Map();
+      trips.forEach(trip => {
+        const head = (trip?.trip_headsign || '').trim();
+        if (!head) return;
+        if (!headsignMeta.has(head)) headsignMeta.set(head, []);
+        headsignMeta.get(head).push(trip);
+      });
+      const headsignAssignIndex = new Map();
+      const stopNameById = new Map(stops.map(s => [s.stop_id, s.stop_name]));
+
+      relevantTripIds.forEach(tripId => {
+        if (tripById.has(tripId)) return;
+        const seq = stopTimesByTrip.get(tripId);
+        if (!seq || !seq.length) return;
+        seq.sort((a, b) => Number(a.stop_sequence) - Number(b.stop_sequence));
+        const first = seq[0];
+        const last = seq[seq.length - 1];
+        const headsign = (stopNameById.get(last?.stop_id) || '').trim();
+        if (!headsign) return;
+        const metaList = headsignMeta.get(headsign);
+        if (!metaList || !metaList.length) return;
+        const idx = headsignAssignIndex.get(headsign) || 0;
+        const meta = metaList[idx % metaList.length];
+        headsignAssignIndex.set(headsign, idx + 1);
+        if (!meta || !meta.route_id || !meta.trip_short_name) return;
+        if (meta.service_id) relevantServiceIds.add(meta.service_id);
+        const synthetic = {
+          trip_id: tripId,
+          service_id: meta.service_id,
+          route_id: meta.route_id,
+          trip_short_name: meta.trip_short_name,
+          trip_headsign: headsign
+        };
+        trips.push(synthetic);
+        tripById.set(tripId, synthetic);
+      });
+
+      const knownTripIds = new Set(tripById.keys());
+      const filteredStopTimes = stopTimes.filter(st => knownTripIds.has(st.trip_id));
       await __yieldToBrowser();
 
       GTFSLoadingUI.message('Chargement du calendrier CFL…');
@@ -5559,9 +5604,6 @@ async function loadCflGtfs(){
 
       const stopNameToId = new Map();
       stops.forEach(s => registerStopName(stopNameToId, s.stop_name, s.stop_id));
-
-      const tripById = new Map();
-      trips.forEach(t => { if (t.trip_id) tripById.set(t.trip_id, t); });
 
       const allowedByDate = new Map();
       const removedByDate = new Map();
@@ -5604,7 +5646,7 @@ async function loadCflGtfs(){
         removedByDate,
         calendarByService,
         relevantStopIds,
-        relevantTripIds: allowedTripIds,
+        relevantTripIds: knownTripIds,
         relevantServiceIds,
         routesById,
         tripDisplayNumber,
