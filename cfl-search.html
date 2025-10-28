@@ -46,24 +46,24 @@
       <label for="minTime">Départ après :</label>
       <input id="minTime" type="time" required>
     </div>
-    <button id="searchBtn" type="button" disabled>Rechercher</button>
+    <button id="searchBtn" type="submit" disabled>Rechercher</button>
     <div id="formError"></div>
   </form>
   <div id="results" class="loading">Chargement des données GTFS…</div>
   <script>
     // 1. utils CSV
     function parseCSV(text) {
-      const cleanedText = text.replace(/\r\n/g, "\n").replace(/\r/g, "\n").replace(/^\uFEFF/, "");
+      const cleaned = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n').replace(/^\uFEFF/, '');
       const rows = [];
       let currentRow = [];
-      let currentField = "";
+      let currentField = '';
       let inQuotes = false;
-      for (let i = 0; i < cleanedText.length; i++) {
-        const char = cleanedText[i];
+      for (let i = 0; i < cleaned.length; i++) {
+        const char = cleaned[i];
         if (inQuotes) {
           if (char === '"') {
-            const nextChar = cleanedText[i + 1];
-            if (nextChar === '"') {
+            const next = cleaned[i + 1];
+            if (next === '"') {
               currentField += '"';
               i++;
             } else {
@@ -72,25 +72,23 @@
           } else {
             currentField += char;
           }
+        } else if (char === '"') {
+          inQuotes = true;
+        } else if (char === ',') {
+          currentRow.push(currentField);
+          currentField = '';
+        } else if (char === '\n') {
+          currentRow.push(currentField);
+          rows.push(currentRow);
+          currentRow = [];
+          currentField = '';
         } else {
-          if (char === '"') {
-            inQuotes = true;
-          } else if (char === ',') {
-            currentRow.push(currentField);
-            currentField = "";
-          } else if (char === '\n') {
-            currentRow.push(currentField);
-            rows.push(currentRow);
-            currentRow = [];
-            currentField = "";
-          } else {
-            currentField += char;
-          }
+          currentField += char;
         }
       }
       if (inQuotes) {
         currentRow.push(currentField);
-      } else if (currentField !== "" || currentRow.length) {
+      } else if (currentField !== '' || currentRow.length) {
         currentRow.push(currentField);
       }
       if (currentRow.length) {
@@ -99,16 +97,16 @@
       if (!rows.length) {
         return [];
       }
-      const header = rows.shift().map((col, idx) => (idx === 0 ? col.replace(/^\uFEFF/, "") : col));
+      const header = rows.shift().map((col, index) => (index === 0 ? col.replace(/^\uFEFF/, '') : col));
       const data = [];
       for (let i = 0; i < rows.length; i++) {
         const row = rows[i];
-        if (row.length === 1 && row[0] === "") {
+        if (row.length === 1 && row[0] === '') {
           continue;
         }
         const record = {};
         for (let j = 0; j < header.length; j++) {
-          record[header[j]] = row[j] !== undefined ? row[j] : "";
+          record[header[j]] = row[j] !== undefined ? row[j] : '';
         }
         data.push(record);
       }
@@ -133,19 +131,20 @@
     }
 
     function minutesToHHMM(totalMinutes) {
-      if (totalMinutes === null || totalMinutes === undefined) {
-        return "--:--";
+      if (!Number.isFinite(totalMinutes)) {
+        return '--:--';
       }
-      const hours = Math.floor(totalMinutes / 60);
-      const minutes = totalMinutes % 60;
-      return String(hours).padStart(2, '0') + ':' + String(minutes).padStart(2, '0');
+      const normalized = ((totalMinutes % 1440) + 1440) % 1440;
+      const hours = Math.floor(normalized / 60);
+      const minutes = normalized % 60;
+      return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`;
     }
 
     function hhmmToMinutes(value) {
       if (!value) {
         return 0;
       }
-      const [hh, mm] = value.split(':').map(Number);
+      const [hh, mm] = value.split(':').map((num) => parseInt(num, 10));
       if (Number.isNaN(hh) || Number.isNaN(mm)) {
         return 0;
       }
@@ -156,20 +155,29 @@
       if (!name) {
         return false;
       }
-      if (name === "Luxembourg, Gare Centrale") {
+      const trimmed = name.trim();
+      if (trimmed === 'Luxembourg, Gare Centrale') {
         return true;
       }
-      return name.endsWith(', Gare');
+      return trimmed.endsWith(', Gare');
     }
 
     // 2. chargement et parsing GTFS
     async function loadGTFSData() {
+      const fetchText = async (file) => {
+        const response = await fetch(`./${file}`, { cache: 'no-store' });
+        if (!response.ok) {
+          throw new Error(`Chargement impossible (${response.status}) pour ${file}`);
+        }
+        return response.text();
+      };
+
       const [routesText, stopsText, tripsText, stopTimes1Text, stopTimes2Text] = await Promise.all([
-        fetch('routes[1].txt').then((res) => res.text()),
-        fetch('stops[1].txt').then((res) => res.text()),
-        fetch('trips[1].txt').then((res) => res.text()),
-        fetch('stop_times[1].txt').then((res) => res.text()),
-        fetch('stop_times[2].txt').then((res) => res.text())
+        fetchText('routes[1].txt'),
+        fetchText('stops[1].txt'),
+        fetchText('trips[1].txt'),
+        fetchText('stop_times[1].txt'),
+        fetchText('stop_times[2].txt')
       ]);
 
       const routesRows = parseCSV(routesText);
@@ -198,14 +206,15 @@
       const stopsById = {};
       for (let i = 0; i < stopsRows.length; i++) {
         const stop = stopsRows[i];
-        if (!isRealTrainStation(stop.stop_name)) {
+        const stopName = stop.stop_name ? stop.stop_name.trim() : '';
+        if (!isRealTrainStation(stopName)) {
           continue;
         }
         const stopId = stop.stop_id;
         stopsById[stopId] = {
-          name: stop.stop_name,
-          lat: stop.stop_lat ? Number(stop.stop_lat) : null,
-          lon: stop.stop_lon ? Number(stop.stop_lon) : null
+          name: stopName,
+          lat: stop.stop_lat && !Number.isNaN(Number(stop.stop_lat)) ? Number(stop.stop_lat) : null,
+          lon: stop.stop_lon && !Number.isNaN(Number(stop.stop_lon)) ? Number(stop.stop_lon) : null
         };
       }
 
@@ -234,11 +243,15 @@
         if (!stopInfo) {
           continue;
         }
+        const sequence = Number(row.stop_sequence);
+        if (!Number.isFinite(sequence)) {
+          continue;
+        }
         const arrival = toMinutesSinceMidnight(row.arrival_time);
         const departure = toMinutesSinceMidnight(row.departure_time);
         const effectiveArrival = arrival !== null ? arrival : departure;
         const effectiveDeparture = departure !== null ? departure : arrival;
-        if (effectiveArrival === null || effectiveDeparture === null) {
+        if (!Number.isFinite(effectiveArrival) || !Number.isFinite(effectiveDeparture)) {
           continue;
         }
         if (!tripsStopsTemp[tripId]) {
@@ -251,7 +264,7 @@
           lon: stopInfo.lon,
           arrival: effectiveArrival,
           departure: effectiveDeparture,
-          seq: Number(row.stop_sequence)
+          seq: sequence
         });
       }
 
@@ -278,9 +291,13 @@
 
     // 4. moteur findDirectTrains
     function findDirectTrains(data, fromStopName, toStopName, minDepartureMinutes) {
+      if (!data || !fromStopName || !toStopName) {
+        return [];
+      }
+
       const allFromStopIds = new Set();
       const allToStopIds = new Set();
-      const stopEntries = Object.entries(data.stopsById);
+      const stopEntries = Object.entries(data.stopsById || {});
       for (let i = 0; i < stopEntries.length; i++) {
         const [stopId, stopInfo] = stopEntries[i];
         if (stopInfo.name === fromStopName) {
@@ -291,59 +308,82 @@
         }
       }
 
+      if (!allFromStopIds.size || !allToStopIds.size) {
+        return [];
+      }
+
       const results = [];
-      const tripIds = Object.keys(data.tripsStops);
-      for (let i = 0; i < tripIds.length; i++) {
-        const tripId = tripIds[i];
-        const stopsSeq = data.tripsStops[tripId];
+      const tripEntries = Object.entries(data.tripsStops || {});
+      for (let i = 0; i < tripEntries.length; i++) {
+        const [tripId, stopsSeq] = tripEntries[i];
+        if (!Array.isArray(stopsSeq) || stopsSeq.length < 2) {
+          continue;
+        }
+
+        const tripInfo = data.tripsById?.[tripId];
+        if (!tripInfo) {
+          continue;
+        }
+        const routeInfo = data.routesById?.[tripInfo.route_id];
+        if (!routeInfo) {
+          continue;
+        }
+
         let depStop = null;
         let arrStop = null;
         let depIndex = -1;
         let arrIndex = -1;
+
         for (let j = 0; j < stopsSeq.length; j++) {
           const currentStop = stopsSeq[j];
-          if (!depStop && allFromStopIds.has(currentStop.stop_id) && currentStop.departure !== null) {
+          if (!depStop && allFromStopIds.has(currentStop.stop_id)) {
             depStop = currentStop;
             depIndex = j;
           }
-          if (depStop && j > depIndex && allToStopIds.has(currentStop.stop_id) && currentStop.arrival !== null) {
+          if (depStop && allToStopIds.has(currentStop.stop_id)) {
             arrStop = currentStop;
             arrIndex = j;
             break;
           }
         }
+
         if (!depStop || !arrStop) {
           continue;
         }
-        if (depStop.departure < minDepartureMinutes) {
+        if (depIndex >= arrIndex) {
           continue;
         }
-        const tripInfo = data.tripsById[tripId];
-        if (!tripInfo) {
+
+        const depTime = depStop.departure;
+        if (!Number.isFinite(depTime) || depTime < minDepartureMinutes) {
           continue;
         }
-        const routeInfo = data.routesById[tripInfo.route_id];
-        if (!routeInfo) {
+
+        const arrTime = Number.isFinite(arrStop.arrival) ? arrStop.arrival : arrStop.departure;
+        if (!Number.isFinite(arrTime)) {
           continue;
         }
-        const interSlice = stopsSeq.slice(depIndex, arrIndex + 1);
-        const intermediateStops = interSlice.map((stop) => ({
+
+        let duration = arrTime - depTime;
+        if (duration < 0) {
+          duration += 1440;
+        }
+
+        const slice = stopsSeq.slice(depIndex, arrIndex + 1);
+        const intermediateStops = slice.map((stop) => ({
           name: stop.stop_name,
           arr: stop.arrival,
           dep: stop.departure
         }));
-        let duration = arrStop.arrival - depStop.departure;
-        if (duration < 0) {
-          duration += 1440;
-        }
+
         results.push({
           trip_id: tripId,
           train_type: routeInfo.shortName || '',
           train_label: tripInfo.shortName || routeInfo.shortName || '',
           depart_station: depStop.stop_name,
-          depart_time_min: depStop.departure,
+          depart_time_min: depTime,
           arrive_station: arrStop.stop_name,
-          arrive_time_min: arrStop.arrival,
+          arrive_time_min: arrTime,
           duration_min: duration,
           intermediate_stops: intermediateStops
         });
@@ -354,15 +394,16 @@
     }
 
     // 5. rendu UI
-    function renderResults(results, container) {
+    function renderResults(container, results) {
       container.innerHTML = '';
-      if (!results.length) {
+      if (!Array.isArray(results) || results.length === 0) {
         const empty = document.createElement('div');
         empty.className = 'card';
         empty.textContent = 'Aucun train direct trouvé après cette heure.';
         container.appendChild(empty);
         return;
       }
+
       for (let i = 0; i < results.length; i++) {
         const result = results[i];
         const card = document.createElement('div');
@@ -374,50 +415,67 @@
         badge.className = 'badge';
         badge.textContent = result.train_type || 'Train';
         header.appendChild(badge);
-        const labelSpan = document.createElement('span');
-        labelSpan.textContent = result.train_label || '';
-        header.appendChild(labelSpan);
+        if (result.train_label) {
+          const labelSpan = document.createElement('span');
+          labelSpan.textContent = result.train_label;
+          header.appendChild(labelSpan);
+        }
         card.appendChild(header);
 
         const mainline = document.createElement('div');
         mainline.className = 'mainline';
-        mainline.textContent = result.depart_station + ' ' + minutesToHHMM(result.depart_time_min) + ' → ' + result.arrive_station + ' ' + minutesToHHMM(result.arrive_time_min) + ' (' + result.duration_min + ' min)';
+        mainline.textContent = `${result.depart_station} ${minutesToHHMM(result.depart_time_min)} → ${result.arrive_station} ${minutesToHHMM(result.arrive_time_min)} (${result.duration_min} min)`;
         card.appendChild(mainline);
 
-        const details = document.createElement('div');
-        details.className = 'details';
-        const seenNames = new Set();
-        const stopNames = [];
-        for (let j = 0; j < result.intermediate_stops.length; j++) {
-          const stop = result.intermediate_stops[j];
-          if (!seenNames.has(stop.name)) {
-            seenNames.add(stop.name);
-            stopNames.push(stop.name);
+        if (Array.isArray(result.intermediate_stops) && result.intermediate_stops.length) {
+          const details = document.createElement('div');
+          details.className = 'details';
+          const seenNames = new Set();
+          const names = [];
+          for (let j = 0; j < result.intermediate_stops.length; j++) {
+            const stop = result.intermediate_stops[j];
+            if (!seenNames.has(stop.name)) {
+              seenNames.add(stop.name);
+              names.push(stop.name);
+            }
           }
+          details.textContent = `Dessert : ${names.join(' · ')}`;
+          card.appendChild(details);
         }
-        details.textContent = 'Dessert : ' + stopNames.join(' · ');
-        card.appendChild(details);
 
         container.appendChild(card);
       }
     }
 
     function populateStationSelects(stopsById, selectElements) {
-      const uniqueNames = new Set();
+      const unique = new Set();
       const names = [];
-      const stopValues = Object.values(stopsById);
-      for (let i = 0; i < stopValues.length; i++) {
-        const stop = stopValues[i];
-        if (!uniqueNames.has(stop.name)) {
-          uniqueNames.add(stop.name);
+      const values = Object.values(stopsById || {});
+      for (let i = 0; i < values.length; i++) {
+        const stop = values[i];
+        if (stop && stop.name && !unique.has(stop.name)) {
+          unique.add(stop.name);
           names.push(stop.name);
         }
       }
       names.sort((a, b) => a.localeCompare(b, 'fr'));
+
       for (let i = 0; i < selectElements.length; i++) {
         const select = selectElements[i];
-        while (select.options.length > 1) {
-          select.remove(1);
+        const placeholder = select.options.length ? select.options[0] : null;
+        select.innerHTML = '';
+        if (placeholder) {
+          placeholder.disabled = true;
+          placeholder.selected = true;
+          placeholder.value = '';
+          select.appendChild(placeholder);
+        } else {
+          const defaultOption = document.createElement('option');
+          defaultOption.value = '';
+          defaultOption.disabled = true;
+          defaultOption.selected = true;
+          defaultOption.textContent = 'Choisir une gare';
+          select.appendChild(defaultOption);
         }
         for (let j = 0; j < names.length; j++) {
           const option = document.createElement('option');
@@ -441,6 +499,7 @@
       const toSelect = document.getElementById('toStation');
       const minTimeInput = document.getElementById('minTime');
       const searchBtn = document.getElementById('searchBtn');
+      const form = document.getElementById('searchForm');
       const resultsContainer = document.getElementById('results');
       const errorEl = document.getElementById('formError');
 
@@ -451,14 +510,17 @@
           window.CFL_DATA = data;
           populateStationSelects(data.stopsById, [fromSelect, toSelect]);
           searchBtn.disabled = false;
+          resultsContainer.classList.remove('loading');
           resultsContainer.textContent = '';
         })
         .catch((err) => {
           console.error('Erreur lors du chargement GTFS', err);
+          resultsContainer.classList.remove('loading');
           resultsContainer.textContent = "Impossible de charger les données GTFS.";
         });
 
-      searchBtn.addEventListener('click', () => {
+      form.addEventListener('submit', (event) => {
+        event.preventDefault();
         errorEl.textContent = '';
         const fromName = fromSelect.value;
         const toName = toSelect.value;
@@ -476,7 +538,7 @@
         }
         const minMinutes = hhmmToMinutes(minTimeInput.value);
         const results = findDirectTrains(window.CFL_DATA, fromName, toName, minMinutes);
-        renderResults(results, resultsContainer);
+        renderResults(resultsContainer, results);
       });
     });
   </script>
