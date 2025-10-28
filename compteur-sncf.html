@@ -407,9 +407,8 @@
 const SNCF_CANONICAL_ORIGIN = 'https://assistant-train-cx5u.vercel.app';
 // Domaines purement statiques : on y redirige automatiquement vers l'origine canonique.
 const SNCF_STATIC_ORIGINS = ['https://www.labetaillere.fr', 'https://labetaillere.fr'];
-// Autres origines exposant le même runtime (backup et domaines statiques).
+// Autres origines exposant le même runtime.
 const SNCF_ADDITIONAL_ORIGINS = [
-  ...SNCF_STATIC_ORIGINS,
   'https://assistant-train.vercel.app'
 ];
 const SNCF_STATS_PATH = '/api/train?stats=1';
@@ -472,9 +471,12 @@ const SNCF_STATS_HOST = (() => {
       const primary = SNCF_STATS_HOST
         ? `${SNCF_STATS_HOST.replace(/\/$/, '')}${path}`
         : path;
+      const snapshotUrl = new URL('data/sncf-stats-snapshot.json', window.location.href).href;
       const fallbacks = [
         `${SNCF_CANONICAL_ORIGIN}${path}`,
-        ...SNCF_ADDITIONAL_ORIGINS.map(candidateOrigin => `${candidateOrigin.replace(/\/$/, '')}${path}`)
+        `${SNCF_CANONICAL_ORIGIN}/api/sncf-stats`,
+        ...SNCF_ADDITIONAL_ORIGINS.map(candidateOrigin => `${candidateOrigin.replace(/\/$/, '')}${path}`),
+        snapshotUrl
       ];
       const unique = new Set([primary, ...fallbacks]);
       return Array.from(unique).filter(Boolean);
@@ -530,7 +532,18 @@ const SNCF_STATS_HOST = (() => {
             lastError = await buildHttpError(response, url);
             continue;
           }
-          return { payload: await response.json(), url };
+          const payload = await response.json();
+          if (payload && typeof payload === 'object' && payload.source == null) {
+            try {
+              const parsedUrl = new URL(url, window.location.href);
+              if (parsedUrl.pathname.endsWith('/data/sncf-stats-snapshot.json')) {
+                payload.source = 'snapshot';
+              }
+            } catch (parseErr) {
+              // ignore malformed URL
+            }
+          }
+          return { payload, url };
         } catch (err) {
           lastError = err;
         }
