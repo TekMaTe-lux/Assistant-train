@@ -411,7 +411,8 @@ const SNCF_STATIC_ORIGINS = ['https://www.labetaillere.fr', 'https://labetailler
 const SNCF_ADDITIONAL_ORIGINS = [
   'https://assistant-train.vercel.app'
 ];
-const SNCF_STATS_PATH = '/api/train?stats=1';
+const SNCF_STATS_PATH = '/api/sncf-stats';
+const SNCF_STATS_FALLBACK_PATHS = ['/api/train?stats=1'];
     
 const SNCF_STATS_HOST = (() => {
       const params = new URLSearchParams(window.location.search);
@@ -467,18 +468,32 @@ const SNCF_STATS_HOST = (() => {
     })();
 
     function getStatsEndpoints() {
-      const path = SNCF_STATS_PATH.startsWith('/') ? SNCF_STATS_PATH : `/${SNCF_STATS_PATH}`;
-      const primary = SNCF_STATS_HOST
-        ? `${SNCF_STATS_HOST.replace(/\/$/, '')}${path}`
-        : path;
+      const toPath = value => (value && value.startsWith('/')) ? value : `/${value || ''}`;
+      const path = toPath(SNCF_STATS_PATH);
+      const fallbackPaths = SNCF_STATS_FALLBACK_PATHS.map(toPath);
+
+      const buildUrl = (origin, candidatePath) => `${origin.replace(/\/$/, '')}${candidatePath}`;
+      
       const snapshotUrl = new URL('data/sncf-stats-snapshot.json', window.location.href).href;
-      const fallbacks = [
-        `${SNCF_CANONICAL_ORIGIN}${path}`,
-        `${SNCF_CANONICAL_ORIGIN}/api/sncf-stats`,
-        ...SNCF_ADDITIONAL_ORIGINS.map(candidateOrigin => `${candidateOrigin.replace(/\/$/, '')}${path}`),
-        snapshotUrl
-      ];
-      const unique = new Set([primary, ...fallbacks]);
+       const endpoints = [];
+      if (SNCF_STATS_HOST) {
+        endpoints.push(buildUrl(SNCF_STATS_HOST, path));
+      } else {
+        endpoints.push(path);
+      }
+
+      const origins = [SNCF_CANONICAL_ORIGIN, ...SNCF_ADDITIONAL_ORIGINS];
+      for (const origin of origins) {
+        if (!origin) continue;
+        endpoints.push(buildUrl(origin, path));
+        for (const fallbackPath of fallbackPaths) {
+          endpoints.push(buildUrl(origin, fallbackPath));
+        }
+      }
+
+      endpoints.push(snapshotUrl);
+
+      const unique = new Set(endpoints);
       return Array.from(unique).filter(Boolean);
     }
 
