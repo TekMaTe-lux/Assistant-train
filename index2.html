@@ -5282,6 +5282,7 @@ function combineGtfsSources(includeCFL){
     stopNameToId: new Map(),
     allowedByDate: new Map(),
     removedByDate: new Map(),
+    calendarByService: new Map(),
     relevantStopIds: new Set(),
     relevantTripIds: new Set(),
     relevantServiceIds: new Set(),
@@ -5305,6 +5306,14 @@ function combineGtfsSources(includeCFL){
     }
     mergeServiceMaps(combined.allowedByDate, src.allowedByDate);
     mergeServiceMaps(combined.removedByDate, src.removedByDate);
+
+    if (src.calendarByService instanceof Map) {
+      src.calendarByService.forEach((val, key) => {
+        if (!combined.calendarByService.has(key)) {
+          combined.calendarByService.set(key, val);
+        }
+      });
+    }
 
     if (src.relevantStopIds instanceof Set) src.relevantStopIds.forEach(id => combined.relevantStopIds.add(id));
     if (src.relevantTripIds instanceof Set) src.relevantTripIds.forEach(id => combined.relevantTripIds.add(id));
@@ -5430,6 +5439,7 @@ async function loadSncfGtfs(){
         stopNameToId,
         allowedByDate,
         removedByDate,
+        calendarByService: new Map(),
         relevantStopIds,
         relevantTripIds,
         relevantServiceIds,
@@ -5503,6 +5513,25 @@ async function loadCflGtfs(){
       });
       await __yieldToBrowser();
 
+      let calendarRows = [];
+      let calendarByService = new Map();
+      try {
+        GTFSLoadingUI.message('Chargement des périodes CFL…');
+        calendarRows = await fetchAndParseCFLCSV('calendar[1].txt', {
+          keepColumns: ['service_id','monday','tuesday','wednesday','thursday','friday','saturday','sunday','start_date','end_date'],
+          filterRow: row => !row.service_id || relevantServiceIds.has(row.service_id)
+        });
+        await __yieldToBrowser();
+      } catch (err) {
+        console.warn('[GTFS] Calendrier CFL (calendar[1].txt) introuvable ou invalide', err);
+        calendarRows = [];
+      }
+      calendarRows.forEach(row => {
+        const svc = row?.service_id;
+        if (!svc) return;
+        calendarByService.set(svc, row);
+      });
+
       GTFSLoadingUI.message('Chargement des trajets CFL…');
       const relevantServiceIds = new Set();
       const trips = await fetchAndParseCFLCSV('trips[1].txt', {
@@ -5573,6 +5602,7 @@ async function loadCflGtfs(){
         stopNameToId,
         allowedByDate,
         removedByDate,
+        calendarByService,
         relevantStopIds,
         relevantTripIds: allowedTripIds,
         relevantServiceIds,
@@ -5725,10 +5755,35 @@ function serviceActiveForDate(trip_id, ymd){
   const t = GTFS.tripById?.get(trip_id); if(!t) return false;
   const svc = t.service_id; if(!svc) return false;
 
+  const removedSet = GTFS.removedByDate?.get(ymd);
+  if (removedSet && removedSet.has(svc)) return false;
+
+  const allowedSet = GTFS.allowedByDate?.get(ymd);
+  if (allowedSet && allowedSet.has(svc)) return true;
+
+  const calendarMap = GTFS.calendarByService instanceof Map ? GTFS.calendarByService : null;
+  if (calendarMap && calendarMap.size){
+    const cal = calendarMap.get(svc);
+    if (cal){
+      const { start_date, end_date } = cal;
+      if (start_date && start_date > ymd) return false;
+      if (end_date && end_date < ymd) return false;
+      const y = Number(ymd.slice(0,4));
+      const m = Number(ymd.slice(4,6));
+      const d = Number(ymd.slice(6,8));
+      if (!Number.isFinite(y) || !Number.isFinite(m) || !Number.isFinite(d)) return false;
+      const day = new Date(Date.UTC(y, m - 1, d)).getUTCDay(); // 0=dimanche
+      const fields = ['sunday','monday','tuesday','wednesday','thursday','friday','saturday'];
+      const key = fields[day];
+      if (key && cal[key] === '1') return true;
+      return false;
+    }
+  }
+
+  if (allowedSet && !allowedSet.has(svc)) return false;
+
   // Si on a des données de dates : on est STRICT
   if (GTFS.allowedByDate && GTFS.allowedByDate.size > 0) {
-    const allowedSet = GTFS.allowedByDate.get(ymd);
-    if (allowedSet) return allowedSet.has(svc); // présent ce jour
     return false; // pas listé ce jour => on N'AFFICHE PAS
   }
 
