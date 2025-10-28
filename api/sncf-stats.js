@@ -18,7 +18,12 @@ module.exports = function handler(req, res) {
     res.setHeader('Cache-Control', 'no-store, max-age=0');
     return res.status(200).json(stats);
   } catch (err) {
-    console.error('[SNCF proxy] Impossible de récupérer les statistiques', err);
+    console.error('[SNCF proxy] Impossible de récupérer les statistiques dynamiques', err);
+    const snapshot = loadSnapshot();
+    if (snapshot) {
+      res.setHeader('Cache-Control', 'public, max-age=60');
+      return res.status(200).json(snapshot);
+    }
     return res.status(500).json({ error: 'Impossible de récupérer les statistiques actuelles.' });
   }
 };
