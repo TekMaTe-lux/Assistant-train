@@ -146,7 +146,22 @@
       color: #6b7280;
       font-size: 0.9rem;
     }
+.dataset-note {
+      margin-top: 1rem;
+      font-size: 0.85rem;
+      color: #4b5563;
+      background: #f3f4f6;
+      border-radius: 8px;
+      padding: 0.75rem 1rem;
+    }
 
+    .dataset-note code {
+      font-family: ui-monospace, SFMono-Regular, SFMono, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+      background: rgba(0, 0, 0, 0.05);
+      padding: 0 0.35rem;
+      border-radius: 4px;
+    }
+    
     .detail-note {
       display: block;
       color: #9ca3af;
@@ -211,6 +226,11 @@
         </div>
       </form>
 
+      <p class="dataset-note" id="dataset-note" hidden>
+        La base de données ferroviaire fusionnée (routes, voyages, arrêts) est accessible dans la console navigateur via
+        <code>window.cflTrainDataset</code> pour vos traitements ultérieurs.
+      </p>
+
       <div class="results" id="results">
         <div class="empty-state">Choisissez une date et une gare de départ pour lancer la recherche.</div>
       </div>
@@ -229,8 +249,15 @@
     };
 
     const allowedTrainRouteIds = new Set(["297", "299", "300", "301", "302"]);
-
-function encodeFilename(filename) {
+    const routeFamilyById = new Map([
+      ["297", "IC"],
+      ["299", "RB"],
+      ["300", "RE"],
+      ["301", "TER"],
+      ["302", "TGV"]
+    ]);
+    
+   function encodeFilename(filename) {
       return filename.replace(/\[/g, "%5B").replace(/\]/g, "%5D");
     }
 
@@ -513,7 +540,7 @@ function encodeFilename(filename) {
             <th>Arrivée</th>
             <th>Train</th>
             <th>Destination</th>
-            <th>Service</th>
+            <th>Type</th>
           </tr>
         </thead>
       `;
@@ -534,7 +561,15 @@ function encodeFilename(filename) {
           }</td>
           <td>${train.routeName}<br/><small>Voyage n° ${train.tripId}</small></td>
           <td>${train.headsign || ""}</td>
-          <td>Service ${train.serviceId}</td>
+          <td>${
+            train.family
+              ? `${train.family}${
+                  train.serviceId ? `<br/><small>Service ${train.serviceId}</small>` : ""
+                }`
+              : train.serviceId
+              ? `Service ${train.serviceId}`
+              : "—"
+          }</td>
         `;
         tbody.appendChild(row);
       }
@@ -551,6 +586,7 @@ function encodeFilename(filename) {
       const dateInput = document.getElementById("travel-date");
       const resultsContainer = document.getElementById("results");
       const searchButton = document.getElementById("search-button");
+      const datasetNote = document.getElementById("dataset-note");
 
       try {
         const [routes, trips, stops, calendar, calendarDates, ...stopTimesArrays] = await Promise.all([
@@ -658,6 +694,107 @@ function encodeFilename(filename) {
 
 
         const stationById = new Map(stationList.map((station) => [station.stationId, station]));
+        const stopToStationId = new Map();
+        for (const station of stationList) {
+          for (const stopId of station.stopIds) {
+            stopToStationId.set(stopId, station.stationId);
+          }
+        }
+
+        const compiledTrips = [];
+
+        for (const trip of trainTrips) {
+          const times = stopTimesByTrip.get(trip.trip_id);
+          if (!times || times.length === 0) {
+            continue;
+          }
+
+          const stationCalls = [];
+          for (const time of times) {
+            const stationId = stopToStationId.get(time.stop_id);
+            if (!stationId) {
+              continue;
+            }
+            const station = stationById.get(stationId);
+            if (!station) {
+              continue;
+            }
+            const stop = stopById.get(time.stop_id);
+            stationCalls.push({
+              stationId,
+              stationName: station.name,
+              stopId: time.stop_id,
+              stopName: stop?.stop_name ?? station.name,
+              arrivalTime: time.arrival_time,
+              departureTime: time.departure_time,
+              stopSequence: Number(time.stop_sequence),
+              pickupType: time.pickup_type,
+              dropOffType: time.drop_off_type
+            });
+          }
+
+          if (stationCalls.length === 0) {
+            continue;
+          }
+
+          const firstCall = stationCalls[0];
+          const lastCall = stationCalls[stationCalls.length - 1];
+          const route = routeMap.get(trip.route_id);
+          const familyLabel = routeFamilyById.get(trip.route_id) ?? "";
+
+          const shortName = (route?.route_short_name ?? familyLabel ?? "").trim();
+          const tripShortName = (trip.trip_short_name ?? "").trim().replace(/^0+/, "");
+          const trainCode =
+            shortName && tripShortName
+              ? `${shortName}${tripShortName}`
+              : shortName || tripShortName || trip.route_id;
+
+          compiledTrips.push({
+            tripId: trip.trip_id,
+            routeId: trip.route_id,
+            serviceId: trip.service_id,
+            headsign: trip.trip_headsign,
+            directionId: trip.direction_id,
+            routeShortName: shortName || familyLabel || "",
+            routeLongName: route?.route_long_name ?? "",
+            family: familyLabel || route?.route_short_name || "",
+            trainCode,
+            originStationId: firstCall.stationId,
+            destinationStationId: lastCall.stationId,
+            firstDeparture: firstCall.departureTime || firstCall.arrivalTime,
+            lastArrival: lastCall.arrivalTime || lastCall.departureTime,
+            stops: stationCalls
+          });
+        }
+
+        const datasetStations = stationList.map((station) => ({
+          stationId: station.stationId,
+          name: station.name,
+          latitude: station.latitude,
+          longitude: station.longitude,
+          stopIds: Array.from(station.stopIds)
+        }));
+
+        const datasetRoutes = Array.from(routeMap.values()).map((route) => ({
+          routeId: route.route_id,
+          agencyId: route.agency_id,
+          shortName: route.route_short_name,
+          longName: route.route_long_name,
+          type: route.route_type
+        }));
+
+        window.cflTrainDataset = {
+          generatedAt: new Date().toISOString(),
+          stations: datasetStations,
+          routes: datasetRoutes,
+          trips: compiledTrips
+        };
+
+        if (compiledTrips.length === 0) {
+          loadingStatus.innerHTML =
+            "Aucun voyage ferroviaire n'a pu être construit à partir des données stop_times fournies.";
+          return;
+        }
 
         if (stationList.length === 0) {
           loadingStatus.innerHTML = "Aucune gare ferroviaire n'a été trouvée dans les fichiers fournis.";
@@ -680,6 +817,9 @@ function encodeFilename(filename) {
 
         form.hidden = false;
         loadingStatus.hidden = true;
+        if (datasetNote) {
+          datasetNote.hidden = false;
+        }
 
         const today = new Date();
         dateInput.valueAsDate = today;
@@ -715,79 +855,74 @@ function encodeFilename(filename) {
           const ymd = ymdFromDateInput(dateValue);
           const trains = [];
 
-          for (const trip of trainTrips) {
-            if (!serviceActive(trip.service_id, ymd)) {
+          for (const trip of compiledTrips) {
+            if (!serviceActive(trip.serviceId, ymd)) {
               continue;
             }
 
-            const times = stopTimesByTrip.get(trip.trip_id);
-            if (!times) {
-              continue;
-            }
+            const stops = trip.stops;
 
-            let originIndex = -1;
-            let originStopId = null;
-            for (let i = 0; i < times.length; i++) {
-              if (originStation.stopIds.has(times[i].stop_id)) {
-                originIndex = i;
-                originStopId = times[i].stop_id;
-                break;
-              }
-            }
+            let originIndex = stops.findIndex(
+              (call) => call.stationId === originStationId || originStation.stopIds.has(call.stopId)
+            );
             if (originIndex === -1) {
               continue;
             }
 
             let destinationIndex = null;
-            let destinationStopId = null;
             if (destinationStation) {
-              for (let i = originIndex + 1; i < times.length; i++) {
-                if (destinationStation.stopIds.has(times[i].stop_id)) {
+             for (let i = originIndex + 1; i < stops.length; i++) {
+                const call = stops[i];
+                if (
+                  call.stationId === destinationStationId ||
+                  destinationStation.stopIds.has(call.stopId)
+                ) {
                   destinationIndex = i;
-                  destinationStopId = times[i].stop_id;
                   break;
                 }
               }
               if (destinationIndex === null) {
                 continue;
               }
+            } else {
+              destinationIndex = stops.length - 1;
             }
 
-            const originStopTime = times[originIndex];
-            const destinationStopTime = destinationIndex !== null ? times[destinationIndex] : null;
-            const route = routeMap.get(trip.route_id);
-            const originStop = stopById.get(originStopId);
-            const destinationStop = destinationStopTime ? stopById.get(destinationStopId) : null;
+            const originCall = stops[originIndex];
+            const destinationCall = destinationIndex !== null ? stops[destinationIndex] : null;
+            const route = routeMap.get(trip.routeId);
 
-            const originDetail = originStop && originStop.stop_name && originStop.stop_name !== originStation.name
-              ? originStop.stop_name
-              : "";
-            const destinationDetail = destinationStop && destinationStop.stop_name && destinationStop.stop_name !== (destinationStation?.name ?? "")
-              ? destinationStop.stop_name
-              : "";
-
-            const shortName = (route?.route_short_name ?? "").trim();
-            const tripShortName = (trip.trip_short_name ?? "").trim().replace(/^0+/, "");
-            const trainCode =
-              shortName && tripShortName
-                ? `${shortName}${tripShortName}`
-                : shortName || tripShortName || trip.route_id;
+            const originDetail =
+              originCall && originCall.stopName && originCall.stopName !== originStation.name
+                ? originCall.stopName
+                : "";
+            const destinationStationName = destinationStation
+              ? destinationStation.name
+              : destinationCall?.stationName ?? "";
+            const destinationDetail =
+              destinationCall && destinationCall.stopName && destinationCall.stopName !== destinationStationName
+                ? destinationCall.stopName
+                : "";
             
             trains.push({
-              departureTime: originStopTime.departure_time || originStopTime.arrival_time,
-              arrivalTime: destinationStopTime ? destinationStopTime.arrival_time || destinationStopTime.departure_time : null,
+             departureTime: originCall?.departureTime || originCall?.arrivalTime,
+              arrivalTime: destinationCall
+                ? destinationCall.arrivalTime || destinationCall.departureTime
+                : null,
               originName: originStation.name,
               originDetail,
-              destinationName: destinationStation ? destinationStation.name : "",
+              destinationName: destinationStationName,
               destinationDetail,
               routeName:
-                trainCode ||
-                route?.route_long_name ||
+                trip.trainCode ||
+                trip.routeLongName ||
+                trip.routeShortName ||
                 route?.route_short_name ||
-                trip.route_id,
-              headsign: trip.trip_headsign,
-              serviceId: trip.service_id,
-              tripId: trip.trip_id
+                trip.routeId,
+              headsign: trip.headsign,
+              serviceId: trip.serviceId,
+              tripId: trip.tripId,
+              family: trip.family || routeFamilyById.get(trip.routeId) || ""
             });
           }
 
