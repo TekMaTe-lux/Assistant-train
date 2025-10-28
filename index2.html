@@ -928,7 +928,23 @@ table[data-snapshotting="true"] tbody tr:nth-child(even) {
 .train-header.no-compo-text a.train-link{
   color: inherit !important;  /* le lien reste blanc comme le texte */
 }
+    
+#trainInfo .train-header.lux-train,
+#trainInfo .train-header.lux-train .train-link,
+#trainInfo .train-header.lux-train .train-label{
+  color: #ffd7ff !important;
+  text-shadow: 0 0 6px #ff5cf8, 0 0 12px rgba(255, 92, 248, 0.5);
+}
 
+#trainInfo .train-header.lux-train{
+  border-color: #ff5cf833 !important;
+}
+
+#trainInfo .train-header .train-label{
+  display: inline-block;
+  padding: 0 4px;
+}
+    
   .icon[title]:hover::after {
   content: attr(title);
   position: absolute;
@@ -2140,6 +2156,18 @@ table[data-snapshotting="true"] tbody tr:nth-child(even) {
   background:radial-gradient(120% 120% at 50% 10%, #00ffff44 0%, #00ffff22 45%, transparent 70%);
   border-color:#00ffff; box-shadow:0 0 10px #00ffff99, inset 0 0 8px #00ffff55;
 }
+#propositions .chip.lux-train{
+  border-color:#ff5cf8aa;
+  box-shadow:0 0 0 1px inset #ff5cf833;
+}
+#propositions .chip.lux-train .t-num{
+  color:#ffd7ff;
+}
+#propositions .chip.lux-train.is-selected{
+  background:radial-gradient(120% 120% at 50% 10%, #ff5cf844 0%, #ff5cf822 45%, transparent 70%);
+  border-color:#ff8df8;
+  box-shadow:0 0 10px #ff5cf899, inset 0 0 8px #ff5cf866;
+}    
 #propositions .t-num{ font-variant-numeric:tabular-nums; font-size:1rem; }
 #propositions .t-time{ font-size:.85em; opacity:.85; }
 
@@ -2372,6 +2400,14 @@ table[data-snapshotting="true"] tbody tr:nth-child(even) {
   white-space:nowrap; cursor:pointer;
   transition:background .15s ease, box-shadow .15s ease, border-color .15s ease, transform .05s ease;
 }
+#selectionChips .chip-tag.lux-train{
+  border-color:#ff5cf8aa;
+  box-shadow:0 0 0 1px inset #ff5cf833;
+  background:linear-gradient(180deg, rgba(40,0,40,.55), rgba(20,0,28,.45));
+}
+#selectionChips .chip-tag.lux-train .t-num{
+  color:#ffd7ff;
+}    
 #selectionChips .chip-tag:hover{
   background:linear-gradient(180deg, rgba(0,40,60,.6), rgba(0,20,36,.5));
   border-color:#00ffff;
@@ -3499,6 +3535,13 @@ function renderRowsChunked(htmlRows, tbody, chunk=200){
             <span>min</span>
           </div>
         </div>
+        <div class="filter-item" style="margin-top:12px;display:flex;flex-direction:column;gap:6px;">
+          <label for="includeCFL" style="display:flex;align-items:center;gap:8px;">
+            <input id="includeCFL" type="checkbox">
+            <span>Inclure les correspondances CFL (Bettembourg)</span>
+          </label>
+          <small style="opacity:.85;max-width:520px;">Ajoute les trains luxembourgeois (#RE…/#RB…) aux recherches GTFS statiques et aux sélections. Active uniquement si tu veux préparer une correspondance côté Bettembourg.</small>
+        </div> 
       </div>
     </div>
 </details>
@@ -3563,7 +3606,7 @@ function renderRowsChunked(htmlRows, tbody, chunk=200){
         </div>
         
         <div class="chips-manual">
-          <input id="manualTrainInput" type="text" inputmode="numeric" pattern="\d{5,6}" placeholder="Ajouter un n° (ex : 88532)">
+          <input id="manualTrainInput" type="text" inputmode="text" pattern="(#?[A-Za-z]{1,4}\d{3,5}|\d{5,6})" placeholder="Ajouter un n° (ex : 88532 ou #RE458)">
           <div class="manual-actions">
             <button id="btnAddTrain" class="btn btn-compact" type="button">+ Ajouter</button>
             <button id="btnClearSelection" class="btn btn-compact ghost" type="button" title="Vider la sélection">🧹 Vider</button>
@@ -3819,10 +3862,13 @@ $('#fermerBlague, #fondModal').click(function() {
   $('#fondModal').fadeOut();
 });
 
-// ===== Numéro de train : 5 ou 6 chiffres =====
-function extractTrainNumber(s){
-  const m = String(s||'').match(/\b\d{5,6}\b/);
-  return m ? m[0] : null;
+// ===== Numéro de train : priorité 5-6 chiffres, sinon 3-4 (CFL) =====
+function extractTrainNumber(str){
+  const text = String(str || '');
+  let match = text.match(/\d{5,6}/);
+  if (match) return match[0];
+  match = text.match(/\d{3,4}/);
+  return match ? match[0] : null;
 }
     
 /* ---------- DONNÉES COMPO + GTFS-RT (unifiée) ---------- */
@@ -3893,7 +3939,7 @@ function computeRelevantStopIds(stops){
 
   stops.forEach(s => {
     const name = (s.stop_name || '').trim();
-    if (name && LINE_STOP_NAMES.has(name)){
+    if (name && isLineStopName(name)){
       if (!relevant.has(s.stop_id)){
         relevant.add(s.stop_id);
         queue.push(s.stop_id);
@@ -4088,7 +4134,121 @@ function formatDateFancy(dateStr) {
   }).format(date);
   return text.charAt(0).toUpperCase() + text.slice(1);
 }
+  const CFL_TOGGLE_STORAGE_KEY = 'includeCFLGTFS';
+let __includeCFLMode = false;
 
+function isCflModeEnabled(){
+  return __includeCFLMode === true;
+}
+
+function setCflMode(enabled){
+  __includeCFLMode = !!enabled;
+  try {
+    localStorage.setItem(CFL_TOGGLE_STORAGE_KEY, __includeCFLMode ? '1' : '0');
+  } catch (e) {
+    // ignore storage errors
+  }
+}
+
+function readStoredCflMode(){
+  try {
+    return localStorage.getItem(CFL_TOGGLE_STORAGE_KEY) === '1';
+  } catch (e) {
+    return false;
+  }
+}
+
+function isLuxTrainNumber(num){
+  return typeof num === 'string' && num.startsWith('#');
+}
+
+function formatTrainLabel(num){
+  if (!num) return '';
+  return isLuxTrainNumber(num) ? num : `#${num}`;
+}
+
+function normalizeTrainToken(token, { allowLux = true } = {}){
+  if (!token) return null;
+  let raw = String(token).trim();
+  if (!raw) return null;
+  raw = raw.replace(/\s+/g, '');
+  const upper = raw.toUpperCase();
+
+  if (/^\d{5,6}$/.test(upper)) return upper;
+
+  if (!allowLux) return null;
+
+  if (/^#[A-Z]{1,4}\d{1,5}$/.test(upper)) return upper;
+  if (/^[A-Z]{1,4}\d{1,5}$/.test(upper)) return `#${upper}`;
+
+  if (upper.startsWith('#')) {
+    const digits = upper.replace(/[^0-9]/g, '');
+    if (digits.length >= 3) {
+      const letters = upper.replace(/[^A-Z]/g, '');
+      const trimmedDigits = digits.replace(/^0+/, '') || digits;
+      if (letters) return `#${letters}${trimmedDigits}`;
+      return `#${trimmedDigits}`;
+    }
+  }
+
+  return null;
+}
+
+function parseTrainTokensFromString(raw, { allowLux = true } = {}){
+  if (!raw) return [];
+  const tokens = new Set();
+  String(raw || '')
+    .split(/[,;\s]+/)
+    .map(part => part.trim())
+    .filter(Boolean)
+    .forEach(part => {
+      const normalized = normalizeTrainToken(part, { allowLux });
+      if (normalized) tokens.add(normalized);
+    });
+  return Array.from(tokens);
+}
+
+function computeLookupTokens(number){
+  const tokens = new Set();
+  const raw = String(number || '').trim();
+  if (!raw) return tokens;
+  tokens.add(raw);
+  tokens.add(raw.toUpperCase());
+
+  const noSpaces = raw.replace(/\s+/g, '');
+  if (noSpaces && noSpaces !== raw){
+    tokens.add(noSpaces);
+    tokens.add(noSpaces.toUpperCase());
+  }
+
+  if (raw.startsWith('#')) tokens.add(raw.slice(1));
+  if (noSpaces.startsWith('#')) tokens.add(noSpaces.slice(1));
+
+  const digits = raw.match(/\d+/g);
+  if (digits){
+    digits.forEach(d => {
+      tokens.add(d);
+      const trimmed = d.replace(/^0+/, '') || '0';
+      tokens.add(trimmed);
+      if (trimmed.length < 5) tokens.add(trimmed.padStart(5, '0'));
+    });
+  }
+
+  return Array.from(tokens).filter(Boolean);
+}
+
+function getTripDisplayNumber(tripId, fallback){
+  const map = GTFS.tripDisplayNumber instanceof Map ? GTFS.tripDisplayNumber : null;
+  if (map && map.has(tripId)) return map.get(tripId);
+  return fallback || null;
+}
+
+function getTripProvider(tripId){
+  return GTFS.tripProviders instanceof Map ? GTFS.tripProviders.get(tripId) : null;
+}
+
+__includeCFLMode = readStoredCflMode();
+  
 function pulseField(el) {
   if (!el) return;
   el.classList.add('field-pulse');
@@ -4751,7 +4911,7 @@ function computeRetardedTime(raw, delay){
 }    
 function hhmmInputToMin(hhmm){ if(!hhmm||!/^\d{2}:\d{2}$/.test(hhmm)) return null; const [h,m]=hhmm.split(':').map(Number); return h*60+m; }
 function dateInputToYMD(str){ if(!str||!/^\d{4}-\d{2}-\d{2}$/.test(str)) return null; const [y,m,d]=str.split('-'); return `${y}${m}${d}`; }
-function extractTrainNumber(str){ const m = String(str||'').match(/(\d{5,6})/); return m ? m[1] : null; }
+// extractTrainNumber défini plus haut
 function toSec(hms){ if(!hms) return null; const [H,M,S]=hms.split(':').map(Number); return H*3600+M*60+(S||0); }
 function toHHMM(sec){ const s=Math.max(0,sec|0); const h=Math.floor(s/3600)%24,m=Math.floor((s%3600)/60); return String(h).padStart(2,'0')+':'+String(m).padStart(2,'0'); }
 function uniqDirects(list){
@@ -4787,17 +4947,12 @@ function uniqTransfers(list){
 
 /************ CHARGEMENT GTFS (stops/stop_times/trips/calendar_dates only) ************/
 
-let GTFS = { 
-  stops:null, 
-  stopTimes:null, 
-  trips:null, 
-  tripById:null, 
-  stopNameToId:null, 
-  allowedByDate:null, 
-  removedByDate:null 
-};
-    
+let GTFS = {};
 let GTFS_LOADING_PROMISE = null;
+let SNCF_GTFS_DATA = null;
+let SNCF_GTFS_PROMISE = null;
+let CFL_GTFS_DATA = null;
+let CFL_GTFS_PROMISE = null;    
 
 const __yieldToBrowser = () => (typeof setTimeout === 'function')
   ? new Promise(resolve => setTimeout(resolve, 0))
@@ -4850,6 +5005,13 @@ const GTFS_BASES = [
   'https://raw.githubusercontent.com/TekMaTe-lux/Assistant-train/main/Assistant-train/data/',
   'https://cdn.jsdelivr.net/gh/TekMaTe-lux/Assistant-train@main/Assistant-train/data/'
 ];
+
+  const CFL_GTFS_BASES = [
+  new URL('CFL/', location.href).href,
+  new URL('Assistant-train/CFL/', location.href).href,
+  'https://raw.githubusercontent.com/TekMaTe-lux/Assistant-train/main/CFL/',
+  'https://cdn.jsdelivr.net/gh/TekMaTe-lux/Assistant-train@main/CFL/'
+];  
 
 function createCSVCollector(opt = {}){
   const keepColumns = Array.isArray(opt.keepColumns) && opt.keepColumns.length ? opt.keepColumns : null;
@@ -5030,9 +5192,9 @@ async function parseCSVFromStream(stream, opt = {}){
   return collector.finish();
 }
 
-async function fetchAndParseCSV(filename, opt = {}){
+async function fetchAndParseCSVFromBases(bases, filename, opt = {}){
   let lastErr;
-  for (const base of GTFS_BASES){
+  for (const base of bases){
     const url = base + filename;
     try {
       const resp = await fetch(url, { cache: 'no-store' });
@@ -5045,23 +5207,153 @@ async function fetchAndParseCSV(filename, opt = {}){
       return parseCSV(txt, opt);
     } catch(e){
       lastErr = e;
-// essaie la base suivante
     }
   }
   throw lastErr || new Error('Impossible de charger '+filename);
 }
+async function fetchAndParseCSV(filename, opt = {}){
+  return fetchAndParseCSVFromBases(GTFS_BASES, filename, opt);
+}
 
-async function ensureGTFSLoaded(){
-  if (GTFS.stops && GTFS.stopTimes && GTFS.trips && GTFS.tripById && GTFS.stopNameToId && GTFS.allowedByDate) return;
-    if (GTFS_LOADING_PROMISE) {
-    try {
-      await GTFS_LOADING_PROMISE;
-    } catch {
-      // previous tentative failed; let the new caller retry below
+async function fetchAndParseCFLCSV(filename, opt = {}){
+  return fetchAndParseCSVFromBases(CFL_GTFS_BASES, filename, opt);
+}
+
+function mergeServiceMaps(target, source){
+  if (!(target instanceof Map) || !(source instanceof Map)) return;
+  source.forEach((value, key) => {
+    if (!key) return;
+    if (!target.has(key)) target.set(key, new Set());
+    const dest = target.get(key);
+    if (value instanceof Set) {
+      value.forEach(v => dest.add(v));
+    } else if (Array.isArray(value)) {
+      value.forEach(v => dest.add(v));
     }
-    if (GTFS.stops && GTFS.stopTimes && GTFS.trips && GTFS.tripById && GTFS.stopNameToId && GTFS.allowedByDate) return;
+  });
+}
+
+function normalizeDisplayKey(value){
+  return String(value || '').replace(/[^0-9A-Z]/gi, '').toUpperCase();
+}
+
+function simplifyStopName(name){
+  return String(name || '').split(',')[0].trim();
+}
+
+function isLineStopName(name){
+  const trimmed = String(name || '').trim();
+  if (!trimmed) return false;
+  if (LINE_STOP_NAMES && LINE_STOP_NAMES.has(trimmed)) return true;
+  const simple = simplifyStopName(trimmed);
+  return simple ? LINE_STOP_NAMES.has(simple) : false;
+}
+
+function registerStopName(map, name, id){
+  if (!(map instanceof Map)) return;
+  const trimmed = String(name || '').trim();
+  if (!trimmed || !id) return;
+  if (!map.has(trimmed)) map.set(trimmed, id);
+  const simple = simplifyStopName(trimmed);
+  if (simple && !map.has(simple)) map.set(simple, id);
+}
+
+function computeCflDisplayNumber(trip, routesById){
+  if (!trip) return null;
+  const route = routesById instanceof Map ? routesById.get(trip.route_id) : null;
+  const prefix = (route?.route_short_name || '').trim().toUpperCase();
+  let digits = (trip.trip_short_name || '').trim();
+  if (!prefix || !digits) return null;
+  digits = digits.replace(/^0+/, '') || digits;
+  return digits ? `#${prefix}${digits}` : null;
+}
+
+function combineGtfsSources(includeCFL){
+  const sources = [];
+  if (SNCF_GTFS_DATA) sources.push(SNCF_GTFS_DATA);
+  if (includeCFL && CFL_GTFS_DATA) sources.push(CFL_GTFS_DATA);
+  if (!sources.length) return {};
+
+  const combined = {
+    stops: [],
+    stopTimes: [],
+    trips: [],
+    tripById: new Map(),
+    stopNameToId: new Map(),
+    allowedByDate: new Map(),
+    removedByDate: new Map(),
+    relevantStopIds: new Set(),
+    relevantTripIds: new Set(),
+    relevantServiceIds: new Set(),
+    routesById: new Map(),
+    tripDisplayNumber: new Map(),
+    displayNumberToTrips: new Map(),
+    tripProviders: new Map()
+  };
+
+  for (const src of sources){
+    if (Array.isArray(src.stops)) combined.stops.push(...src.stops);
+    if (Array.isArray(src.stopTimes)) combined.stopTimes.push(...src.stopTimes);
+    if (Array.isArray(src.trips)) combined.trips.push(...src.trips);
+
+    if (src.tripById instanceof Map) src.tripById.forEach((val, key) => combined.tripById.set(key, val));
+
+    if (src.stopNameToId instanceof Map) {
+      src.stopNameToId.forEach((val, key) => {
+        if (!combined.stopNameToId.has(key)) combined.stopNameToId.set(key, val);
+      });
+    }
+    mergeServiceMaps(combined.allowedByDate, src.allowedByDate);
+    mergeServiceMaps(combined.removedByDate, src.removedByDate);
+
+    if (src.relevantStopIds instanceof Set) src.relevantStopIds.forEach(id => combined.relevantStopIds.add(id));
+    if (src.relevantTripIds instanceof Set) src.relevantTripIds.forEach(id => combined.relevantTripIds.add(id));
+    if (src.relevantServiceIds instanceof Set) src.relevantServiceIds.forEach(id => combined.relevantServiceIds.add(id));
+
+    if (src.routesById instanceof Map) src.routesById.forEach((val, key) => {
+      if (!combined.routesById.has(key)) combined.routesById.set(key, val);
+    });
+
+    if (src.tripDisplayNumber instanceof Map) src.tripDisplayNumber.forEach((val, key) => {
+      if (val && !combined.tripDisplayNumber.has(key)) combined.tripDisplayNumber.set(key, val);
+    });
+
+    if (src.displayNumberToTrips instanceof Map) {
+      src.displayNumberToTrips.forEach((set, key) => {
+        if (!key) return;
+        if (!combined.displayNumberToTrips.has(key)) combined.displayNumberToTrips.set(key, new Set());
+        const dest = combined.displayNumberToTrips.get(key);
+        if (set instanceof Set) set.forEach(v => dest.add(v));
+        else if (Array.isArray(set)) set.forEach(v => dest.add(v));
+      });
+    }
+
+    if (src.tripProviders instanceof Map) src.tripProviders.forEach((val, key) => {
+      if (!combined.tripProviders.has(key)) combined.tripProviders.set(key, val);
+    });
   }
- GTFS_LOADING_PROMISE = (async () => {
+  
+ combined.displayNumberToTrips.forEach((set, key) => {
+    combined.displayNumberToTrips.set(key, new Set(set));
+  });
+
+  delete combined._stopTimesByTripSec;
+  delete combined._depsByStop;
+  delete combined._stopTimesByTrip;
+  delete combined._tripsByNumber;
+  delete combined._tripsByDisplay;
+  combined.nameToIds = null;
+  combined.idToName = null;
+  combined.idToStop = null;
+
+  return combined;
+}
+
+async function loadSncfGtfs(){
+  if (SNCF_GTFS_DATA) return SNCF_GTFS_DATA;
+  if (SNCF_GTFS_PROMISE) return SNCF_GTFS_PROMISE;
+
+  SNCF_GTFS_PROMISE = (async () => {
     GTFSLoadingUI.show('Chargement des arrêts SNCF…');
     try {
       await __yieldToBrowser();
@@ -5108,17 +5400,11 @@ async function ensureGTFSLoaded(){
       await __yieldToBrowser();
 
       const stopNameToId = new Map();
-      stops.forEach(s => {
-        if (s.stop_name && s.stop_id)
-          if(!stopNameToId.has(s.stop_name)) stopNameToId.set(s.stop_name, s.stop_id);
-      });
+      stops.forEach(s => registerStopName(stopNameToId, s.stop_name, s.stop_id));
 
       const tripById = new Map();
-      trips.forEach(t => {
-        if (t.trip_id) tripById.set(t.trip_id, t);
-      });
+      trips.forEach(t => { if (t.trip_id) tripById.set(t.trip_id, t); });
 
-      // yyyymmdd -> Set(service_id) ajoutés ; et yyyymmdd -> Set(service_id) supprimés
       const allowedByDate = new Map();
       const removedByDate = new Map();
       calendarDates.forEach(row => {
@@ -5133,7 +5419,10 @@ async function ensureGTFSLoaded(){
         }
       });
 
-      GTFS = {
+      const tripProviders = new Map();
+      trips.forEach(t => { if (t.trip_id) tripProviders.set(t.trip_id, 'SNCF'); });
+
+      return {
         stops,
         stopTimes,
         trips,
@@ -5143,11 +5432,200 @@ async function ensureGTFSLoaded(){
         removedByDate,
         relevantStopIds,
         relevantTripIds,
-        relevantServiceIds
+        relevantServiceIds,
+        routesById: new Map(),
+        tripDisplayNumber: new Map(),
+        displayNumberToTrips: new Map(),
+        tripProviders
+      };
+    } finally {
+      GTFSLoadingUI.hide();
+    }
+  })();
+
+  try {
+    SNCF_GTFS_DATA = await SNCF_GTFS_PROMISE;
+    return SNCF_GTFS_DATA;
+  } finally {
+    SNCF_GTFS_PROMISE = null;
+  }
+}
+
+async function loadCflGtfs(){
+  if (CFL_GTFS_DATA) return CFL_GTFS_DATA;
+  if (CFL_GTFS_PROMISE) return CFL_GTFS_PROMISE;
+
+  CFL_GTFS_PROMISE = (async () => {
+    GTFSLoadingUI.show('Chargement des arrêts CFL…');
+    try {
+      await __yieldToBrowser();
+
+      let stops = await fetchAndParseCFLCSV('stops[1].txt', {
+        keepColumns: ['stop_id','stop_name','parent_station','stop_lat','stop_lon']
+      });
+      const relevantStopIds = computeRelevantStopIds(stops);
+      stops = stops.filter(s => relevantStopIds.has(s.stop_id));
+      await __yieldToBrowser();
+
+      GTFSLoadingUI.message('Chargement des horaires CFL…');
+      const relevantTripIds = new Set();
+      const stopTimesChunks = await Promise.all([
+        fetchAndParseCFLCSV('stop_times[1].txt', {
+          keepColumns: ['trip_id','arrival_time','departure_time','stop_id','stop_sequence'],
+          filterRow: row => {
+            if (!relevantStopIds.has(row.stop_id)) return false;
+            if (row.trip_id) relevantTripIds.add(row.trip_id);
+            return true;
+          }
+        }),
+        fetchAndParseCFLCSV('stop_times[2].txt', {
+          keepColumns: ['trip_id','arrival_time','departure_time','stop_id','stop_sequence'],
+          filterRow: row => {
+            if (!relevantStopIds.has(row.stop_id)) return false;
+            if (row.trip_id) relevantTripIds.add(row.trip_id);
+            return true;
+          }
+        })
+      ]);
+      const stopTimes = stopTimesChunks.flat();
+      await __yieldToBrowser();
+
+      GTFSLoadingUI.message('Chargement des routes CFL…');
+      const routes = await fetchAndParseCFLCSV('routes[1].txt', {
+        keepColumns: ['route_id','route_short_name','route_type']
+      });
+      const routesById = new Map();
+      const allowedRouteIds = new Set();
+      routes.forEach(r => {
+        if (!r.route_id) return;
+        routesById.set(r.route_id, r);
+        if (String(r.route_type) === '2') allowedRouteIds.add(r.route_id);
+      });
+      await __yieldToBrowser();
+
+      GTFSLoadingUI.message('Chargement des trajets CFL…');
+      const relevantServiceIds = new Set();
+      const trips = await fetchAndParseCFLCSV('trips[1].txt', {
+        keepColumns: ['trip_id','service_id','route_id','trip_short_name','trip_headsign'],
+        filterRow: row => {
+          if (!relevantTripIds.has(row.trip_id)) return false;
+          if (row.route_id && !allowedRouteIds.has(row.route_id)) return false;
+          if (row.service_id) relevantServiceIds.add(row.service_id);
+          return true;
+        }
+      });
+      const allowedTripIds = new Set(trips.map(t => t.trip_id));
+      const filteredStopTimes = stopTimes.filter(st => allowedTripIds.has(st.trip_id));
+      await __yieldToBrowser();
+
+      GTFSLoadingUI.message('Chargement du calendrier CFL…');
+      const calendarDates = await fetchAndParseCFLCSV('calendar_dates[1].txt', {
+        keepColumns: ['service_id','date','exception_type'],
+        filterRow: row => !row.service_id || relevantServiceIds.has(row.service_id)
+      });
+      await __yieldToBrowser();
+
+      GTFSLoadingUI.message('Organisation des données…');
+      await __yieldToBrowser();
+
+      const stopNameToId = new Map();
+      stops.forEach(s => registerStopName(stopNameToId, s.stop_name, s.stop_id));
+
+      const tripById = new Map();
+      trips.forEach(t => { if (t.trip_id) tripById.set(t.trip_id, t); });
+
+      const allowedByDate = new Map();
+      const removedByDate = new Map();
+      calendarDates.forEach(row => {
+        const ymd = row.date, serviceId = row.service_id, exc = Number(row.exception_type);
+        if (!ymd || !serviceId) return;
+        if (exc === 1) {
+          if (!allowedByDate.has(ymd)) allowedByDate.set(ymd, new Set());
+          allowedByDate.get(ymd).add(serviceId);
+        } else if (exc === 2) {
+          if (!removedByDate.has(ymd)) removedByDate.set(ymd, new Set());
+          removedByDate.get(ymd).add(serviceId);
+        }
+      });
+
+      const tripDisplayNumber = new Map();
+      const displayNumberToTrips = new Map();
+      const tripProviders = new Map();
+      trips.forEach(trip => {
+        if (!trip.trip_id) return;
+        tripProviders.set(trip.trip_id, 'CFL');
+        const display = computeCflDisplayNumber(trip, routesById);
+        if (display){
+          tripDisplayNumber.set(trip.trip_id, display);
+          const normalized = normalizeDisplayKey(display);
+          if (normalized){
+            if (!displayNumberToTrips.has(normalized)) displayNumberToTrips.set(normalized, new Set());
+            displayNumberToTrips.get(normalized).add(trip.trip_id);
+          }
+        }
+      });
+
+      return {
+        stops,
+        stopTimes: filteredStopTimes,
+        trips,
+        tripById,
+        stopNameToId,
+        allowedByDate,
+        removedByDate,
+        relevantStopIds,
+        relevantTripIds: allowedTripIds,
+        relevantServiceIds,
+        routesById,
+        tripDisplayNumber,
+        displayNumberToTrips,
+        tripProviders
       };
     } finally {
       GTFSLoadingUI.hide();
       }
+  })();
+
+  try {
+    CFL_GTFS_DATA = await CFL_GTFS_PROMISE;
+    return CFL_GTFS_DATA;
+  } finally {
+    CFL_GTFS_PROMISE = null;
+  }
+}
+
+async function ensureGTFSLoaded(){
+  const wantCFL = typeof isCflModeEnabled === 'function' ? isCflModeEnabled() : false;
+  const targetKey = wantCFL ? 'sncf+cfl' : 'sncf';
+
+  if (GTFS.stops && GTFS._sourcesKey === targetKey) return;
+
+  if (GTFS_LOADING_PROMISE){
+    try {
+      await GTFS_LOADING_PROMISE;
+    } catch {
+      // ignorer et relancer un nouveau chargement
+    }
+    if (GTFS.stops && GTFS._sourcesKey === targetKey) return;
+  }
+
+  GTFS_LOADING_PROMISE = (async () => {
+    const sncf = await loadSncfGtfs();
+    if (!sncf) throw new Error('Données SNCF GTFS indisponibles');
+
+    let includeCfl = false;
+    if (wantCFL){
+      try {
+        const cfl = await loadCflGtfs();
+        includeCfl = !!cfl;
+      } catch (err){
+        console.error('[GTFS] Impossible de charger les données statiques CFL', err);
+        includeCfl = false;
+      }
+    }
+
+    GTFS = combineGtfsSources(includeCfl);
+    GTFS._sourcesKey = includeCfl ? 'sncf+cfl' : 'sncf';
   })();
   
   try {
@@ -5172,6 +5650,11 @@ function buildStationGroups(){
     const name=(s.stop_name||'').trim(); if(!name) continue;
     if(!nameToIds.has(name)) nameToIds.set(name,new Set());
     nameToIds.get(name).add(s.stop_id);
+    const simple = simplifyStopName(name);
+    if (simple && simple !== name){
+      if(!nameToIds.has(simple)) nameToIds.set(simple, new Set());
+      nameToIds.get(simple).add(s.stop_id);
+    }
     idToName.set(s.stop_id, name);
     if (s.parent_station){
       if(!parentToIds.has(s.parent_station)) parentToIds.set(s.parent_station,new Set());
@@ -5270,23 +5753,55 @@ function ensureTripsByNumberIndex(){
   if (GTFS._tripsByNumber) return;
   if (!Array.isArray(GTFS.trips)) return;
   const index = new Map();
+  const addToIndex = (key, tripId) => {
+    if (!key || !tripId) return;
+    if (!index.has(key)) index.set(key, new Set());
+    index.get(key).add(tripId);
+  };
   for (const trip of GTFS.trips){
-    if (!trip) continue;
-    const numbers = new Set();
+    if (!trip || !trip.trip_id) continue;
+    const candidates = new Set();
     const headsign = extractTrainNumber(trip.trip_headsign || '');
     const shortName = extractTrainNumber(trip.trip_short_name || '');
     const fromId = extractTrainNumber(trip.trip_id || '');
-    if (headsign) numbers.add(headsign);
-    if (shortName) numbers.add(shortName);
-    if (fromId) numbers.add(fromId);
-    numbers.forEach(num => {
-      if (!index.has(num)) index.set(num, new Set());
-      index.get(num).add(trip.trip_id);
+    if (headsign) candidates.add(headsign);
+    if (shortName) candidates.add(shortName);
+    if (fromId) candidates.add(fromId);
+
+    const display = getTripDisplayNumber(trip.trip_id, null);
+    if (display){
+      const digits = display.replace(/[^0-9]/g, '');
+      if (digits) candidates.add(digits);
+    }
+
+    candidates.forEach(num => {
+      if (!num) return;
+      const numeric = String(num).replace(/[^0-9]/g, '');
+      if (!numeric) return;
+      addToIndex(numeric, trip.trip_id);
+      const trimmed = numeric.replace(/^0+/, '') || '0';
+      if (trimmed !== numeric) addToIndex(trimmed, trip.trip_id);
     });
   }
-  const normalized = new Map();
-  index.forEach((set, num) => normalized.set(num, Array.from(set)));
-  GTFS._tripsByNumber = normalized;
+  index.forEach((set, num) => index.set(num, Array.from(set)));
+  GTFS._tripsByNumber = index;
+}
+
+function ensureTripsByDisplayIndex(){
+  if (GTFS._tripsByDisplay) return;
+  if (!Array.isArray(GTFS.trips)) return;
+  const index = new Map();
+  for (const trip of GTFS.trips){
+    if (!trip || !trip.trip_id) continue;
+    const display = getTripDisplayNumber(trip.trip_id, null);
+    if (!display) continue;
+    const normalized = normalizeDisplayKey(display);
+    if (!normalized) continue;
+    if (!index.has(normalized)) index.set(normalized, new Set());
+    index.get(normalized).add(trip.trip_id);
+  }
+  index.forEach((set, key) => index.set(key, Array.from(set)));
+  GTFS._tripsByDisplay = index;
 }
 
 function escapeHtml(str){
@@ -5298,10 +5813,38 @@ function escapeHtml(str){
     "'": '&#39;'
   })[ch] || ch);
 }
-
+function findTripIdsByNumber(number){
+  ensureTripsByNumberIndex();
+  ensureTripsByDisplayIndex();
+  const ids = [];
+  const seen = new Set();
+  const numericIndex = GTFS._tripsByNumber || new Map();
+  const displayIndex = GTFS._tripsByDisplay || new Map();
+  const tokens = computeLookupTokens(number);
+  for (const token of tokens){
+    const numericKey = token.replace(/[^0-9]/g, '');
+    if (numericKey && numericIndex.has(numericKey)){
+      numericIndex.get(numericKey).forEach(id => {
+        if (!seen.has(id)){
+          seen.add(id);
+          ids.push(id);
+        }
+      });
+    }
+    const displayKey = normalizeDisplayKey(token);
+    if (displayKey && displayIndex.has(displayKey)){
+      displayIndex.get(displayKey).forEach(id => {
+        if (!seen.has(id)){
+          seen.add(id);
+          ids.push(id);
+        }
+      });
+    }
+  }
+  return ids;
+}
+    
 async function buildGtfsFallbackResult(number, { ymd } = {}){
-  const normalized = extractTrainNumber(number);
-  if (!normalized) return null;
   const targetYmd = (ymd && /^\d{8}$/.test(ymd)) ? ymd : null;
   try {
     await ensureGTFSLoaded();
@@ -5310,13 +5853,10 @@ async function buildGtfsFallbackResult(number, { ymd } = {}){
     return null;
   }
 
-  ensureTripsByNumberIndex();
   ensureStopTimesByTripIndex();
   buildStationGroups();
 
-  const index = GTFS._tripsByNumber;
-  if (!index) return null;
-  const tripIds = index.get(normalized);
+  const tripIds = findTripIdsByNumber(number);
   if (!tripIds || !tripIds.length) return null;
   const uniqueTripIds = Array.from(new Set(tripIds));
 
@@ -5446,7 +5986,9 @@ function findOneTransferItineraries({
     if (processedFirstLeg.has(firstKey)) continue;
 
     // numéro lisible du 1er train
-    const num1 = extractTrainNumber(GTFS._tripById.get(trip1)?.trip_short_name) || extractTrainNumber(trip1) || '—';
+    const baseNum1 = extractTrainNumber(GTFS._tripById.get(trip1)?.trip_short_name) || extractTrainNumber(trip1) || '—';
+    const num1 = getTripDisplayNumber(trip1, baseNum1) || baseNum1;
+    const provider1 = getTripProvider(trip1) || '';
 
     let best = null;
 
@@ -5487,7 +6029,9 @@ function findOneTransferItineraries({
         if (!toDest) continue;
 
         // 🚫 2) pas le même numéro commercial
-        const num2 = extractTrainNumber(GTFS._tripById.get(trip2)?.trip_short_name) || extractTrainNumber(trip2) || '—';
+        const baseNum2 = extractTrainNumber(GTFS._tripById.get(trip2)?.trip_short_name) || extractTrainNumber(trip2) || '—';
+        const num2 = getTripDisplayNumber(trip2, baseNum2) || baseNum2;
+        const provider2 = getTripProvider(trip2) || '';
         if (num1 && num2 && num1 === num2) continue;
 
         best = {
@@ -5499,7 +6043,9 @@ function findOneTransferItineraries({
           dep2:    toHHMM(st2[idxInter2].depS),
           arr2:    toHHMM(toDest.arrS),
           waitMin: Math.max(0, Math.round((st2[idxInter2].depS - inter.arrS)/60)),
-          durMin:  Math.max(0, Math.round((toDest.arrS - dep1S)/60))
+          durMin:  Math.max(0, Math.round((toDest.arrS - dep1S)/60)),
+          provider1,
+          provider2
         };
         break; // on ne garde que la plus proche
       }
@@ -5539,7 +6085,9 @@ function findOneTransferItineraries({
           if (!toDest) continue;
 
           // 🚫 pas le même numéro commercial
-          const num2 = extractTrainNumber(GTFS._tripById.get(trip2)?.trip_short_name) || extractTrainNumber(trip2) || '—';
+          const baseNum2 = extractTrainNumber(GTFS._tripById.get(trip2)?.trip_short_name) || extractTrainNumber(trip2) || '—';
+          const num2 = getTripDisplayNumber(trip2, baseNum2) || baseNum2;
+          const provider2 = getTripProvider(trip2) || '';
           if (num1 && num2 && num1 === num2) continue;
 
           best = {
@@ -5551,7 +6099,9 @@ function findOneTransferItineraries({
             dep2:    toHHMM(st2[idxInter2].depS),
             arr2:    toHHMM(toDest.arrS),
             waitMin: Math.max(0, Math.round((st2[idxInter2].depS - interJ.arrS)/60)),
-            durMin:  Math.max(0, Math.round((toDest.arrS - dep1S)/60))
+            durMin:  Math.max(0, Math.round((toDest.arrS - dep1S)/60)),
+            provider1,
+            provider2
           };
           break;
         }
@@ -5577,6 +6127,34 @@ function renderTransferCards(transfers, startName, endName){
   if (!transfers || !transfers.length) return '';
   transfers = transfers.filter(t => t.num1 && t.num2 && t.num1 !== t.num2);
   if (!transfers.length) return '';
+  const safeStart = escapeHtml(startName);
+  const safeEnd = escapeHtml(endName);
+  const cards = transfers.map(t => {
+    const classes = ['chip', 'transfer'];
+    const provider1 = (t.provider1 || '').toUpperCase();
+    const provider2 = (t.provider2 || '').toUpperCase();
+    if (provider1 === 'CFL' || provider2 === 'CFL' || isLuxTrainNumber(t.num1) || isLuxTrainNumber(t.num2)) {
+      classes.push('lux-train');
+    }
+    const safeNum1 = escapeHtml(t.num1);
+    const safeNum2 = escapeHtml(t.num2);
+    const safeVia = escapeHtml(t.viaName);
+    const providerAttr1 = escapeHtml(t.provider1 || '');
+    const providerAttr2 = escapeHtml(t.provider2 || '');
+    const safeDep1 = escapeHtml(t.dep1);
+    const safeArr1 = escapeHtml(t.arr1);
+    const safeDep2 = escapeHtml(t.dep2);
+    const safeArr2 = escapeHtml(t.arr2);
+    return `
+        <div class="${classes.join(' ')}" data-num1="${safeNum1}" data-num2="${safeNum2}" data-provider1="${providerAttr1}" data-provider2="${providerAttr2}">
+          <div style="display:flex;flex-direction:column;gap:2px">
+            <div><b>${safeStart}</b> ${safeDep1} → <b>${safeVia}</b> ${safeArr1} — Train ${safeNum1}</div>
+            <div>Attente: ${t.waitMin} min</div>
+            <div><b>${safeVia}</b> ${safeDep2} → <b>${safeEnd}</b> ${safeArr2} — Train ${safeNum2}</div>
+            <div style="opacity:.8">Durée totale: ${t.durMin} min</div>
+          </div>
+        </div>`;
+  }).join('');
   return `
   <div class="chips-panel" style="margin-top:12px">
     <div class="chips-header">
@@ -5584,16 +6162,7 @@ function renderTransferCards(transfers, startName, endName){
       <div class="chips-count">${transfers.length}</div>
     </div>
     <div class="chips-wrap">
-      ${transfers.map(t=>`
-        <div class="chip transfer" data-num1="${t.num1}" data-num2="${t.num2}">
-          <div style="display:flex;flex-direction:column;gap:2px">
-            <div><b>${startName}</b> ${t.dep1} → <b>${t.viaName}</b> ${t.arr1} — Train ${t.num1}</div>
-            <div>Attente: ${t.waitMin} min</div>
-            <div><b>${t.viaName}</b> ${t.dep2} → <b>${endName}</b> ${t.arr2} — Train ${t.num2}</div>
-            <div style="opacity:.8">Durée totale: ${t.durMin} min</div>
-          </div>
-        </div>
-      `).join('')}
+      ${cards}
     </div>
     <div class="chips-footer">
       <small>Astuce : cliquer une carte “correspondance” ajoute/retire ses 2 trains à la sélection.</small>
@@ -5652,16 +6221,17 @@ async function computeItineraryProposals({
     const depMin = Number(dep.slice(0,2))*60 + Number(dep.slice(3,5));
     if (depMin<fromMin || depMin>toMin) return;
 
-    let numero = trow?.trip_short_name ? extractTrainNumber(trow.trip_short_name) : null;
-    if (!numero) numero = extractTrainNumber(trip_id);
+    const provider = getTripProvider(trip_id) || '';
+    const fallbackNumber = trow?.trip_short_name ? extractTrainNumber(trow.trip_short_name) : extractTrainNumber(trip_id);
+    const numero = getTripDisplayNumber(trip_id, fallbackNumber) || fallbackNumber;
     if (!numero) return;
 
-    const key = `${numero}|${dep.slice(0,5)}`;
+    const key = `${trip_id}|${dep.slice(0,5)}`;
     if (!computeItineraryProposals._seen) computeItineraryProposals._seen = new Set();
     if (computeItineraryProposals._seen.has(key)) return;
     computeItineraryProposals._seen.add(key);
 
-    directs.push({ numero, dep:dep.slice(0,5), arr: arr ? arr.slice(0,5) : null });
+    directs.push({ numero, dep:dep.slice(0,5), arr: arr ? arr.slice(0,5) : null, provider, tripId: trip_id });
   });
   computeItineraryProposals._seen = null;
 
@@ -5672,7 +6242,16 @@ async function computeItineraryProposals({
   if (allowTransfers){
     const minTransferMin = Math.max(1, Number(document.getElementById('minTransfer')?.value || 5));
     const maxTransferMin = Math.max(minTransferMin, Number(document.getElementById('maxTransfer')?.value || 45));
-    const allowedSet = getIdsForName('Metz');
+    let allowedSet = null;
+    const metzIds = getIdsForName('Metz');
+    if (metzIds && metzIds.size) allowedSet = new Set(metzIds);
+    if (isCflModeEnabled()){
+      const bettIds = getIdsForName('Bettembourg');
+      if (bettIds && bettIds.size){
+        if (!allowedSet) allowedSet = new Set();
+        bettIds.forEach(id => allowedSet.add(id));
+      }
+    }
     const raw = findOneTransferItineraries({
       originIds,
       destIds,
@@ -5769,20 +6348,32 @@ async function proposerTrainsOD(eventOrOptions){
     
   const directsHTML = (function(){
     if (!directsList.length) {
-      return `<div class="chips-panel"><p>Aucun train direct ${startName} → ${endName} dans cette plage.</p></div>`;
+      return `<div class="chips-panel"><p>Aucun train direct ${escapeHtml(startName)} → ${escapeHtml(endName)} dans cette plage.</p></div>`;
     }
+    const cards = directsList.map(t => {
+      const classes = ['chip'];
+      const providerUpper = (t.provider || '').toUpperCase();
+      if (providerUpper === 'CFL' || isLuxTrainNumber(t.numero)) classes.push('lux-train');
+      const safeNum = escapeHtml(t.numero);
+      const safeStart = escapeHtml(startName);
+      const safeEnd = escapeHtml(endName);
+      const safeDep = escapeHtml(t.dep);
+      const safeArr = escapeHtml(t.arr || '?');
+      const providerAttr = escapeHtml(t.provider || '');
+      return `
+            <div class="${classes.join(' ')}" data-num="${safeNum}" data-provider="${providerAttr}">
+              <span class="t-num">Train ${safeNum}</span>
+              <span class="t-time">(${safeStart} ${safeDep} → ${safeEnd} ${safeArr})</span>
+            </div>`;
+    }).join('');
     return `
       <div class="chips-panel">
         <div class="chips-header">
-          <div style="font-weight:700">Propositions directes ${startName} → ${endName}</div>
+          <div style="font-weight:700">Propositions directes ${escapeHtml(startName)} → ${escapeHtml(endName)}</div>
           <div class="chips-count"><span id="chipsCount">0</span> sélection(s)</div>
         </div>
         <div class="chips-wrap">
-          ${directsList.map(t => `
-            <div class="chip" data-num="${t.numero}">
-              <span class="t-num">Train ${t.numero}</span>
-              <span class="t-time">(${startName} ${t.dep} → ${endName} ${t.arr || '?'})</span>
-            </div>`).join('')}
+         ${cards} 
         </div>
       </div>`;
   })();
@@ -5794,35 +6385,42 @@ async function proposerTrainsOD(eventOrOptions){
     section.classList.toggle('is-empty', !hasChip);
   }
 
-  document.querySelectorAll('#propositions .chip').forEach(chip => {
-    const n = chip.dataset.num;
-    const t = chip.querySelector('.t-num');
-    if (t) t.textContent = 'Train ' + n;
-  });
-
   cont.querySelectorAll('.chip[data-num]').forEach((chip)=>{
     chip.addEventListener('click', ()=>{
       const prevSize = selectedTrains ? selectedTrains.size : 0;
-      const num = chip.dataset.num; if (!num) return;
+       const raw = chip.dataset.num || '';
+      const normalized = normalizeTrainToken(raw, { allowLux: isCflModeEnabled() });
+      if (!normalized) return;
+      chip.dataset.num = normalized;
       const willSelect = !chip.classList.contains('is-selected');
       chip.classList.toggle('is-selected', willSelect);
-      if (willSelect) selectedTrains?.add(num); else selectedTrains?.delete(num);
+      if (willSelect) selectedTrains?.add(normalized); else selectedTrains?.delete(normalized);
+      const label = chip.querySelector('.t-num');
+      if (label) label.textContent = 'Train ' + normalized;
       chipsUpdateCount?.(); updateSelectionUI?.();
       if (selectedTrains && prevSize === 0 && selectedTrains.size > 0 && typeof openSelectionModal === 'function' && !isSelectionModalOpen()){
         openSelectionModal({ focus: false, trigger: document.getElementById('openSelectionModal') || chip });
-      }      
+      }
     });
   });
 
   cont.querySelectorAll('.chip.transfer').forEach((chip)=>{
     chip.addEventListener('click', ()=>{
       const prevSize = selectedTrains ? selectedTrains.size : 0;
-      const n1=chip.dataset.num1, n2=chip.dataset.num2;
+      const raw1 = chip.dataset.num1 || '';
+      const raw2 = chip.dataset.num2 || '';
+      const n1 = normalizeTrainToken(raw1, { allowLux: isCflModeEnabled() });
+      const n2 = normalizeTrainToken(raw2, { allowLux: isCflModeEnabled() });
+      if (!n1 || !n2) return;
+      chip.dataset.num1 = n1;
+      chip.dataset.num2 = n2;
       const isOn = chip.classList.contains('is-selected');
       chip.classList.toggle('is-selected', !isOn);
       if (!isOn){ selectedTrains?.add(n1); selectedTrains?.add(n2); }
       else { selectedTrains?.delete(n1); selectedTrains?.delete(n2); }
-      cont.querySelectorAll(`.chip[data-num="${n1}"], .chip[data-num="${n2}"]`).forEach(c=> c.classList.toggle('is-selected', selectedTrains?.has(c.dataset.num)));
+      const safeN1 = n1.replace(/"/g, '\\"');
+      const safeN2 = n2.replace(/"/g, '\\"');
+      cont.querySelectorAll(`.chip[data-num="${safeN1}"], .chip[data-num="${safeN2}"]`).forEach(c=> c.classList.toggle('is-selected', selectedTrains?.has(c.dataset.num)));
       chipsUpdateCount?.(); updateSelectionUI?.();
       if (selectedTrains && prevSize === 0 && selectedTrains.size > 0 && typeof openSelectionModal === 'function' && !isSelectionModalOpen()){
         openSelectionModal({ focus: false, trigger: document.getElementById('openSelectionModal') || chip });
@@ -6052,11 +6650,15 @@ function updateSelectionUI(){
   const zone = document.getElementById('selectionChips');
   if (zone){
     // (ré)génère le HTML des chips
-    zone.innerHTML = arr.map(num => `
-      <span class="chip-tag" data-num="${num}" role="button" tabindex="0" title="Retirer ${num}">
-        <span class="t-num">#${num}</span>
-      </span>
-    `).join('');
+    zone.innerHTML = arr.map(num => {
+      const safeNum = escapeHtml(num);
+      const label = escapeHtml(formatTrainLabel(num));
+      const luxClass = isLuxTrainNumber(num) ? ' lux-train' : '';
+      return `
+      <span class="chip-tag${luxClass}" data-num="${safeNum}" role="button" tabindex="0" title="Retirer ${label}">
+        <span class="t-num">${label}</span>
+      </span>`;
+    }).join('');
 
     // remove au clic / clavier (désactivé si on est en train de drag)
     zone.querySelectorAll('.chip-tag').forEach(tag=>{
@@ -6064,7 +6666,8 @@ function updateSelectionUI(){
         const num = tag.dataset.num;
         if (!num) return;
         selectedTrains.delete(num);
-        const card = document.querySelector(`#propositions .chip[data-num="${num}"]`);
+        const safeNum = num.replace(/"/g, '\\"');
+        const card = document.querySelector(`#propositions .chip[data-num="${safeNum}"]`);
         if (card) card.classList.remove('is-selected');
         chipsUpdateCount?.();
         updateSelectionUI();
@@ -6278,10 +6881,52 @@ function initSelectionSortable(){
     }
   });
 }
+
+ async function handleCflToggleChange(enabled){
+  try {
+    await ensureGTFSLoaded();
+    GTFS.nameToIds = null;
+    GTFS.idToName = null;
+    GTFS.idToStop = null;
+    buildStationGroups();
+  } catch (err) {
+    console.error('[GTFS] Rechargement après changement CFL', err);
+  }
+
+  if (!enabled){
+    const before = selectedTrains.size;
+    Array.from(selectedTrains).forEach(num => {
+      if (isLuxTrainNumber(num)) selectedTrains.delete(num);
+    });
+    if (selectedTrains.size !== before){
+      updateSelectionUI();
+    }
+  }
+
+  if (proposerTrainsOD?.lastRequest){
+    proposerTrainsOD({ ...proposerTrainsOD.lastRequest, openModal:false, focus:false });
+  }
+}
+
+function initCflToggle(){
+  const checkbox = document.getElementById('includeCFL');
+  if (!checkbox) return;
+  const stored = readStoredCflMode();
+  setCflMode(stored);
+  checkbox.checked = stored;
+
+  checkbox.addEventListener('change', () => {
+    const previous = isCflModeEnabled();
+    setCflMode(checkbox.checked);
+    if (previous === isCflModeEnabled()) return;
+    handleCflToggleChange(isCflModeEnabled());
+  });
+}   
     
 /* ====================== DOC READY ====================== */
 $(function () {
   // Date par défaut + menus
+  initCflToggle();
   $('#trainDate').val(formatDateInputValue(new Date()));
   buildGareDropdown();
   buildStationSelects();
@@ -6452,30 +7097,33 @@ syncSelectionDateFromMain();
   // Saisie manuelle (si tu gardes l’input CSV masqué pour compat)
   $('#trainNumbers').off('input').on('input', () => {
   const raw = $('#trainNumbers').val();
-  const tokens = String(raw || '')
-    .split(/[,\s]+/)
-    .map(s => (String(s).match(/\b\d{5,6}\b/) || [])[0])
-    .filter(Boolean);
-  selectedTrains.clear();
-  tokens.forEach(num => selectedTrains.add(num));
-  document.querySelectorAll('#propositions .chip').forEach(c=>{
-    c.classList.toggle('is-selected', selectedTrains.has(c.dataset.num));
+    const tokens = parseTrainTokensFromString(raw, { allowLux: isCflModeEnabled() });
+    selectedTrains.clear();
+    tokens.forEach(num => selectedTrains.add(num));
+    document.querySelectorAll('#propositions .chip').forEach(c => {
+      const normalized = normalizeTrainToken(c.dataset.num || '', { allowLux: isCflModeEnabled() });
+      if (normalized) c.dataset.num = normalized;
+      c.classList.toggle('is-selected', selectedTrains.has(c.dataset.num));
+      const label = c.querySelector('.t-num');
+      if (label && c.dataset.num) label.textContent = 'Train ' + formatTrainLabel(c.dataset.num);
+    });
+    if (typeof chipsUpdateCount === 'function') chipsUpdateCount();
+    updateSelectionUI();
   });
-  if (typeof chipsUpdateCount === 'function') chipsUpdateCount();
-  updateSelectionUI();
-});
+  
 function addManualTrain(){
   const $inp = $('#manualTrainInput');
   const raw = String($inp.val() || '').trim();
-  const num = (raw.match(/\b\d{5,6}\b/) || [])[0];
+  const num = normalizeTrainToken(raw, { allowLux: isCflModeEnabled() });
   if (!num){
     $inp.addClass('input-error'); setTimeout(()=> $inp.removeClass('input-error'), 400);
     return;
   }
-  const wasEmpty = selectedTrains.size === 0; 
+  const wasEmpty = selectedTrains.size === 0;
   selectedTrains.add(num);
   updateSelectionUI();
-  const card = document.querySelector(`#propositions .chip[data-num="${num}"]`);
+  const safeNum = num.replace(/"/g, '\\"');
+  const card = document.querySelector(`#propositions .chip[data-num="${safeNum}"]`);
   if (card) card.classList.add('is-selected');
   $inp.val('');
   if (wasEmpty && selectedTrains.size > 0 && !isSelectionModalOpen()){
@@ -6501,7 +7149,7 @@ function addManualTrain(){
     const fixedStops = getStopsForDirection(sensInverse);
 
     const date = $('#trainDate').val();
-    const numbers = $('#trainNumbers').val().split(',').map(s => s.trim()).filter(Boolean);
+    const numbers = parseTrainTokensFromString($('#trainNumbers').val(), { allowLux: isCflModeEnabled() });
     const ymdDate = dateInputToYMD(date);
 
     if (!numbers.length || !date) {
@@ -6540,8 +7188,12 @@ function addManualTrain(){
 
       /* 1) Récupération des données API pour chaque train */
     for (const num of numbers) {
+      const isLux = isLuxTrainNumber(num);
       const url = `https://assistant-train-cx5u.vercel.app/api/train?id=vehicle_journeys/vehicle_journey:SNCF:${date}:${num}:1187:Train`;
       try {
+        if (isLux) {
+          throw new Error('CFL_GTFS_ONLY');
+        }
         const res = await $.ajax({ url });
         const train = res.vehicle_journeys?.[0];
         if (!train) {
@@ -6619,7 +7271,9 @@ if (!newStart) {
       } catch (e) {
         const fallback = await buildGtfsFallbackResult(num, { ymd: ymdDate });
         if (fallback) {
-          const reason = formatSncfApiError(e);
+          const reason = e && e.message === 'CFL_GTFS_ONLY'
+            ? 'Horaires statiques CFL'
+            : formatSncfApiError(e);
           fallback.fallbackDetails = {
             reason,
             tooltip: `${reason} — Horaires théoriques (GTFS)`
@@ -6632,8 +7286,12 @@ if (!newStart) {
           results[num] = fallback;
           continue;
         }
-        console.error("Erreur lors de la requête API:", e);
-        results[num] = { error: 'Erreur API' };
+        if (e && e.message === 'CFL_GTFS_ONLY') {
+          results[num] = { error: 'Train CFL indisponible' };
+        } else {
+          console.error("Erreur lors de la requête API:", e);
+          results[num] = { error: 'Erreur API' };
+        }
       }
     }
 
@@ -6677,12 +7335,14 @@ if (!newStart) {
     /* 4) Construction du tableau */
     let html = '<table><thead><tr><th>Gare</th>';
     numbers.forEach(num => {
-  const composition = (typeof compoData !== 'undefined' && compoData) ? compoData[num] : '';
-  const compClass   = getCompoClass(composition, true); // ← force blanc si inconnu
-  const result = results[num];
-  const fallbackAttr = result?.gtfsFallback ? ' data-gtfs-fallback="1"' : '';
-  html += `<th class="train-header ${compClass}" data-train-number="${num}"${fallbackAttr}>${num}</th>`;
-});
+   const composition = (typeof compoData !== 'undefined' && compoData) ? compoData[num] : '';
+      const compClass   = getCompoClass(composition, true); // ← force blanc si inconnu
+      const result = results[num];
+      const fallbackAttr = result?.gtfsFallback ? ' data-gtfs-fallback="1"' : '';
+      const luxClass = isLuxTrainNumber(num) ? ' lux-train' : '';
+      const displayNum = escapeHtml(formatTrainLabel(num));
+      html += `<th class="train-header ${compClass}${luxClass}" data-train-number="${num}"${fallbackAttr}>${displayNum}</th>`;
+    });
     html += '</tr><tr><th></th>';
 
     /* Ligne d’icônes (statut) */
@@ -6869,9 +7529,18 @@ injectTableChunkedIntoTrainInfo(html, { chunk: 180 });
         banner.className = 'sncf-fallback-banner';
         banner.setAttribute('role', 'alert');
         banner.setAttribute('aria-live', 'polite');
-        const fallbackNumbers = Array.from(sncfFallback.numbers).sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+        const fallbackNumbersRaw = Array.from(sncfFallback.numbers);
+        const fallbackNumbersSorted = fallbackNumbersRaw.sort((a, b) => {
+          const na = normalizeDisplayKey(a);
+          const nb = normalizeDisplayKey(b);
+          if (na && nb && na !== nb) {
+            return na.localeCompare(nb, undefined, { numeric: true });
+          }
+          return String(a).localeCompare(String(b), undefined, { numeric: true });
+        });
+        const fallbackNumbers = fallbackNumbersSorted.map(num => escapeHtml(formatTrainLabel(num)));
         let trainsLabel = 'certains trains demandés';
-        if (fallbackNumbers.length === numbers.length && numbers.length > 0) {
+        if (fallbackNumbersSorted.length === numbers.length && numbers.length > 0) {
           trainsLabel = 'tous les trains demandés';
         } else if (fallbackNumbers.length === 1) {
           trainsLabel = `le train ${fallbackNumbers[0]}`;
@@ -6912,10 +7581,15 @@ function linkifyGaresAndTrains(root){
   scope.querySelectorAll('#trainInfo th[data-train-number]').forEach(th => {
     const numero = th.dataset.trainNumber;
     if (!numero) return;
-    const already = th.querySelector('a.train-link');
-    const url = `https://www.sncf-voyageurs.com/fr/voyagez-avec-nous/horaires-et-itineraires/recherche-de-train/detail-train/?numeroCirculation=${numero}&dateCirculation=${dateCirculation}`;
-    if (already) { already.href = url; already.textContent = numero; }
-    else { th.innerHTML = `<a href="${url}" target="_blank" rel="noopener" class="train-link">${numero}</a>`; }
+    const isLux = isLuxTrainNumber(numero);
+    const displayNumero = escapeHtml(formatTrainLabel(numero));
+    th.classList.toggle('lux-train', isLux);
+    if (isLux) {
+      th.innerHTML = `<span class="train-label">${displayNumero}</span>`;
+    } else {
+      const url = `https://www.sncf-voyageurs.com/fr/voyagez-avec-nous/horaires-et-itineraires/recherche-de-train/detail-train/?numeroCirculation=${numero}&dateCirculation=${dateCirculation}`;
+      th.innerHTML = `<a href="${url}" target="_blank" rel="noopener" class="train-link">${displayNumero}</a>`;
+    }
     if (th.dataset.gtfsFallback === '1' && !th.querySelector('.fallback-pill')) {
       const pill = document.createElement('span');
       pill.className = 'fallback-pill';
