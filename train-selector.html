@@ -1,0 +1,526 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <title>Sélecteur de trains CFL</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    body {
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      margin: 0;
+      padding: 0;
+      background: #f5f7fb;
+      color: #1f2937;
+    }
+
+    header {
+      background: #b10026;
+      color: #fff;
+      padding: 1.5rem 1rem;
+      text-align: center;
+    }
+
+    main {
+      max-width: 960px;
+      margin: 2rem auto;
+      padding: 0 1rem 3rem;
+    }
+
+    h1 {
+      margin: 0 0 0.5rem;
+      font-size: 2rem;
+    }
+
+    p.lead {
+      margin: 0;
+      font-size: 1rem;
+      opacity: 0.9;
+    }
+
+    .card {
+      background: #fff;
+      border-radius: 12px;
+      box-shadow: 0 10px 30px -15px rgba(0, 0, 0, 0.3);
+      padding: 1.5rem;
+      margin-bottom: 2rem;
+    }
+
+    .field-group {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 1rem 1.5rem;
+      margin-bottom: 1.5rem;
+    }
+
+    label {
+      display: block;
+      font-weight: 600;
+      margin-bottom: 0.35rem;
+    }
+
+    select,
+    input[type="date"] {
+      width: 100%;
+      padding: 0.6rem 0.75rem;
+      border: 1px solid #cbd5f5;
+      border-radius: 8px;
+      background: #fff;
+      font-size: 0.95rem;
+      box-sizing: border-box;
+      transition: border-color 0.2s ease;
+    }
+
+    select:focus,
+    input[type="date"]:focus {
+      outline: none;
+      border-color: #4c51bf;
+      box-shadow: 0 0 0 3px rgba(76, 81, 191, 0.15);
+    }
+
+    button {
+      align-self: end;
+      padding: 0.75rem 1.25rem;
+      border: none;
+      border-radius: 999px;
+      background: linear-gradient(135deg, #b10026, #f97316);
+      color: #fff;
+      font-weight: 600;
+      cursor: pointer;
+      transition: transform 0.15s ease, box-shadow 0.15s ease;
+    }
+
+    button:disabled {
+      opacity: 0.6;
+      cursor: progress;
+      box-shadow: none;
+      transform: none;
+    }
+
+    button:not(:disabled):hover {
+      transform: translateY(-1px);
+      box-shadow: 0 8px 20px -10px rgba(177, 0, 38, 0.6);
+    }
+
+    .results {
+      margin-top: 2rem;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 1rem;
+      font-size: 0.95rem;
+    }
+
+    th,
+    td {
+      text-align: left;
+      padding: 0.75rem 0.5rem;
+      border-bottom: 1px solid #e5e7eb;
+    }
+
+    th {
+      font-size: 0.75rem;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: #6b7280;
+    }
+
+    tbody tr:hover {
+      background: #f9fafb;
+    }
+
+    .empty-state {
+      text-align: center;
+      padding: 2rem 1rem;
+      color: #6b7280;
+      background: #fff;
+      border-radius: 12px;
+      border: 1px dashed #d1d5db;
+    }
+
+    .status {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      color: #6b7280;
+      font-size: 0.9rem;
+    }
+
+    .status span.loader {
+      width: 16px;
+      height: 16px;
+      border-radius: 50%;
+      border: 2px solid rgba(177, 0, 38, 0.3);
+      border-top-color: #b10026;
+      animation: spin 1s linear infinite;
+      display: inline-block;
+    }
+
+    @keyframes spin {
+      to {
+        transform: rotate(360deg);
+      }
+    }
+
+    @media (max-width: 600px) {
+      header {
+        padding: 1.25rem 1rem;
+      }
+
+      h1 {
+        font-size: 1.65rem;
+      }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Sélecteur de trains CFL</h1>
+    <p class="lead">Recherchez les trains disponibles par date et par gare luxembourgeoise.</p>
+  </header>
+
+  <main>
+    <section class="card">
+      <div class="status" id="loading-status">
+        <span class="loader"></span>
+        Chargement des données officielles CFL…
+      </div>
+
+      <form id="search-form" hidden>
+        <div class="field-group">
+          <label for="travel-date">Date</label>
+          <input type="date" id="travel-date" required />
+
+          <label for="origin-stop">Gare de départ</label>
+          <select id="origin-stop" required>
+            <option value="">Sélectionnez…</option>
+          </select>
+
+          <label for="destination-stop">Gare d'arrivée (optionnel)</label>
+          <select id="destination-stop">
+            <option value="">Toutes les destinations</option>
+          </select>
+
+          <button type="submit" id="search-button">Rechercher</button>
+        </div>
+      </form>
+
+      <div class="results" id="results">
+        <div class="empty-state">Choisissez une date et une gare de départ pour lancer la recherche.</div>
+      </div>
+    </section>
+  </main>
+
+  <script>
+    const dataPaths = {
+      routes: "routes[1].txt",
+      trips: "trips[1].txt",
+      stops: "stops[1].txt",
+      stopTimes: ["stop_times[1].txt", "stop_times[2].txt"],
+      calendar: "calendar[1].txt",
+      calendarDates: "calendar_dates[1].txt"
+    };
+
+    function parseCSVLine(line) {
+      const result = [];
+      let current = "";
+      let inQuotes = false;
+
+      for (let i = 0; i < line.length; i++) {
+        const char = line[i];
+
+        if (char === '"') {
+          if (inQuotes && line[i + 1] === '"') {
+            current += '"';
+            i++;
+          } else {
+            inQuotes = !inQuotes;
+          }
+        } else if (char === "," && !inQuotes) {
+          result.push(current);
+          current = "";
+        } else {
+          current += char;
+        }
+      }
+
+      result.push(current);
+      return result.map((value) => value.trim());
+    }
+
+    function parseCSV(text) {
+      const lines = text
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter((line) => line.length > 0);
+
+      if (lines.length === 0) {
+        return [];
+      }
+
+      const headers = parseCSVLine(lines[0]).map((header) => header.replace(/^"|"$/g, ""));
+      return lines.slice(1).map((line) => {
+        const values = parseCSVLine(line);
+        const record = {};
+        headers.forEach((header, index) => {
+          const raw = values[index] ?? "";
+          record[header] = raw.replace(/^"|"$/g, "");
+        });
+        return record;
+      });
+    }
+
+    async function loadCSV(path) {
+      const response = await fetch(path);
+      if (!response.ok) {
+        throw new Error(`Impossible de charger ${path}`);
+      }
+      const text = await response.text();
+      return parseCSV(text);
+    }
+
+    function groupBy(array, keyFn) {
+      const map = new Map();
+      for (const item of array) {
+        const key = keyFn(item);
+        if (!map.has(key)) {
+          map.set(key, []);
+        }
+        map.get(key).push(item);
+      }
+      return map;
+    }
+
+    function timeToSeconds(time) {
+      if (!time) return Number.POSITIVE_INFINITY;
+      const [hours, minutes = 0, seconds = 0] = time.split(":").map(Number);
+      return hours * 3600 + minutes * 60 + seconds;
+    }
+
+    function ymdFromDateInput(input) {
+      return input.replaceAll("-", "");
+    }
+
+    function buildServiceChecker(calendarEntries, calendarDateEntries) {
+      const calendarMap = new Map();
+      for (const entry of calendarEntries) {
+        calendarMap.set(entry.service_id, {
+          monday: entry.monday === "1",
+          tuesday: entry.tuesday === "1",
+          wednesday: entry.wednesday === "1",
+          thursday: entry.thursday === "1",
+          friday: entry.friday === "1",
+          saturday: entry.saturday === "1",
+          sunday: entry.sunday === "1",
+          start: entry.start_date,
+          end: entry.end_date
+        });
+      }
+
+      const calendarDateMap = groupBy(calendarDateEntries, (entry) => entry.service_id);
+
+      return (serviceId, ymd) => {
+        const calendar = calendarMap.get(serviceId);
+        const dateObj = new Date(`${ymd.slice(0, 4)}-${ymd.slice(4, 6)}-${ymd.slice(6, 8)}`);
+        let active = false;
+
+        if (calendar) {
+          const between = calendar.start <= ymd && ymd <= calendar.end;
+          if (between) {
+            const dayIndex = dateObj.getUTCDay();
+            const dayKeys = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
+            active = calendar[dayKeys[dayIndex]] ?? false;
+          }
+        }
+
+        const exceptions = calendarDateMap.get(serviceId) ?? [];
+        const exception = exceptions.find((item) => item.date === ymd);
+        if (exception) {
+          if (exception.exception_type === "1") {
+            active = true;
+          } else if (exception.exception_type === "2") {
+            active = false;
+          }
+        }
+
+        return active;
+      };
+    }
+
+    function renderResults(container, trains) {
+      container.innerHTML = "";
+
+      if (trains.length === 0) {
+        container.innerHTML = '<div class="empty-state">Aucun train trouvé pour les critères sélectionnés.</div>';
+        return;
+      }
+
+      const table = document.createElement("table");
+      table.innerHTML = `
+        <thead>
+          <tr>
+            <th>Départ</th>
+            <th>Arrivée</th>
+            <th>Train</th>
+            <th>Destination</th>
+            <th>Service</th>
+          </tr>
+        </thead>
+      `;
+
+      const tbody = document.createElement("tbody");
+      for (const train of trains) {
+        const row = document.createElement("tr");
+        row.innerHTML = `
+          <td><strong>${train.departureTime}</strong><br/><small>${train.originName}</small></td>
+          <td>${train.arrivalTime ? `<strong>${train.arrivalTime}</strong><br/><small>${train.destinationName}</small>` : "—"}</td>
+          <td>${train.routeName}<br/><small>Voyage n° ${train.tripId}</small></td>
+          <td>${train.headsign || ""}</td>
+          <td>Service ${train.serviceId}</td>
+        `;
+        tbody.appendChild(row);
+      }
+
+      table.appendChild(tbody);
+      container.appendChild(table);
+    }
+
+    async function bootstrap() {
+      const loadingStatus = document.getElementById("loading-status");
+      const form = document.getElementById("search-form");
+      const originSelect = document.getElementById("origin-stop");
+      const destinationSelect = document.getElementById("destination-stop");
+      const dateInput = document.getElementById("travel-date");
+      const resultsContainer = document.getElementById("results");
+      const searchButton = document.getElementById("search-button");
+
+      try {
+        const [routes, trips, stops, calendar, calendarDates, ...stopTimesArrays] = await Promise.all([
+          loadCSV(dataPaths.routes),
+          loadCSV(dataPaths.trips),
+          loadCSV(dataPaths.stops),
+          loadCSV(dataPaths.calendar),
+          loadCSV(dataPaths.calendarDates),
+          ...dataPaths.stopTimes.map((path) => loadCSV(path))
+        ]);
+
+        const routeMap = new Map(
+          routes
+            .filter((route) => route.route_type === "2")
+            .map((route) => [route.route_id, route])
+        );
+
+        const trainTrips = trips.filter((trip) => routeMap.has(trip.route_id));
+        const tripMap = new Map(trainTrips.map((trip) => [trip.trip_id, trip]));
+
+        const stopTimes = stopTimesArrays.flat().filter((item) => tripMap.has(item.trip_id));
+        const stopTimesByTrip = groupBy(stopTimes, (item) => item.trip_id);
+
+        const trainStopIds = new Set();
+        for (const times of stopTimesByTrip.values()) {
+          times.sort((a, b) => Number(a.stop_sequence) - Number(b.stop_sequence));
+          times.forEach((time) => trainStopIds.add(time.stop_id));
+        }
+
+        const trainStops = stops
+          .filter((stop) => trainStopIds.has(stop.stop_id))
+          .sort((a, b) => a.stop_name.localeCompare(b.stop_name, "fr"));
+
+        const stopNameById = new Map(trainStops.map((stop) => [stop.stop_id, stop.stop_name || stop.stop_id]));
+
+        for (const stop of trainStops) {
+          const originOption = document.createElement("option");
+          originOption.value = stop.stop_id;
+          originOption.textContent = stop.stop_name || stop.stop_id;
+          originSelect.appendChild(originOption);
+
+          const destinationOption = document.createElement("option");
+          destinationOption.value = stop.stop_id;
+          destinationOption.textContent = stop.stop_name || stop.stop_id;
+          destinationSelect.appendChild(destinationOption);
+        }
+
+        const serviceActive = buildServiceChecker(calendar, calendarDates);
+
+        form.hidden = false;
+        loadingStatus.hidden = true;
+
+        const today = new Date();
+        dateInput.valueAsDate = today;
+
+        form.addEventListener("submit", (event) => {
+          event.preventDefault();
+          const originStop = originSelect.value;
+          const destinationStop = destinationSelect.value;
+          const dateValue = dateInput.value;
+
+          if (!originStop || !dateValue) {
+            resultsContainer.innerHTML = '<div class="empty-state">Sélectionnez au minimum une date et une gare de départ.</div>';
+            return;
+          }
+
+          searchButton.disabled = true;
+          resultsContainer.innerHTML = '<div class="status"><span class="loader"></span>Recherche en cours…</div>';
+
+          const ymd = ymdFromDateInput(dateValue);
+          const trains = [];
+
+          for (const trip of trainTrips) {
+            if (!serviceActive(trip.service_id, ymd)) {
+              continue;
+            }
+
+            const times = stopTimesByTrip.get(trip.trip_id);
+            if (!times) {
+              continue;
+            }
+
+            const originIndex = times.findIndex((item) => item.stop_id === originStop);
+            if (originIndex === -1) {
+              continue;
+            }
+
+            let destinationIndex = null;
+            if (destinationStop) {
+              for (let i = originIndex + 1; i < times.length; i++) {
+                if (times[i].stop_id === destinationStop) {
+                  destinationIndex = i;
+                  break;
+                }
+              }
+              if (destinationIndex === null) {
+                continue;
+              }
+            }
+
+            const originStopTime = times[originIndex];
+            const destinationStopTime = destinationIndex !== null ? times[destinationIndex] : null;
+            const route = routeMap.get(trip.route_id);
+
+            trains.push({
+              departureTime: originStopTime.departure_time || originStopTime.arrival_time,
+              arrivalTime: destinationStopTime ? destinationStopTime.arrival_time || destinationStopTime.departure_time : null,
+              originName: stopNameById.get(originStop) ?? originStop,
+              destinationName: destinationStopTime ? stopNameById.get(destinationStop) ?? destinationStop : "",
+              routeName: route.route_short_name || route.route_long_name || route.route_id,
+              headsign: trip.trip_headsign,
+              serviceId: trip.service_id,
+              tripId: trip.trip_id
+            });
+          }
+
+          trains.sort((a, b) => timeToSeconds(a.departureTime) - timeToSeconds(b.departureTime));
+          renderResults(resultsContainer, trains);
+          searchButton.disabled = false;
+        });
+      } catch (error) {
+        console.error(error);
+        loadingStatus.innerHTML = "Une erreur est survenue lors du chargement des données. Veuillez recharger la page.";
+      }
+    }
+
+    bootstrap();
+  </script>
+</body>
+</html>
