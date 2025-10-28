@@ -403,13 +403,27 @@
       document.title = `SNCF ${formatNumber(total)} / ${formatNumber(dailyLimit)}`;
     }
 
-const SNCF_CANONICAL_ORIGIN = 'https://www.labetaillere.fr';
-const SNCF_ADDITIONAL_ORIGINS = ['https://labetaillere.fr'];    
+// Origine par défaut qui expose les fonctions serverless nécessaires au compteur.
+const SNCF_CANONICAL_ORIGIN = 'https://assistant-train.vercel.app';
+// Domaines purement statiques : on y redirige automatiquement vers l'origine canonique.
+const SNCF_STATIC_ORIGINS = ['https://www.labetaillere.fr', 'https://labetaillere.fr'];
+// Autres origines exposant le même runtime (backup et domaines statiques).
+const SNCF_ADDITIONAL_ORIGINS = [
+  ...SNCF_STATIC_ORIGINS,
+  'https://assistant-train-cx5u.vercel.app'
+];
     
 const SNCF_STATS_HOST = (() => {
       const params = new URLSearchParams(window.location.search);
       const forcedHost = params.get('host');
       if (forcedHost) {
+        const lowered = forcedHost.trim().toLowerCase();
+        if (['self', 'local', 'origin'].includes(lowered)) {
+          return window.location.origin;
+        }
+        if (['remote', 'canonical', 'vercel'].includes(lowered)) {
+          return SNCF_CANONICAL_ORIGIN;
+        }
         try {
           const coerced = new URL(forcedHost, window.location.origin);
           return coerced.origin;
@@ -418,38 +432,38 @@ const SNCF_STATS_HOST = (() => {
         }
       }
 
-      const { hostname, origin, protocol } = window.location;
+      const { hostname, origin } = window.location;
       const normaliseOrigin = candidate => {
         if (!candidate) return '';
         try {
-          const url = new URL(candidate, `${protocol}//${hostname}`);
+          const url = new URL(candidate, origin);
           return url.origin;
         } catch (err) {
           console.warn('Origine invalide pour les stats SNCF', candidate, err);
           return '';
         }
       };
-      if (hostname === 'www.labetaillere.fr') {
+      if (hostname === 'localhost' || hostname === '127.0.0.1') {
         return origin;
-      }
-
-      if (hostname === 'labetaillere.fr') {
-        return origin;
-      }
-
-      if (hostname.endsWith('.labetaillere.fr')) {
-        return origin;
-      }
-
-      if (hostname.endsWith('.github.io')) {
-        return SNCF_CANONICAL_ORIGIN;
       }
 
       if (hostname.endsWith('.vercel.app')) {
         return origin;
       }
 
-      return normaliseOrigin(SNCF_CANONICAL_ORIGIN);
+      const matchesStaticOrigin = SNCF_STATIC_ORIGINS.some(candidate => {
+        try {
+          return new URL(candidate).hostname === hostname;
+        } catch (err) {
+          return false;
+        }
+      });
+
+      if (matchesStaticOrigin || hostname.endsWith('.labetaillere.fr') || hostname.endsWith('.github.io')) {
+        return normaliseOrigin(SNCF_CANONICAL_ORIGIN);
+      }
+
+      return origin;
     })();
 
     function getStatsEndpoints() {
@@ -458,9 +472,7 @@ const SNCF_STATS_HOST = (() => {
         : '/api/sncf-stats';
       const fallbacks = [
         `${SNCF_CANONICAL_ORIGIN}/api/sncf-stats`,
-        ...SNCF_ADDITIONAL_ORIGINS.map(origin => `${origin}/api/sncf-stats`),
-        'https://assistant-train.vercel.app/api/sncf-stats',
-        'https://assistant-train-cx5u.vercel.app/api/sncf-stats'
+        ...SNCF_ADDITIONAL_ORIGINS.map(candidateOrigin => `${candidateOrigin.replace(/\/$/, '')}/api/sncf-stats`)
       ];
       const unique = new Set([primary, ...fallbacks]);
       return Array.from(unique).filter(Boolean);
