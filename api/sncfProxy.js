@@ -1,3 +1,9 @@
+const {
+  incrementCounters: persistUsageCounters,
+  readCounters: readPersistedCounters,
+  providerName: statsProviderName
+} = require('./sncfStatsStore.js');
+
 const DAILY_LIMIT = 5000;
 const LONG_TERM_LIMIT = 40;
 const LONG_TERM_TTL_MINUTES = 12 * 60; // 12 hours
@@ -6,7 +12,8 @@ const TIMEZONE = 'Europe/Paris';
 const state = globalThis.__SNCF_PROXY_STATE__ || (globalThis.__SNCF_PROXY_STATE__ = {
   cache: new Map(),
   counters: { dayKey: null, total: 0, longTerm: 0 },
-  lastPrune: 0
+  lastPrune: 0,
+  persisted: { dayKey: null, total: 0, longTerm: 0, lastSync: 0, provider: null }
 });
 
 function getTimeZoneOffset(date, timeZone) {
@@ -276,23 +283,84 @@ function resetCountersIfNeeded(dayKey) {
     state.counters.dayKey = dayKey;
     state.counters.total = 0;
     state.counters.longTerm = 0;
+    state.persisted = {
+      dayKey,
+      total: 0,
+      longTerm: 0,
+      lastSync: 0,
+      provider: null
+    };
   }
 }
 
-function tryConsumeQuota(policy) {
+async function syncPersistedCounters(dayKey, { force = false } = {}) {
+  if (!dayKey) return null;
+
+  const now = Date.now();
+  const persisted = state.persisted || (state.persisted = { dayKey: null, total: 0, longTerm: 0, lastSync: 0, provider: null });
+
+  if (!force && persisted.dayKey === dayKey && persisted.lastSync && (now - persisted.lastSync) < 30_000) {
+    return persisted;
+  }
+
+  try {
+    const snapshot = await readPersistedCounters(dayKey);
+    if (snapshot) {
+      if (typeof snapshot.total === 'number' && Number.isFinite(snapshot.total)) {
+        state.counters.total = snapshot.total;
+      }
+      if (typeof snapshot.longTerm === 'number' && Number.isFinite(snapshot.longTerm)) {
+        state.counters.longTerm = snapshot.longTerm;
+      }
+      persisted.dayKey = dayKey;
+      persisted.total = state.counters.total;
+      persisted.longTerm = state.counters.longTerm;
+      persisted.lastSync = now;
+      persisted.provider = snapshot.provider || statsProviderName || 'external';
+      return persisted;
+    }
+  } catch (err) {
+    console.warn('[SNCF proxy] Synchronisation des compteurs impossible', err);
+  }
+
+  return null;
+}
+
+async function tryConsumeQuota(policy, dayKey) {
   if (state.counters.total >= DAILY_LIMIT) {
-    return false;
+    return { allowed: false, reason: 'daily-limit' };
   }
   if (policy.type === 'longTerm' && state.counters.longTerm >= LONG_TERM_LIMIT) {
-    return false;
+    return { allowed: false, reason: 'long-term-limit' };
   }
   state.counters.total += 1;
-  if (policy.type === 'longTerm') {
+  const incrementLongTerm = policy.type === 'longTerm';
+  if (incrementLongTerm) {
     state.counters.longTerm += 1;
   }
-  return true;
-}
 
+try {
+    const snapshot = await persistUsageCounters(dayKey, { incrementLongTerm });
+    if (snapshot) {
+      if (typeof snapshot.total === 'number' && Number.isFinite(snapshot.total)) {
+        state.counters.total = snapshot.total;
+      }
+      if (typeof snapshot.longTerm === 'number' && Number.isFinite(snapshot.longTerm)) {
+        state.counters.longTerm = snapshot.longTerm;
+      }
+      const persisted = state.persisted || (state.persisted = { dayKey: null, total: 0, longTerm: 0, lastSync: 0, provider: null });
+      persisted.dayKey = dayKey;
+      persisted.total = state.counters.total;
+      persisted.longTerm = state.counters.longTerm;
+      persisted.lastSync = Date.now();
+      persisted.provider = snapshot.provider || statsProviderName || 'external';
+    }
+  } catch (err) {
+    console.warn('[SNCF proxy] Persistance des compteurs impossible', err);
+  }
+
+  return { allowed: true };
+  
 function pruneCache(nowTs) {
   if (nowTs - state.lastPrune < 30 * 60 * 1000) return;
   state.lastPrune = nowTs;
@@ -404,14 +472,15 @@ function respondWaiting(res, policy, targetInfo) {
   });
 }
 
-function respondQuotaExceeded(res, policy) {
+function respondQuotaExceeded(res, policy, reason) {
   const retry = policy.type === 'longTerm' ? (6 * 60 * 60) : (15 * 60);
   res.setHeader('Retry-After', String(retry));
   res.status(429).json({
     error: 'Quota quotidien SNCF atteint.',
     policy: policy.type,
     schedule: policy.description,
-    retryAfterSeconds: retry
+    retryAfterSeconds: retry,
+    reason: reason || null
   });
 }
 
@@ -458,7 +527,7 @@ function createSncfProxyHandler({ resolveApiUrl }) {
 
     const now = new Date();
     const nowInfo = getLocalInfo(now);
-    resetCountersIfNeeded(nowInfo.dayKey);
+    await syncPersistedCounters(nowInfo.dayKey);
     pruneCache(now.getTime());
 
     const targetInfo = extractTargetInfo(apiUrl);
@@ -479,11 +548,12 @@ function createSncfProxyHandler({ resolveApiUrl }) {
       return respondFromCache(res, cacheEntry, policy, { reason: decision.reason });
     }
 
-    if (!tryConsumeQuota(policy)) {
+    const quota = await tryConsumeQuota(policy, nowInfo.dayKey);
+    if (!quota.allowed) {
       if (cacheEntry) {
         return respondFromCache(res, cacheEntry, policy, { reason: 'quota', stale: true });
       }
-      return respondQuotaExceeded(res, policy);
+      return respondQuotaExceeded(res, policy, quota.reason);
     }
 
     try {
@@ -546,6 +616,15 @@ function getSncfProxyStats() {
   const nowInfo = getLocalInfo(now);
   resetCountersIfNeeded(nowInfo.dayKey);
 
+  const persisted = (state.persisted && state.persisted.dayKey === state.counters.dayKey)
+    ? {
+        total: state.persisted.total,
+        longTerm: state.persisted.longTerm,
+        lastSync: state.persisted.lastSync ? new Date(state.persisted.lastSync).toISOString() : null,
+        provider: state.persisted.provider
+      }
+    : null;
+
   return {
     source: 'runtime',
     dayKey: state.counters.dayKey,
@@ -557,11 +636,21 @@ function getSncfProxyStats() {
     longTermLimit: LONG_TERM_LIMIT,
     longTerm: state.counters.longTerm,
     longTermRemaining: Math.max(LONG_TERM_LIMIT - state.counters.longTerm, 0),
-    cacheSize: state.cache.size
+    cacheSize: state.cache.size,
+    persisted
   };
 }
 
+ async function getSncfProxyStatsAsync(options = {}) {
+  const now = new Date();
+  const nowInfo = getLocalInfo(now);
+  resetCountersIfNeeded(nowInfo.dayKey);
+  await syncPersistedCounters(nowInfo.dayKey, { force: options.forceSync });
+  return getSncfProxyStats();
+} 
+
 module.exports = {
   createSncfProxyHandler,
-  getSncfProxyStats
+  getSncfProxyStats,
+  getSncfProxyStatsAsync
 };
