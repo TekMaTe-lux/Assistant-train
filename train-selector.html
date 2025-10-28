@@ -228,6 +228,8 @@
       calendarDates: "calendar_dates[1].txt"
     };
 
+    const allowedTrainRouteIds = new Set(["297", "299", "300", "301", "302"]);
+
 function encodeFilename(filename) {
       return filename.replace(/\[/g, "%5B").replace(/\]/g, "%5D");
     }
@@ -562,11 +564,28 @@ function encodeFilename(filename) {
 
         const routeMap = new Map(
           routes
-            .filter((route) => route.route_type === "2")
+            .filter(
+              (route) =>
+                route.route_type === "2" &&
+                route.agency_id === "11" &&
+                allowedTrainRouteIds.has(route.route_id)
+            )
             .map((route) => [route.route_id, route])
         );
+        
+           if (routeMap.size === 0) {
+          throw new Error(
+            "Aucune ligne ferroviaire CFL n'a été trouvée dans routes[1].txt."
+          );
+        }
 
         const trainTrips = trips.filter((trip) => routeMap.has(trip.route_id));
+
+        if (trainTrips.length === 0) {
+          throw new Error(
+            "Aucun trajet ferroviaire CFL n'a été trouvé dans trips[1].txt pour les lignes sélectionnées."
+          );
+        }
         const tripMap = new Map(trainTrips.map((trip) => [trip.trip_id, trip]));
 
         const stopTimes = stopTimesArrays.flat().filter((item) => tripMap.has(item.trip_id));
@@ -747,6 +766,13 @@ function encodeFilename(filename) {
               ? destinationStop.stop_name
               : "";
 
+            const shortName = (route?.route_short_name ?? "").trim();
+            const tripShortName = (trip.trip_short_name ?? "").trim().replace(/^0+/, "");
+            const trainCode =
+              shortName && tripShortName
+                ? `${shortName}${tripShortName}`
+                : shortName || tripShortName || trip.route_id;
+            
             trains.push({
               departureTime: originStopTime.departure_time || originStopTime.arrival_time,
               arrivalTime: destinationStopTime ? destinationStopTime.arrival_time || destinationStopTime.departure_time : null,
@@ -754,7 +780,11 @@ function encodeFilename(filename) {
               originDetail,
               destinationName: destinationStation ? destinationStation.name : "",
               destinationDetail,
-              routeName: (route?.route_short_name || route?.route_long_name || trip.route_id),
+              routeName:
+                trainCode ||
+                route?.route_long_name ||
+                route?.route_short_name ||
+                trip.route_id,
               headsign: trip.trip_headsign,
               serviceId: trip.service_id,
               tripId: trip.trip_id
