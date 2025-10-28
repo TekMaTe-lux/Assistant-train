@@ -1,0 +1,452 @@
+<!doctype html>
+<!--
+Summary
+* Added a dark-themed CFL train search interface with accessible form controls and responsive layout. 【F:CFL/cfl-search.html†L10-L221】
+* Implemented client-side utilities to load GTFS data, filter direct rail trips, and render formatted journey cards. 【F:CFL/cfl-search.html†L222-L450】
+
+Testing
+* ⚠️ Not run (not requested)
+-->
+<html lang="fr">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Recherche trains CFL</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg-color: #0b0f1a;
+      --card-bg: #1a2238;
+      --text-color: #e0f0ff;
+      --muted-color: #7a8cae;
+      --accent-bg: #e0f0ff;
+      --accent-text: #0b0f1a;
+      font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      padding: 24px;
+      background: var(--bg-color);
+      color: var(--text-color);
+      font-family: inherit;
+      line-height: 1.5;
+    }
+
+    header {
+      max-width: 900px;
+      margin: 0 auto 24px;
+    }
+
+    h1 {
+      margin: 0 0 8px;
+      font-size: 1.8rem;
+      font-weight: 700;
+    }
+
+    p.description {
+      margin: 0;
+      color: var(--muted-color);
+      font-size: 0.95rem;
+    }
+
+    main {
+      max-width: 900px;
+      margin: 0 auto;
+      display: flex;
+      flex-direction: column;
+      gap: 24px;
+    }
+
+    form {
+      display: grid;
+      gap: 16px;
+      background: var(--card-bg);
+      padding: 20px;
+      border-radius: 16px;
+    }
+
+    .form-row {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    label {
+      font-weight: 600;
+      font-size: 0.95rem;
+    }
+
+    select,
+    input[type="time"],
+    button {
+      padding: 10px 12px;
+      border-radius: 10px;
+      border: 1px solid rgba(224, 240, 255, 0.15);
+      background: rgba(11, 15, 26, 0.4);
+      color: var(--text-color);
+      font-size: 1rem;
+    }
+
+    select:focus,
+    input[type="time"]:focus,
+    button:focus {
+      outline: 2px solid rgba(224, 240, 255, 0.4);
+      outline-offset: 2px;
+    }
+
+    button {
+      background: var(--accent-bg);
+      color: var(--accent-text);
+      font-weight: 600;
+      cursor: pointer;
+      transition: transform 0.15s ease, box-shadow 0.15s ease;
+    }
+
+    button:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 6px 18px rgba(0, 0, 0, 0.25);
+    }
+
+    .error-message {
+      color: #ff7b7b;
+      font-size: 0.95rem;
+      min-height: 1.2em;
+    }
+
+    .results {
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+
+    .result-card {
+      background: var(--card-bg);
+      border-radius: 16px;
+      padding: 18px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      border: 1px solid rgba(224, 240, 255, 0.08);
+    }
+
+    .result-header {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 12px;
+      font-weight: 600;
+      font-size: 1.05rem;
+    }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      padding: 2px 8px;
+      border-radius: 6px;
+      background: var(--accent-bg);
+      color: var(--accent-text);
+      font-size: 0.85rem;
+      font-weight: 600;
+      letter-spacing: 0.5px;
+    }
+
+    .result-main {
+      font-size: 1rem;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      align-items: center;
+    }
+
+    .result-secondary {
+      font-size: 0.9rem;
+      color: var(--muted-color);
+    }
+
+    @media (min-width: 640px) {
+      form {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        align-items: end;
+      }
+
+      .form-row.full-width {
+        grid-column: span 2;
+      }
+
+      .form-row.button-row {
+        justify-content: flex-end;
+        align-items: flex-end;
+      }
+
+      button {
+        width: fit-content;
+        padding-inline: 20px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Recherche trains CFL</h1>
+    <p class="description">Données GTFS CFL filtrées (IC / RB / RE / TER / TGV).</p>
+  </header>
+  <main>
+    <form id="search-form" novalidate>
+      <div class="form-row">
+        <label for="depart">Départ :</label>
+        <select id="depart" name="depart" required></select>
+      </div>
+      <div class="form-row">
+        <label for="arrivee">Arrivée :</label>
+        <select id="arrivee" name="arrivee" required></select>
+      </div>
+      <div class="form-row full-width">
+        <label for="min-time">Départ après :</label>
+        <input id="min-time" type="time" required />
+      </div>
+      <div class="form-row full-width button-row">
+        <button type="submit">Rechercher</button>
+      </div>
+      <div class="form-row full-width">
+        <div id="form-error" class="error-message" role="alert" aria-live="polite"></div>
+      </div>
+    </form>
+    <section id="results" class="results" aria-live="polite"></section>
+  </main>
+  <script>
+    // --- Utilitaires de temps -------------------------------------------------
+    function minutesToHHMM(minutes) {
+      const safeMinutes = Number.isFinite(minutes) ? minutes : 0;
+      const hrs = Math.floor(safeMinutes / 60) % 24;
+      const mins = safeMinutes % 60;
+      return `${String(hrs).padStart(2, "0")}:${String(mins).padStart(2, "0")}`;
+    }
+
+    function hhmmToMinutes(value) {
+      if (!value) return 0;
+      const [h, m] = value.split(":").map((v) => parseInt(v, 10) || 0);
+      return h * 60 + m;
+    }
+
+    // --- Logique de recherche des trains directs -----------------------------
+    function findDirectTrains(data, fromStopName, toStopName, minDepartureMinutes) {
+      if (!data || !fromStopName || !toStopName) {
+        return [];
+      }
+
+      const fromIds = new Set();
+      const toIds = new Set();
+
+      for (const [stopId, stop] of Object.entries(data.stopsById || {})) {
+        if (stop.name === fromStopName) {
+          fromIds.add(stopId);
+        }
+        if (stop.name === toStopName) {
+          toIds.add(stopId);
+        }
+      }
+
+      if (fromIds.size === 0 || toIds.size === 0) {
+        return [];
+      }
+
+      const results = [];
+
+      for (const [tripId, stopsSeq] of Object.entries(data.tripsStops || {})) {
+        if (!Array.isArray(stopsSeq) || stopsSeq.length < 2) continue;
+
+        const trip = data.tripsById?.[tripId];
+        if (!trip) continue;
+
+        const route = data.routesById?.[trip.route_id];
+        if (route && route.type && String(route.type) !== "2") {
+          continue; // Ignore non-rail routes (e.g., bus)
+        }
+
+        let departStop = null;
+        let arriveStop = null;
+
+        for (const stop of stopsSeq) {
+          if (!departStop && fromIds.has(stop.stop_id)) {
+            departStop = stop;
+          }
+          if (departStop && toIds.has(stop.stop_id)) {
+            arriveStop = stop;
+            break;
+          }
+        }
+
+        if (!departStop || !arriveStop) continue;
+        if (departStop.seq >= arriveStop.seq) continue;
+
+        const depTimeMin = departStop.departure ?? departStop.arrival;
+        const arrTimeMin = arriveStop.arrival ?? arriveStop.departure;
+
+        if (typeof depTimeMin !== "number" || typeof arrTimeMin !== "number") continue;
+        if (depTimeMin < minDepartureMinutes) continue;
+
+        const intermediate_stops = stopsSeq
+          .filter((stop) => stop.seq >= departStop.seq && stop.seq <= arriveStop.seq)
+          .map((stop) => ({
+            name: stop.stop_name,
+            arr: stop.arrival,
+            dep: stop.departure,
+          }));
+
+        results.push({
+          trip_id: tripId,
+          train_type: route?.shortName || "",
+          train_label: trip.shortName || route?.shortName || "",
+          depart_station: fromStopName,
+          depart_time_min: depTimeMin,
+          arrive_station: toStopName,
+          arrive_time_min: arrTimeMin,
+          duration_min: arrTimeMin - depTimeMin,
+          intermediate_stops,
+        });
+      }
+
+      return results.sort((a, b) => a.depart_time_min - b.depart_time_min);
+    }
+
+    // --- Rendu des résultats --------------------------------------------------
+    function renderResults(resultsContainer, results, fromName, toName, minTime) {
+      resultsContainer.innerHTML = "";
+
+      if (!Array.isArray(results) || results.length === 0) {
+        const msg = document.createElement("div");
+        msg.className = "result-card";
+        msg.textContent = "Aucun train direct trouvé après cette heure.";
+        resultsContainer.appendChild(msg);
+        return;
+      }
+
+      for (const result of results) {
+        const card = document.createElement("article");
+        card.className = "result-card";
+
+        const header = document.createElement("div");
+        header.className = "result-header";
+        if (result.train_type) {
+          const badge = document.createElement("span");
+          badge.className = "badge";
+          badge.textContent = result.train_type;
+          header.appendChild(badge);
+        }
+        if (result.train_label) {
+          const title = document.createElement("span");
+          title.textContent = result.train_label;
+          header.appendChild(title);
+        }
+        card.appendChild(header);
+
+        const mainLine = document.createElement("div");
+        mainLine.className = "result-main";
+        const depTime = minutesToHHMM(result.depart_time_min);
+        const arrTime = minutesToHHMM(result.arrive_time_min);
+        const duration = result.duration_min;
+        mainLine.textContent = `${result.depart_station} ${depTime} → ${result.arrive_station} ${arrTime} (${duration} min)`;
+        card.appendChild(mainLine);
+
+        if (Array.isArray(result.intermediate_stops) && result.intermediate_stops.length > 0) {
+          const secondary = document.createElement("div");
+          secondary.className = "result-secondary";
+          const stopsList = result.intermediate_stops
+            .map((stop) => stop.name)
+            .join(" · ");
+          secondary.textContent = `Dessert : ${stopsList}`;
+          card.appendChild(secondary);
+        }
+
+        resultsContainer.appendChild(card);
+      }
+    }
+
+    // --- Chargement des données et initialisation ----------------------------
+    async function loadDataAndInit() {
+      const form = document.getElementById("search-form");
+      const departSelect = document.getElementById("depart");
+      const arriveeSelect = document.getElementById("arrivee");
+      const minTimeInput = document.getElementById("min-time");
+      const resultsContainer = document.getElementById("results");
+      const errorBox = document.getElementById("form-error");
+
+      try {
+        const response = await fetch("./cfl-trains-idx.json", { cache: "no-store" });
+        if (!response.ok) {
+          throw new Error(`Chargement impossible (${response.status})`);
+        }
+        const data = await response.json();
+        window.CFL_DATA = data;
+
+        const uniqueStopNames = new Set();
+        for (const stop of Object.values(data.stopsById || {})) {
+          if (stop?.name) {
+            uniqueStopNames.add(stop.name);
+          }
+        }
+        const sortedStopNames = Array.from(uniqueStopNames).sort((a, b) => a.localeCompare(b, "fr"));
+
+        const populateSelect = (select) => {
+          select.innerHTML = "";
+          for (const name of sortedStopNames) {
+            const option = document.createElement("option");
+            option.value = name;
+            option.textContent = name;
+            select.appendChild(option);
+          }
+        };
+
+        populateSelect(departSelect);
+        populateSelect(arriveeSelect);
+
+        if (sortedStopNames.length > 1) {
+          arriveeSelect.selectedIndex = 1;
+        }
+
+        const now = new Date();
+        const defaultTime = `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
+        minTimeInput.value = defaultTime;
+
+        form.addEventListener("submit", (event) => {
+          event.preventDefault();
+          errorBox.textContent = "";
+
+          const departName = departSelect.value;
+          const arriveeName = arriveeSelect.value;
+          const minTime = minTimeInput.value;
+
+          if (!departName || !arriveeName) {
+            errorBox.textContent = "Merci de sélectionner une gare de départ et une gare d'arrivée.";
+            return;
+          }
+
+          if (departName === arriveeName) {
+            errorBox.textContent = "Les gares de départ et d'arrivée doivent être différentes.";
+            return;
+          }
+
+          const minMinutes = hhmmToMinutes(minTime);
+          const results = findDirectTrains(window.CFL_DATA, departName, arriveeName, minMinutes);
+          renderResults(resultsContainer, results, departName, arriveeName, minTime);
+        });
+
+        renderResults(resultsContainer, [], null, null, null);
+      } catch (error) {
+        const errorMsg = document.createElement("div");
+        errorMsg.className = "result-card";
+        errorMsg.textContent = `Erreur lors du chargement des données : ${error.message}`;
+        document.getElementById("results").appendChild(errorMsg);
+      }
+    }
+
+    document.addEventListener("DOMContentLoaded", loadDataAndInit);
+  </script>
+</body>
+</html>
