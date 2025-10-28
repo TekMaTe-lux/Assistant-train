@@ -547,6 +547,7 @@ function getSncfProxyStats() {
   resetCountersIfNeeded(nowInfo.dayKey);
 
   return {
+    source: 'runtime',
     dayKey: state.counters.dayKey,
     timezone: TIMEZONE,
     generatedAt: now.toISOString(),
