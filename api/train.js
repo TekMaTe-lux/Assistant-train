@@ -1,4 +1,7 @@
-const { createSncfProxyHandler, getSncfProxyStats } = require('./sncfProxy.js');
+const {
+  createSncfProxyHandler,
+  getSncfProxyStatsAsync
+} = require('./sncfProxy.js');
 const { loadSncfStatsSnapshot } = require('./sncfStatsSnapshot.js');
 
 function resolveApiUrl(req) {
@@ -35,7 +38,7 @@ function isStatsRequest(req) {
   return Object.prototype.hasOwnProperty.call(query, 'stats');
 }
 
-function handleStats(req, res) {
+async function handleStats(req, res) {
   setStatsCorsHeaders(res);
 
   if (req.method === 'OPTIONS') {
@@ -47,7 +50,7 @@ function handleStats(req, res) {
   }
 
   try {
-    const stats = getSncfProxyStats();
+    const stats = await getSncfProxyStatsAsync({ forceSync: true });
     res.setHeader('Cache-Control', 'no-store, max-age=0');
     return res.status(200).json(stats);
   } catch (err) {
@@ -61,7 +64,7 @@ function handleStats(req, res) {
   }
 }
 
-module.exports = function trainHandler(req, res) {
+module.exports = async function trainHandler(req, res) {
   if (isStatsRequest(req)) {
     return handleStats(req, res);
   }
