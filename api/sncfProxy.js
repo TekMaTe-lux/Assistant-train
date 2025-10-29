@@ -559,8 +559,9 @@ function createSncfProxyHandler({ resolveApiUrl }) {
     }
 
     try {
-      const response = await fetch(apiUrl, {
-        headers: { Authorization: `Basic ${auth}` }
+      const response = await fetchWithTimeout(apiUrl, {
+        headers: { Authorization: `Basic ${auth}` },
+        timeoutMs: 15_000
       });
 
       if (!response.ok) {
@@ -596,21 +597,69 @@ function createSncfProxyHandler({ resolveApiUrl }) {
         fetchedAt: entry.fetchedAt
       });
     } catch (err) {
-      console.error('[SNCF proxy] Erreur réseau', err);
+      if (err?.name === 'AbortError' || err?.code === 'ABORT_ERR' || err?.isTimeout) {
+        console.warn('[SNCF proxy] Requête SNCF expirée', err);
+      } else {
+        console.error('[SNCF proxy] Erreur réseau', err);
+      }
       if (cacheEntry) {
         return respondFromCache(res, cacheEntry, policy, {
-          reason: 'network-error',
+          reason: err?.name === 'AbortError' || err?.code === 'ABORT_ERR' || err?.isTimeout
+            ? 'timeout'
+            : 'network-error',
           stale: true
         });
       }
-      return res.status(500).json({
-        error: 'Erreur interne du proxy SNCF',
+      const status = (err?.name === 'AbortError' || err?.code === 'ABORT_ERR' || err?.isTimeout)
+        ? 504
+        : 500;
+      return res.status(status).json({
+        error: status === 504 ? 'Délai dépassé lors de la requête SNCF.' : 'Erreur interne du proxy SNCF',
         details: err?.message || String(err),
         policy: policy.type,
         schedule: policy.description
       });
     }
   };
+}
+
+function fetchWithTimeout(url, { timeoutMs, signal, ...options } = {}) {
+  if (!timeoutMs || timeoutMs <= 0) {
+    return fetch(url, { ...options, signal });
+  }
+
+  const controller = new AbortController();
+  const onAbort = () => {
+    try {
+      controller.abort(signal?.reason);
+    } catch (err) {
+      controller.abort();
+    }
+  };
+
+  if (signal) {
+    if (signal.aborted) {
+      onAbort();
+    } else {
+      signal.addEventListener('abort', onAbort, { once: true });
+    }
+  }
+
+  const timeout = setTimeout(() => {
+    controller.abort();
+  }, timeoutMs);
+
+  return fetch(url, { ...options, signal: controller.signal }).finally(() => {
+    clearTimeout(timeout);
+    if (signal) {
+      signal.removeEventListener('abort', onAbort);
+    }
+  }).catch(err => {
+    if (err && (err.name === 'AbortError' || err.code === 'ABORT_ERR') && !signal?.aborted) {
+      err.isTimeout = true;
+    }
+    throw err;
+  });
 }
 
 function getSncfProxyStats() {
