@@ -652,78 +652,112 @@ function findSegmentsTo(endName, yyyymmdd, weekdayIdx) {
 
 // 3. construit les correspondances via HUBS uniquement
 function findSmartTransfers(startName, endName, yyyymmdd, weekdayIdx, minDepartureMinutes, minTransferMinutes = 5) {
+  // On génère tous les segments possibles "départ -> pivot"
   const segOut = findSegmentsFrom(startName, minDepartureMinutes, yyyymmdd, weekdayIdx);
+
+  // On génère tous les segments possibles "pivot -> arrivée"
   const segIn  = findSegmentsTo(endName, yyyymmdd, weekdayIdx);
 
-  const trips = [];
+  // On va d’abord créer toutes les correspondances possibles (train1 + train2)
+  // MAIS ensuite on ne gardera qu’UNE correspondance par train1.
+  const combos = [];
 
   for (const s1 of segOut) {
     for (const s2 of segIn) {
 
-      // même gare pivot ?
+      // même pivot ?
       if (s1.to_stop_name !== s2.from_stop_name) continue;
 
-      // pivot autorisé ?
+      // pivot doit être un hub autorisé
       if (!HUBS.includes(s1.to_stop_name)) continue;
 
-      // correspondance faisable ? (s2 part après arrivée de s1 + marge)
+      // correspondance réalisable ?
       if (s2.dep_min < s1.arr_min + minTransferMinutes) continue;
 
-      // construire l’itinéraire complet
-      trips.push({
-        pivot: s1.to_stop_name,
+      // construire le voyage complet
+      combos.push({
+        // identité du premier train ("train1") qu'on va utiliser pour grouper
+        first_key: {
+          start_station: s1.from_stop_name,
+          pivot: s1.to_stop_name,
+          start_time_min: s1.dep_min,
+          first_train_type: s1.train_type,
+          first_train_label: s1.train_label
+        },
 
+        // détails du segment 1
         start_station: s1.from_stop_name,
         start_time_min: s1.dep_min,
-
         arrive_pivot_min: s1.arr_min,
-        leave_pivot_min: s2.dep_min,
-
-        end_station: s2.to_stop_name,
-        end_time_min: s2.arr_min,
-
-        total_duration_min: (s2.arr_min ?? 0) - (s1.dep_min ?? 0),
-
         first_train_type: s1.train_type,
         first_train_label: s1.train_label,
         first_segment_stops: s1.stops_between,
 
+        // pivot
+        pivot: s1.to_stop_name,
+        leave_pivot_min: s2.dep_min,
+
+        // segment 2
+        end_station: s2.to_stop_name,
+        end_time_min: s2.arr_min,
         second_train_type: s2.train_type,
         second_train_label: s2.train_label,
-        second_segment_stops: s2.stops_between
+        second_segment_stops: s2.stops_between,
+
+        // durée totale du trajet
+        total_duration_min: (s2.arr_min ?? 0) - (s1.dep_min ?? 0)
       });
     }
   }
 
-  // Trier les correspondances trouvées.
-  // Logique : d’abord l’heure de départ du premier train, puis durée totale.
-  trips.sort((a,b)=>{
-    if (a.start_time_min !== b.start_time_min) {
-      return a.start_time_min - b.start_time_min;
-    }
-    return a.total_duration_min - b.total_duration_min;
-  });
-
-  // Dédupliquer si jamais on crée deux fois le même trajet (même départ, même pivot, même arrivée)
-  const unique = [];
-  const seen = new Set();
-  for (const t of trips) {
-    const sig = [
-      t.start_station,
-      t.start_time_min,
-      t.pivot,
-      t.leave_pivot_min,
-      t.end_station,
-      t.end_time_min
+  // Maintenant on groupe par train1.
+  // Clé = (start_station, pivot, start_time_min, first_train_type, first_train_label)
+  const bestPerFirstTrain = {};
+  for (const c of combos) {
+    const key = [
+      c.first_key.start_station,
+      c.first_key.pivot,
+      c.first_key.start_time_min,
+      c.first_key.first_train_type,
+      c.first_key.first_train_label
     ].join("|");
-    if (!seen.has(sig)) {
-      seen.add(sig);
-      unique.push(t);
+
+    if (!bestPerFirstTrain[key]) {
+      bestPerFirstTrain[key] = c;
+    } else {
+      // choisir la meilleure correspondance pour CE train1 :
+      // 1. durée totale la plus courte
+      // 2. si égalité, arrivée finale la plus tôt
+      const cur = bestPerFirstTrain[key];
+      const better =
+        (c.total_duration_min < cur.total_duration_min) ||
+        (
+          c.total_duration_min === cur.total_duration_min &&
+          c.end_time_min < cur.end_time_min
+        );
+      if (better) {
+        bestPerFirstTrain[key] = c;
+      }
     }
   }
 
-  // limiter un peu pour éviter une liste énorme (genre les 10 prochains itinéraires)
-  return unique.slice(0, 10);
+  // On repasse en liste
+  let finalList = Object.values(bestPerFirstTrain);
+
+  // On trie par heure de départ du premier train (logique utilisateur: "prochains départs")
+  finalList.sort((a,b)=>{
+    if (a.start_time_min !== b.start_time_min) {
+      return a.start_time_min - b.start_time_min;
+    }
+    // si deux trains partent à la même minute (quasi impossible mais bon),
+    // on préfère celui qui arrive plus tôt
+    return a.end_time_min - b.end_time_min;
+  });
+
+  // On limite l’affichage aux 10 prochains couples train1+train2
+  finalList = finalList.slice(0,10);
+
+  return finalList;
 }
 
 // ====================== RENDU UI ======================
