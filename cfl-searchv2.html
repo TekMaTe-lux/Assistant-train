@@ -655,23 +655,31 @@ function findSmartTransfers(startName, endName, yyyymmdd, weekdayIdx, minDepartu
   const segOut = findSegmentsFrom(startName, minDepartureMinutes, yyyymmdd, weekdayIdx);
   const segIn  = findSegmentsTo(endName, yyyymmdd, weekdayIdx);
 
-  // On ne garde que si la gare pivot est dans HUBS
-  const possibleTrips = [];
+  const trips = [];
 
   for (const s1 of segOut) {
     for (const s2 of segIn) {
-      if (s1.to_stop_name !== s2.from_stop_name) continue;         // même pivot
-      if (!HUBS.includes(s1.to_stop_name)) continue;               // pivot autorisé ?
-      if (s2.dep_min < s1.arr_min + minTransferMinutes) continue;  // temps correspondance ok ?
 
-      possibleTrips.push({
+      // même gare pivot ?
+      if (s1.to_stop_name !== s2.from_stop_name) continue;
+
+      // pivot autorisé ?
+      if (!HUBS.includes(s1.to_stop_name)) continue;
+
+      // correspondance faisable ? (s2 part après arrivée de s1 + marge)
+      if (s2.dep_min < s1.arr_min + minTransferMinutes) continue;
+
+      // construire l’itinéraire complet
+      trips.push({
         pivot: s1.to_stop_name,
-        start_station: s1.from_stop_name,
-        end_station: s2.to_stop_name,
 
+        start_station: s1.from_stop_name,
         start_time_min: s1.dep_min,
+
         arrive_pivot_min: s1.arr_min,
         leave_pivot_min: s2.dep_min,
+
+        end_station: s2.to_stop_name,
         end_time_min: s2.arr_min,
 
         total_duration_min: (s2.arr_min ?? 0) - (s1.dep_min ?? 0),
@@ -687,28 +695,35 @@ function findSmartTransfers(startName, endName, yyyymmdd, weekdayIdx, minDepartu
     }
   }
 
-  // Maintenant on ne veut pas spammer plusieurs trajets différents pour le même pivot.
-  // On garde pour chaque pivot: le plus rapide (durée totale) OU le plus tôt ? On choisit le plus court total.
-  const bestByPivot = {};
-  for (const t of possibleTrips){
-    const key = t.pivot;
-    if (!bestByPivot[key]) {
-      bestByPivot[key] = t;
-    } else {
-      if (t.total_duration_min < bestByPivot[key].total_duration_min) {
-        bestByPivot[key] = t;
-      }
+  // Trier les correspondances trouvées.
+  // Logique : d’abord l’heure de départ du premier train, puis durée totale.
+  trips.sort((a,b)=>{
+    if (a.start_time_min !== b.start_time_min) {
+      return a.start_time_min - b.start_time_min;
+    }
+    return a.total_duration_min - b.total_duration_min;
+  });
+
+  // Dédupliquer si jamais on crée deux fois le même trajet (même départ, même pivot, même arrivée)
+  const unique = [];
+  const seen = new Set();
+  for (const t of trips) {
+    const sig = [
+      t.start_station,
+      t.start_time_min,
+      t.pivot,
+      t.leave_pivot_min,
+      t.end_station,
+      t.end_time_min
+    ].join("|");
+    if (!seen.has(sig)) {
+      seen.add(sig);
+      unique.push(t);
     }
   }
 
-  // Ensuite, si tu veux NE PROPOSER QU'UN SEUL HUB GLOBAL :
-  // -> on choisit le meilleur de tous les pivots
-  const reducedList = Object.values(bestByPivot);
-  reducedList.sort((a,b)=>a.total_duration_min - b.total_duration_min);
-  // garder juste le meilleur global :
-  const finalList = reducedList.length ? [reducedList[0]] : [];
-
-  return finalList;
+  // limiter un peu pour éviter une liste énorme (genre les 10 prochains itinéraires)
+  return unique.slice(0, 10);
 }
 
 // ====================== RENDU UI ======================
