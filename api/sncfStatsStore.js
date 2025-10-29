@@ -25,8 +25,38 @@ function buildUrl(action, key) {
   return `${DEFAULT_BASE_URL.replace(/\/$/, '')}/${action}/${namespace}/${encodedKey}`;
 }
 
+const parsedTimeout = Number.parseInt(process.env.SNCF_STATS_TIMEOUT_MS || '4000', 10);
+const DEFAULT_FETCH_TIMEOUT_MS = Number.isFinite(parsedTimeout) ? parsedTimeout : 4000;
+
+async function fetchWithTimeout(url, options = {}) {
+  const controller = typeof AbortController === 'function' ? new AbortController() : null;
+  let timeoutId;
+
+  const timeoutPromise = new Promise((_, reject) => {
+    timeoutId = setTimeout(() => {
+      if (controller) {
+        controller.abort();
+      }
+      const timeoutError = new Error(`Statistiques SNCF: délai dépassé pour ${url}`);
+      timeoutError.name = 'TimeoutError';
+      reject(timeoutError);
+    }, DEFAULT_FETCH_TIMEOUT_MS);
+  });
+
+  const fetchPromise = fetch(url, controller
+    ? { ...options, signal: controller.signal }
+    : options
+  );
+
+  try {
+    return await Promise.race([fetchPromise, timeoutPromise]);
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
 async function fetchCounter(url, { expectNotFound = false } = {}) {
-  const response = await fetch(url, { method: 'GET', cache: 'no-store' });
+  const response = await fetchWithTimeout(url, { method: 'GET', cache: 'no-store' });
   if (response.status === 404 && expectNotFound) {
     return { value: 0 };
   }
@@ -41,7 +71,7 @@ async function fetchCounter(url, { expectNotFound = false } = {}) {
 }
 
 async function hitCounter(url) {
-  const response = await fetch(url, { method: 'GET', cache: 'no-store' });
+  const response = await fetchWithTimeout(url, { method: 'GET', cache: 'no-store' });
   if (!response.ok) {
     const text = await response.text().catch(() => '');
     const error = new Error(`Statistiques SNCF: échec de l'incrément ${url} (${response.status})`);
