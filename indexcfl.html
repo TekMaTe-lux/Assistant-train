@@ -4821,6 +4821,32 @@ function uniqTransfers(list){
   return Array.from(map.values());
 }
 
+function stationLineIndex(name){
+  const trimmed = (name || '').trim();
+  if (!trimmed) return null;
+  const normalized = trimmed
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '');
+  if (!normalized) return null;
+  if (Object.prototype.hasOwnProperty.call(MAINLINE_STATION_ORDER, normalized)){
+    return MAINLINE_STATION_ORDER[normalized];
+  }
+  return null;
+}
+
+function isPivotDirectionallyValid(startName, viaName, endName){
+  const sIdx = stationLineIndex(startName);
+  const vIdx = stationLineIndex(viaName);
+  const eIdx = stationLineIndex(endName);
+  if (sIdx == null || vIdx == null || eIdx == null) return true;
+  if (sIdx === eIdx) return false;
+  if (sIdx < eIdx) return vIdx > sIdx && vIdx < eIdx;
+  if (sIdx > eIdx) return vIdx < sIdx && vIdx > eIdx;
+  return true;
+}
+    
 /************ CHARGEMENT GTFS (stops/stop_times/trips/calendar_dates only) ************/
 
 const CFL_ALLOWED_ROUTE_IDS = new Set(['302','300','299','297']);
@@ -4836,6 +4862,47 @@ const CFL_STATION_ALIASES = {
   'bettembourg gare': ['Bettembourg, Gare'],
   'gare de bettembourg': ['Bettembourg, Gare']
 };
+   const MAINLINE_STATION_ORDER = {
+  'nancy': 0,
+  'garedenancy': 0,
+  'pontamousson': 1,
+  'garedepontamousson': 1,
+  'pagnysurmoselle': 2,
+  'garedepagnysurmoselle': 2,
+  'metz': 3,
+  'metzville': 3,
+  'metzgare': 3,
+  'garedemetz': 3,
+  'garedemetzville': 3,
+  'metznord': 4,
+  'garedemetznord': 4,
+  'woippy': 5,
+  'garedewoippy': 5,
+  'maiziereslesmetz': 6,
+  'garedemaiziereslesmetz': 6,
+  'walygatorparc': 7,
+  'waligatorparc': 7,
+  'hagondange': 8,
+  'garedehagondange': 8,
+  'uckange': 9,
+  'garedeuckange': 9,
+  'thionville': 10,
+  'thionvillegare': 10,
+  'garedeithionville': 10,
+  'hettangegrande': 11,
+  'garedehettangegrande': 11,
+  'bettembourg': 12,
+  'bettembourggare': 12,
+  'garedebettembourg': 12,
+  'howald': 13,
+  'howaldgare': 13,
+  'garedehowald': 13,
+  'luxembourg': 14,
+  'garedeluxembourg': 14,
+  'luxembourggare': 14,
+  'luxembourggarecentrale': 14,
+  'luxembourrgarecentrale': 14
+}; 
 const CFL_BASES = [
   new URL('CFL/', location.href).href,
   new URL('Assistant-train/CFL/', location.href).href,
@@ -5218,6 +5285,7 @@ async function computeCflHybridTransfers({
     const cflEndCandidates = mapToCflStationNames(endName);
     if (cflEndCandidates.length){
       for (const via of vias){
+        if (!isPivotDirectionallyValid(startName, via, endName)) continue;
         const leg1List = gtfsFindDirectTrainsBetween({ startName, endName: via, fromMin, toMin, ymd });
         if (!leg1List.length) continue;
         const cflViaCandidates = mapToCflStationNames(via);
@@ -5264,6 +5332,7 @@ async function computeCflHybridTransfers({
     const cflStartCandidates = mapToCflStationNames(startName);
     if (cflStartCandidates.length){
       for (const via of vias){
+        if (!isPivotDirectionallyValid(startName, via, endName)) continue;
         const cflViaCandidates = mapToCflStationNames(via);
         if (!cflViaCandidates.length) continue;
         const leg1List = cflFindDirectTrainsBetween({
@@ -6237,7 +6306,8 @@ async function computeItineraryProposals({
       waitMin: t.waitMin,
       durMin: t.durMin
     }));
-    transfersCombined = transfersCombined.concat(baseTransfers);
+    const filteredBaseTransfers = baseTransfers.filter(t => isPivotDirectionallyValid(start, t.viaName || '', end));
+    transfersCombined = transfersCombined.concat(filteredBaseTransfers);
   }
 
   if (allowTransfers && cflReady){
