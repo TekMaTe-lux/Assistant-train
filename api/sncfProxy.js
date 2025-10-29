@@ -344,7 +344,7 @@ async function tryConsumeQuota(policy, dayKey) {
     if (snapshot) {
       if (typeof snapshot.total === 'number' && Number.isFinite(snapshot.total)) {
         state.counters.total = snapshot.total;
-      }
+      } 
       if (typeof snapshot.longTerm === 'number' && Number.isFinite(snapshot.longTerm)) {
         state.counters.longTerm = snapshot.longTerm;
       }
