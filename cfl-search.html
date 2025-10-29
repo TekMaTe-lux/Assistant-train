@@ -183,9 +183,6 @@
 // ------------------------------------------------------
 const DATA_PATH = "CFL/";
 
-// On restreint aux vraies lignes CFL trains (agency_id=11 dans routes[1].txt)
-const ROUTE_IDS_ALLOWED = new Set(["302","301","300","299","297"]);
-
 // Structures mémoire
 const CFL_DATA = {
   routesById: {},          // { route_id: { route_id, shortName, agency_id } }
@@ -286,10 +283,18 @@ function dateInputToYMDinfo(dateStr) {
 function isRealTrainStation(name) {
   if (!name) return false;
   const low = name.toLowerCase();
-  if (low.includes("routière")) return false; // exclure les gares routières
-  // on veut des gares rail
-  if (name.includes("Gare Centrale")) return true;
-  if (name.includes(", Gare")) return true;
+  
+  if (low.includes("routière")) return false;      // gares routières (bus)
+  if (low.includes("rocade")) return false;        // arrêts bus autour de la gare
+  if (low.includes("p+r")) return false;           // parkings relais
+  if (low.includes("square")) return false;        // arrêts de bus place de la gare
+  if (low.includes("(tram)")) return false;        // stations tram
+
+  if (low.includes("gare centrale")) return true;
+  if (/,\s*gare\b/i.test(name)) return true;      // « Ville, Gare »
+  if (/\bgare\s*cfl\b/i.test(low)) return true;
+  if (/\bhalte\b/i.test(low) && /\bcfl\b/i.test(low)) return true;
+  if (/\bbahnhof\b/i.test(low)) return true;      // gares côté germanophone
   return false;
 }
 
@@ -346,13 +351,10 @@ async function loadAllData() {
 function buildRoutes(rows) {
   for (const r of rows) {
     const route_id  = (r.route_id||"").trim().replace(/"/g,"");
-    const agency_id = (r.agency_id||"").trim().replace(/"/g,"");
-    if (!ROUTE_IDS_ALLOWED.has(route_id)) continue;
-    // on respecte ta règle stricte: uniquement agency_id = 11
-    if (agency_id !== "11") continue;
+    if (!route_id) continue;
     CFL_DATA.routesById[route_id] = {
       route_id,
-      agency_id,
+      agency_id: (r.agency_id||"").trim().replace(/"/g,""),
       shortName: (r.route_short_name||"").trim(),
       longName:  (r.route_long_name ||"").trim(),
       type:      (r.route_type      ||"").trim()
@@ -380,7 +382,6 @@ function buildTrips(rows) {
     const route_id   = (t.route_id||"").trim();
     const service_id = (t.service_id||"").trim();
     if (!trip_id || !route_id || !service_id) continue;
-    // garder uniquement les trips dont la route_id est une route CFL qu'on garde
     if (!CFL_DATA.routesById[route_id]) continue;
     CFL_DATA.tripsById[trip_id] = {
       route_id,
@@ -478,6 +479,17 @@ function buildTripsStops(rows) {
     if (seqList.length < 2) {
       delete CFL_DATA.tripsStops[tripId];
       delete CFL_DATA.tripsById[tripId];
+    }
+  }
+  
+  const usedRoutes = new Set();
+  for (const tripId in CFL_DATA.tripsById) {
+    const meta = CFL_DATA.tripsById[tripId];
+    if (meta) usedRoutes.add(meta.route_id);
+  }
+  for (const routeId in CFL_DATA.routesById) {
+    if (!usedRoutes.has(routeId)) {
+      delete CFL_DATA.routesById[routeId];
     }
   }
 }
