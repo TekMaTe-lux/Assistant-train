@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Recherche trains CFL</</title>
+<title>Recherche trains CFL</title>
 <style>
   :root {
     color-scheme: dark;
@@ -175,7 +175,7 @@
 <body>
 <header>
   <h1>Recherche trains CFL</h1>
-  <p>Horaires statiques GTFS CFL (IC / RB / RE / TER / TGV). Résultats directs ou avec correspondance.</p>
+  <p>Horaires statiques GTFS CFL (IC / RB / RE / TER / TGV). Résultats directs ou, si nécessaire, avec correspondance via les grands hubs.</p>
 </header>
 
 <form id="searchForm" onsubmit="return false;">
@@ -211,23 +211,31 @@
 </footer>
 
 <script>
-// ============ CONFIG ============
+// ====================== CONFIG ======================
 
 const DATA_PATH = "CFL/";
 
 // Trains CFL qu'on veut garder (agency_id = 11)
 const ROUTE_IDS_ALLOWED = new Set(["302","301","300","299","297"]);
 
+// Gares pivot autorisées pour correspondance
+const HUBS = [
+  "Luxembourg, Gare Centrale",
+  "Bettembourg, Gare",
+  "Ettelbruck, Gare"
+  // tu peux en rajouter ici si besoin
+];
+
 // Mémoire globale
 const DATA = {
-  routesById:{},         // { route_id: {route_id, shortName, agency_id} }
+  routesById:{},         // { route_id: {...} }
   stopsById:{},          // { stop_id: { name, lat, lon } }
-  tripsById:{},          // { trip_id: { route_id, service_id, headsign, shortName, direction } }
+  tripsById:{},          // { trip_id: { route_id, service_id, ... } }
   tripsStops:{},         // { trip_id: [ {stop_id,stop_name,arr,dep,seq}, ...] }
-  calendar:{},           // { service_id: { startDate,endDate,days:{1..7},exceptions:{} } }
+  calendar:{},           // { service_id: { startDate,endDate,days,exceptions } }
 };
 
-// ============ UTILS PARSE CSV ============
+// ====================== CSV PARSER ======================
 
 function splitCsvLine(line) {
   const out = [];
@@ -277,7 +285,7 @@ function parseCSV(rawText){
   return rows;
 }
 
-// ============ TEMPS / DATES ============
+// ====================== TIME / DATE ======================
 
 function toMinutesSinceMidnight(hms){
   if(!hms || !hms.includes(":")) return null;
@@ -308,19 +316,21 @@ function dateInputToYMDinfo(dateStr){
   const [Y,M,D]=dateStr.split("-");
   const yyyymmdd=Y+M+D;
   const jsDate=new Date(+Y,+M-1,+D);
-  const map={1:0,2:1,3:2,4:3,5:4,6:5,0:6}; // JS 0=dimanche
+  // JS getDay(): 0=dimanche..6=samedi
+  // On veut: 0=lundi..6=dimanche
+  const map={1:0,2:1,3:2,4:3,5:4,6:5,0:6};
   const weekdayIdx=map[jsDate.getDay()];
   return { yyyymmdd, weekdayIdx };
 }
 
-// ============ GARES ============
-// Filtrage gares: on veut les vraies gares train CFL
+// ====================== STATIONS FILTER ======================
+
 function isRealStation(name){
   if (!name) return false;
 
   const lower = name.toLowerCase();
 
-  // exclusions explicites (bus / tram / rue / rocade)
+  // exclusions bus / tram / rue / rocade
   if (lower.includes("routière")) return false;
   if (lower.includes("routiere")) return false;
   if (lower.includes("rocade")) return false;
@@ -330,19 +340,18 @@ function isRealStation(name){
   if (lower.includes("op der gare")) return false;
   if (lower.includes("bus")) return false;
 
-  // cas spéciaux à garder explicitement
+  // exceptions à garder
   if (name === "Luxembourg, Gare Centrale") return true;
   if (name === "Howald, Gare") return true;
 
   // pattern "<Ville>, Gare"
-  if (/, Gare\b/.test(name)) {
-    return true;
-  }
+  if (/, Gare\b/.test(name)) return true;
 
   return false;
 }
 
-// ============ CALENDAR LOGIC ============
+// ====================== CALENDAR ======================
+
 function serviceRunsOnDate(service_id, yyyymmdd, weekdayIdx){
   const svc = DATA.calendar[service_id];
   if(!svc) return false;
@@ -351,7 +360,6 @@ function serviceRunsOnDate(service_id, yyyymmdd, weekdayIdx){
   if (svc.exceptions && svc.exceptions[yyyymmdd] !== undefined) {
     return svc.exceptions[yyyymmdd] === 1;
   }
-
   // start/end
   if(svc.startDate && yyyymmdd < svc.startDate) return false;
   if(svc.endDate   && yyyymmdd > svc.endDate)   return false;
@@ -361,7 +369,7 @@ function serviceRunsOnDate(service_id, yyyymmdd, weekdayIdx){
   return !!svc.days[dayField];
 }
 
-// ============ BUILDERS (on remplit DATA.*) ============
+// ====================== BUILDERS ======================
 
 function buildRoutes(rows){
   for(const r of rows){
@@ -386,7 +394,6 @@ function buildStops(rows){
     const stop_name = (s.stop_name||"").trim();
     if(!stop_id || !stop_name) continue;
     if(!isRealStation(stop_name)) continue;
-
     DATA.stopsById[stop_id] = {
       name: stop_name,
       lat:  Number(s.stop_lat||"0"),
@@ -402,8 +409,7 @@ function buildTrips(rows){
     const service_id = (t.service_id||"").trim();
     if(!trip_id || !route_id || !service_id) continue;
 
-    // garder uniquement les trips qui appartiennent à une route CFL retenue
-    if(!DATA.routesById[route_id]) continue;
+    if(!DATA.routesById[route_id]) continue; // garder seulement CFL train
 
     DATA.tripsById[trip_id] = {
       route_id,
@@ -416,7 +422,6 @@ function buildTrips(rows){
 }
 
 function buildCalendar(calRows, calDatesRows){
-  // base
   for(const c of calRows){
     const service_id=(c.service_id||"").trim();
     if(!service_id) continue;
@@ -436,7 +441,6 @@ function buildCalendar(calRows, calDatesRows){
     };
   }
 
-  // exceptions
   for(const ce of calDatesRows){
     const service_id=(ce.service_id||"").trim();
     const date=(ce.date||"").trim();
@@ -461,8 +465,8 @@ function buildTripsStops(stopTimesRows){
     const stop_id = (st.stop_id||"").trim();
     if(!trip_id || !stop_id) continue;
 
-    if(!DATA.tripsById[trip_id]) continue;   // ignorer trips hors CFL
-    if(!DATA.stopsById[stop_id]) continue;   // ignorer arrêts qu'on ne garde pas
+    if(!DATA.tripsById[trip_id]) continue;
+    if(!DATA.stopsById[stop_id]) continue;
 
     if(!DATA.tripsStops[trip_id]) DATA.tripsStops[trip_id] = [];
 
@@ -475,7 +479,6 @@ function buildTripsStops(stopTimesRows){
     });
   }
 
-  // trier et filtrer les trips trop courts
   for(const tripId of Object.keys(DATA.tripsStops)){
     const arrs = DATA.tripsStops[tripId];
     arrs.sort((a,b)=>a.seq-b.seq);
@@ -486,10 +489,9 @@ function buildTripsStops(stopTimesRows){
   }
 }
 
-// ============ RECHERCHE DIRECTE ============
+// ====================== RECHERCHE DIRECTE ======================
 
 function findDirectTrains(fromName,toName,minDepartureMinutes,yyyymmdd,weekdayIdx){
-  // stop_ids possibles pour from et to
   const fromIds = new Set();
   const toIds   = new Set();
   for(const sid in DATA.stopsById){
@@ -505,7 +507,6 @@ function findDirectTrains(fromName,toName,minDepartureMinutes,yyyymmdd,weekdayId
     const tripMeta = DATA.tripsById[tripId];
     if(!tripMeta) continue;
 
-    // service actif ?
     if(!serviceRunsOnDate(tripMeta.service_id, yyyymmdd, weekdayIdx)) continue;
 
     let depStop=null;
@@ -525,11 +526,10 @@ function findDirectTrains(fromName,toName,minDepartureMinutes,yyyymmdd,weekdayId
     if(!depStop || !arrStop) continue;
     if(depStop.dep==null || depStop.dep < minDepartureMinutes) continue;
 
-    // sous-parcours
     const between = stopSeq.filter(s => s.seq>=depStop.seq && s.seq<=arrStop.seq);
 
     const routeMeta = DATA.routesById[tripMeta.route_id] || {};
-    const trainType = routeMeta.shortName || ""; // RB / RE / TER / IC / TGV
+    const trainType = routeMeta.shortName || "";
     const label = tripMeta.shortName || tripMeta.headsign || "";
 
     results.push({
@@ -550,10 +550,10 @@ function findDirectTrains(fromName,toName,minDepartureMinutes,yyyymmdd,weekdayId
   return results;
 }
 
-// ============ OUTILS POUR CORRESPONDANCE ============
+// ====================== OUTILS CORRESPONDANCE ======================
 
-// Tous les segments "je pars de startName et je vais vers n'importe quelle gare plus loin dans le même train"
-function findDirectSegmentsFromToAny(startName, minDepartureMinutes, yyyymmdd, weekdayIdx) {
+// 1. segments partant de startName vers toutes les gares (plus loin dans CE train)
+function findSegmentsFrom(startName, minDepartureMinutes, yyyymmdd, weekdayIdx) {
   const startIds = new Set();
   for (const sid in DATA.stopsById) {
     if (DATA.stopsById[sid].name === startName) startIds.add(sid);
@@ -565,52 +565,46 @@ function findDirectSegmentsFromToAny(startName, minDepartureMinutes, yyyymmdd, w
     const seqList = DATA.tripsStops[tripId];
     const tripMeta = DATA.tripsById[tripId];
     if (!tripMeta) continue;
-
     if (!serviceRunsOnDate(tripMeta.service_id, yyyymmdd, weekdayIdx)) continue;
 
-    let foundStart = null;
-    for (let i = 0; i < seqList.length; i++) {
-      const st = seqList[i];
+    let originStop = null;
+    for (let i=0;i<seqList.length;i++){
+      const st=seqList[i];
 
-      // si on n'a pas encore trouvé la gare de départ dans ce train
-      if (!foundStart && startIds.has(st.stop_id)) {
-        foundStart = st;
-        // on NE break PAS parce qu'on veut tester toutes les arrivées plus loin
+      if (!originStop && startIds.has(st.stop_id)) {
+        originStop = st;
       }
 
-      if (foundStart) {
-        // toute gare après devient une arrivée candidate
-        if (st.seq <= foundStart.seq) continue;
-        if (foundStart.dep == null) continue;
-        if (foundStart.dep < minDepartureMinutes) continue;
+      if (originStop) {
+        if (st.seq <= originStop.seq) continue;
+        if (originStop.dep == null) continue;
+        if (originStop.dep < minDepartureMinutes) continue;
 
         const routeMeta = DATA.routesById[tripMeta.route_id] || {};
-        const trainType = routeMeta.shortName || ""; // RB / RE / TER...
+        const trainType = routeMeta.shortName || "";
         const label = tripMeta.shortName || tripMeta.headsign || "";
 
         const sliceBetween = seqList
-          .filter(s => s.seq>=foundStart.seq && s.seq<=st.seq)
-          .map(s => s.stop_name);
+          .filter(x => x.seq>=originStop.seq && x.seq<=st.seq)
+          .map(x => x.stop_name);
 
         segments.push({
-          trip_id: tripId,
+          from_stop_name: originStop.stop_name,
+          to_stop_name: st.stop_name,
+          dep_min: originStop.dep,
+          arr_min: st.arr,
           train_type: trainType,
           train_label: label,
-          from_stop_name: foundStart.stop_name,
-          to_stop_name: st.stop_name,
-          dep_min: foundStart.dep,
-          arr_min: st.arr,
           stops_between: sliceBetween
         });
       }
     }
   }
-
   return segments;
 }
 
-// Tous les segments "je vais vers endName depuis une gare précédente dans le même train"
-function findDirectSegmentsToEnd(endName, yyyymmdd, weekdayIdx) {
+// 2. segments allant vers endName depuis toutes les gares avant dans CE train
+function findSegmentsTo(endName, yyyymmdd, weekdayIdx) {
   const endIds = new Set();
   for (const sid in DATA.stopsById) {
     if (DATA.stopsById[sid].name === endName) endIds.add(sid);
@@ -624,87 +618,100 @@ function findDirectSegmentsToEnd(endName, yyyymmdd, weekdayIdx) {
     if (!tripMeta) continue;
     if (!serviceRunsOnDate(tripMeta.service_id, yyyymmdd, weekdayIdx)) continue;
 
-    for (let i = 0; i < seqList.length; i++) {
-      const maybeEnd = seqList[i];
-      if (!endIds.has(maybeEnd.stop_id)) continue;
+    for (let i=0;i<seqList.length;i++){
+      const endSt = seqList[i];
+      if (!endIds.has(endSt.stop_id)) continue;
 
-      for (let j = 0; j < i; j++) {
-        const maybeStart = seqList[j];
-        if (maybeStart.seq >= maybeEnd.seq) continue;
-        if (maybeStart.dep == null) continue;
+      for (let j=0;j<i;j++){
+        const startSt = seqList[j];
+        if (startSt.seq >= endSt.seq) continue;
+        if (startSt.dep == null) continue;
 
         const routeMeta = DATA.routesById[tripMeta.route_id] || {};
         const trainType = routeMeta.shortName || "";
         const label = tripMeta.shortName || tripMeta.headsign || "";
 
         const sliceBetween = seqList
-          .filter(s => s.seq>=maybeStart.seq && s.seq<=maybeEnd.seq)
-          .map(s => s.stop_name);
+          .filter(x => x.seq>=startSt.seq && x.seq<=endSt.seq)
+          .map(x => x.stop_name);
 
         segments.push({
-          trip_id: tripId,
+          from_stop_name: startSt.stop_name,
+          to_stop_name: endSt.stop_name,
+          dep_min: startSt.dep,
+          arr_min: endSt.arr,
           train_type: trainType,
           train_label: label,
-          from_stop_name: maybeStart.stop_name,
-          to_stop_name: maybeEnd.stop_name,
-          dep_min: maybeStart.dep,
-          arr_min: maybeEnd.arr,
           stops_between: sliceBetween
         });
       }
     }
   }
-
   return segments;
 }
 
-// Combine 2 segments -> 1 correspondance
-function findOneTransferJourneys(startName, endName, yyyymmdd, weekdayIdx, minDepartureMinutes, minTransferMinutes = 5) {
-  const outSegments = findDirectSegmentsFromToAny(startName, minDepartureMinutes, yyyymmdd, weekdayIdx);
-  const inSegments  = findDirectSegmentsToEnd(endName, yyyymmdd, weekdayIdx);
+// 3. construit les correspondances via HUBS uniquement
+function findSmartTransfers(startName, endName, yyyymmdd, weekdayIdx, minDepartureMinutes, minTransferMinutes = 5) {
+  const segOut = findSegmentsFrom(startName, minDepartureMinutes, yyyymmdd, weekdayIdx);
+  const segIn  = findSegmentsTo(endName, yyyymmdd, weekdayIdx);
 
-  const trips = [];
+  // On ne garde que si la gare pivot est dans HUBS
+  const possibleTrips = [];
 
-  for (const seg1 of outSegments) {
-    for (const seg2 of inSegments) {
-      // même gare pivot
-      if (seg1.to_stop_name !== seg2.from_stop_name) continue;
+  for (const s1 of segOut) {
+    for (const s2 of segIn) {
+      if (s1.to_stop_name !== s2.from_stop_name) continue;         // même pivot
+      if (!HUBS.includes(s1.to_stop_name)) continue;               // pivot autorisé ?
+      if (s2.dep_min < s1.arr_min + minTransferMinutes) continue;  // temps correspondance ok ?
 
-      // le deuxième doit partir après l'arrivée du premier + marge
-      if (seg2.dep_min < seg1.arr_min + minTransferMinutes) continue;
+      possibleTrips.push({
+        pivot: s1.to_stop_name,
+        start_station: s1.from_stop_name,
+        end_station: s2.to_stop_name,
 
-      trips.push({
-        type: "transfer",
-        start_station: seg1.from_stop_name,
-        start_time_min: seg1.dep_min,
+        start_time_min: s1.dep_min,
+        arrive_pivot_min: s1.arr_min,
+        leave_pivot_min: s2.dep_min,
+        end_time_min: s2.arr_min,
 
-        transfer_station: seg1.to_stop_name,
-        arrive_transfer_min: seg1.arr_min,
-        leave_transfer_min: seg2.dep_min,
+        total_duration_min: (s2.arr_min ?? 0) - (s1.dep_min ?? 0),
 
-        end_station: seg2.to_stop_name,
-        end_time_min: seg2.arr_min,
+        first_train_type: s1.train_type,
+        first_train_label: s1.train_label,
+        first_segment_stops: s1.stops_between,
 
-        total_duration_min: (seg2.arr_min ?? 0) - (seg1.dep_min ?? 0),
-
-        first_train_type: seg1.train_type,
-        first_train_label: seg1.train_label,
-        first_segment_stops: seg1.stops_between,
-
-        second_train_type: seg2.train_type,
-        second_train_label: seg2.train_label,
-        second_segment_stops: seg2.stops_between
+        second_train_type: s2.train_type,
+        second_train_label: s2.train_label,
+        second_segment_stops: s2.stops_between
       });
     }
   }
 
-  // Trier par heure d'arrivée finale
-  trips.sort((a,b)=>a.end_time_min - b.end_time_min);
+  // Maintenant on ne veut pas spammer plusieurs trajets différents pour le même pivot.
+  // On garde pour chaque pivot: le plus rapide (durée totale) OU le plus tôt ? On choisit le plus court total.
+  const bestByPivot = {};
+  for (const t of possibleTrips){
+    const key = t.pivot;
+    if (!bestByPivot[key]) {
+      bestByPivot[key] = t;
+    } else {
+      if (t.total_duration_min < bestByPivot[key].total_duration_min) {
+        bestByPivot[key] = t;
+      }
+    }
+  }
 
-  return trips;
+  // Ensuite, si tu veux NE PROPOSER QU'UN SEUL HUB GLOBAL :
+  // -> on choisit le meilleur de tous les pivots
+  const reducedList = Object.values(bestByPivot);
+  reducedList.sort((a,b)=>a.total_duration_min - b.total_duration_min);
+  // garder juste le meilleur global :
+  const finalList = reducedList.length ? [reducedList[0]] : [];
+
+  return finalList;
 }
 
-// ============ UI / RENDU ============
+// ====================== RENDU UI ======================
 
 function populateStationsSelect(){
   const setNames=new Set();
@@ -739,11 +746,7 @@ function prefillDateTime(){
   if(!timeInput.value)timeInput.value=`${HH}:${MM}`;
 }
 
-function renderResultsAll(directList, transferList){
-  const container=document.getElementById("results");
-  container.innerHTML="";
-
-  // Directs
+function renderDirectSection(container, directList){
   const dirTitle=document.createElement("h2");
   dirTitle.innerHTML=`<span class="dot"></span>Trains directs`;
   container.appendChild(dirTitle);
@@ -754,124 +757,141 @@ function renderResultsAll(directList, transferList){
     no.style.color="var(--txt-dim)";
     no.textContent="Aucun train direct trouvé après cette heure.";
     container.appendChild(no);
-  } else {
-    for(const r of directList){
-      const card=document.createElement("div");
-      card.className="card";
-
-      const head=document.createElement("div");
-      head.className="trainHeader";
-
-      const badge=document.createElement("span");
-      badge.className="badge";
-      badge.textContent=r.train_type || "?";
-      head.appendChild(badge);
-
-      const lbl=document.createElement("span");
-      lbl.textContent=r.train_label || "";
-      head.appendChild(lbl);
-
-      const mainline=document.createElement("div");
-      mainline.className="mainline";
-      const depHHMM=minutesToHHMM(r.depart_time_min);
-      const arrHHMM=minutesToHHMM(r.arrive_time_min);
-      const dur=(r.duration_min!=null && r.duration_min>=0)? r.duration_min+" min":"";
-      mainline.textContent =
-        `${r.depart_station} ${depHHMM} → ${r.arrive_station} ${arrHHMM}`+
-        (dur?` (${dur})`:"");
-
-      const details=document.createElement("div");
-      details.className="details";
-      details.textContent="Dessert : "+r.stops.join(" · ");
-
-      card.appendChild(head);
-      card.appendChild(mainline);
-      card.appendChild(details);
-      container.appendChild(card);
-    }
+    return;
   }
 
-  // Avec correspondance
+  for(const r of directList){
+    const card=document.createElement("div");
+    card.className="card";
+
+    const head=document.createElement("div");
+    head.className="trainHeader";
+
+    const badge=document.createElement("span");
+    badge.className="badge";
+    badge.textContent=r.train_type || "?";
+    head.appendChild(badge);
+
+    const lbl=document.createElement("span");
+    lbl.textContent=r.train_label || "";
+    head.appendChild(lbl);
+
+    const mainline=document.createElement("div");
+    mainline.className="mainline";
+    const depHHMM=minutesToHHMM(r.depart_time_min);
+    const arrHHMM=minutesToHHMM(r.arrive_time_min);
+    const dur=(r.duration_min!=null && r.duration_min>=0)? r.duration_min+" min":"";
+    mainline.textContent =
+      `${r.depart_station} ${depHHMM} → ${r.arrive_station} ${arrHHMM}`+
+      (dur?` (${dur})`:"");
+
+    const details=document.createElement("div");
+    details.className="details";
+    details.textContent="Dessert : "+r.stops.join(" · ");
+
+    card.appendChild(head);
+    card.appendChild(mainline);
+    card.appendChild(details);
+    container.appendChild(card);
+  }
+}
+
+function renderTransferSection(container, transferList){
   const viaTitle=document.createElement("h2");
-  viaTitle.innerHTML=`<span class="dot alt"></span>Avec correspondance (1 changement max)`;
+  viaTitle.innerHTML=`<span class="dot alt"></span>Avec correspondance via hub majeur`;
   container.appendChild(viaTitle);
 
   if (!transferList.length){
     const no=document.createElement("div");
     no.className="card";
     no.style.color="var(--txt-dim)";
-    no.textContent="Aucun trajet avec correspondance trouvé.";
+    no.textContent="Aucun trajet avec correspondance pertinent.";
     container.appendChild(no);
-  } else {
-    for(const j of transferList){
-      const card=document.createElement("div");
-      card.className="card";
+    return;
+  }
 
-      // Segment 1
-      const head1=document.createElement("div");
-      head1.className="trainHeader";
+  for(const j of transferList){
+    const card=document.createElement("div");
+    card.className="card";
 
-      const badge1=document.createElement("span");
-      badge1.className="badge";
-      badge1.textContent=j.first_train_type || "?";
-      head1.appendChild(badge1);
+    // 1er train
+    const head1=document.createElement("div");
+    head1.className="trainHeader";
 
-      const lbl1=document.createElement("span");
-      lbl1.textContent=j.first_train_label || "";
-      head1.appendChild(lbl1);
+    const badge1=document.createElement("span");
+    badge1.className="badge";
+    badge1.textContent=j.first_train_type || "?";
+    head1.appendChild(badge1);
 
-      const line1=document.createElement("div");
-      line1.className="mainline";
-      line1.textContent =
-        `${j.start_station} ${minutesToHHMM(j.start_time_min)} → ${j.transfer_station} ${minutesToHHMM(j.arrive_transfer_min)}`;
+    const lbl1=document.createElement("span");
+    lbl1.textContent=j.first_train_label || "";
+    head1.appendChild(lbl1);
 
-      const stops1=document.createElement("div");
-      stops1.className="details";
-      stops1.textContent="1er train : "+j.first_segment_stops.join(" · ");
+    const line1=document.createElement("div");
+    line1.className="mainline";
+    line1.textContent =
+      `${j.start_station} ${minutesToHHMM(j.start_time_min)} → ${j.pivot} ${minutesToHHMM(j.arrive_pivot_min)}`;
 
-      // Correspondance
-      const tx=document.createElement("div");
-      tx.className="transferInfo";
-      const waitMin = (j.leave_transfer_min - j.arrive_transfer_min);
-      tx.textContent = `Correspondance à ${j.transfer_station} (~${waitMin} min d'attente)`;
+    const stops1=document.createElement("div");
+    stops1.className="details";
+    stops1.textContent="1er train : "+j.first_segment_stops.join(" · ");
 
-      // Segment 2
-      const head2=document.createElement("div");
-      head2.className="trainHeader";
+    const tx=document.createElement("div");
+    tx.className="transferInfo";
+    const waitMin = (j.leave_pivot_min - j.arrive_pivot_min);
+    tx.textContent = `Correspondance à ${j.pivot} (~${waitMin} min d'attente)`;
 
-      const badge2=document.createElement("span");
-      badge2.className="badge secondary";
-      badge2.textContent=j.second_train_type || "?";
-      head2.appendChild(badge2);
+    // 2e train
+    const head2=document.createElement("div");
+    head2.className="trainHeader";
 
-      const lbl2=document.createElement("span");
-      lbl2.textContent=j.second_train_label || "";
-      head2.appendChild(lbl2);
+    const badge2=document.createElement("span");
+    badge2.className="badge secondary";
+    badge2.textContent=j.second_train_type || "?";
+    head2.appendChild(badge2);
 
-      const line2=document.createElement("div");
-      line2.className="mainline";
-      const totalDur = (j.total_duration_min!=null && j.total_duration_min>=0)
-        ? ` (${j.total_duration_min} min total)`
-        : "";
-      line2.textContent =
-        `${j.transfer_station} ${minutesToHHMM(j.leave_transfer_min)} → ${j.end_station} ${minutesToHHMM(j.end_time_min)}${totalDur}`;
+    const lbl2=document.createElement("span");
+    lbl2.textContent=j.second_train_label || "";
+    head2.appendChild(lbl2);
 
-      const stops2=document.createElement("div");
-      stops2.className="details";
-      stops2.textContent="2e train : "+j.second_segment_stops.join(" · ");
+    const line2=document.createElement("div");
+    line2.className="mainline";
+    const totalDur = (j.total_duration_min!=null && j.total_duration_min>=0)
+      ? ` (${j.total_duration_min} min total)`
+      : "";
+    line2.textContent =
+      `${j.pivot} ${minutesToHHMM(j.leave_pivot_min)} → ${j.end_station} ${minutesToHHMM(j.end_time_min)}${totalDur}`;
 
-      card.appendChild(head1);
-      card.appendChild(line1);
-      card.appendChild(stops1);
-      card.appendChild(tx);
-      card.appendChild(head2);
-      card.appendChild(line2);
-      card.appendChild(stops2);
+    const stops2=document.createElement("div");
+    stops2.className="details";
+    stops2.textContent="2e train : "+j.second_segment_stops.join(" · ");
 
-      container.appendChild(card);
-    }
+    card.appendChild(head1);
+    card.appendChild(line1);
+    card.appendChild(stops1);
+    card.appendChild(tx);
+    card.appendChild(head2);
+    card.appendChild(line2);
+    card.appendChild(stops2);
+
+    container.appendChild(card);
   }
 }
+
+function renderResultsSmart(directList, transferList){
+  const container=document.getElementById("results");
+  container.innerHTML="";
+
+  if (directList.length > 0) {
+    // On n'affiche QUE les directs si au moins un direct existe
+    renderDirectSection(container, directList);
+  } else {
+    // pas de direct -> on affiche les correspondances intelligentes
+    renderTransferSection(container, transferList);
+  }
+}
+
+// ====================== INTERACTION ======================
 
 function setupSearchHandler(){
   const btn=document.getElementById("searchBtn");
@@ -905,7 +925,6 @@ function setupSearchHandler(){
     const { yyyymmdd, weekdayIdx } = dateInputToYMDinfo(dateStr);
     const minDepartureMinutes = hhmmToMinutes(minTimeStr);
 
-    // Recherche directe
     const directFound = findDirectTrains(
       fromStation,
       toStation,
@@ -914,21 +933,20 @@ function setupSearchHandler(){
       weekdayIdx
     );
 
-    // Recherche avec correspondance (1 changement)
-    const transferFound = findOneTransferJourneys(
+    const transferFound = findSmartTransfers(
       fromStation,
       toStation,
       yyyymmdd,
       weekdayIdx,
       minDepartureMinutes,
-      5 // marge min d'attente (minutes)
+      5 // marge min correspondance en minutes
     );
 
-    renderResultsAll(directFound, transferFound);
+    renderResultsSmart(directFound, transferFound);
   });
 }
 
-// ============ CHARGEMENT INITIAL ============
+// ====================== INIT ======================
 
 async function loadAll(){
   const [
