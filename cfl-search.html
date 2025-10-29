@@ -142,7 +142,7 @@
 <body>
 <header>
   <h1>Recherche trains CFL</h1>
-  <p>Données GTFS CFL filtrées (IC / RB / RE / TER / TGV). Résultats par date réelle + heure choisie.</p>
+  <p>Horaires statiques GTFS CFL (IC / RB / RE / TER / TGV). Résultats par date réelle + heure choisie.</p>
 </header>
 
 <form id="searchForm" onsubmit="return false;">
@@ -174,28 +174,28 @@
 
 <footer>
   <div>Prototype horaire CFL – pas de retards temps réel.</div>
-  <div>Source : GTFS CFL. Calcul côté navigateur.</div>
+  <div>Source : GTFS CFL (statique).</div>
 </footer>
 
 <script>
-// ------------------------------------------------------
-// 0. CONFIG
-// ------------------------------------------------------
+// ============ CONFIG ============
+
 const DATA_PATH = "CFL/";
 
-// Structures mémoire
-const CFL_DATA = {
-  routesById: {},          // { route_id: { route_id, shortName, agency_id } }
-  stopsById: {},           // { stop_id: { name, lat, lon } }
-  tripsById: {},           // { trip_id: { route_id, service_id, headsign, shortName } }
-  tripsStops: {},          // { trip_id: [ {stop_id,stop_name,arrival,departure,seq}, ... ] }
-  serviceCalendar: {},     // { service_id: { days:{...}, startDate, endDate } }
-  serviceExceptions: {}    // { service_id: { yyyymmdd: 1|2, ... } }
+// Trains CFL qu'on veut garder (agency_id = 11)
+const ROUTE_IDS_ALLOWED = new Set(["302","301","300","299","297"]);
+
+// Mémoire globale
+const DATA = {
+  routesById:{},         // { route_id: {route_id, shortName, agency_id} }
+  stopsById:{},          // { stop_id: { name, lat, lon } }
+  tripsById:{},          // { trip_id: { route_id, service_id, headsign, shortName } }
+  tripsStops:{},         // { trip_id: [ {stop_id,stop_name,arr,dep,seq}, ...] }
+  calendar:{},           // { service_id: { startDate,endDate,days:{1..7},exceptions:{} } }
 };
 
-// ------------------------------------------------------
-// 1. Utils parse CSV + temps
-// ------------------------------------------------------
+// ============ UTILS PARSE CSV ============
+
 function splitCsvLine(line) {
   const out = [];
   let cur = "";
@@ -205,8 +205,7 @@ function splitCsvLine(line) {
     if (inQuotes) {
       if (ch === '"') {
         if (line[i+1] === '"') {
-          cur += '"';
-          i++;
+          cur += '"'; i++;
         } else {
           inQuotes = false;
         }
@@ -228,133 +227,107 @@ function splitCsvLine(line) {
   return out;
 }
 
-function parseCSV(rawText) {
+function parseCSV(rawText){
   const lines = rawText.trim().split(/\r?\n/);
   if (!lines.length) return [];
   const header = splitCsvLine(lines[0]);
   const rows = [];
-  for (let i = 1; i < lines.length; i++) {
+  for (let i=1;i<lines.length;i++){
     const cols = splitCsvLine(lines[i]);
-    if (cols.length === 1 && cols[0] === "") continue;
-    const obj = {};
-    for (let c = 0; c < header.length; c++) {
-      obj[header[c]] = cols[c] !== undefined ? cols[c] : "";
+    if (cols.length===1 && cols[0]==="") continue;
+    const obj={};
+    for (let c=0;c<header.length;c++){
+      obj[header[c]] = cols[c]!==undefined ? cols[c] : "";
     }
     rows.push(obj);
   }
   return rows;
 }
 
-function toMinutesSinceMidnight(hms) {
-  if (!hms || !hms.includes(":")) return null;
-  const parts = hms.split(":");
-  const H = parseInt(parts[0],10);
-  const M = parseInt(parts[1],10);
-  return H*60 + M;
+// ============ TEMPS / DATES ============
+
+function toMinutesSinceMidnight(hms){
+  if(!hms || !hms.includes(":")) return null;
+  const parts=hms.split(":");
+  const H=parseInt(parts[0],10);
+  const M=parseInt(parts[1],10);
+  return H*60+M;
 }
 
-function hhmmToMinutes(hhmm) {
-  if (!hhmm || !hhmm.includes(":")) return 0;
-  const [h,m] = hhmm.split(":");
-  return parseInt(h,10)*60 + parseInt(m,10);
+function hhmmToMinutes(hhmm){
+  if(!hhmm||!hhmm.includes(":"))return 0;
+  const [h,m]=hhmm.split(":");
+  return parseInt(h,10)*60+parseInt(m,10);
 }
 
-function minutesToHHMM(mins) {
-  if (mins==null || isNaN(mins)) return "--:--";
-  let m = mins;
-  while (m < 0) m += 1440;
-  while (m >= 1440) m -= 1440;
-  const H = Math.floor(m/60);
-  const M = m % 60;
+function minutesToHHMM(mins){
+  if(mins==null||isNaN(mins))return"--:--";
+  let m=mins;
+  while(m<0) m+=1440;
+  while(m>=1440) m-=1440;
+  const H=Math.floor(m/60);
+  const M=m%60;
   return (H<10?"0"+H:H)+":"+(M<10?"0"+M:M);
 }
 
 // weekdayIdx: 0=lundi,...,6=dimanche
-function dateInputToYMDinfo(dateStr) {
-  const [Y,M,D] = dateStr.split("-");
-  const yyyymmdd = Y+M+D;
-  const jsDate = new Date(+Y, +M-1, +D);
-  const map = {1:0,2:1,3:2,4:3,5:4,6:5,0:6};
-  const weekdayIdx = map[jsDate.getDay()];
+function dateInputToYMDinfo(dateStr){
+  const [Y,M,D]=dateStr.split("-");
+  const yyyymmdd=Y+M+D;
+  const jsDate=new Date(+Y,+M-1,+D);
+  const map={1:0,2:1,3:2,4:3,5:4,6:5,0:6}; // JS 0=dimanche
+  const weekdayIdx=map[jsDate.getDay()];
   return { yyyymmdd, weekdayIdx };
 }
 
-// Gare ferroviaire vraie ?
-function isRealTrainStation(name) {
-  if (!name) return false;
-  const low = name.toLowerCase();
-  
-  if (low.includes("routière")) return false;      // gares routières (bus)
-  if (low.includes("rocade")) return false;        // arrêts bus autour de la gare
-  if (low.includes("p+r")) return false;           // parkings relais
-  if (low.includes("square")) return false;        // arrêts de bus place de la gare
-  if (low.includes("(tram)")) return false;        // stations tram
+// ============ GARES ============
 
-  if (low.includes("gare centrale")) return true;
-  if (/,\s*gare\b/i.test(name)) return true;      // « Ville, Gare »
-  if (/\bgare\s*cfl\b/i.test(low)) return true;
-  if (/\bhalte\b/i.test(low) && /\bcfl\b/i.test(low)) return true;
-  if (/\bbahnhof\b/i.test(low)) return true;      // gares côté germanophone
-  return false;
+// On garde tout arrêt contenant le mot "Gare", même "Gare routière"
+// (sinon on perd certains trajets completement)
+function isRealStation(name){
+  if(!name) return false;
+  return name.includes("Gare");
 }
 
-// ------------------------------------------------------
-// 2. Chargement GTFS
-// ------------------------------------------------------
-async function loadAllData() {
-  const [
-    routesText,
-    stopsText,
-    tripsText,
-    stopTimesText1,
-    stopTimesText2,
-    calText,
-    calDatesText
-  ] = await Promise.all([
-    fetch(DATA_PATH + "routes[1].txt").then(r=>r.text()),
-    fetch(DATA_PATH + "stops[1].txt").then(r=>r.text()),
-    fetch(DATA_PATH + "trips[1].txt").then(r=>r.text()),
-    fetch(DATA_PATH + "stop_times[1].txt").then(r=>r.text()),
-    fetch(DATA_PATH + "stop_times[2].txt").then(r=>r.text()),
-    fetch(DATA_PATH + "calendar[1].txt").then(r=>r.text()),
-    fetch(DATA_PATH + "calendar_dates[1].txt").then(r=>r.text())
-  ]);
+// ============ CALENDAR LOGIC ============
+// Le format final qu'on va remplir :
+// DATA.calendar[service_id] = {
+//   startDate:"20251022",
+//   endDate:"20251215",
+//   days:{ "1":true, "2":true, ... "7":false }, // 1=lundi,...,7=dimanche
+//   exceptions:{ "20251103":1, "20251215":2 }   // 1=ajout,2=suppression
+// }
 
-  const routesRows     = parseCSV(routesText);
-  const stopsRows      = parseCSV(stopsText);
-  const tripsRows      = parseCSV(tripsText);
-  const stopTimesRows  = parseCSV(stopTimesText1).concat(parseCSV(stopTimesText2));
-  const calRows        = parseCSV(calText);
-  const calDatesRows   = parseCSV(calDatesText);
+function serviceRunsOnDate(service_id, yyyymmdd, weekdayIdx){
+  const svc = DATA.calendar[service_id];
+  if(!svc) return false;
 
-  buildRoutes(routesRows);
-  buildStops(stopsRows);
-  buildTrips(tripsRows);
-  buildServiceCalendar(calRows);
-  buildServiceExceptions(calDatesRows);
-  buildTripsStops(stopTimesRows);
+  // exceptions d'abord
+  if (svc.exceptions && svc.exceptions[yyyymmdd] !== undefined) {
+    return svc.exceptions[yyyymmdd] === 1;
+  }
 
-  console.log("DEBUG after load:", {
-    routesKept:Object.keys(CFL_DATA.routesById).length,
-    stopsKept:Object.keys(CFL_DATA.stopsById).length,
-    tripsKept:Object.keys(CFL_DATA.tripsById).length,
-    tripsWithStops:Object.keys(CFL_DATA.tripsStops).length
-  });
+  // sinon horaires normaux
+  if(svc.startDate && yyyymmdd < svc.startDate) return false;
+  if(svc.endDate   && yyyymmdd > svc.endDate)   return false;
 
-  populateStationsSelect();
-  prefillDateTime();
+  // weekdayIdx 0=lundi,...,6=dimanche => jour GTFS = weekdayIdx+1
+  const dayField = String(weekdayIdx+1);
+  return !!svc.days[dayField];
 }
 
-// ------------------------------------------------------
-// 3. Indexation: routes, stops, trips, calendar
-// ------------------------------------------------------
-function buildRoutes(rows) {
-  for (const r of rows) {
-    const route_id  = (r.route_id||"").trim().replace(/"/g,"");
-    if (!route_id) continue;
-    CFL_DATA.routesById[route_id] = {
+// ============ BUILDERS (on remplit DATA.*) ============
+
+function buildRoutes(rows){
+  for(const r of rows){
+    const route_id  = (r.route_id||"").trim();
+    const agency_id = (r.agency_id||"").trim();
+    if(!ROUTE_IDS_ALLOWED.has(route_id)) continue;
+    if(agency_id !== "11") continue; // CFL pur
+
+    DATA.routesById[route_id] = {
       route_id,
-      agency_id: (r.agency_id||"").trim().replace(/"/g,""),
+      agency_id,
       shortName: (r.route_short_name||"").trim(),
       longName:  (r.route_long_name ||"").trim(),
       type:      (r.route_type      ||"").trim()
@@ -362,13 +335,14 @@ function buildRoutes(rows) {
   }
 }
 
-function buildStops(rows) {
-  for (const s of rows) {
+function buildStops(rows){
+  for(const s of rows){
     const stop_id   = (s.stop_id||"").trim();
     const stop_name = (s.stop_name||"").trim();
-    if (!stop_id || !stop_name) continue;
-    if (!isRealTrainStation(stop_name)) continue;
-    CFL_DATA.stopsById[stop_id] = {
+    if(!stop_id || !stop_name) continue;
+    if(!isRealStation(stop_name)) continue;
+
+    DATA.stopsById[stop_id] = {
       name: stop_name,
       lat:  Number(s.stop_lat||"0"),
       lon:  Number(s.stop_lon||"0")
@@ -376,14 +350,17 @@ function buildStops(rows) {
   }
 }
 
-function buildTrips(rows) {
-  for (const t of rows) {
+function buildTrips(rows){
+  for(const t of rows){
     const trip_id    = (t.trip_id||"").trim();
     const route_id   = (t.route_id||"").trim();
     const service_id = (t.service_id||"").trim();
-    if (!trip_id || !route_id || !service_id) continue;
-    if (!CFL_DATA.routesById[route_id]) continue;
-    CFL_DATA.tripsById[trip_id] = {
+    if(!trip_id || !route_id || !service_id) continue;
+
+    // garder uniquement les trips qui appartiennent à une route CFL retenue
+    if(!DATA.routesById[route_id]) continue;
+
+    DATA.tripsById[trip_id] = {
       route_id,
       service_id,
       headsign:  (t.trip_headsign  ||"").trim(),
@@ -393,273 +370,225 @@ function buildTrips(rows) {
   }
 }
 
-// calendar[1].txt
-function buildServiceCalendar(rows) {
-  for (const c of rows) {
-    const service_id = (c.service_id||"").trim();
-    if (!service_id) continue;
-    CFL_DATA.serviceCalendar[service_id] = {
-      days:{
-        monday:    c.monday==="1",
-        tuesday:   c.tuesday==="1",
-        wednesday: c.wednesday==="1",
-        thursday:  c.thursday==="1",
-        friday:    c.friday==="1",
-        saturday:  c.saturday==="1",
-        sunday:    c.sunday==="1"
-      },
+function buildCalendar(calRows, calDatesRows){
+  // base
+  for(const c of calRows){
+    const service_id=(c.service_id||"").trim();
+    if(!service_id) continue;
+    DATA.calendar[service_id] = {
       startDate:(c.start_date||"").trim(),
-      endDate:(c.end_date||"").trim()
+      endDate:(c.end_date||"").trim(),
+      days:{
+        "1": c.monday==="1",
+        "2": c.tuesday==="1",
+        "3": c.wednesday==="1",
+        "4": c.thursday==="1",
+        "5": c.friday==="1",
+        "6": c.saturday==="1",
+        "7": c.sunday==="1"
+      },
+      exceptions:{}
     };
   }
-}
 
-// calendar_dates[1].txt
-function buildServiceExceptions(rows) {
-  for (const ce of rows) {
-    const service_id = (ce.service_id||"").trim();
-    const date       = (ce.date||"").trim();
-    const exc        = (ce.exception_type||"").trim();
-    if (!service_id || !date || !exc) continue;
-    if (!CFL_DATA.serviceExceptions[service_id]) {
-      CFL_DATA.serviceExceptions[service_id] = {};
+  // exceptions
+  for(const ce of calDatesRows){
+    const service_id=(ce.service_id||"").trim();
+    const date=(ce.date||"").trim();
+    const exc=(ce.exception_type||"").trim();
+    if(!service_id||!date||!exc) continue;
+
+    if(!DATA.calendar[service_id]){
+      DATA.calendar[service_id] = {
+        startDate:"",
+        endDate:"",
+        days:{},
+        exceptions:{}
+      };
     }
-    CFL_DATA.serviceExceptions[service_id][date] = parseInt(exc,10); 
+    DATA.calendar[service_id].exceptions[date] = parseInt(exc,10); // 1=ajout,2=suppr
   }
 }
 
-function serviceRunsOnDate(service_id, yyyymmdd, weekdayIdx) {
-  const exMap = CFL_DATA.serviceExceptions[service_id];
-  if (exMap && exMap[yyyymmdd] === 1) {
-    return true; // ajouté
-  }
-  if (exMap && exMap[yyyymmdd] === 2) {
-    return false; // annulé
-  }
-  const base = CFL_DATA.serviceCalendar[service_id];
-  if (!base) return false;
-  if (yyyymmdd < base.startDate) return false;
-  if (yyyymmdd > base.endDate)  return false;
-  const field = [
-    "monday","tuesday","wednesday","thursday","friday","saturday","sunday"
-  ][weekdayIdx];
-  return !!base.days[field];
-}
-
-// ------------------------------------------------------
-// 4. tripsStops via stop_times
-// ------------------------------------------------------
-function buildTripsStops(rows) {
-  for (const st of rows) {
+function buildTripsStops(stopTimesRows){
+  // 1. pousser dans DATA.tripsStops uniquement si trip + stop valides
+  for(const st of stopTimesRows){
     const trip_id = (st.trip_id||"").trim();
     const stop_id = (st.stop_id||"").trim();
-    if (!trip_id || !stop_id) continue;
+    if(!trip_id || !stop_id) continue;
 
-    // on ne prend que si le trip est connu (donc route CFL autorisée)
-    if (!CFL_DATA.tripsById[trip_id]) continue;
-    // on ne prend que si l'arrêt est une vraie gare retenue
-    if (!CFL_DATA.stopsById[stop_id]) continue;
+    if(!DATA.tripsById[trip_id]) continue;   // ignorer trips hors CFL
+    if(!DATA.stopsById[stop_id]) continue;   // ignorer arrêts qu'on ne garde pas
 
-    if (!CFL_DATA.tripsStops[trip_id]) {
-      CFL_DATA.tripsStops[trip_id] = [];
-    }
-    CFL_DATA.tripsStops[trip_id].push({
+    if(!DATA.tripsStops[trip_id]) DATA.tripsStops[trip_id] = [];
+
+    DATA.tripsStops[trip_id].push({
       stop_id,
-      stop_name: CFL_DATA.stopsById[stop_id].name,
-      arrival:   toMinutesSinceMidnight(st.arrival_time),
-      departure: toMinutesSinceMidnight(st.departure_time),
-      seq:       Number(st.stop_sequence||"0")
+      stop_name: DATA.stopsById[stop_id].name,
+      arr: toMinutesSinceMidnight(st.arrival_time),
+      dep: toMinutesSinceMidnight(st.departure_time),
+      seq: Number(st.stop_sequence||"0")
     });
   }
 
-  // Trier les arrêts d'un train et jeter les trains qui n'ont pas au moins 2 gares valides
-  for (const tripId in CFL_DATA.tripsStops) {
-    const seqList = CFL_DATA.tripsStops[tripId];
-    seqList.sort((a,b)=>a.seq-b.seq);
-    if (seqList.length < 2) {
-      delete CFL_DATA.tripsStops[tripId];
-      delete CFL_DATA.tripsById[tripId];
-    }
-  }
-  
-  const usedRoutes = new Set();
-  for (const tripId in CFL_DATA.tripsById) {
-    const meta = CFL_DATA.tripsById[tripId];
-    if (meta) usedRoutes.add(meta.route_id);
-  }
-  for (const routeId in CFL_DATA.routesById) {
-    if (!usedRoutes.has(routeId)) {
-      delete CFL_DATA.routesById[routeId];
+  // 2. trier et filtrer les trips trop courts
+  for(const tripId of Object.keys(DATA.tripsStops)){
+    const arrs = DATA.tripsStops[tripId];
+    arrs.sort((a,b)=>a.seq-b.seq);
+    if(arrs.length < 2){
+      delete DATA.tripsStops[tripId];
+      delete DATA.tripsById[tripId];
     }
   }
 }
 
-// ------------------------------------------------------
-// 5. Recherche des trains directs A -> B après heure X ce jour-là
-// ------------------------------------------------------
-function findDirectTrainsForDate(
-  data,
-  fromStopName,
-  toStopName,
-  minDepartureMinutes,
-  yyyymmdd,
-  weekdayIdx
-) {
-  console.log("🔎 Recherche", {fromStopName,toStopName,minDepartureMinutes,yyyymmdd,weekdayIdx});
+// ============ RECHERCHE DES TRAINS DIRECTS ============
+//
+// Critère :
+// - Service actif ce jour-là (calendar + calendar_dates)
+// - Train passe par fromStation puis par toStation après
+// - Heure départ >= heure min choisie
+//
 
-  // stop_ids candidats pour départ / arrivée
+function findDirectTrains(fromName,toName,minDepartureMinutes,yyyymmdd,weekdayIdx){
+  // stop_ids possibles pour from et to
   const fromIds = new Set();
   const toIds   = new Set();
-  for (const sid in data.stopsById) {
-    if (data.stopsById[sid].name === fromStopName) fromIds.add(sid);
-    if (data.stopsById[sid].name === toStopName)   toIds.add(sid);
+  for(const sid in DATA.stopsById){
+    const stName = DATA.stopsById[sid].name;
+    if(stName === fromName) fromIds.add(sid);
+    if(stName === toName)   toIds.add(sid);
   }
-  console.log("fromIds", fromIds, "toIds", toIds);
 
   const results = [];
 
-  for (const tripId in data.tripsStops) {
-    const seqList  = data.tripsStops[tripId];
-    const tripMeta = data.tripsById[tripId];
-    if (!tripMeta) continue;
+  for(const tripId in DATA.tripsStops){
+    const stopSeq = DATA.tripsStops[tripId];
+    const tripMeta = DATA.tripsById[tripId];
+    if(!tripMeta) continue;
 
-    const runsToday = serviceRunsOnDate(tripMeta.service_id, yyyymmdd, weekdayIdx);
-    if (!runsToday) continue;
+    // est-ce que ce service roule ce jour ?
+    if(!serviceRunsOnDate(tripMeta.service_id, yyyymmdd, weekdayIdx)){
+      continue;
+    }
 
-    let depStop = null;
-    let arrStop = null;
+    let depStop=null;
+    let arrStop=null;
 
-    for (let i = 0; i < seqList.length; i++) {
-      const st = seqList[i];
-      if (!depStop && fromIds.has(st.stop_id)) {
-        depStop = st;
+    for(let i=0;i<stopSeq.length;i++){
+      const s=stopSeq[i];
+      if(!depStop && fromIds.has(s.stop_id)){
+        depStop = s;
       }
-      if (depStop && toIds.has(st.stop_id) && st.seq > depStop.seq) {
-        arrStop = st;
+      if(depStop && toIds.has(s.stop_id) && s.seq>depStop.seq){
+        arrStop = s;
         break;
       }
     }
 
-    if (!depStop || !arrStop) continue;
-    if (depStop.departure == null || depStop.departure < minDepartureMinutes) continue;
+    if(!depStop || !arrStop) continue;
+    if(depStop.dep==null || depStop.dep < minDepartureMinutes) continue;
 
-    const betweenStops = seqList
-      .filter(s => s.seq >= depStop.seq && s.seq <= arrStop.seq)
-      .map(s => ({
-        name: s.stop_name,
-        arr:  s.arrival,
-        dep:  s.departure
-      }));
+    // sous-parcours entre les deux
+    const between = stopSeq.filter(s => s.seq>=depStop.seq && s.seq<=arrStop.seq);
 
-    const routeMeta = data.routesById[tripMeta.route_id] || { shortName:"" };
-    const label = tripMeta.shortName || routeMeta.shortName || "";
+    const routeMeta = DATA.routesById[tripMeta.route_id] || {};
+    const trainType = routeMeta.shortName || ""; // RB / RE / TER / IC / TGV
+    const label = tripMeta.shortName || tripMeta.headsign || "";
 
     results.push({
       trip_id: tripId,
-      train_type: routeMeta.shortName || "",
+      train_type: trainType,
       train_label: label,
       depart_station: depStop.stop_name,
-      depart_time_min: depStop.departure,
+      depart_time_min: depStop.dep,
       arrive_station: arrStop.stop_name,
-      arrive_time_min: arrStop.arrival,
-      duration_min: (arrStop.arrival ?? 0) - (depStop.departure ?? 0),
-      stops: betweenStops
+      arrive_time_min: arrStop.arr,
+      duration_min: (arrStop.arr??0) - (depStop.dep??0),
+      stops: between.map(s=>s.stop_name)
     });
   }
 
   results.sort((a,b)=>a.depart_time_min - b.depart_time_min);
-  console.log("results trouvés:", results.length, results.slice(0,5));
   return results;
 }
 
-// ------------------------------------------------------
-// 6. UI : remplir les sélecteurs et afficher les résultats
-// ------------------------------------------------------
-function populateStationsSelect() {
-  const namesSet = new Set();
-  for (const sid in CFL_DATA.stopsById) {
-    namesSet.add(CFL_DATA.stopsById[sid].name);
+// ============ UI / RENDU ============
+
+function populateStationsSelect(){
+  const setNames=new Set();
+  for(const sid in DATA.stopsById){
+    setNames.add(DATA.stopsById[sid].name);
   }
-  const sortedNames = Array.from(namesSet).sort((a,b)=>a.localeCompare(b,"fr"));
-
-  const fromSel = document.getElementById("fromStation");
-  const toSel   = document.getElementById("toStation");
-  fromSel.innerHTML = "";
-  toSel.innerHTML = "";
-
-  for (const n of sortedNames) {
-    const o1 = document.createElement("option");
-    o1.value = n; o1.textContent = n;
+  const names=[...setNames].sort((a,b)=>a.localeCompare(b,"fr"));
+  const fromSel=document.getElementById("fromStation");
+  const toSel=document.getElementById("toStation");
+  fromSel.innerHTML="";
+  toSel.innerHTML="";
+  for(const n of names){
+    const o1=document.createElement("option");
+    o1.value=n;o1.textContent=n;
     fromSel.appendChild(o1);
-
-    const o2 = document.createElement("option");
-    o2.value = n; o2.textContent = n;
+    const o2=document.createElement("option");
+    o2.value=n;o2.textContent=n;
     toSel.appendChild(o2);
   }
 }
 
-function prefillDateTime() {
-  const now = new Date();
-  const yyyy = now.getFullYear();
-  const mm = String(now.getMonth()+1).padStart(2,"0");
-  const dd = String(now.getDate()).padStart(2,"0");
-  const HH = String(now.getHours()).padStart(2,"0");
-  const MM = String(now.getMinutes()).padStart(2,"0");
-
-  const dateInput = document.getElementById("dateDay");
-  const timeInput = document.getElementById("minTime");
-
-  if (!dateInput.value) dateInput.value = `${yyyy}-${mm}-${dd}`;
-  if (!timeInput.value) timeInput.value = `${HH}:${MM}`;
+function prefillDateTime(){
+  const now=new Date();
+  const yyyy=now.getFullYear();
+  const mm=String(now.getMonth()+1).padStart(2,"0");
+  const dd=String(now.getDate()).padStart(2,"0");
+  const HH=String(now.getHours()).padStart(2,"0");
+  const MM=String(now.getMinutes()).padStart(2,"0");
+  const dateInput=document.getElementById("dateDay");
+  const timeInput=document.getElementById("minTime");
+  if(!dateInput.value)dateInput.value=`${yyyy}-${mm}-${dd}`;
+  if(!timeInput.value)timeInput.value=`${HH}:${MM}`;
 }
 
-function renderResults(results) {
-  const container = document.getElementById("results");
-  container.innerHTML = "";
+function renderResults(results){
+  const container=document.getElementById("results");
+  container.innerHTML="";
 
-  if (!results.length) {
-    const div = document.createElement("div");
-    div.className = "card";
-    div.style.color = "var(--txt-dim)";
-    div.textContent = "Aucun train direct trouvé après cette heure.";
+  if(!results.length){
+    const div=document.createElement("div");
+    div.className="card";
+    div.style.color="var(--txt-dim)";
+    div.textContent="Aucun train direct trouvé après cette heure.";
     container.appendChild(div);
     return;
   }
 
-  for (const r of results) {
-    const card = document.createElement("div");
-    card.className = "card";
+  for(const r of results){
+    const card=document.createElement("div");
+    card.className="card";
 
-    const head = document.createElement("div");
-    head.className = "trainHeader";
+    const head=document.createElement("div");
+    head.className="trainHeader";
 
-    const badge = document.createElement("span");
-    badge.className = "badge";
-    badge.textContent = r.train_type || "?";
+    const badge=document.createElement("span");
+    badge.className="badge";
+    badge.textContent=r.train_type || "?";
     head.appendChild(badge);
 
-    const lbl = document.createElement("span");
-    lbl.textContent = r.train_label || "";
+    const lbl=document.createElement("span");
+    lbl.textContent=r.train_label || "";
     head.appendChild(lbl);
 
-    const mainline = document.createElement("div");
-    mainline.className = "mainline";
-    const depHHMM = minutesToHHMM(r.depart_time_min);
-    const arrHHMM = minutesToHHMM(r.arrive_time_min);
-    const dur = (r.duration_min!=null && r.duration_min>=0) ? r.duration_min+" min" : "";
+    const mainline=document.createElement("div");
+    mainline.className="mainline";
+    const depHHMM=minutesToHHMM(r.depart_time_min);
+    const arrHHMM=minutesToHHMM(r.arrive_time_min);
+    const dur=(r.duration_min!=null && r.duration_min>=0)? r.duration_min+" min":"";
     mainline.textContent =
-      `${r.depart_station} ${depHHMM} → ${r.arrive_station} ${arrHHMM}` +
-      (dur ? ` (${dur})` : "");
+      `${r.depart_station} ${depHHMM} → ${r.arrive_station} ${arrHHMM}`+
+      (dur?` (${dur})`:"");
 
-    const details = document.createElement("div");
-    details.className = "details";
-    const uniqueNames = [];
-    for (const st of r.stops) {
-      if (uniqueNames[uniqueNames.length-1] !== st.name) {
-        uniqueNames.push(st.name);
-      }
-    }
-    details.textContent = "Dessert : " + uniqueNames.join(" · ");
+    const details=document.createElement("div");
+    details.className="details";
+    details.textContent="Dessert : "+r.stops.join(" · ");
 
     card.appendChild(head);
     card.appendChild(mainline);
@@ -668,43 +597,39 @@ function renderResults(results) {
   }
 }
 
-// ------------------------------------------------------
-// 7. Recherche bouton
-// ------------------------------------------------------
-function setupSearchHandler() {
-  const btn = document.getElementById("searchBtn");
-  const errBox = document.getElementById("formError");
+function setupSearchHandler(){
+  const btn=document.getElementById("searchBtn");
+  const errBox=document.getElementById("formError");
 
-  btn.addEventListener("click", function(){
-    errBox.textContent = "";
+  btn.addEventListener("click",()=>{
+    errBox.textContent="";
 
-    const fromStation = document.getElementById("fromStation").value;
-    const toStation   = document.getElementById("toStation").value;
-    const dateStr     = document.getElementById("dateDay").value;
-    const minTimeStr  = document.getElementById("minTime").value;
+    const fromStation=document.getElementById("fromStation").value;
+    const toStation=document.getElementById("toStation").value;
+    const dateStr=document.getElementById("dateDay").value;
+    const minTimeStr=document.getElementById("minTime").value;
 
-    if (!fromStation || !toStation) {
-      errBox.textContent = "Choisis une gare de départ et une gare d'arrivée.";
+    if(!fromStation||!toStation){
+      errBox.textContent="Choisis une gare de départ et une gare d'arrivée.";
       return;
     }
-    if (fromStation === toStation) {
-      errBox.textContent = "Départ et arrivée identiques.";
+    if(fromStation===toStation){
+      errBox.textContent="Départ et arrivée identiques.";
       return;
     }
-    if (!dateStr) {
-      errBox.textContent = "Choisis une date.";
+    if(!dateStr){
+      errBox.textContent="Choisis une date.";
       return;
     }
-    if (!minTimeStr) {
-      errBox.textContent = "Choisis une heure minimale.";
+    if(!minTimeStr){
+      errBox.textContent="Choisis une heure minimale.";
       return;
     }
 
     const { yyyymmdd, weekdayIdx } = dateInputToYMDinfo(dateStr);
     const minDepartureMinutes = hhmmToMinutes(minTimeStr);
 
-    const found = findDirectTrainsForDate(
-      CFL_DATA,
+    const found = findDirectTrains(
       fromStation,
       toStation,
       minDepartureMinutes,
@@ -716,11 +641,50 @@ function setupSearchHandler() {
   });
 }
 
-// ------------------------------------------------------
-// 8. Init
-// ------------------------------------------------------
-document.addEventListener("DOMContentLoaded", async () => {
-  await loadAllData();
+// ============ CHARGEMENT INITIAL ============
+
+async function loadAll(){
+  const [
+    routesText,
+    stopsText,
+    tripsText,
+    stopTimesText,
+    calText,
+    calDatesText
+  ] = await Promise.all([
+    fetch(DATA_PATH+"routescfl.txt").then(r=>r.text()),
+    fetch(DATA_PATH+"stopscfl.txt").then(r=>r.text()),
+    fetch(DATA_PATH+"tripscfl.txt").then(r=>r.text()),
+    fetch(DATA_PATH+"stop_timescfl.txt").then(r=>r.text()),
+    fetch(DATA_PATH+"calendarcfl.txt").then(r=>r.text()),
+    fetch(DATA_PATH+"calendar_datescfl.txt").then(r=>r.text())
+  ]);
+
+  const routesRows    = parseCSV(routesText);
+  const stopsRows     = parseCSV(stopsText);
+  const tripsRows     = parseCSV(tripsText);
+  const stopTimesRows = parseCSV(stopTimesText);
+  const calRows       = parseCSV(calText);
+  const calDatesRows  = parseCSV(calDatesText);
+
+  buildRoutes(routesRows);
+  buildStops(stopsRows);
+  buildTrips(tripsRows);
+  buildCalendar(calRows, calDatesRows);
+  buildTripsStops(stopTimesRows);
+
+  console.log("DEBUG:", {
+    routesKept:Object.keys(DATA.routesById).length,
+    stopsKept:Object.keys(DATA.stopsById).length,
+    tripsKept:Object.keys(DATA.tripsById).length,
+    tripsWithStops:Object.keys(DATA.tripsStops).length
+  });
+}
+
+document.addEventListener("DOMContentLoaded", async ()=>{
+  await loadAll();
+  populateStationsSelect();
+  prefillDateTime();
   setupSearchHandler();
 });
 </script>
