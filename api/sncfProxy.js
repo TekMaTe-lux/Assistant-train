@@ -339,7 +339,7 @@ async function tryConsumeQuota(policy, dayKey) {
     state.counters.longTerm += 1;
   }
 
-try {
+  try {
     const snapshot = await persistUsageCounters(dayKey, { incrementLongTerm });
     if (snapshot) {
       if (typeof snapshot.total === 'number' && Number.isFinite(snapshot.total)) {
@@ -360,6 +360,8 @@ try {
   }
 
   return { allowed: true };
+
+  }
   
 function pruneCache(nowTs) {
   if (nowTs - state.lastPrune < 30 * 60 * 1000) return;
