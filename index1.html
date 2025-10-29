@@ -1883,17 +1883,11 @@ table[data-snapshotting="true"] tbody tr:nth-child(even) {
 }
 
    #lastUpdated {
-  font-size: 0.8em;
-  margin-top: 6px;
-  color: #bbb;
-  font-style: italic;
-  text-align: right;
-}
-  #lastUpdated .sncf-validity {
-  display: inline-block;
-  margin-top: 4px;
-  color: #9ddcff;
-  font-style: normal;
+  font-size: 0.8em;     
+  margin-top: 6px;   
+  color: #bbb;          
+  font-style: italic;  
+  text-align: right;    
 }
    /* Modale */
 .table-modal{
@@ -3384,7 +3378,7 @@ function renderRowsChunked(htmlRows, tbody, chunk=200){
         </div>
       </div>
     </div>
-</details>
+  </details>
 
   <!-- 2) GÉNÉRATION PERSONNALISÉE -->
   <details class="console-section">
@@ -3504,15 +3498,10 @@ function renderRowsChunked(htmlRows, tbody, chunk=200){
             <input id="maxTransfer" type="number" value="25" min="1" step="1" style="width:4.5rem;">
             <span>min</span>
           </div>
-          <label for="includeCflTransfers" style="display:flex;align-items:center;gap:8px;">
-            <input id="includeCflTransfers" type="checkbox">
-            <span>Ajouter les trains CFL (Bettembourg)</span>
-          </label>
-          <div id="includeCflTransfersStatus" style="flex-basis:100%;font-size:0.82em;color:#7de;display:none;"></div>
         </div>
       </div>
     </div>
-  </details>
+</details>
   
   <!-- Bouton don -->
 <div style="text-align: center;">
@@ -3766,8 +3755,7 @@ if (container && !container.querySelector('.disruption-box')) {
   container.style.display = 'block';
 }
     
- let mainTableRendered = false;
-let lastSncfFetchSummary = null; 
+ let mainTableRendered = false;   
 
 /* ---------- BOUTON BLAGUES ---------- */
 $('#btnBingo').click(function() {
@@ -3887,24 +3875,6 @@ const garesParLigne = [
 
 const LINE_STOP_NAMES = new Set(garesParLigne.map(g => g.nom));
 
-function matchesLineStopName(rawName){
-  const name = (rawName || '').trim();
-  if (!name) return false;
-  if (LINE_STOP_NAMES.has(name)) return true;
-
-  const commaIndex = name.indexOf(',');
-  const baseName = (commaIndex >= 0 ? name.slice(0, commaIndex) : name)
-    .replace(/\s+Gare.*$/i, '')
-    .trim();
-
-  if (!baseName || !LINE_STOP_NAMES.has(baseName)) return false;
-  if (/routi[eè]re/i.test(name)) return false;
-  if (/\bgare\b/i.test(name)) return true;
-  if (/\bhalte\b/i.test(name)) return true;
-  if (/\bstation\b/i.test(name)) return true;
-  return false;
-}
-
 function computeRelevantStopIds(stops){
   const idToStop = new Map();
   const childrenByParent = new Map();
@@ -3922,8 +3892,8 @@ function computeRelevantStopIds(stops){
   const queue = [];
 
   stops.forEach(s => {
-    const name = s?.stop_name;
-    if (matchesLineStopName(name)){
+    const name = (s.stop_name || '').trim();
+    if (name && LINE_STOP_NAMES.has(name)){
       if (!relevant.has(s.stop_id)){
         relevant.add(s.stop_id);
         queue.push(s.stop_id);
@@ -4749,220 +4719,6 @@ const FORCE_VIA_METZ = false;                // correspondances à Metz uniqueme
 const KEEP_ONLY_EARLIEST_TRANSFER = true;   // n’afficher que la 1ʳᵉ correspondance la plus proche
 const STRICT_CALENDAR = false;              // 🔴 ne PAS filtrer avec calendar_dates seul
 
-const HAFAS_ACCESS_ID = '58ef9a71-6837-4405-bd5d-23beaf92864c';
-const REALTIME_TRANSFER_STATIONS = [
-  {
-    name: 'Bettembourg',
-    hafasIds: ['000220102018', '220102018'],
-    cacheMs: 60_000
-  }
-];
-const HAFAS_DEPARTURE_CACHE = new Map();
-
-function normalizeLabelLite(str){
-  return String(str || '')
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .replace(/['’]/g, '')
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, ' ')
-    .trim();
-}
-
-function ymdToIsoDate(ymd){
-  if (!ymd || typeof ymd !== 'string' || ymd.length !== 8) return null;
-  return `${ymd.slice(0,4)}-${ymd.slice(4,6)}-${ymd.slice(6,8)}`;
-}
-
-function minutesToHafasClock(min){
-  const clock = minutesToClock(min);
-  return clock ? `${clock}:00` : null;
-}
-
-function extractFlexibleTrainNumber(value){
-  const m = String(value || '').match(/\b\d{3,6}\b/);
-  return m ? m[0] : null;
-}
-
-async function fetchHafasDepartureBoard({ stopId, dateStr, timeStr, duration = 120, maxJourneys = 30, cacheMs = 60_000 }){
-  if (!stopId || !dateStr || !timeStr) return { departures: [] };
-  const key = `${stopId}|${dateStr}|${timeStr}|${duration}|${maxJourneys}`;
-  const now = Date.now();
-  const cached = HAFAS_DEPARTURE_CACHE.get(key);
-  if (cached && (now - cached.fetchedAt) < cacheMs) return cached.payload;
-
-  const params = new URLSearchParams({
-    accessId: HAFAS_ACCESS_ID,
-    id: stopId,
-    date: dateStr,
-    time: timeStr,
-    duration: String(duration),
-    maxJourneys: String(maxJourneys),
-    format: 'json'
-  });
-  const url = `https://cdt.hafas.de/opendata/apiserver/departureBoard?${params.toString()}`;
-
-  const payload = { departures: [] };
-  try {
-    const res = await fetch(url, { cache: 'no-store' });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const json = await res.json();
-    const list = Array.isArray(json?.Departure) ? json.Departure : [];
-    payload.departures = list.map(dep => {
-      const plannedRaw = String(dep.time || '').slice(0, 5);
-      const realtimeRaw = dep.rtTime ? String(dep.rtTime).slice(0, 5) : null;
-      const plannedMin = plannedRaw ? rawHHMMToMinutes(plannedRaw.replace(':', '')) : null;
-      const realtimeMin = realtimeRaw ? rawHHMMToMinutes(realtimeRaw.replace(':', '')) : null;
-      const direction = String(dep.direction || dep.Product?.direction || '').replace(/,?\s*Gare$/i, '').trim();
-      const directionNorm = normalizeLabelLite(direction);
-      const number = extractFlexibleTrainNumber(dep.name) || extractFlexibleTrainNumber(dep.Product?.name) || extractFlexibleTrainNumber(dep.Product?.line);
-      return {
-        planned: plannedRaw || null,
-        plannedMin,
-        realtime: realtimeRaw,
-        realtimeMin,
-        direction,
-        directionNorm,
-        number,
-        track: dep.rtTrack || dep.track || null,
-        cancelled: !!(dep.cancelled || dep.status === 'deleted'),
-        raw: dep
-      };
-    });
-  } catch (err) {
-    console.warn('[HAFAS] depart board failed', err);
-  }
-
-  HAFAS_DEPARTURE_CACHE.set(key, { fetchedAt: now, payload });
-  return payload;
-}
-
-function buildRealtimeLookup(entry){
-  const byMinute = new Map();
-  const byNumber = new Map();
-  for (const dep of entry.departures){
-    if (Number.isFinite(dep.plannedMin)){
-      if (!byMinute.has(dep.plannedMin)) byMinute.set(dep.plannedMin, []);
-      byMinute.get(dep.plannedMin).push(dep);
-    }
-    if (dep.number){
-      if (!byNumber.has(dep.number)) byNumber.set(dep.number, []);
-      byNumber.get(dep.number).push(dep);
-    }
-  }
-  entry.byMinute = byMinute;
-  entry.byNumber = byNumber;
-  return entry;
-}
-
-async function getRealtimeTransferDepartures({ ymd, fromMin, toMin, maxTransferMin }){
-  const out = new Map();
-  const isoDate = ymdToIsoDate(ymd);
-  if (!isoDate) return out;
-
-  const searchStart = Math.max(0, Math.min(fromMin, toMin) - 30);
-  const searchEnd = Math.max(fromMin, toMin) + Math.max(60, maxTransferMin || 0);
-  const duration = Math.min(240, Math.max(30, searchEnd - searchStart));
-  const timeStr = minutesToHafasClock(searchStart);
-  if (!timeStr) return out;
-
-  for (const cfg of REALTIME_TRANSFER_STATIONS){
-    const ids = getIdsForName(cfg.name);
-    if (!ids || !ids.size) continue;
-
-    let board = null;
-    for (const stopId of cfg.hafasIds){
-      const data = await fetchHafasDepartureBoard({
-        stopId,
-        dateStr: isoDate,
-        timeStr,
-        duration,
-        maxJourneys: 40,
-        cacheMs: cfg.cacheMs ?? 60_000
-      });
-      if (data.departures && data.departures.length){
-        board = { name: cfg.name, stopId, departures: data.departures.slice() };
-        break;
-      }
-      if (!board) board = { name: cfg.name, stopId, departures: data.departures.slice() };
-    }
-
-    if (!board) continue;
-    const entry = buildRealtimeLookup(board);
-    ids.forEach(id => out.set(id, entry));
-  }
-
-  return out;
-}
-
-function matchRealtimeDeparture(entry, { depMin, num, normDest }){
-  if (!entry) return null;
-  const minutesToTry = [];
-  if (Number.isFinite(depMin)){
-    for (let delta = -2; delta <= 2; delta++) minutesToTry.push(depMin + delta);
-  }
-  const tryMatch = (list, strictTime) => {
-    if (!Array.isArray(list)) return null;
-    for (const item of list){
-      if (num && item.number && item.number !== num) continue;
-      if (!strictTime && num && item.number && item.number === num) return item;
-      if (normDest){
-        const dir = item.directionNorm || normalizeLabelLite(item.direction);
-        if (dir){
-          if (dir === normDest) return item;
-          if (dir.includes(normDest) || normDest.includes(dir)) return item;
-        }
-      } else {
-        return item;
-      }
-    }
-    return null;
-  };
-
-  for (const minute of minutesToTry){
-    const list = entry.byMinute?.get(minute);
-    const match = tryMatch(list, true);
-    if (match) return match;
-  }
-
-  if (num && entry.byNumber){
-    const list = entry.byNumber.get(num);
-    const match = tryMatch(list, false);
-    if (match) return match;
-  }
-
-  // dernier recours : toute la liste
-  if (Array.isArray(entry.departures)){
-    const match = tryMatch(entry.departures, false);
-    if (match) return match;
-  }
-
-  return null;
-}
-
-function attachRealtimeToTransfer(transfer, { viaStopId, dep2Sec, arr1Sec, destName, num2, realtimeMap }){
-  if (!(realtimeMap instanceof Map) || !realtimeMap.size) return true;
-  const entry = realtimeMap.get(viaStopId);
-  if (!entry) return true;
-
-  const depMin = Number.isFinite(dep2Sec) ? Math.floor(dep2Sec / 60) : null;
-  const normDest = destName ? normalizeLabelLite(destName) : null;
-  const normalizedNum = num2 && /\d/.test(num2) ? num2 : null;
-  const match = matchRealtimeDeparture(entry, { depMin, num: normalizedNum, normDest });
-  if (!match) return false;
-
-  transfer.cflRealtime = true;
-  transfer.cflCancelled = !!match.cancelled;
-  transfer.cflTrack = match.track || null;
-  transfer.dep2rt = match.realtime || match.planned || transfer.dep2;
-  transfer.dep2Realtime = match.realtime || null;
-  if (Number.isFinite(arr1Sec) && Number.isFinite(match.realtimeMin)){
-    transfer.waitMinReal = Math.max(0, Math.round((match.realtimeMin * 60 - arr1Sec)/60));
-  }
-  transfer.realtimeMeta = match;
-  return true;
-}    
-
     const $allow = $('#allowTransfer');
 if ($allow.length) $allow.prop('checked', false);
 
@@ -5031,24 +4787,17 @@ function uniqTransfers(list){
 
 /************ CHARGEMENT GTFS (stops/stop_times/trips/calendar_dates only) ************/
 
-let GTFS = {
-  stops: null,
-  stopTimes: null,
-  trips: null,
-  tripById: null,
-  stopNameToId: null,
-  allowedByDate: null,
-  removedByDate: null,
-  calendarDates: null,
-  sources: { sncf: false, cfl: false }
+let GTFS = { 
+  stops:null, 
+  stopTimes:null, 
+  trips:null, 
+  tripById:null, 
+  stopNameToId:null, 
+  allowedByDate:null, 
+  removedByDate:null 
 };
     
-let GTFS_PRIMARY_DATA = null;
-let CFL_GTFS_DATA = null;
-let INCLUDE_CFL_TRANSFERS = false;
-    
 let GTFS_LOADING_PROMISE = null;
-let CFL_GTFS_LOADING_PROMISE = null;
 
 const __yieldToBrowser = () => (typeof setTimeout === 'function')
   ? new Promise(resolve => setTimeout(resolve, 0))
@@ -5101,13 +4850,6 @@ const GTFS_BASES = [
   'https://raw.githubusercontent.com/TekMaTe-lux/Assistant-train/main/Assistant-train/data/',
   'https://cdn.jsdelivr.net/gh/TekMaTe-lux/Assistant-train@main/Assistant-train/data/'
 ];
-
-const CFL_GTFS_BASES = [
-  new URL('CFL/', location.href).href,
-  new URL('Assistant-train/CFL/', location.href).href,
-  'https://raw.githubusercontent.com/TekMaTe-lux/Assistant-train/main/CFL/',
-  'https://cdn.jsdelivr.net/gh/TekMaTe-lux/Assistant-train@main/CFL/'
-];   
 
 function createCSVCollector(opt = {}){
   const keepColumns = Array.isArray(opt.keepColumns) && opt.keepColumns.length ? opt.keepColumns : null;
@@ -5290,19 +5032,17 @@ async function parseCSVFromStream(stream, opt = {}){
 
 async function fetchAndParseCSV(filename, opt = {}){
   let lastErr;
-  const { baseList, setSourceFlag = true, ...collectorOpt } = opt || {};
-  const bases = Array.isArray(baseList) && baseList.length ? baseList : GTFS_BASES;
-  for (const base of bases){
+  for (const base of GTFS_BASES){
     const url = base + filename;
     try {
       const resp = await fetch(url, { cache: 'no-store' });
       if (!resp.ok) throw new Error('HTTP '+resp.status+' on '+url);
-      if (setSourceFlag && baseList == null) window.GTFS_STATIC_SOURCE = base; // debug
+      window.GTFS_STATIC_SOURCE = base; // debug
       if (resp.body && typeof resp.body.getReader === 'function' && typeof TextDecoder === 'function'){
-        return await parseCSVFromStream(resp.body, collectorOpt);
+        return await parseCSVFromStream(resp.body, opt);
       }
       const txt = await resp.text();
-      return parseCSV(txt, collectorOpt);
+      return parseCSV(txt, opt);
     } catch(e){
       lastErr = e;
 // essaie la base suivante
@@ -5310,111 +5050,7 @@ async function fetchAndParseCSV(filename, opt = {}){
   }
   throw lastErr || new Error('Impossible de charger '+filename);
 }
-async function fetchCsvWithAlternates(filenames, opt = {}){
-  let lastErr;
-  for (const name of filenames){
-    try {
-      return await fetchAndParseCSV(name, opt);
-    } catch (err) {
-      lastErr = err;
-    }
-  }
-  throw lastErr || new Error('Impossible de charger '+(filenames[0] || 'fichier'));
-}
 
-function rebuildActiveGtfs(){
-  const sources = [];
-  if (GTFS_PRIMARY_DATA) sources.push(GTFS_PRIMARY_DATA);
-  if (INCLUDE_CFL_TRANSFERS && CFL_GTFS_DATA) sources.push(CFL_GTFS_DATA);
-
-  if (!sources.length){
-    GTFS = {
-      stops: [],
-      stopTimes: [],
-      trips: [],
-      tripById: new Map(),
-      stopNameToId: new Map(),
-      allowedByDate: new Map(),
-      removedByDate: new Map(),
-      calendarDates: [],
-      sources: { sncf: false, cfl: false }
-    };
-    return;
-  }
-
-  const stops = [];
-  const stopTimes = [];
-  const trips = [];
-  const calendarDates = [];
-
-  for (const src of sources){
-    if (Array.isArray(src.stops)) stops.push(...src.stops);
-    if (Array.isArray(src.stopTimes)) stopTimes.push(...src.stopTimes);
-    if (Array.isArray(src.trips)) trips.push(...src.trips);
-    if (Array.isArray(src.calendarDates)) calendarDates.push(...src.calendarDates);
-  }
-
-  const stopNameToId = new Map();
-  stops.forEach(s => {
-    if (!s) return;
-    const name = s.stop_name;
-    if (name && s.stop_id && !stopNameToId.has(name)){
-      stopNameToId.set(name, s.stop_id);
-    }
-  });
-
-  const tripById = new Map();
-  trips.forEach(t => {
-    if (t?.trip_id) tripById.set(t.trip_id, t);
-  });
-
-  const allowedByDate = new Map();
-  const removedByDate = new Map();
-  const addCalendarRow = row => {
-    if (!row) return;
-    const ymd = row.date;
-    const serviceId = row.service_id;
-    const exc = Number(row.exception_type);
-    if (!ymd || !serviceId || Number.isNaN(exc)) return;
-    if (exc === 1){
-      if (!allowedByDate.has(ymd)) allowedByDate.set(ymd, new Set());
-      allowedByDate.get(ymd).add(serviceId);
-    } else if (exc === 2){
-      if (!removedByDate.has(ymd)) removedByDate.set(ymd, new Set());
-      removedByDate.get(ymd).add(serviceId);
-    }
-  };
-  calendarDates.forEach(addCalendarRow);
-
-  GTFS = {
-    stops,
-    stopTimes,
-    trips,
-    tripById,
-    stopNameToId,
-    allowedByDate,
-    removedByDate,
-    calendarDates,
-    sources: {
-      sncf: !!GTFS_PRIMARY_DATA,
-      cfl: INCLUDE_CFL_TRANSFERS && !!CFL_GTFS_DATA
-    }
-  };
-
-  GTFS._stopTimesByTripSec = null;
-  GTFS._depsByStop = null;
-  GTFS._tripById = tripById;
-  GTFS._stopTimesByTrip = null;
-  GTFS._tripsByNumber = null;
-  GTFS.nameToIds = null;
-  GTFS.idToName = null;
-  GTFS.idToStop = null;
-
-  try {
-    window.dispatchEvent?.(new CustomEvent('gtfs:sources-changed', { detail: GTFS.sources }));
-  } catch {}
-}
-    
 async function ensureGTFSLoaded(){
   if (GTFS.stops && GTFS.stopTimes && GTFS.trips && GTFS.tripById && GTFS.stopNameToId && GTFS.allowedByDate) return;
     if (GTFS_LOADING_PROMISE) {
@@ -5471,13 +5107,44 @@ async function ensureGTFSLoaded(){
       GTFSLoadingUI.message('Organisation des données…');
       await __yieldToBrowser();
 
-     GTFS_PRIMARY_DATA = { 
+      const stopNameToId = new Map();
+      stops.forEach(s => {
+        if (s.stop_name && s.stop_id)
+          if(!stopNameToId.has(s.stop_name)) stopNameToId.set(s.stop_name, s.stop_id);
+      });
+
+      const tripById = new Map();
+      trips.forEach(t => {
+        if (t.trip_id) tripById.set(t.trip_id, t);
+      });
+
+      // yyyymmdd -> Set(service_id) ajoutés ; et yyyymmdd -> Set(service_id) supprimés
+      const allowedByDate = new Map();
+      const removedByDate = new Map();
+      calendarDates.forEach(row => {
+        const ymd = row.date, serviceId = row.service_id, exc = Number(row.exception_type);
+        if (!ymd || !serviceId) return;
+        if (exc === 1) {
+          if (!allowedByDate.has(ymd)) allowedByDate.set(ymd, new Set());
+          allowedByDate.get(ymd).add(serviceId);
+        } else if (exc === 2) {
+          if (!removedByDate.has(ymd)) removedByDate.set(ymd, new Set());
+          removedByDate.get(ymd).add(serviceId);
+        }
+      });
+
+      GTFS = {
         stops,
         stopTimes,
         trips,
-        calendarDates
+        tripById,
+        stopNameToId,
+        allowedByDate,
+        removedByDate,
+        relevantStopIds,
+        relevantTripIds,
+        relevantServiceIds
       };
-      rebuildActiveGtfs();
     } finally {
       GTFSLoadingUI.hide();
       }
@@ -5489,163 +5156,6 @@ async function ensureGTFSLoaded(){
     GTFS_LOADING_PROMISE = null;
   }
 }
- async function ensureCflGtfsLoaded(){
-  if (CFL_GTFS_DATA) return;
-  if (CFL_GTFS_LOADING_PROMISE){
-    try {
-      await CFL_GTFS_LOADING_PROMISE;
-    } finally {
-      CFL_GTFS_LOADING_PROMISE = null;
-    }
-    return;
-  }
-
-  CFL_GTFS_LOADING_PROMISE = (async () => {
-    GTFSLoadingUI.show('Chargement des arrêts CFL…');
-    try {
-      await __yieldToBrowser();
-
-      let stops = await fetchCsvWithAlternates(
-        ['stops%5B1%5D.txt', 'stops[1].txt', 'stops.txt'],
-        {
-          keepColumns: ['stop_id','stop_name','parent_station','stop_lat','stop_lon'],
-          baseList: CFL_GTFS_BASES,
-          setSourceFlag: false
-        }
-      );
-      const relevantStopIds = computeRelevantStopIds(stops);
-      stops = stops.filter(s => relevantStopIds.has(s.stop_id));
-      await __yieldToBrowser();
-
-      GTFSLoadingUI.message('Chargement des horaires CFL…');
-      const relevantTripIds = new Set();
-      let stopTimes = await fetchCsvWithAlternates(
-        ['stop_times%5B1%5D.txt', 'stop_times[1].txt', 'stop_times.txt'],
-        {
-          keepColumns: ['trip_id','arrival_time','departure_time','stop_id','stop_sequence'],
-          baseList: CFL_GTFS_BASES,
-          setSourceFlag: false,
-          filterRow: row => {
-            if (!relevantStopIds.has(row.stop_id)) return false;
-            if (row.trip_id) relevantTripIds.add(row.trip_id);
-            return true;
-          }
-        }
-      );
-      await __yieldToBrowser();
-
-      GTFSLoadingUI.message('Chargement des trajets CFL…');
-      const routeIds = new Set();
-      let trips = await fetchCsvWithAlternates(
-        ['trips%5B1%5D.txt', 'trips[1].txt', 'trips.txt'],
-        {
-          keepColumns: ['trip_id','service_id','route_id','trip_short_name','trip_headsign'],
-          baseList: CFL_GTFS_BASES,
-          setSourceFlag: false,
-          filterRow: row => {
-            if (!relevantTripIds.has(row.trip_id)) return false;
-            if (row.route_id) routeIds.add(row.route_id);
-            return true;
-          }
-        }
-      );
-      await __yieldToBrowser();
-
-      GTFSLoadingUI.message('Chargement des lignes CFL…');
-      let allowedTripIds = null;
-      if (routeIds.size){
-        const routes = await fetchCsvWithAlternates(
-          ['routes%5B1%5D.txt', 'routes[1].txt', 'routes.txt'],
-          {
-            keepColumns: ['route_id','route_type'],
-            baseList: CFL_GTFS_BASES,
-            setSourceFlag: false,
-            filterRow: row => routeIds.has(row.route_id)
-          }
-        );
-        const allowedRouteIds = new Set(
-          routes
-            .filter(r => Number(r.route_type) === 2)
-            .map(r => r.route_id)
-        );
-        if (allowedRouteIds.size){
-          const tmpTripIds = new Set();
-          trips = trips.filter(t => {
-            const keep = allowedRouteIds.has(t.route_id);
-            if (keep && t.trip_id) tmpTripIds.add(t.trip_id);
-            return keep;
-          });
-          if (tmpTripIds.size) allowedTripIds = tmpTripIds;
-        }
-        await __yieldToBrowser();
-      }
-
-      if (allowedTripIds){
-        stopTimes = stopTimes.filter(st => allowedTripIds.has(st.trip_id));
-      }
-
-      const relevantServiceIds = new Set();
-      trips.forEach(t => {
-        if (t?.service_id) relevantServiceIds.add(t.service_id);
-      });
-
-      GTFSLoadingUI.message('Chargement du calendrier CFL…');
-      const calendarDates = await fetchCsvWithAlternates(
-        ['calendar_dates%5B1%5D.txt', 'calendar_dates[1].txt', 'calendar_dates.txt'],
-        {
-          keepColumns: ['service_id','date','exception_type'],
-          baseList: CFL_GTFS_BASES,
-          setSourceFlag: false,
-          filterRow: row => !row.service_id || relevantServiceIds.has(row.service_id)
-        }
-      );
-      await __yieldToBrowser();
-
-      if (stopTimes.length){
-        const usedStopIds = new Set(stopTimes.map(st => st.stop_id));
-        stops = stops.filter(s => usedStopIds.has(s.stop_id));
-      }
-
-      CFL_GTFS_DATA = {
-        stops,
-        stopTimes,
-        trips,
-        calendarDates
-      };
-    } finally {
-      GTFSLoadingUI.hide();
-    }
-  })();
-
-  try {
-    await CFL_GTFS_LOADING_PROMISE;
-  } finally {
-    CFL_GTFS_LOADING_PROMISE = null;
-  }
-}
-
-async function setIncludeCflTransfers(enabled){
-  await ensureGTFSLoaded();
-  if (enabled){
-    try {
-      await ensureCflGtfsLoaded();
-      INCLUDE_CFL_TRANSFERS = true;
-    } catch (err) {
-      INCLUDE_CFL_TRANSFERS = false;
-      rebuildActiveGtfs();
-      throw err;
-    }
-  } else {
-    INCLUDE_CFL_TRANSFERS = false;
-  }
-
-  rebuildActiveGtfs();
-
-  try {
-    if (enabled) localStorage.setItem('includeCflTransfers', '1');
-    else localStorage.removeItem('includeCflTransfers');
-  } catch {}
-}   
    
 /************  GROUPES DE STOPS PAR GARE (stop_name/parent_station)  ************/
 function buildStationGroups(){
@@ -5711,7 +5221,7 @@ function ensureTransferIndexesBuilt(){
     for (const r of sts){
       if (r.depS==null) continue;
       if (!depsByStop.has(r.stop_id)) depsByStop.set(r.stop_id, []);
-      depsByStop.get(r.stop_id).push({ trip_id, depS: r.depS, seq: r.seq, stop_id: r.stop_id });
+      depsByStop.get(r.stop_id).push({ trip_id, depS: r.depS, seq: r.seq });
     }
   });
   for (const list of depsByStop.values()) list.sort((a,b)=>a.depS-b.depS);
@@ -5789,73 +5299,8 @@ function escapeHtml(str){
   })[ch] || ch);
 }
 
-async function buildGtfsFallbackResult(number, { ymd } = {}){
-  const normalized = extractTrainNumber(number);
-  if (!normalized) return null;
-  const targetYmd = (ymd && /^\d{8}$/.test(ymd)) ? ymd : null;
-  try {
-    await ensureGTFSLoaded();
-  } catch (err) {
-    console.error('[GTFS] Impossible de charger les données statiques pour le fallback', err);
-    return null;
-  }
-
-  ensureTripsByNumberIndex();
-  ensureStopTimesByTripIndex();
-  buildStationGroups();
-
-  const index = GTFS._tripsByNumber;
-  if (!index) return null;
-  const tripIds = index.get(normalized);
-  if (!tripIds || !tripIds.length) return null;
-  const uniqueTripIds = Array.from(new Set(tripIds));
-
-  let chosenTripId = null;
-  if (targetYmd) {
-    chosenTripId = uniqueTripIds.find(id => serviceActiveForDate(id, targetYmd));
-  }
-  if (!chosenTripId) {
-    chosenTripId = uniqueTripIds[0];
-  }
-  if (!chosenTripId) return null;
-
-  const tripData = GTFS.tripById?.get(chosenTripId);
-  const stopRows = GTFS._stopTimesByTrip?.get(chosenTripId);
-  if (!tripData || !stopRows || !stopRows.length) return null;
-
-  const idToStop = GTFS.idToStop || new Map((GTFS.stops || []).map(s => [s.stop_id, s]));
-  const toHHMMRaw = value => value ? String(value).replace(/:/g, '') : null;
-  const stopTimes = stopRows.map(st => {
-    const stop = idToStop.get(st.stop_id) || {};
-    return {
-      stop_point: {
-        id: st.stop_id,
-        name: stop.stop_name || st.stop_id
-      },
-      arrival_time: toHHMMRaw(st.arrival_time),
-      departure_time: toHHMMRaw(st.departure_time)
-    };
-  });
-
-  if (!stopTimes.length) return null;
-
-  return {
-    train: {
-      stop_times: stopTimes,
-      display_informations: {
-        commercial_mode: 'GTFS statique',
-        physical_mode: 'GTFS statique'
-      },
-      _gtfsFallback: true
-    },
-    impacted: {},
-    newStart: null,
-    newEnd: null,
-    disruptions: [],
-    disruptionCauses: [],
-    gtfsFallback: true,
-    tripId: chosenTripId
-  };
+async function buildGtfsFallbackResult(){
+  return null;
 }
 
 function formatSncfApiError(err){
@@ -5884,14 +5329,9 @@ function findOneTransferItineraries({
   maxTransferMin = 45,
   ymd,
   allowedInterchanges = null,
-  maxResults = 40,
-  realtimeDepartures = null
+  maxResults = 40
 }){
   ensureTransferIndexesBuilt(); buildStationGroups();
-
-  const realtimeMap = (realtimeDepartures instanceof Map && realtimeDepartures.size)
-    ? realtimeDepartures
-    : null;
 
   const depStart = t0Min * 60;
   const depEnd   = t1Min * 60;
@@ -5969,12 +5409,6 @@ function findOneTransferItineraries({
         const d2 = depsFromInter[k];
         if (d2.depS > latest) break;               // ❗ respecte délai max
 
-        if (inter.stop_id && d2.stop_id && inter.stop_id !== d2.stop_id){
-          const viaNorm = normalizeLabelLite(GTFS.idToName.get(inter.stop_id) || '');
-          const depNorm = normalizeLabelLite(GTFS.idToName.get(d2.stop_id) || '');
-          if (viaNorm && depNorm && viaNorm !== depNorm) continue;
-        }
-
         const trip2 = d2.trip_id;
 
         // 🚫 1) pas de correspondance sur le même voyage (trip_id)
@@ -5991,29 +5425,17 @@ function findOneTransferItineraries({
         const num2 = extractTrainNumber(GTFS._tripById.get(trip2)?.trip_short_name) || extractTrainNumber(trip2) || '—';
         if (num1 && num2 && num1 === num2) continue;
 
-        const destName = GTFS.idToName.get(toDest.stop_id) || '';
-        const dep2Sec = st2[idxInter2].depS;
-
         best = {
           viaId:   inter.stop_id,
           viaName: GTFS.idToName.get(inter.stop_id) || 'Metz',
           num1, num2,
           dep1:    toHHMM(dep1S),
           arr1:    toHHMM(inter.arrS),
-          dep2:    toHHMM(dep2Sec),
+          dep2:    toHHMM(st2[idxInter2].depS),
           arr2:    toHHMM(toDest.arrS),
           waitMin: Math.max(0, Math.round((st2[idxInter2].depS - inter.arrS)/60)),
           durMin:  Math.max(0, Math.round((toDest.arrS - dep1S)/60))
         };
-        const ok = attachRealtimeToTransfer(best, {
-          viaStopId: inter.stop_id,
-          dep2Sec,
-          arr1Sec: inter.arrS,
-          destName,
-          num2,
-          realtimeMap
-        });
-        if (!ok){ best = null; continue; }
         break; // on ne garde que la plus proche
       }
     } else {
@@ -6055,28 +5477,17 @@ function findOneTransferItineraries({
           const num2 = extractTrainNumber(GTFS._tripById.get(trip2)?.trip_short_name) || extractTrainNumber(trip2) || '—';
           if (num1 && num2 && num1 === num2) continue;
 
-          const destName = GTFS.idToName.get(toDest.stop_id) || '';
-          const dep2Sec = st2[idxInter2].depS;
           best = {
             viaId:   interJ.stop_id,
             viaName: GTFS.idToName.get(interJ.stop_id) || '',
             num1, num2,
             dep1:    toHHMM(dep1S),
             arr1:    toHHMM(interJ.arrS),
-            dep2:    toHHMM(dep2Sec),
+            dep2:    toHHMM(st2[idxInter2].depS),
             arr2:    toHHMM(toDest.arrS),
             waitMin: Math.max(0, Math.round((st2[idxInter2].depS - interJ.arrS)/60)),
             durMin:  Math.max(0, Math.round((toDest.arrS - dep1S)/60))
           };
-          const ok = attachRealtimeToTransfer(best, {
-            viaStopId: interJ.stop_id,
-            dep2Sec,
-            arr1Sec: interJ.arrS,
-            destName,
-            num2,
-            realtimeMap
-          });
-          if (!ok){ best = null; continue; }
           break;
         }
       }
@@ -6112,9 +5523,8 @@ function renderTransferCards(transfers, startName, endName){
         <div class="chip transfer" data-num1="${t.num1}" data-num2="${t.num2}">
           <div style="display:flex;flex-direction:column;gap:2px">
             <div><b>${startName}</b> ${t.dep1} → <b>${t.viaName}</b> ${t.arr1} — Train ${t.num1}</div>
-            <div>Attente: ${t.cflRealtime && Number.isFinite(t.waitMinReal) ? `${t.waitMin} min (réel: ${t.waitMinReal} min)` : `${t.waitMin} min`}</div>
+            <div>Attente: ${t.waitMin} min</div>
             <div><b>${t.viaName}</b> ${t.dep2} → <b>${endName}</b> ${t.arr2} — Train ${t.num2}</div>
-            ${t.cflRealtime ? `<div class="transfer-realtime" style="font-size:0.92em;opacity:0.85">Temps réel CFL : départ ${t.dep2rt || t.dep2}${t.dep2Realtime && t.dep2Realtime !== t.dep2 ? ` (prévu ${t.dep2})` : ''}${t.cflTrack ? ` — Voie ${t.cflTrack}` : ''}${t.cflCancelled ? ` — <strong style="color:#ff6b6b;">Supprimé</strong>` : ''}</div>` : ''}
             <div style="opacity:.8">Durée totale: ${t.durMin} min</div>
           </div>
         </div>
@@ -6197,30 +5607,7 @@ async function computeItineraryProposals({
   if (allowTransfers){
     const minTransferMin = Math.max(1, Number(document.getElementById('minTransfer')?.value || 5));
     const maxTransferMin = Math.max(minTransferMin, Number(document.getElementById('maxTransfer')?.value || 45));
-    const allowedSet = new Set();
-    const metzIds = getIdsForName('Metz');
-    metzIds.forEach(id => allowedSet.add(id));
-
-    let realtimeDepartures = null;
-    const todayYmd = todayYMDLux().replace(/-/g, '');
-    REALTIME_TRANSFER_STATIONS.forEach(cfg => {
-      const ids = getIdsForName(cfg.name);
-      ids.forEach(id => allowedSet.add(id));
-    });
-
-    if (REALTIME_TRANSFER_STATIONS.length && targetYMD === todayYmd){
-      try {
-        realtimeDepartures = await getRealtimeTransferDepartures({
-          ymd: targetYMD,
-          fromMin,
-          toMin,
-          maxTransferMin
-        });
-      } catch (err) {
-        console.warn('[HAFAS] realtime transfers failed', err);
-      }
-    }
-    
+    const allowedSet = getIdsForName('Metz');
     const raw = findOneTransferItineraries({
       originIds,
       destIds,
@@ -6230,8 +5617,7 @@ async function computeItineraryProposals({
       maxTransferMin,
       ymd: targetYMD,
       allowedInterchanges: allowedSet,
-      maxResults: 200,
-      realtimeDepartures
+      maxResults: 200
     });
     transfers = uniqTransfers(keepFirstTransferPerFirstLeg(raw));
   }
@@ -7058,12 +6444,9 @@ function addManualTrain(){
       return;
     }
 
-   GTFSLoadingUI.show('Chargement des Bétaillères…');
+   GTFSLoadingUI.show('Chargement des Bétaillères…'); 
 
     $('#trainInfo').html('<p>Chargement de vos bétaillères…</p>');
-    lastSncfFetchSummary = null;
-    const pendingInfo = document.getElementById('lastUpdated');
-    if (pendingInfo) pendingInfo.textContent = 'Requêtes SNCF en cours…';
 
     try {
       await loadCompoData();
@@ -7088,31 +6471,13 @@ function addManualTrain(){
         reasons: new Set(),
         details: new Map()
       };
-      const sncfFetchInfos = [];
       const results = {};
 
       /* 1) Récupération des données API pour chaque train */
     for (const num of numbers) {
       const url = `https://assistant-train-cx5u.vercel.app/api/train?id=vehicle_journeys/vehicle_journey:SNCF:${date}:${num}:1187:Train`;
       try {
-        const response = await fetch(url, { cache: 'no-store' });
-        if (!response.ok) {
-          const err = new Error(`HTTP ${response.status}`);
-          err.status = response.status;
-          err.statusText = response.statusText;
-          const raw = await response.text();
-          try {
-            err.responseJSON = JSON.parse(raw);
-          } catch {
-            err.responseText = raw;
-          }
-          throw err;
-        }
-        const res = await response.json();
-        const cacheMeta = parseSncfCacheHeader(response.headers.get('X-SNCF-Cache'));
-        const fetchedAtHeader = response.headers.get('X-SNCF-Fetched-At') || null;
-        const sncfMeta = { cache: cacheMeta, fetchedAt: fetchedAtHeader };
-        sncfFetchInfos.push(sncfMeta);
+        const res = await $.ajax({ url });
         const train = res.vehicle_journeys?.[0];
         if (!train) {
           const fallback = await buildGtfsFallbackResult(num, { ymd: ymdDate });
@@ -7187,7 +6552,6 @@ if (!newStart) {
         
         results[num] = { train, impacted, newStart, newEnd, disruptions, disruptionCauses };
       } catch (e) {
-        sncfFetchInfos.push({ cache: { status: 'ERROR', reason: e?.status ? `HTTP_${e.status}` : 'network', raw: '' }, fetchedAt: null });
         const fallback = await buildGtfsFallbackResult(num, { ymd: ymdDate });
         if (fallback) {
           const reason = formatSncfApiError(e);
@@ -7709,17 +7073,12 @@ scheduleWeatherAfterTableSettled();
       console.log("Les retards GTFS ne sont pas encore chargés");
     }
 
-    lastSncfFetchSummary = summariseSncfFetch(sncfFetchInfos);  
     setLastUpdated();
 
   // *** Appliquer GTFS-RT juste après l'injection (sécurisé DOM) ***
     setTimeout(tryApplyGtfsToCurrentTable, 0);
-    } finally {
+      } finally {
       GTFSLoadingUI.hide();
-      const pendingInfo = document.getElementById('lastUpdated');
-      if (pendingInfo && pendingInfo.textContent === 'Requêtes SNCF en cours…') {
-        setLastUpdated();
-      }
     }
     // ===== FIN handler "#loadTrains"
   });
@@ -7863,116 +7222,7 @@ function tryApplyGtfsToCurrentTable() {
   resetGtfsRetards(table);
   if (typeof applyRetardsFromGTFS === 'function') applyRetardsFromGTFS(window.retardsGTFS);
 }
-function parseSncfCacheHeader(header) {
-  const raw = String(header || '').trim();
-  if (!raw) {
-    return { raw: '', status: 'UNKNOWN', policy: null, reason: null, target: null };
-  }
-  const parts = raw.split(';').map(part => part.trim()).filter(Boolean);
-  const status = parts.shift() || 'UNKNOWN';
-  const meta = { raw, status, policy: null, reason: null, target: null };
-  for (const part of parts) {
-    const [key, value] = part.split('=').map(token => token.trim());
-    if (!key || !value) continue;
-    if (key === 'policy') meta.policy = value;
-    else if (key === 'reason') meta.reason = value;
-    else if (key === 'target') meta.target = value;
-  }
-  return meta;
-}
 
-function formatLuxDateTime(date) {
-  if (!(date instanceof Date) || Number.isNaN(date.getTime())) return null;
-  return new Intl.DateTimeFormat('fr-FR', {
-    timeZone: 'Europe/Luxembourg',
-    year: 'numeric', month: '2-digit', day: '2-digit',
-    hour: '2-digit', minute: '2-digit', second: '2-digit',
-    hour12: false
-  }).format(date).replace(',', ' à');
-}
-
-function summariseSncfFetch(entries) {
-  if (!Array.isArray(entries) || entries.length === 0) return null;
-  let liveCount = 0;
-  let cacheCount = 0;
-  let errorCount = 0;
-  let unknownCount = 0;
-  let newestTs = null;
-  const errorReasons = new Map();
-
-  const normaliseReason = (raw) => {
-    if (!raw) return null;
-    const httpMatch = String(raw).match(/^HTTP_(\d{3})$/i);
-    if (httpMatch) return `HTTP ${httpMatch[1]}`;
-    if (raw === 'network-error' || raw === 'network') return 'erreur réseau';
-    if (raw === 'quota') return 'quota atteint';
-    if (raw === 'awaiting-snapshot') return 'snapshot en attente';
-    return String(raw).replace(/[-_]/g, ' ');
-  };
-
-  entries.forEach(entry => {
-    const status = String(entry?.cache?.status || '').toUpperCase();
-    if (status === 'MISS' || status === 'REFRESH') {
-      liveCount += 1;
-    } else if (status === 'HIT') {
-      cacheCount += 1;
-    } else if (status === 'ERROR') {
-      errorCount += 1;
-      const label = normaliseReason(entry?.cache?.reason);
-      if (label) {
-        errorReasons.set(label, (errorReasons.get(label) || 0) + 1);
-      }  
-    } else {
-      unknownCount += 1;
-    }
-    const fetchedAt = entry?.fetchedAt ? Date.parse(entry.fetchedAt) : NaN;
-    if (Number.isFinite(fetchedAt)) {
-      if (newestTs == null || fetchedAt > newestTs) {
-        newestTs = fetchedAt;
-      }
-    }
-  });
-
-  const total = entries.length;
-  const parts = [];
-  const detail = [];
-
-  if (total > 0 && errorCount === total && liveCount === 0 && cacheCount === 0) {
-    parts.push('Données SNCF indisponibles');
-  } else if (liveCount === total && total > 0) {
-    parts.push('Données SNCF actualisées en direct');
-  } else if (cacheCount === total && total > 0) {
-    parts.push('Données SNCF servies depuis le cache');
-  } else {
-    parts.push('Données SNCF mixtes');
-  }
-
-  if (liveCount) detail.push(`${liveCount} en direct`);
-  if (cacheCount) detail.push(`${cacheCount} via cache`);
-  if (errorCount) {
-    const reasonBits = Array.from(errorReasons.entries()).map(([label, count]) => {
-      return count > 1 ? `${label} ×${count}` : label;
-    });
-    const reasonText = reasonBits.length ? ` (${reasonBits.join(', ')})` : '';
-    detail.push(`${errorCount} en erreur${reasonText}`);
-  }
-  if (unknownCount) detail.push(`${unknownCount} statut inconnu`);
-
-  if (detail.length) {
-    parts.push(`(${detail.join(', ')})`);
-  }
-
-  if (newestTs != null) {
-    const formatted = formatLuxDateTime(new Date(newestTs));
-    if (formatted) parts.push(`— dernière requête SNCF : ${formatted}`);
-  }
-
-  return {
-    text: parts.join(' '),
-    counts: { live: liveCount, cache: cacheCount, error: errorCount, unknown: unknownCount }
-  };
-}
-    
 /* ---------- TIMESTAMP ---------- */
 function setLastUpdated() {
   const el = document.getElementById('lastUpdated');
@@ -7989,11 +7239,7 @@ function setLastUpdated() {
     const [y, m, day] = d.split('-');
     validTxt = `${day}/${m}/${y}`;
   }
-  let html = `Généré le ${nowTxt} — Données valables le <strong>${validTxt}</strong>`;
-  if (lastSncfFetchSummary && lastSncfFetchSummary.text) {
-    html += `<br><span class="sncf-validity">${escapeHtml(lastSncfFetchSummary.text)}</span>`;
-  }
-  el.innerHTML = html;
+  el.innerHTML = `Généré le ${nowTxt} — Données valables le <strong>${validTxt}</strong>`;
 }
 function todayYMDLux(){
   const parts = new Intl.DateTimeFormat('en-CA', {
@@ -8473,68 +7719,6 @@ document.addEventListener('DOMContentLoaded', () => {
       document.getElementById(tab.dataset.tab).classList.add("active");
     });
   });
-
-  const cflToggle = document.getElementById('includeCflTransfers');
-  const cflStatus = document.getElementById('includeCflTransfersStatus');
-  const showCflStatus = (message, type = 'info') => {
-    if (!cflStatus) return;
-    if (!message){
-      cflStatus.style.display = 'none';
-      cflStatus.textContent = '';
-      return;
-    }
-    cflStatus.textContent = message;
-    cflStatus.style.display = 'block';
-    cflStatus.style.color = type === 'error' ? '#ff9b9b' : '#7de';
-  };
-
-  const refreshProposalsAfterToggle = () => {
-    try {
-      if (proposerTrainsOD?.lastRequest){
-        proposerTrainsOD({ ...proposerTrainsOD.lastRequest });
-      } else if (typeof scheduleCustomProposalRefresh === 'function') {
-        scheduleCustomProposalRefresh();
-      }
-    } catch (err) {
-      console.warn('[CFL] rafraîchissement propositions impossible', err);
-    }
-  };
-
-  if (cflToggle){
-    const saved = (() => {
-      try { return localStorage.getItem('includeCflTransfers'); }
-      catch { return null; }
-    })();
-
-    if (saved === '1'){
-      cflToggle.checked = true;
-      setIncludeCflTransfers(true)
-        .then(() => showCflStatus('Trains CFL actifs pour Bettembourg.', 'info'))
-        .catch(err => {
-          console.error('[CFL] chargement initial échoué', err);
-          cflToggle.checked = false;
-          showCflStatus('Impossible de charger les trains CFL.', 'error');
-        });
-    }
-
-    cflToggle.addEventListener('change', async () => {
-      const enabled = cflToggle.checked;
-      cflToggle.disabled = true;
-      showCflStatus(enabled ? 'Chargement des trains CFL…' : 'Retour aux trains SNCF…', 'info');
-      try {
-        await setIncludeCflTransfers(enabled);
-        if (enabled) showCflStatus('Trains CFL actifs pour Bettembourg.', 'info');
-        else showCflStatus('', 'info');
-        refreshProposalsAfterToggle();
-      } catch (err) {
-        console.error('[CFL] bascule échouée', err);
-        cflToggle.checked = !enabled;
-        showCflStatus('Échec du chargement des trains CFL.', 'error');
-      } finally {
-        cflToggle.disabled = false;
-      }
-    });
-  }
 
   // ----------------------
   // PARTIE TRAINS
