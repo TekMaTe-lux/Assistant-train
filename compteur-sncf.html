@@ -403,28 +403,13 @@
       document.title = `SNCF ${formatNumber(total)} / ${formatNumber(dailyLimit)}`;
     }
 
-// Origine par défaut qui expose les fonctions serverless nécessaires au compteur.
-const SNCF_CANONICAL_ORIGIN = 'https://assistant-train-cx5u.vercel.app';
-// Domaines purement statiques : on y redirige automatiquement vers l'origine canonique.
-const SNCF_STATIC_ORIGINS = ['https://www.labetaillere.fr', 'https://labetaillere.fr'];
-// Autres origines exposant le même runtime.
-const SNCF_ADDITIONAL_ORIGINS = [
-  'https://assistant-train.vercel.app'
-];
-const SNCF_STATS_PATH = '/api/sncf-stats';
-const SNCF_STATS_FALLBACK_PATHS = ['/api/train?stats=1'];
-    
-const SNCF_STATS_HOST = (() => {
+    const SNCF_CANONICAL_ORIGIN = 'https://www.labetaillere.fr';
+    const SNCF_ADDITIONAL_ORIGINS = ['https://labetaillere.fr'];
+
+    const SNCF_STATS_HOST = (() => {
       const params = new URLSearchParams(window.location.search);
       const forcedHost = params.get('host');
       if (forcedHost) {
-        const lowered = forcedHost.trim().toLowerCase();
-        if (['self', 'local', 'origin'].includes(lowered)) {
-          return window.location.origin;
-        }
-        if (['remote', 'canonical', 'vercel'].includes(lowered)) {
-          return SNCF_CANONICAL_ORIGIN;
-        }
         try {
           const coerced = new URL(forcedHost, window.location.origin);
           return coerced.origin;
@@ -433,67 +418,69 @@ const SNCF_STATS_HOST = (() => {
         }
       }
 
-      const { hostname, origin } = window.location;
+      const { hostname, origin, protocol } = window.location;
       const normaliseOrigin = candidate => {
         if (!candidate) return '';
         try {
-          const url = new URL(candidate, origin);
+          const url = new URL(candidate, `${protocol}//${hostname}`);
           return url.origin;
         } catch (err) {
           console.warn('Origine invalide pour les stats SNCF', candidate, err);
           return '';
         }
       };
+
       if (hostname === 'localhost' || hostname === '127.0.0.1') {
         return origin;
+      }
+
+      if (hostname === 'www.labetaillere.fr') {
+        return origin;
+      }
+
+      if (hostname === 'labetaillere.fr') {
+        return origin;
+      }
+
+      if (hostname.endsWith('.labetaillere.fr')) {
+        return origin;
+      }
+
+      if (hostname.endsWith('.github.io')) {
+        return SNCF_CANONICAL_ORIGIN;
       }
 
       if (hostname.endsWith('.vercel.app')) {
         return origin;
       }
 
-      const matchesStaticOrigin = SNCF_STATIC_ORIGINS.some(candidate => {
-        try {
-          return new URL(candidate).hostname === hostname;
-        } catch (err) {
-          return false;
-        }
-      });
-
-      if (matchesStaticOrigin || hostname.endsWith('.labetaillere.fr') || hostname.endsWith('.github.io')) {
-        return normaliseOrigin(SNCF_CANONICAL_ORIGIN);
-      }
-
-      return origin;
+      return normaliseOrigin(SNCF_CANONICAL_ORIGIN);
     })();
 
+    function buildOriginCandidates(origin) {
+      if (!origin) return [];
+      const base = origin.replace(/\/$/, '');
+      return [
+        `${base}/api/sncf-stats`,
+        `${base}/api/train?stats=1`
+      ];
+    }
+
     function getStatsEndpoints() {
-      const toPath = value => (value && value.startsWith('/')) ? value : `/${value || ''}`;
-      const path = toPath(SNCF_STATS_PATH);
-      const fallbackPaths = SNCF_STATS_FALLBACK_PATHS.map(toPath);
+      const primaryOrigins = SNCF_STATS_HOST
+        ? buildOriginCandidates(SNCF_STATS_HOST)
+        : ['/api/sncf-stats', '/api/train?stats=1'];
 
-      const buildUrl = (origin, candidatePath) => `${origin.replace(/\/$/, '')}${candidatePath}`;
-      
-      const snapshotUrl = new URL('data/sncf-stats-snapshot.json', window.location.href).href;
-       const endpoints = [];
-      if (SNCF_STATS_HOST) {
-        endpoints.push(buildUrl(SNCF_STATS_HOST, path));
-      } else {
-        endpoints.push(path);
-      }
+      const fallbackOrigins = [
+        ...buildOriginCandidates(SNCF_CANONICAL_ORIGIN),
+        ...SNCF_ADDITIONAL_ORIGINS.flatMap(buildOriginCandidates),
+        ...[
+          'https://assistant-train.vercel.app',
+          'https://assistant-train-cx5u.vercel.app'
+        ].flatMap(buildOriginCandidates)
+      ];
 
-      const origins = [SNCF_CANONICAL_ORIGIN, ...SNCF_ADDITIONAL_ORIGINS];
-      for (const origin of origins) {
-        if (!origin) continue;
-        endpoints.push(buildUrl(origin, path));
-        for (const fallbackPath of fallbackPaths) {
-          endpoints.push(buildUrl(origin, fallbackPath));
-        }
-      }
-
-      endpoints.push(snapshotUrl);
-
-      const unique = new Set(endpoints);
+      const unique = new Set([...primaryOrigins, ...fallbackOrigins]);
       return Array.from(unique).filter(Boolean);
     }
 
@@ -547,18 +534,7 @@ const SNCF_STATS_HOST = (() => {
             lastError = await buildHttpError(response, url);
             continue;
           }
-          const payload = await response.json();
-          if (payload && typeof payload === 'object' && payload.source == null) {
-            try {
-              const parsedUrl = new URL(url, window.location.href);
-              if (parsedUrl.pathname.endsWith('/data/sncf-stats-snapshot.json')) {
-                payload.source = 'snapshot';
-              }
-            } catch (parseErr) {
-              // ignore malformed URL
-            }
-          }
-          return { payload, url };
+          return { payload: await response.json(), url };
         } catch (err) {
           lastError = err;
         }
@@ -608,37 +584,16 @@ const SNCF_STATS_HOST = (() => {
       }
       return REFRESH_INTERVAL;
     }
-    
+
     async function loadStats() {
       try {
         statusTextEl.textContent = 'Mise à jour…';
         const { payload, url } = await fetchStatsWithFallback();
         updateUI(payload, { endpoint: url });
-        
-        const isSnapshot = payload && payload.source === 'snapshot';
-        const nextDelay = isSnapshot ? FALLBACK_RETRY_INTERVAL : REFRESH_INTERVAL;
-
-        const persistedInfo = payload && payload.persisted;
-        const providerLabel = persistedInfo && persistedInfo.provider
-          ? `compteur partagé (${persistedInfo.provider})`
-          : 'compteur local';
-
-        statusTextEl.textContent = isSnapshot
-          ? 'Mode dégradé (instantané statique)'
-          : `En ligne — ${providerLabel}`;
-
-        if (isSnapshot) {
-          const note = payload && typeof payload.note === 'string'
-            ? payload.note
-            : 'Instantané statique utilisé faute de runtime actif.';
-          errorMessageEl.textContent = note;
-          autoRefreshEl.textContent = `Nouvel essai dans ${formatDelay(nextDelay)} (instantané)`;
-        } else {
-          errorMessageEl.textContent = '';
-          autoRefreshEl.textContent = `Actualisation automatique : ${formatDelay(nextDelay)}`;
-        }
-
-        scheduleNextRefresh(nextDelay);
+        statusTextEl.textContent = 'En ligne';
+        errorMessageEl.textContent = '';
+        autoRefreshEl.textContent = `Actualisation automatique : ${formatDelay(REFRESH_INTERVAL)}`;
+        scheduleNextRefresh(REFRESH_INTERVAL);
       } catch (err) {
         console.error('Impossible de charger les stats SNCF', err);
         statusTextEl.textContent = 'Erreur';
