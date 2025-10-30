@@ -4,6 +4,16 @@
   const DAILY_QUOTA = 5000;
   const MIN_INTERVAL_MS = Math.ceil((24 * 60 * 60 * 1000) / DAILY_QUOTA);
   const CACHE_LIMIT = 150;
+  const MS_PER_MINUTE = 60 * 1000;
+  const SAME_DAY_WINDOWS = [
+    { startMinutes: 270, endMinutes: 570, intervalMinutes: 4 },   // 04:30 – 09:30
+    { startMinutes: 570, endMinutes: 930, intervalMinutes: 8 },   // 09:30 – 15:30
+    { startMinutes: 930, endMinutes: 1260, intervalMinutes: 4 }   // 15:30 – 21:00
+  ];
+  const NIGHT_INTERVAL_MINUTES = 20; // 21:00 – 04:30
+  const NEXT_DAY_INTERVAL_MINUTES = 4 * 60; // 4 h
+  const FUTURE_DAY_INTERVAL_MINUTES = 12 * 60; // 12 h → 2 requêtes / jour
+  const PAST_DAY_INTERVAL_MINUTES = 30; // requêtes historiques plus souples
 
   const STORAGE_KEYS = {
     usage: 'sncf:usage-tracking',
@@ -154,35 +164,55 @@
     return parsed;
   }
 
-  function computeCacheTTL({ isoDate, ymdDate }) {
+  function minutesToMs(minutes) {
+    return Math.max(MS_PER_MINUTE, minutes * MS_PER_MINUTE);
+  }
+
+  function getSameDayIntervalMinutes(requestDate) {
+    if (!(requestDate instanceof Date)) {
+      return NIGHT_INTERVAL_MINUTES;
+    }
+    const minutes = requestDate.getHours() * 60 + requestDate.getMinutes();
+    for (const window of SAME_DAY_WINDOWS) {
+      if (minutes >= window.startMinutes && minutes < window.endMinutes) {
+        return window.intervalMinutes;
+      }
+    }
+    return NIGHT_INTERVAL_MINUTES;
+  }
+
+  function computeCachePolicy({ isoDate, ymdDate, requestDate = new Date() }) {
     const targetDate = parseTargetDate({ isoDate, ymdDate });
-    const nowDate = new Date();
     if (!targetDate) {
-      return 5 * 60 * 1000; // défaut 5 min
+      const fallback = minutesToMs(5);
+      return { intervalMs: fallback, ttlMs: fallback, diffDays: null };
     }
 
-    const startOfNow = new Date(nowDate.getFullYear(), nowDate.getMonth(), nowDate.getDate());
-    const diffDays = Math.round((targetDate - startOfNow) / (24 * 60 * 60 * 1000));
+    const startOfRequestDay = new Date(
+      requestDate.getFullYear(),
+      requestDate.getMonth(),
+      requestDate.getDate()
+    );
+    const diffDays = Math.round((targetDate - startOfRequestDay) / (24 * 60 * 60 * 1000));
+
+    if (diffDays === 0) {
+      const intervalMinutes = getSameDayIntervalMinutes(requestDate);
+      const intervalMs = minutesToMs(intervalMinutes);
+      return { intervalMs, ttlMs: intervalMs, diffDays };
+    }
+
+    if (diffDays === 1) {
+      const intervalMs = minutesToMs(NEXT_DAY_INTERVAL_MINUTES);
+      return { intervalMs, ttlMs: intervalMs, diffDays };
+    }
 
     if (diffDays > 1) {
-      return 6 * 60 * 60 * 1000; // J+2 et plus : 6h
-    }
-    if (diffDays === 1) {
-      return 60 * 60 * 1000; // J+1 : 1h
-    }
-    if (diffDays < 0) {
-      return 30 * 60 * 1000; // dates passées : 30 min
+      const intervalMs = minutesToMs(FUTURE_DAY_INTERVAL_MINUTES);
+      return { intervalMs, ttlMs: intervalMs, diffDays };
     }
 
-    const minutes = nowDate.getHours() * 60 + nowDate.getMinutes();
-    const isMorningPeak = minutes >= (6 * 60) && minutes < (9 * 60);
-    const isEveningPeak = minutes >= (16 * 60) && minutes < (19 * 60);
-
-    if (isMorningPeak || isEveningPeak) {
-      return 90 * 1000; // heures de pointe : 1 min 30
-    }
-
-    return 5 * 60 * 1000; // reste de la journée : 5 min
+    const intervalMs = minutesToMs(PAST_DAY_INTERVAL_MINUTES);
+    return { intervalMs, ttlMs: intervalMs, diffDays };
   }
 
   function getCacheIndex() {
@@ -409,7 +439,9 @@
         data: cachedEntry.data,
         fromCache: true,
         cacheTimestamp: cachedEntry.createdAt,
-        expiresAt: cachedEntry.expiresAt
+        expiresAt: cachedEntry.expiresAt,
+        enforcedIntervalMs: cachedEntry.policy?.intervalMs || null,
+        targetDiffDays: cachedEntry.policy?.diffDays ?? null
       };
     }
 
@@ -443,11 +475,18 @@
     const scheduledPromise = scheduleNetworkCall(fetchTask)
       .then(data => {
         recordApiRequest(1);
-        const ttl = computeCacheTTL({ isoDate, ymdDate });
+        const policy = computeCachePolicy({ isoDate, ymdDate, requestDate: new Date() });
+        const createdAt = now();
+        const ttl = Math.max(MS_PER_MINUTE, policy.ttlMs || 0);
         const entry = {
-          createdAt: now(),
-          expiresAt: now() + ttl,
-          data
+          createdAt,
+          expiresAt: createdAt + ttl,
+          data,
+          policy: {
+            intervalMs: policy.intervalMs,
+            ttlMs: ttl,
+            diffDays: policy.diffDays
+          }
         };
         setCacheEntry(cacheKey, entry);
         trimCache();
@@ -455,7 +494,9 @@
           data,
           fromCache: false,
           cacheTimestamp: entry.createdAt,
-          expiresAt: entry.expiresAt
+          expiresAt: entry.expiresAt,
+          enforcedIntervalMs: policy.intervalMs,
+          targetDiffDays: policy.diffDays
         };
       })
       .finally(() => {
@@ -484,6 +525,7 @@
     DAILY_QUOTA,
     MIN_INTERVAL_MS,
     fetchVehicleJourney,
+    getCachePolicy: computeCachePolicy,
     getUsageSnapshot,
     subscribeToUsage,
     clearCache
