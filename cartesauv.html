@@ -261,7 +261,7 @@ function escapeHTML(str){
       '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;'
     })[c]);
   }
- function extractTrainNumberCandidate(value){
+  function extractTrainNumberCandidate(value){
     if (value == null) return null;
     const raw = String(value).trim();
     if (!raw) return null;
@@ -278,7 +278,15 @@ function escapeHTML(str){
     }
     return null;
   }
-
+ function normalizeTrainNumberKey(value){
+    if (value == null) return null;
+    const raw = String(value).trim();
+    if (!raw) return null;
+    const trimmed = raw.replace(/^0+/, '');
+    if (trimmed.length) return trimmed;
+    return raw.length ? '0' : null;
+  } 
+    
   function trainNumberForTrip(trip, route, tripId){
     const candidates = [
       trip?.trip_short_name,
@@ -429,6 +437,20 @@ function escapeHTML(str){
   const HAFAS_REFRESH_INTERVAL_MS = 120000;
   const HAFAS_MAX_JOURNEYS = 20;
   const HAFAS_STATIONS = [
+    { axisId:'rodange', hafasId:'220903011', label:'Rodange', names:['Rodange','Rodange, Gare'] },
+    { axisId:'petange', hafasId:'220902007', label:'Pétange', names:['Pétange','Petange','Pétange, Gare'] },
+    { axisId:'bascharage-sanem', hafasId:'190101027', label:'Bascharage-Sanem', names:['Bascharage-Sanem','Bascharage/Sanem','Bascharage/Sanem, Gare','Bascharage, Gare'] },
+    { axisId:'niederkorn', hafasId:'220203006', label:'Niederkorn', names:['Niederkorn','Niederkorn, Gare'] },
+    { axisId:'differdange', hafasId:'220201021', label:'Differdange', names:['Differdange','Differdange, Gare'] },
+    { axisId:'oberkorn', hafasId:'220201032', label:'Oberkorn', names:['Oberkorn','Oberkorn, Gare'] },
+    { axisId:'belvaux-soleuvre', hafasId:'221301010', label:'Belvaux-Soleuvre', names:['Belvaux-Soleuvre','Belvaux Soleuvre','Belvaux-Soleuvre, Gare'] },
+    { axisId:'belval-redange', hafasId:'221301002', label:'Belval-Rédange', names:['Belval-Rédange','Belval Redange','Belval-Rédange, Gare'] },
+    { axisId:'belval-lycee', hafasId:'221301023', label:'Belval-Lycée', names:['Belval-Lycée','Belval Lycée','Belval (Lycée), Gare'] },
+    { axisId:'belval-universite', hafasId:'220401002', label:'Belval-Université', names:['Belval-Université','Belval Université','Belval (Université), Gare'] },
+    { axisId:'esch', hafasId:'220402046', label:'Esch-sur-Alzette', names:['Esch-sur-Alzette','Esch sur Alzette','Esch-sur-Alzette, Gare'] },
+    { axisId:'schifflange', hafasId:'221401002', label:'Schifflange', names:['Schifflange','Schifflange, Gare'] },
+    { axisId:'noertzange', hafasId:'220105006', label:'Noertzange', names:['Noertzange','Noertzange, Gare'] },
+    { axisId:'berchem', hafasId:'221101001', label:'Berchem', names:['Berchem','Berchem, Gare'] },
     { axisId:'luxembourg', hafasId:'200405060', label:'Luxembourg', names:['Luxembourg','Luxembourg, Gare Centrale'] },
     { axisId:'bettembourg', hafasId:'220102018', label:'Bettembourg', names:['Bettembourg','Bettembourg, Gare'] },
     { axisId:'howald', hafasId:'200304014', label:'Howald', names:['Howald','Howald, Gare'] },
@@ -561,7 +583,9 @@ function escapeHTML(str){
         }
       }
       if (perStation.size){
-         perTrain.set(String(trainNum), perStation);
+         const rawKey = String(trainNum);
+        const normalizedKey = normalizeTrainNumberKey(rawKey) || rawKey;
+        perTrain.set(normalizedKey, perStation);
       }
     }
     const originLabel = describeRealtimeSource(source);
@@ -584,7 +608,9 @@ function escapeHTML(str){
           stationMap.set(String(norm), { original: entry.original, value: entry.value });
         }
         if (stationMap.size){
-          normalized.set(String(trainNum), stationMap);
+          const rawKey = String(trainNum);
+          const normalizedKey = normalizeTrainNumberKey(rawKey) || rawKey;
+          normalized.set(normalizedKey, stationMap);
         }
       }
     }
@@ -727,7 +753,8 @@ function escapeHTML(str){
             if (!delay) continue;
             if (!delay.cancelled && delay.minutes == null) continue;
             const value = delay.cancelled ? null : Number(delay.minutes ?? 0);
-            const key = String(number);
+            const keyRaw = String(number);
+            const key = normalizeTrainNumberKey(keyRaw) || keyRaw;
             let perStation = perTrain.get(key);
             if (!perStation){
               perStation = new Map();
@@ -826,7 +853,7 @@ function escapeHTML(str){
 
   function computeTrainDelayInfo(train){
     if (!train || !trainDelaysByNumber.size) return null;
-    const numberKey = train.numberKey || extractTrainNumberCandidate(train.number) || null;
+    const numberKey = normalizeTrainNumberKey(train.numberKey || extractTrainNumberCandidate(train.number) || null);
     if (!numberKey) return null;
     const perStation = trainDelaysByNumber.get(String(numberKey));
     if (!perStation) return null;
@@ -983,7 +1010,8 @@ function escapeHTML(str){
       realtimeStopDataByTrip.delete(tripId);
       return null;
     }
-    const perStation = numberKey ? trainDelaysByNumber.get(String(numberKey)) : null;
+    const normalizedKey = normalizeTrainNumberKey(numberKey);
+    const perStation = normalizedKey ? trainDelaysByNumber.get(String(normalizedKey)) : null;
     const startPlanned = seq[0]?.departure ?? seq[0]?.arrival ?? null;
     const lastStop = seq[seq.length - 1] || null;
     const endPlanned = lastStop?.arrival ?? lastStop?.departure ?? null;
@@ -2712,9 +2740,10 @@ async function integrateCflGtfs({ axisStopIds, axisTripIds, axisRouteIds, mergeA
       const rawNumber = trainNumberForTrip(trip, route, trip_id);
       const numberCandidate = extractTrainNumberCandidate(rawNumber);
       const fallbackNumberCandidate = numberCandidate || extractTrainNumberCandidate(trip_id) || null;
+      const numberKeyRaw = fallbackNumberCandidate != null ? String(fallbackNumberCandidate) : null;
+      const numberKey = numberKeyRaw ? normalizeTrainNumberKey(numberKeyRaw) : null;
       const branding = computeTrainBranding(trip_id, trip, route, rawNumber, numberCandidate || fallbackNumberCandidate);
-      const numberDisplay = branding.displayNumber || rawNumber || (fallbackNumberCandidate != null ? String(fallbackNumberCandidate) : null);
-      const numberKey = fallbackNumberCandidate != null ? String(fallbackNumberCandidate) : null;
+      const numberDisplay = branding.displayNumber || rawNumber || (numberKey != null ? String(numberKey) : (numberKeyRaw != null ? String(numberKeyRaw) : null));
       const realtimeProfile = computeRealtimeStopData(trip_id, seq, numberKey);
 
       const startPlanned = seq[0].departure ?? seq[0].arrival;
