@@ -5672,6 +5672,7 @@ async function buildCflResult(selectionKey, { ymd } = {}){
         };
         if (isCancelled){
           impactedEntry.departure_status = 'deleted';
+          impactedEntry.arrival_status = 'deleted';
           impactedEntry.stop_time_effect = 'deleted';
         } else if (hasPositiveDelay && amendedRaw){
           impactedEntry.amended_departure_time = amendedRaw;
@@ -5680,6 +5681,44 @@ async function buildCflResult(selectionKey, { ymd } = {}){
           impactedEntry.delay_minutes = effectiveDelay;
         }
         impacted[firstDeparture.stop_id] = impactedEntry;
+
+        if (isCancelled || hasPositiveDelay){
+          const effectiveDelayMinutes = Number.isFinite(effectiveDelay) ? effectiveDelay : null;
+          for (const row of stopSeq){
+            const stopId = row.stop_id;
+            if (!stopId) continue;
+            const stopMeta = CFL_GTFS.stopsById.get(stopId) || {};
+            const displayName = cflFormatStopDisplayName(stopMeta.name || '');
+            const baseDepRawAll = minutesToRawHHMM(row.dep);
+            const baseArrRawAll = minutesToRawHHMM(row.arr);
+            const existing = impacted[stopId] || {};
+            if (!existing.stop_point){
+              existing.stop_point = { id: stopId, name: displayName };
+            }
+            if (!existing.base_departure_time && baseDepRawAll){
+              existing.base_departure_time = baseDepRawAll;
+            }
+            if (!existing.base_arrival_time && baseArrRawAll){
+              existing.base_arrival_time = baseArrRawAll;
+            }
+            if (isCancelled){
+              if (!existing.departure_status) existing.departure_status = 'deleted';
+              if (!existing.arrival_status) existing.arrival_status = 'deleted';
+              if (!existing.stop_time_effect) existing.stop_time_effect = 'deleted';
+            } else if (hasPositiveDelay && Number.isFinite(effectiveDelayMinutes) && effectiveDelayMinutes > 0){
+              existing.delay_minutes = effectiveDelayMinutes;
+              if (!existing.amended_departure_time && baseDepRawAll){
+                const amendedDep = computeRetardedTime(baseDepRawAll, effectiveDelayMinutes);
+                if (amendedDep) existing.amended_departure_time = amendedDep.replace(':', '');
+              }
+              if (!existing.amended_arrival_time && baseArrRawAll){
+                const amendedArr = computeRetardedTime(baseArrRawAll, effectiveDelayMinutes);
+                if (amendedArr) existing.amended_arrival_time = amendedArr.replace(':', '');
+              }
+            }
+            impacted[stopId] = existing;
+          }
+        }
 
         const cause = extractHafasCause(match);
         if (cause) disruptionCauses.push(cause);
@@ -5714,6 +5753,11 @@ async function buildCflResult(selectionKey, { ymd } = {}){
     tripId: chosenTripId,
     source: 'CFL',
     trainType: normalizedType,
+    cflMeta: {
+      trainType: normalizedType,
+      routeId: tripMeta.route_id,
+      numero
+    },
     displayLabel,
     selectionKey: canonicalKey
   };
