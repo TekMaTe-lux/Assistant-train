@@ -185,6 +185,21 @@ test('shared GitHub cache is reused across independent requests', async () => {
     assert.equal(firstResponse.headers['X-Sncf-Usage-Requests'], '1');
     assert.equal(firstResponse.headers['X-Sncf-Usage-ApiRequests'], '1');
     assert.equal(firstResponse.headers['X-Sncf-Usage-CacheHits'], '0');
+    assert.equal(
+      firstResponse.headers['Access-Control-Expose-Headers'],
+      [
+        'X-Sncf-Cache-State',
+        'X-Sncf-Cache-Expires',
+        'X-Sncf-Usage-Date',
+        'X-Sncf-Usage-Requests',
+        'X-Sncf-Usage-ApiRequests',
+        'X-Sncf-Usage-CacheHits',
+        'X-Sncf-Usage-Updated-At',
+        'X-Sncf-Usage-Quota',
+        'X-Sncf-Usage-Remaining'
+      ].join(', '),
+      'CORS headers should expose shared usage metadata'
+    );
     assert.equal(state.apiCalls, 1, 'API should be called once on cache miss');
     assert.equal(firstPayload.requestId, 'call-1');
 
