@@ -12,6 +12,11 @@
     #map{ height: calc(100vh - 110px); }
     .panel{ display:flex; gap:12px; align-items:center; padding:8px 14px; background:#0e1726; border-top:1px solid #20324b; flex-wrap:wrap;}
     .badge{ padding:2px 6px; border:1px solid #2a3b55; border-radius:6px; font-size:12px; }
+    .badge-indicator{ display:inline-flex; align-items:center; gap:6px; }
+    .badge-indicator-pending{ border-color:#2a3b55; color:#aabbd1; }
+    .badge-indicator-ready{ border-color:#42658f; color:#d6e6ff; }
+    .badge-indicator-applied{ border-color:#2f7d4a; color:#9eff9e; }
+    .badge-indicator-error{ border-color:#8f2d2d; color:#ffb4b4; }
     .muted{ opacity:.8; font-size:12px; }
     .ctrl{ display:flex; align-items:center; gap:8px; }
     .ctrl input[type="range"]{ width:160px; }
@@ -123,6 +128,10 @@
       <label class="muted"><input id="toggle-major" type="checkbox" checked> gares prioritaires</label>
       <label class="muted"><input id="toggle-regular" type="checkbox" checked> gares secondaires</label>
       <label class="muted"><input id="toggle-trains" type="checkbox" checked> bétaillères</label>
+    </div>
+    <div class="ctrl">
+      <label class="muted"><input id="toggle-delays" type="checkbox"> appliquer retards temps réel</label>
+      <span id="hafas-indicator" class="badge badge-indicator badge-indicator-pending" aria-live="polite">CFL HAFAS —</span>
     </div> 
     <span id="clock" class="muted">—</span>
     <span id="counts" class="muted">—</span>
@@ -467,6 +476,8 @@ function escapeHTML(str){
   let trainDelaySourceLabel = '';
   let trainDelayLastUpdated = null;
   let trainDelayTooltipSuffix = '';
+  let realtimeDelaysApplied = false;
+  let hafasIndicatorEl = null;
   let gtfsRtRefreshTimer = null;
   let hafasRefreshTimer = null;
   let pendingGtfsRtPromise = null;
@@ -493,6 +504,48 @@ function escapeHTML(str){
     src.error = message || null;
     updateRealtimeStatus();
   }
+
+  function ensureHafasIndicatorEl(){
+    if (!hafasIndicatorEl){
+      hafasIndicatorEl = document.getElementById('hafas-indicator');
+    }
+    return hafasIndicatorEl;
+  }
+
+  function updateHafasIndicator(){
+    const el = ensureHafasIndicatorEl();
+    if (!el) return;
+    const src = realtimeSources.hafas;
+    const classes = ['badge','badge-indicator'];
+    let text = 'CFL HAFAS —';
+    let title = '';
+    if (src?.error){
+      classes.push('badge-indicator-error');
+      text = 'CFL HAFAS indisponible';
+      title = src.error || '';
+    } else if (src?.lastUpdated){
+      const time = formatLuxTime(new Date(src.lastUpdated));
+      if (realtimeDelaysApplied){
+        classes.push('badge-indicator-applied');
+        text = 'CFL HAFAS appliqué';
+      } else {
+        classes.push('badge-indicator-ready');
+        text = 'CFL HAFAS disponible';
+      }
+      title = `Dernière mise à jour ${time}`;
+    } else {
+      classes.push('badge-indicator-pending');
+      text = 'CFL HAFAS en attente';
+      title = 'En attente des données HAFAS';
+    }
+    el.className = classes.join(' ');
+    el.textContent = text;
+    if (title){
+      el.title = title;
+    } else {
+      el.removeAttribute('title');
+    }
+  }  
 
   function rebuildRealtimeDelayIndex(){
     trainDelaysByNumber = new Map();
@@ -542,12 +595,14 @@ function escapeHTML(str){
   function updateRealtimeStatus(){
     const parts = [];
     const baseLabel = trainDelaySourceLabel ? `Retards temps réel via ${trainDelaySourceLabel}` : 'Retards temps réel';
-    parts.push(baseLabel);
+    const appliedLabel = realtimeDelaysApplied ? 'appliqués sur la carte' : 'non appliqués sur la carte';
+    parts.push(`${baseLabel} (${appliedLabel})`);
     if (trainDelayTooltipSuffix){
       parts.push(trainDelayTooltipSuffix);
     } else if (trainDelayLastUpdated){
       parts.push(`MAJ ${formatLuxTime(new Date(trainDelayLastUpdated))}`);
-      const errorParts = [];
+      }
+    const errorParts = [];
     for (const key of ['gtfs','hafas']){
       const src = realtimeSources[key];
       if (src?.error){
@@ -561,7 +616,7 @@ function escapeHTML(str){
 
     const message = parts.filter(Boolean).join(' — ');
     setRealtimeStatus(message);
-    }
+    updateHafasIndicator();
   }
 
   function registerGtfsRetards(data, source){
@@ -852,6 +907,7 @@ function escapeHTML(str){
   }
 
   function computeTrainDelayInfo(train){
+    if (!realtimeDelaysApplied) return null;
     if (!train || !trainDelaysByNumber.size) return null;
     const numberKey = normalizeTrainNumberKey(train.numberKey || extractTrainNumberCandidate(train.number) || null);
     if (!numberKey) return null;
@@ -1011,6 +1067,19 @@ function escapeHTML(str){
       return null;
     }
     const normalizedKey = normalizeTrainNumberKey(numberKey);
+    if (!realtimeDelaysApplied){
+      const data = {
+        stops,
+        startPlanned,
+        endPlanned,
+        startRealtime: startPlanned,
+        endRealtime: endPlanned,
+        hasRealtime: false
+      };
+      realtimeStopDataByTrip.set(tripId, data);
+      return data;
+    }
+    
     const perStation = normalizedKey ? trainDelaysByNumber.get(String(normalizedKey)) : null;
     const startPlanned = seq[0]?.departure ?? seq[0]?.arrival ?? null;
     const lastStop = seq[seq.length - 1] || null;
@@ -1388,6 +1457,26 @@ function sanitizeCflStationName(name){
   const toggleMajorEl = document.getElementById('toggle-major');
   const toggleRegularEl = document.getElementById('toggle-regular');
   const toggleTrainsEl = document.getElementById('toggle-trains');
+  const toggleDelaysEl = document.getElementById('toggle-delays');
+
+  if (toggleDelaysEl){
+    realtimeDelaysApplied = toggleDelaysEl.checked;
+    toggleDelaysEl.addEventListener('change', ()=>{
+      realtimeDelaysApplied = toggleDelaysEl.checked;
+      realtimeStopDataByTrip.clear();
+      for (const train of trainDataById.values()){
+        train.delayInfo = null;
+      }
+      updateRealtimeStatus();
+      try { tick(); } catch(_){ }
+      renderPanel();
+    });
+  } else {
+    realtimeDelaysApplied = false;
+  }
+
+  updateHafasIndicator();
+  updateRealtimeStatus();  
 
   if (toggleMajorEl){
     layerVisibility.stationsMajor = toggleMajorEl.checked;
