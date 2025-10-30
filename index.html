@@ -5626,15 +5626,42 @@ async function buildCflResult(selectionKey, { ymd } = {}){
         const baseDepartureRaw = minutesToRawHHMM(firstDeparture.dep);
         const baseArrivalRaw = minutesToRawHHMM(firstDeparture.arr);
         const realtimeRaw = parseHafasRealtimeTime(match.rtTime || match.rtDepTime || match.rtDepartureTime);
-        let delayMinutes = null;
+        let delayFromField = null;
         if (typeof match.rtDelay !== 'undefined' && match.rtDelay !== null && match.rtDelay !== ''){
           const parsed = Number(match.rtDelay);
-          if (Number.isFinite(parsed)) delayMinutes = parsed;
+          if (Number.isFinite(parsed)) delayFromField = parsed;
         }
-        if (!Number.isFinite(delayMinutes) && realtimeRaw && baseDepartureRaw){
+        if (Number.isFinite(delayFromField) && Math.abs(delayFromField) > 600){
+          delayFromField = Math.round(delayFromField / 60);
+        }
+        let delayFromRealtime = null;
+        if (realtimeRaw && baseDepartureRaw){
           const diff = dl(baseDepartureRaw, realtimeRaw);
-          if (Number.isFinite(diff)) delayMinutes = diff;
+         if (Number.isFinite(diff)) delayFromRealtime = diff;
         }
+        let effectiveDelay = null;
+        if (Number.isFinite(delayFromRealtime)){
+          effectiveDelay = delayFromRealtime;
+        } else if (Number.isFinite(delayFromField)){
+          effectiveDelay = delayFromField;
+        }
+        if (Number.isFinite(effectiveDelay) && Math.abs(effectiveDelay) > 600){
+          effectiveDelay = Math.round(effectiveDelay / 60);
+        }
+        let amendedRaw = realtimeRaw && realtimeRaw.length >= 4 ? realtimeRaw.slice(0, 4) : null;
+        if (amendedRaw && baseDepartureRaw){
+          const diff = dl(baseDepartureRaw, amendedRaw);
+          if (!Number.isFinite(diff) || diff <= 0){
+            amendedRaw = null;
+          } else if (!Number.isFinite(effectiveDelay)){
+            effectiveDelay = diff;
+          }
+        }
+        if (!amendedRaw && Number.isFinite(effectiveDelay) && effectiveDelay > 0 && baseDepartureRaw){
+          const fallbackClock = computeRetardedTime(baseDepartureRaw, effectiveDelay);
+          if (fallbackClock) amendedRaw = fallbackClock.replace(':', '');
+        }
+        const hasPositiveDelay = Number.isFinite(effectiveDelay) && effectiveDelay > 0;
         const status = String(match.status || '').toLowerCase();
         const isCancelled = match.cancelled === true || status === 'cancelled' || status === 'canceled' || status === 'deleted';
         const stopName = cflFormatStopDisplayName(CFL_GTFS.stopsById.get(firstDeparture.stop_id)?.name || '');
@@ -5646,8 +5673,11 @@ async function buildCflResult(selectionKey, { ymd } = {}){
         if (isCancelled){
           impactedEntry.departure_status = 'deleted';
           impactedEntry.stop_time_effect = 'deleted';
-        } else if (Number.isFinite(delayMinutes) && delayMinutes > 0 && realtimeRaw){
-          impactedEntry.amended_departure_time = realtimeRaw;
+        } else if (hasPositiveDelay && amendedRaw){
+          impactedEntry.amended_departure_time = amendedRaw;
+          impactedEntry.delay_minutes = effectiveDelay;
+        } else if (hasPositiveDelay){
+          impactedEntry.delay_minutes = effectiveDelay;
         }
         impacted[firstDeparture.stop_id] = impactedEntry;
 
@@ -5658,7 +5688,7 @@ async function buildCflResult(selectionKey, { ymd } = {}){
             severity: { effect: 'NO_SERVICE' },
             messages: cause ? [{ text: cause }] : []
           });
-        } else if (Number.isFinite(delayMinutes) && delayMinutes > 0){
+        } else if (hasPositiveDelay){
           disruptions.push({
             severity: { effect: 'SIGNIFICANT_DELAYS' },
             messages: cause ? [{ text: cause }] : []
@@ -7793,11 +7823,16 @@ if (!newStart) {
       } else {
         const disruptions = result.disruptions || [];
         const impacted = result.impacted || {};
-        const hasDelay = Object.values(impacted).some(s =>
-          (s.amended_departure_time || s.amended_arrival_time) &&
-          (s.base_departure_time || s.base_arrival_time) &&
-          dl(s.base_departure_time || s.base_arrival_time, s.amended_departure_time || s.amended_arrival_time) > 0
-        );
+        const hasDelay = Object.values(impacted).some(s => {
+          const amended = s.amended_departure_time || s.amended_arrival_time;
+          const baseTime = s.base_departure_time || s.base_arrival_time;
+          const hasAmendedDelay = amended && baseTime && dl(baseTime, amended) > 0;
+          const delayMinutes = (typeof s.delay_minutes !== 'undefined' && s.delay_minutes !== null)
+            ? Number(s.delay_minutes)
+            : null;
+          const hasDelayFlag = Number.isFinite(delayMinutes) && delayMinutes > 0;
+          return hasAmendedDelay || hasDelayFlag;
+        });
         const newStartId = result.newStart;
         const originalStartId = result.train.stop_times[0].stop_point.id;
         const isPartial = newStartId && newStartId !== originalStartId;
@@ -7861,8 +7896,11 @@ if (!newStart) {
           null;
 
         const amended =
-          (imp && (imp.amended_departure_time || imp.amended_arrival_time)) ||
-          null;
+          const delayFromImpactRaw =
+          (imp && typeof imp.delay_minutes !== 'undefined' && imp.delay_minutes !== null)
+            ? Number(imp.delay_minutes)
+            : null;
+        const hasDelayFromImpact = Number.isFinite(delayFromImpactRaw) && delayFromImpactRaw > 0;
 
         // statuts
         const departureDeleted = imp?.departure_status === 'deleted';
@@ -7931,6 +7969,12 @@ if (!newStart) {
           content = `<span class="deleted">${content}</span>`;
         } else if (amended && dl(base, amended) > 0) {
           content = `<span class="delay-strike">${ft(base)}</span><br><span class="delayed">${ft(amended)}</span>`;
+          } else if (hasDelayFromImpact) {
+          const roundedDelay = Math.round(delayFromImpactRaw);
+          const fallbackClock = base ? computeRetardedTime(base, delayFromImpactRaw) : null;
+          const delayLabel = fallbackClock ? fallbackClock : `+${roundedDelay} min`;
+          const baseStrike = base ? `<span class="delay-strike">${ft(base)}</span><br>` : '';
+          content = `${baseStrike}<span class="delayed">${delayLabel}</span>`;
         } else if (isFirstStop || isLastStop) {
           content = `<strong>${content}</strong>`;
         }
@@ -8966,21 +9010,69 @@ document.addEventListener('DOMContentLoaded', () => {
   // ----------------------
   // PARTIE BUS/TRAM
   // ----------------------
-  const stopsUrl = "https://raw.githubusercontent.com/TekMaTe-lux/Assistant-train/main/CFL/stops%5B1%5D.txt";
+  const stopsUrl = "https://raw.githubusercontent.com/TekMaTe-lux/Assistant-train/main/CFL/stopscfl.txt";
   let stopsData = [];
   let busInterval;
 
+  function parseStopLine(line) {
+    if (!line) return null;
+    const cells = [];
+    let current = '';
+    let inQuotes = false;
+    for (let i = 0; i < line.length; i++) {
+      const ch = line[i];
+      if (ch === '"') {
+        if (inQuotes && line[i + 1] === '"') {
+          current += '"';
+          i++;
+        } else {
+          inQuotes = !inQuotes;
+        }
+        continue;
+      }
+      if (ch === ',' && !inQuotes) {
+        cells.push(current);
+        current = '';
+      } else {
+        current += ch;
+      }
+    }
+    cells.push(current);
+
+    const rawId = (cells[0] || '').trim();
+    const name = (cells[2] || '').trim();
+    if (!rawId || !name) return null;
+
+    const cleanedId = rawId.replace(/^"|"$/g, '');
+    const cleanedName = name.replace(/^"|"$/g, '');
+    if (!cleanedId || !cleanedName) return null;
+
+    const normalized = cleanedName
+      .normalize('NFD')
+      .replace(/\p{Diacritic}/gu, '')
+      .toLowerCase();
+
+    return {
+      id: cleanedId,
+      name: cleanedName,
+      normalized
+    };
+  }
+
   // Charger la base de données des arrêts
   fetch(stopsUrl)
-    .then(r => r.text())
+    .then(r => {
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      return r.text();
+    })
     .then(txt => {
-      const lines = txt.split("\n").slice(1);
-      stopsData = lines.map(l => {
-        const match = l.match(/^(\d+),"[^"]*","([^"]*)",/);
-        if (!match) return null;
-        return { id: match[1], name: match[2] };
-      }).filter(s => s);
+      const lines = txt.split(/\r?\n/).slice(1);
+      stopsData = lines.map(parseStopLine).filter(Boolean);
       console.log("Stops chargés:", stopsData.length);
+    })
+    .catch(err => {
+      console.error("Erreur lors du chargement des arrêts CFL", err);
+      stopsData = [];
     });
 
   const stopSearch = document.getElementById("stopSearch");
@@ -9048,13 +9140,18 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   stopSearch.addEventListener("input", () => {
-    const query = stopSearch.value.toLowerCase();
+    const query = stopSearch.value
+      .normalize('NFD')
+      .replace(/\p{Diacritic}/gu, '')
+      .toLowerCase();
     if (!query) {
       stopsList.innerHTML = "Entrez un arrêt pour afficher les prochains départs";
       return;
     }
 
-    const results = stopsData.filter(s => s.name.toLowerCase().includes(query)).slice(0,10);
+    const results = stopsData
+      .filter(s => s.normalized.includes(query))
+      .slice(0,10);
     if (results.length === 0) {
       stopsList.innerHTML = "Aucun arrêt trouvé";
       return;
