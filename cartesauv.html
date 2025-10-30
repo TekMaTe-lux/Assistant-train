@@ -22,6 +22,9 @@
     .cow-marker{ display:flex; align-items:center; gap:6px; font-size:22px; text-shadow:0 0 4px #000; border:none; background:transparent; color:inherit; padding:0; margin:0; line-height:1; }
     .cow-marker:focus-visible{ outline:2px solid #a0ff00; outline-offset:2px; }
     .cow-marker .train-num{ font-size:13px; font-weight:600; padding:2px 5px; border-radius:6px; border:1px solid #2a3b55; background:rgba(14,23,38,0.9); color:#e0f0ff; white-space:nowrap; }
+    .cow-marker.train-sncf .train-num{ border-color:#1b3b73; background:rgba(18,38,73,0.92); color:#9fc3ff; box-shadow:0 0 10px rgba(27,59,115,0.45); }
+    .cow-marker.train-cfl .train-num{ border-color:#ff5869; background:rgba(96,16,32,0.92); color:#ffd6d9; box-shadow:0 0 10px rgba(255,88,105,0.45); }
+    .cow-marker.train-tgv-roi .train-num{ border-color:#f5d97b; background:rgba(70,52,12,0.94); color:#fff0c2; box-shadow:0 0 12px rgba(245,217,123,0.55); }
     .cow-marker .train-delay-badge{ display:inline-flex; align-items:center; justify-content:center; font-size:11px; font-weight:700; padding:2px 7px; border-radius:999px; margin-left:6px; border:1px solid rgba(255,196,128,0.7); background:rgba(120,72,16,0.85); color:#0b0f1a; white-space:nowrap; box-shadow:0 0 6px rgba(0,0,0,0.35); text-transform:none; letter-spacing:.01em; }
     .cow-marker .train-delay-badge--moderate{ background:rgba(255,189,92,0.92); border-color:rgba(255,210,150,0.95); color:#101b2b; }
     .cow-marker .train-delay-badge--major{ background:rgba(255,145,86,0.92); border-color:rgba(255,185,140,0.95); color:#0f1828; }
@@ -169,27 +172,43 @@
     calendar_dates: 'calendar_dates.txt'// optionnel (exceptions jour)
   };
 
+   const CFL_BASES = [
+    location.origin + '/CFL/',
+    'https://raw.githubusercontent.com/TekMaTe-lux/Assistant-train/main/CFL/'
+  ];
+
+  const CFL_FILES = {
+    stops: 'stopscfl.txt',
+    stop_times: 'stop_timescfl.txt',
+    trips: 'tripscfl.txt',
+    routes: 'routescfl.txt',
+    calendar: 'calendarcfl.txt',
+    calendar_dates: 'calendar_datescfl.txt'
+  };
+
+  const CFL_ROUTE_IDS_ALLOWED = new Set(['302','300','299','297']); // pas de TER 
+
   // ---------- Helpers fetch multi-bases ----------
-  function urlFor(name, baseIndex=0){ return BASES[baseIndex] + name; }
+  function urlFor(name, baseIndex=0, bases=BASES){ return bases[baseIndex] + name; }
 
-  async function fetchJSONAny(name){
-    for (let i=0;i<BASES.length;i++){
-      try { const r = await fetch(urlFor(name,i), {mode:'cors'}); if (r.ok) return await r.json(); } catch(_) {}
+  async function fetchJSONAny(name, bases = BASES){
+    for (let i=0;i<bases.length;i++){
+      try { const r = await fetch(urlFor(name,i,bases), {mode:'cors'}); if (r.ok) return await r.json(); } catch(_) {}
     }
     throw new Error('Introuvable: '+name);
   }
 
-  async function fetchTextAny(name){
-    for (let i=0;i<BASES.length;i++){
-      try { const r = await fetch(urlFor(name,i), {mode:'cors'}); if (r.ok) return await r.text(); } catch(_) {}
+  async function fetchTextAny(name, bases = BASES){
+    for (let i=0;i<bases.length;i++){
+      try { const r = await fetch(urlFor(name,i,bases), {mode:'cors'}); if (r.ok) return await r.text(); } catch(_) {}
     }
     throw new Error('Introuvable: '+name);
   }
 
-  function parseCSVAny(name){
+  function parseCSVAny(name, bases = BASES){
     return new Promise(async (resolve, reject) => {
       try {
-        const csv = await fetchTextAny(name);
+        const csv = await fetchTextAny(name, bases);
         Papa.parse(csv, { header:true, dynamicTyping:false, skipEmptyLines:true,
           complete: (res)=>resolve(res.data), error: reject
         });
@@ -278,11 +297,103 @@ function escapeHTML(str){
     return tripId;
   }
 
+ const CFL_ROUTE_PREFIXES = new Map([
+    ['RE', 'RE'],
+    ['RB', 'RB'],
+    ['IC', 'IC'],
+    ['TGV', 'TGV ROI']
+  ]);
+
+  function computeTrainBranding(tripId, trip, route, rawNumber, rawNumberKey){
+    const isCfl = (tripId && tripId.startsWith('CFL:')) || trip?.source === 'CFL' || route?.source === 'CFL';
+    const routeShort = (route?.short || '').trim();
+    const routeLong = (route?.long || '').trim();
+    const headsign = (trip?.headsign || '').trim();
+    const normalizedShort = routeShort.toUpperCase();
+    const isTgv = normalizedShort === 'TGV' || /\bTGV\b/i.test(routeLong) || /\bTGV\b/i.test(headsign);
+
+    let category = 'sncf';
+    if (isCfl) category = 'cfl';
+    if (isTgv) category = 'tgv-roi';
+
+    let prefix = null;
+    if (category === 'tgv-roi'){
+      prefix = 'TGV ROI';
+    } else if (isCfl && CFL_ROUTE_PREFIXES.has(normalizedShort)){
+      prefix = CFL_ROUTE_PREFIXES.get(normalizedShort);
+    }
+
+    const rawDigits = rawNumberKey != null ? String(rawNumberKey) : null;
+    let digits = rawDigits;
+    if (digits && (isCfl || category === 'tgv-roi')){
+      const trimmed = digits.replace(/^0+/, '');
+      digits = trimmed || '0';
+    }
+
+    let displayNumber = null;
+    if (prefix){
+      displayNumber = digits ? `${prefix} ${digits}` : prefix;
+    } else if (digits){
+      displayNumber = digits;
+    } else if (rawNumber){
+      displayNumber = rawNumber;
+    }
+
+    const panelTitle = displayNumber || prefix || rawNumber || null;
+    const className = category === 'tgv-roi' ? 'train-tgv-roi' : (category === 'cfl' ? 'train-cfl' : 'train-sncf');
+
+    return {
+      category,
+      className,
+      prefix,
+      digits,
+      displayNumber,
+      panelTitle,
+      rawDigits
+    };
+  }
+
+  function trainLabelParts(train, fallbackId){
+    if (!train) return { label:'', category:'sncf' };
+    const label = train.branding?.panelTitle || train.number || train.headsign || fallbackId || '';
+    const category = train.branding?.category || 'sncf';
+    return { label, category };
+  }
+
+  function formatTrainLabel(train, { includeTrainWord = true, fallbackId } = {}){
+    const { label, category } = trainLabelParts(train, fallbackId);
+    if (!label) return fallbackId || '';
+    if (!includeTrainWord || category === 'tgv-roi') return label;
+    return `Train ${label}`;
+  }
+
+  function formatTrainAriaLabel(train, fallbackId){
+    const { label, category } = trainLabelParts(train, fallbackId);
+    if (!label) return 'train';
+    const prefix = category === 'tgv-roi' ? '' : 'train ';
+    return `${prefix}${label}`.trim();
+  }   
+
   const luxTimeFormatter = new Intl.DateTimeFormat('fr-FR', {
     timeZone:'Europe/Luxembourg',
     hour:'2-digit', minute:'2-digit', second:'2-digit', hour12:false
   });
   function formatLuxTime(date){ return luxTimeFormatter.format(date); }
+    
+  const luxDateFormatterIso = new Intl.DateTimeFormat('en-CA', {
+    timeZone:'Europe/Luxembourg', year:'numeric', month:'2-digit', day:'2-digit'
+  });
+  const luxTimeFormatterIso = new Intl.DateTimeFormat('en-GB', {
+    timeZone:'Europe/Luxembourg', hour:'2-digit', minute:'2-digit', second:'2-digit', hour12:false
+  });
+  function formatLuxDateISO(date){
+    const parts = Object.fromEntries(luxDateFormatterIso.formatToParts(date).map(p=>[p.type, p.value]));
+    return `${parts.year}-${parts.month}-${parts.day}`;
+  }
+  function formatLuxTimeISO(date){
+    const parts = Object.fromEntries(luxTimeFormatterIso.formatToParts(date).map(p=>[p.type, p.value]));
+    return `${parts.hour}:${parts.minute}:${parts.second}`;
+  }
 
   const stationNameNormalizeCache = new Map();
   const stopNameCandidatesCache = new Map();  
@@ -312,14 +423,32 @@ function escapeHTML(str){
   ];
   const GTFS_RT_REFRESH_INTERVAL_MS = 60000;
 
-  let trainDelayDataRaw = null;
+  const HAFAS_BASE_URL = 'https://cdt.hafas.de/opendata/apiserver/departureBoard';
+  const HAFAS_ACCESS_ID = '58ef9a71-6837-4405-bd5d-23beaf92864c';
+  const HAFAS_LOOKAHEAD_MINUTES = 120;
+  const HAFAS_REFRESH_INTERVAL_MS = 120000;
+  const HAFAS_MAX_JOURNEYS = 20;
+  const HAFAS_STATIONS = [
+    { axisId:'luxembourg', hafasId:'200405060', label:'Luxembourg', names:['Luxembourg','Luxembourg, Gare Centrale'] },
+    { axisId:'bettembourg', hafasId:'220102018', label:'Bettembourg', names:['Bettembourg','Bettembourg, Gare'] },
+    { axisId:'howald', hafasId:'200304014', label:'Howald', names:['Howald','Howald, Gare'] },
+    { axisId:'thionville', hafasId:'400000098', label:'Thionville', names:['Thionville','Thionville, Gare'] },
+    { axisId:'metz', hafasId:'400000071', label:'Metz', names:['Metz','Metz-Ville','Metz-Ville, Gare'] }
+  ];
+
+  const realtimeRawData = { gtfs:null, hafas:null };
+  const realtimeSources = {
+    gtfs: { key:'gtfs', displayName:'GTFS-RT', origin:'', map:new Map(), lastUpdated:null, rawSource:'', error:null },
+    hafas: { key:'hafas', displayName:'HAFAS', origin:'API HAFAS', map:new Map(), lastUpdated:null, rawSource:'', error:null }
+  };
   let trainDelaysByNumber = new Map();
   let trainDelaySourceLabel = '';
-  let trainDelaySourceRaw = '';
   let trainDelayLastUpdated = null;
   let trainDelayTooltipSuffix = '';
   let gtfsRtRefreshTimer = null;
+  let hafasRefreshTimer = null;
   let pendingGtfsRtPromise = null;
+  let pendingHafasPromise = null;
 
   function describeRealtimeSource(src){
     if (!src) return '';
@@ -336,25 +465,87 @@ function escapeHTML(str){
     }
   }
 
-  function updateRealtimeStatus({ error } = {}){
-    if (trainDelayLastUpdated){
-      const parts = ['Retards temps réel'];
-      if (trainDelaySourceLabel) parts.push(`via ${trainDelaySourceLabel}`);
+  function setRealtimeSourceError(key, message){
+    const src = realtimeSources[key];
+    if (!src) return;
+    src.error = message || null;
+    updateRealtimeStatus();
+  }
+
+  function rebuildRealtimeDelayIndex(){
+    trainDelaysByNumber = new Map();
+    const labelParts = [];
+    const tooltipParts = [];
+    let newest = null;
+
+    for (const key of ['gtfs','hafas']){
+      const src = realtimeSources[key];
+      if (!src) continue;
+      let hadData = false;
+      if (src.map && src.map.size){
+        for (const [trainNum, perStation] of src.map.entries()){
+          let combined = trainDelaysByNumber.get(trainNum);
+          if (!combined){
+            combined = new Map();
+            trainDelaysByNumber.set(trainNum, combined);
+          }
+          for (const [norm, entry] of perStation.entries()){
+            combined.set(norm, entry);
+          }
+        }
+        hadData = true;
+      }
+      if (hadData || src.lastUpdated){
+        const label = src.displayName || src.key.toUpperCase();
+        labelParts.push(label);
+        if (src.lastUpdated){
+          newest = (!newest || src.lastUpdated > newest) ? src.lastUpdated : newest;
+          const originLabel = src.origin ? `${label} via ${src.origin}` : label;
+          tooltipParts.push(`${originLabel} MAJ ${formatLuxTime(new Date(src.lastUpdated))}`);
+        } else if (src.origin){
+          const labelName = src.displayName || src.key.toUpperCase();
+          tooltipParts.push(`${labelName} via ${src.origin}`);
+        }
+      }
+    }
+
+    realtimeStopDataByTrip.clear();
+    trainDelaySourceLabel = labelParts.join(' + ');
+    trainDelayLastUpdated = newest;
+    trainDelayTooltipSuffix = tooltipParts.join(' · ');
+    updateRealtimeStatus();
+    try { tick(); } catch(_){ }
+  }
+
+  function updateRealtimeStatus(){
+    const parts = [];
+    const baseLabel = trainDelaySourceLabel ? `Retards temps réel via ${trainDelaySourceLabel}` : 'Retards temps réel';
+    parts.push(baseLabel);
+    if (trainDelayTooltipSuffix){
+      parts.push(trainDelayTooltipSuffix);
+    } else if (trainDelayLastUpdated){
       parts.push(`MAJ ${formatLuxTime(new Date(trainDelayLastUpdated))}`);
-      if (error) parts.push(error);
-      setRealtimeStatus(parts.join(' — '));
-    } else {
-      setRealtimeStatus(error ? `Retards temps réel ${error}` : '');
+      const errorParts = [];
+    for (const key of ['gtfs','hafas']){
+      const src = realtimeSources[key];
+      if (src?.error){
+        const label = src.displayName || src.key.toUpperCase();
+        errorParts.push(`${label}: ${src.error}`);
+      }
+    }
+    if (errorParts.length){
+      parts.push(errorParts.join(' | '));
+    }
+
+    const message = parts.filter(Boolean).join(' — ');
+    setRealtimeStatus(message);
     }
   }
 
   function registerGtfsRetards(data, source){
     if (!data || typeof data !== 'object') return;
-    trainDelayDataRaw = data;
-    trainDelaysByNumber = new Map();
-    trainDelaySourceRaw = source || '';
-    trainDelaySourceLabel = describeRealtimeSource(source);
-    realtimeStopDataByTrip.clear();
+    realtimeRawData.gtfs = data;
+    const perTrain = new Map();
     for (const [trainNum, stations] of Object.entries(data)){
       if (!stations || typeof stations !== 'object') continue;
       const perStation = new Map();
@@ -370,16 +561,222 @@ function escapeHTML(str){
         }
       }
       if (perStation.size){
-        trainDelaysByNumber.set(String(trainNum), perStation);
+         perTrain.set(String(trainNum), perStation);
       }
     }
-    trainDelayLastUpdated = Date.now();
-    const suffixParts = [];
-    if (trainDelaySourceLabel) suffixParts.push(trainDelaySourceLabel);
-    suffixParts.push(`MAJ ${formatLuxTime(new Date(trainDelayLastUpdated))}`);
-    trainDelayTooltipSuffix = suffixParts.join(' · ');
-    updateRealtimeStatus();
-    try { tick(); } catch(_){}
+    const originLabel = describeRealtimeSource(source);
+    realtimeSources.gtfs.origin = originLabel || realtimeSources.gtfs.origin;
+    realtimeSources.gtfs.map = perTrain;
+    realtimeSources.gtfs.lastUpdated = Date.now();
+    realtimeSources.gtfs.rawSource = source || '';
+    realtimeSources.gtfs.error = null;
+    rebuildRealtimeDelayIndex();
+  }
+
+  function registerHafasRetards(perTrainMap, { fetchedAt } = {}){
+    const normalized = new Map();
+    if (perTrainMap instanceof Map){
+      for (const [trainNum, perStation] of perTrainMap.entries()){
+        if (!(perStation instanceof Map) || !perStation.size) continue;
+        const stationMap = new Map();
+        for (const [norm, entry] of perStation.entries()){
+          if (!norm || !entry) continue;
+          stationMap.set(String(norm), { original: entry.original, value: entry.value });
+        }
+        if (stationMap.size){
+          normalized.set(String(trainNum), stationMap);
+        }
+      }
+    }
+    realtimeRawData.hafas = perTrainMap instanceof Map ? perTrainMap : new Map();
+    realtimeSources.hafas.map = normalized;
+    realtimeSources.hafas.lastUpdated = fetchedAt || Date.now();
+    realtimeSources.hafas.error = null;
+    rebuildRealtimeDelayIndex();
+  }
+
+  function normalizeHafasDate(value){
+    if (!value && value !== 0) return null;
+    const str = String(value).trim();
+    if (!str) return null;
+    if (/^\d{8}$/.test(str)) return `${str.slice(0,4)}-${str.slice(4,6)}-${str.slice(6)}`;
+    return str;
+  }
+
+  function normalizeHafasTime(value){
+    if (!value && value !== 0) return null;
+    const str = String(value).trim();
+    if (!str) return null;
+    if (/^\d{6}$/.test(str)) return `${str.slice(0,2)}:${str.slice(2,4)}:${str.slice(4,6)}`;
+    if (/^\d{4}$/.test(str)) return `${str.slice(0,2)}:${str.slice(2,4)}:00`;
+    if (/^\d{2}:\d{2}$/.test(str)) return `${str}:00`;
+    return str;
+  }
+
+  function extractHafasTrainNumber(dep){
+    if (!dep || typeof dep !== 'object') return null;
+    const candidates = [
+      dep.trainNumber,
+      dep.name,
+      dep.number,
+      dep.line,
+      dep.Line,
+      dep.Product?.line,
+      dep.Product?.name,
+      dep.Product?.catOut,
+      dep.Product?.catIn,
+      dep.Product?.lineId,
+      dep.Product?.number,
+      dep.JourneyDetailRef?.ref,
+      dep.id
+    ];
+    for (const candidate of candidates){
+      const num = extractTrainNumberCandidate(candidate);
+      if (num) return num;
+    }
+    return null;
+  }
+
+  function computeHafasDelay(dep){
+    const cancelTokens = [dep?.cancelled, dep?.status, dep?.rtStatus, dep?.rtState];
+    const isCancelled = cancelTokens.some(token => {
+      if (token == null) return false;
+      const str = String(token).toLowerCase();
+      return str === 'true' || str === 'yes' || str === 'cancelled' || str === 'canceled' || str === 'deleted';
+    });
+    if (isCancelled) return { cancelled:true, minutes:null };
+
+    const plannedDate = normalizeHafasDate(dep?.date);
+    const plannedTime = normalizeHafasTime(dep?.time);
+    const rtDate = normalizeHafasDate(dep?.rtDate || dep?.rtDateTime || dep?.rtDateTimeOut || dep?.date);
+    const rtTime = normalizeHafasTime(dep?.rtTime || dep?.rtTimeOut || dep?.rtDepartureTime);
+
+    if (plannedDate && plannedTime && rtTime){
+      const scheduled = new Date(`${plannedDate}T${plannedTime}`);
+      const realtime = new Date(`${(rtDate || plannedDate)}T${rtTime}`);
+      if (!Number.isNaN(scheduled.getTime()) && !Number.isNaN(realtime.getTime())){
+        const diff = (realtime - scheduled) / 60000;
+        if (Number.isFinite(diff)) return { cancelled:false, minutes: diff };
+      }
+    }
+
+    if (dep?.rtDelay != null){
+      const val = Number(dep.rtDelay);
+      if (Number.isFinite(val)) return { cancelled:false, minutes: val };
+    }
+    if (dep?.delay != null){
+      const val = Number(dep.delay);
+      if (Number.isFinite(val)) return { cancelled:false, minutes: val };
+    }
+
+    if (plannedTime && rtTime){
+      const scheduled = new Date(`1970-01-01T${plannedTime}`);
+      const realtime = new Date(`1970-01-01T${rtTime}`);
+      if (!Number.isNaN(scheduled.getTime()) && !Number.isNaN(realtime.getTime())){
+        const diff = (realtime - scheduled) / 60000;
+        if (Number.isFinite(diff)) return { cancelled:false, minutes: diff };
+      }
+    }
+
+    return { cancelled:false, minutes: 0 };
+  }
+
+  async function fetchHafasDeparturesForStation(station, { dateStr, timeStr, duration }){
+    if (!station?.hafasId) return [];
+    const params = new URLSearchParams({
+      accessId: HAFAS_ACCESS_ID,
+      id: station.hafasId,
+      date: dateStr,
+      time: timeStr,
+      duration: String(duration ?? HAFAS_LOOKAHEAD_MINUTES),
+      maxJourneys: String(HAFAS_MAX_JOURNEYS),
+      format: 'json'
+    });
+    const url = `${HAFAS_BASE_URL}?${params.toString()}`;
+    const res = await fetchWithTimeoutNoHeaders(url, 10000);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    let data;
+    const ct = (res.headers.get('content-type') || '').toLowerCase();
+    if (ct.includes('application/json')){
+      data = await res.json();
+    } else {
+      data = JSON.parse(await res.text());
+    }
+    const list = data?.Departure;
+    return Array.isArray(list) ? list : [];
+  }
+
+  async function loadHafasDelays({ duration = HAFAS_LOOKAHEAD_MINUTES } = {}){
+    if (pendingHafasPromise) return pendingHafasPromise;
+    pendingHafasPromise = (async()=>{
+      const now = new Date();
+      const dateStr = formatLuxDateISO(now);
+      const timeStr = formatLuxTimeISO(now);
+      const perTrain = new Map();
+      const errors = [];
+
+      for (const station of HAFAS_STATIONS){
+        try {
+          const departures = await fetchHafasDeparturesForStation(station, { dateStr, timeStr, duration });
+          if (!Array.isArray(departures) || !departures.length) continue;
+          const names = Array.isArray(station.names) && station.names.length ? station.names : [station.label || station.axisId || station.hafasId];
+          for (const dep of departures){
+            const number = extractHafasTrainNumber(dep);
+            if (!number) continue;
+            const delay = computeHafasDelay(dep);
+            if (!delay) continue;
+            if (!delay.cancelled && delay.minutes == null) continue;
+            const value = delay.cancelled ? null : Number(delay.minutes ?? 0);
+            const key = String(number);
+            let perStation = perTrain.get(key);
+            if (!perStation){
+              perStation = new Map();
+              perTrain.set(key, perStation);
+            }
+            for (const displayName of names){
+              const norm = normalizeStationName(displayName);
+              if (!norm) continue;
+              const existing = perStation.get(norm);
+              if (existing){
+                if (existing.value == null) continue;
+                if (value == null){
+                  perStation.set(norm, { original: displayName, value });
+                  continue;
+                }
+                const existingVal = Number(existing.value);
+                if (Number.isFinite(existingVal) && Number.isFinite(value) && Math.abs(value) < Math.abs(existingVal)){
+                  continue;
+                }
+              }
+              perStation.set(norm, { original: displayName, value });
+            }
+          }
+        } catch(err){
+          errors.push({ station, error: err });
+          console.warn('[HAFAS] échec station', station?.label || station?.hafasId, err);
+        }
+      }
+
+      const fetchedAt = Date.now();
+      registerHafasRetards(perTrain, { fetchedAt });
+
+      if (errors.length === HAFAS_STATIONS.length){
+        setRealtimeSourceError('hafas', 'indisponible');
+        const lastErr = errors[errors.length - 1]?.error || new Error('HAFAS indisponible');
+        throw lastErr;
+      }
+      if (errors.length){
+        setRealtimeSourceError('hafas', 'partiel');
+      } else {
+        setRealtimeSourceError('hafas', null);
+      }
+    })();
+
+    try {
+      await pendingHafasPromise;
+    } finally {
+      pendingHafasPromise = null;
+    }
   }
 
   function buildDelayInfo(entry){
@@ -747,7 +1144,7 @@ function escapeHTML(str){
       }
 
       console.error('[GTFS-RT] ❌ impossible de charger les retards temps réel', lastErr);
-      updateRealtimeStatus({ error: trainDelayLastUpdated ? 'rafraîchissement en échec' : 'indisponibles' });
+      setRealtimeSourceError('gtfs', trainDelayLastUpdated ? 'rafraîchissement en échec' : 'indisponibles');
       throw lastErr || new Error('Chargement GTFS-RT impossible');
     })();
 
@@ -803,7 +1200,29 @@ const WEEKDAY_FIELDS = ['sunday','monday','tuesday','wednesday','thursday','frid
     return active;
   }
     
+function sanitizeCflStationName(name){
+    if (!name) return '';
+    const trimmed = String(name).trim();
+    if (!trimmed) return '';
+    const cleaned = trimmed.replace(/,\s*Gare(?:[^,]*)?$/i, '').trim();
+    return cleaned || trimmed;
+  }
 
+  function isCflStationCandidate(name){
+    if (!name) return false;
+    const lower = String(name).toLowerCase();
+    if (lower.includes('routière') || lower.includes('routiere')) return false;
+    if (lower.includes('rocade')) return false;
+    if (lower.includes('(tram')) return false;
+    if (lower.includes(' tram')) return false;
+    if (lower.includes('rue de la gare')) return false;
+    if (lower.includes('op der gare')) return false;
+    if (lower.includes('bus')) return false;
+    if (name === 'Luxembourg, Gare Centrale') return true;
+    if (name === 'Howald, Gare') return true;
+    return /,\s*Gare\b/i.test(name);
+  }
+    
   // ---------- Maths géo (approx) ----------
   const R = 6371000;
   function toXY(lat, lon, lat0){ const x=(lon*Math.PI/180)*Math.cos(lat0*Math.PI/180), y=(lat*Math.PI/180); return {x,y}; }
@@ -906,18 +1325,18 @@ const WEEKDAY_FIELDS = ['sunday','monday','tuesday','wednesday','thursday','frid
     { id:'noveant', label:'Novéant-sur-Moselle', stopArea:'StopArea:OCE87192427', lat:49.028717, lon:6.052051, type:'regular' },
     { id:'ancy-sur-moselle', label:'Ancy-sur-Moselle', stopArea:'StopArea:OCE87192419', lat:49.057714, lon:6.062342, type:'regular' },
     { id:'ars-sur-moselle', label:'Ars-sur-Moselle', stopArea:'StopArea:OCE87192401', lat:49.074475, lon:6.077646, type:'regular' },
-    { id:'metz', label:'Metz', stopArea:'StopArea:OCE87192039', lat:49.109466, lon:6.177052, type:'major' },
+    { id:'metz', label:'Metz', stopArea:'StopArea:OCE87192039', lat:49.109466, lon:6.177052, type:'major', extraStopNames:['Metz-Ville, Gare'] },
     { id:'metz-nord', label:'Metz Nord', stopArea:'StopArea:OCE87192070', lat:49.136865, lon:6.167538, type:'regular' },
     { id:'woippy', label:'Woippy', stopArea:'StopArea:OCE87192088', lat:49.148797, lon:6.155621, type:'regular' },
     { id:'maizieres', label:'Maizières-lès-Metz', stopArea:'StopArea:OCE87191106', lat:49.215536, lon:6.158727, type:'regular' },
     { id:'walygator-parc', label:'Walygator parc', stopArea:'StopArea:OCE87191098', lat:49.22492, lon:6.15946, type:'regular' },
     { id:'hagondange', label:'Hagondange', stopArea:'StopArea:OCE87191114', lat:49.25356, lon:6.16448, type:'regular' },
     { id:'uckange', label:'Uckange', stopArea:'StopArea:OCE87191130', lat:49.303459, lon:6.1566, type:'regular' },
-    { id:'thionville', label:'Thionville', stopArea:'StopArea:OCE87191007', lat:49.353965, lon:6.168582, type:'major' },
-    { id:'hettange-grande', label:'Hettange-Grande', stopArea:'StopArea:OCE87191163', lat:49.407685, lon:6.156759, type:'regular' },
-    { id:'bettembourg', label:'Bettembourg', stopArea:'StopArea:OCE82006030', lat:49.516111, lon:6.101111, type:'major' },
-    { id:'howald', label:'Howald', stopArea:'StopArea:OCE82002501', lat:49.58032, lon:6.13232, type:'regular' },
-    { id:'luxembourg', label:'Luxembourg', stopArea:'StopArea:OCE82001000', lat:49.599722, lon:6.134722, type:'major' }
+    { id:'thionville', label:'Thionville', stopArea:'StopArea:OCE87191007', lat:49.353965, lon:6.168582, type:'major', extraStopNames:['Thionville, Gare'] },
+    { id:'hettange-grande', label:'Hettange-Grande', stopArea:'StopArea:OCE87191163', lat:49.407685, lon:6.156759, type:'regular', extraStopNames:['Hettange-Grande, Gare SNCF'] },
+    { id:'bettembourg', label:'Bettembourg', stopArea:'StopArea:OCE82006030', lat:49.516111, lon:6.101111, type:'major', extraStopNames:['Bettembourg, Gare'] },
+    { id:'howald', label:'Howald', stopArea:'StopArea:OCE82002501', lat:49.58032, lon:6.13232, type:'regular', extraStopNames:['Howald, Gare'] },
+    { id:'luxembourg', label:'Luxembourg', stopArea:'StopArea:OCE82001000', lat:49.599722, lon:6.134722, type:'major', extraStopNames:['Luxembourg, Gare Centrale'] }
   ];
   const axisStationsById = new Map(AXIS_STATIONS.map(st=>[st.id, st]));
   const SILLON_BOUNDS = L.latLngBounds(AXIS_STATIONS.map(st=>[st.lat, st.lon]));
@@ -1002,10 +1421,12 @@ const WEEKDAY_FIELDS = ['sunday','monday','tuesday','wednesday','thursday','frid
 
   function iconForTrain(train){
     const cow = cowForTrain(train.id);
-    const num = escapeHTML(train.number || train.id);
+    const displayNum = train.number || train.headsign || train.id;
+    const num = escapeHTML(displayNum || '—');
     const safeId = escapeAttr(train.id);
     const delayInfo = train.delayInfo || computeTrainDelayInfo(train);
-    const ariaParts = [`Voir le détail du ${train.number ? `train ${train.number}` : 'train'}`];
+    const ariaLabelText = formatTrainAriaLabel(train, train.id);
+    const ariaParts = [`Voir le détail du ${ariaLabelText}`];
     if (delayInfo){
       if (delayInfo.minutes == null){
         ariaParts.push('train supprimé');
@@ -1018,9 +1439,12 @@ const WEEKDAY_FIELDS = ['sunday','monday','tuesday','wednesday','thursday','frid
       ? `<span class="${delayInfo.badgeClass}"${delayInfo.title ? ` title="${escapeAttr(delayInfo.title)}"` : ''}>${escapeHTML(delayInfo.label)}</span>`
       : '';
     const titleAttr = delayInfo?.title ? ` title="${escapeAttr(delayInfo.title)}"` : '';
+    const classNames = ['cow-marker'];
+    if (train.branding?.className) classNames.push(train.branding.className);
+    const classAttr = escapeAttr(classNames.join(' '));
     return L.divIcon({
       className:'',
-      html:`<button type="button" class="cow-marker" data-train-id="${safeId}" aria-label="${aria}"${titleAttr}>${cow}<span class="train-num">${num}</span>${badge}</button>`,
+      html:`<button type="button" class="${classAttr}" data-train-id="${safeId}" aria-label="${aria}"${titleAttr}>${cow}<span class="train-num">${num}</span>${badge}</button>`,
       iconSize:null,
       iconAnchor:[20,20]
     });
@@ -1150,10 +1574,16 @@ const mapContainerEl = map.getContainer();
     tripStopsEl.classList.remove('station-mode');
     tripPanelIconEl.textContent = cowForTrain(activeTripId);
 
-    if (data.number){
-      tripPanelTrainEl.textContent = `Bétaillère ${data.number}`;
+    const labelInfo = trainLabelParts(data, data.id);
+    const baseLabel = labelInfo.label || data.headsign || data.id || '';
+    if (labelInfo.category === 'tgv-roi'){
+      tripPanelTrainEl.textContent = baseLabel || 'TGV ROI';
+    } else if (data.number && baseLabel){
+      tripPanelTrainEl.textContent = `Bétaillère ${baseLabel}`;
     } else if (data.headsign){
       tripPanelTrainEl.textContent = data.headsign;
+    } else if (baseLabel){
+      tripPanelTrainEl.textContent = baseLabel;
     } else {
       tripPanelTrainEl.textContent = data.id || 'Sélectionnez une bétaillère';
     }
@@ -1418,7 +1848,7 @@ const mapContainerEl = map.getContainer();
     }
 
     const cards = events.map(ev=>{
-      const title = ev.number ? `Train ${ev.number}` : (ev.headsign || ev.displayName || ev.trainId);
+      const title = ev.titleText || (ev.number ? `Train ${ev.number}` : (ev.headsign || ev.displayName || ev.trainId));
       const subtitle = [];
       if (ev.headsign && (!ev.number || !title.includes(ev.headsign))){
         subtitle.push(ev.headsign);
@@ -1434,7 +1864,7 @@ const mapContainerEl = map.getContainer();
       const note = subtitle.length ? `<div class="station-event-note">${escapeHTML(subtitle.join(' — '))}</div>` : '';
       const times = `<div class="station-event-times">${arrLine}${depLine}</div>`;
       const btnId = escapeAttr(ev.trainId);
-      const btnLabel = escapeAttr(`Ouvrir le détail du ${ev.number ? `train ${ev.number}` : 'service'}`);
+      const btnLabel = escapeAttr(`Ouvrir le détail du ${ev.ariaLabel || (ev.number ? `train ${ev.number}` : 'service')}`);
       return `<div class="station-event"><div class="station-event-main"><div class="station-event-title">${escapeHTML(title)}</div><div class="station-event-status">${escapeHTML(statusText)}</div>${times}${note}</div><button type="button" class="station-train-link" data-train-id="${btnId}" aria-label="${btnLabel}">${ev.cow}<span>Détails</span></button></div>`;
     }).join('');
 
@@ -1483,11 +1913,19 @@ const mapContainerEl = map.getContainer();
         continue;
       }
 
+      const titleText = formatTrainLabel(train, { includeTrainWord:true, fallbackId:tripId });
+      const ariaLabel = formatTrainAriaLabel(train, tripId);
+      const labelMeta = trainLabelParts(train, tripId);
+      
       events.push({
         trainId: tripId,
         number: train.number,
         headsign: train.headsign,
         displayName: train.displayName || train.number || tripId,
+        label: labelMeta.label,
+        category: labelMeta.category,
+        titleText,
+        ariaLabel,
         arrSec,
         depSec,
         arrPlanned,
@@ -1506,6 +1944,16 @@ const mapContainerEl = map.getContainer();
 
   function prepareStationMetadata(){
   axisStationByStopId.clear();
+  const nameIndex = new Map();
+  for (const [stopId, meta] of stopsById.entries()){
+    const candidates = [meta.name, meta.stop_name, meta.stop_desc];
+    for (const candidate of candidates){
+      const norm = normalizeStationName(candidate);
+      if (!norm) continue;
+      if (!nameIndex.has(norm)) nameIndex.set(norm, []);
+      nameIndex.get(norm).push(stopId);
+    }
+  } 
   for (const station of AXIS_STATIONS){
     const ids = new Set(station.stopIds || []);
 
@@ -1530,6 +1978,19 @@ const mapContainerEl = map.getContainer();
             station.lat = meta.lat;
             station.lon = meta.lon;
             break;
+          }
+        }
+      }
+    }
+
+    if (Array.isArray(station.extraStopNames)){
+      for (const label of station.extraStopNames){
+        const norm = normalizeStationName(label);
+        if (!norm) continue;
+        const matches = nameIndex.get(norm);
+        if (matches){
+          for (const stopId of matches){
+            ids.add(stopId);
           }
         }
       }
@@ -1906,6 +2367,16 @@ function setLayerGroupVisibility(group, visible){
       stopNameCandidatesCache.clear();
       realtimeStopDataByTrip.clear();
 
+      const axisStopIds = new Set();
+      const axisTripIds = new Set();
+      const axisRouteIds = new Set();
+      let combinedActiveServiceIds = null;
+      const mergeActiveServices = (set)=>{
+        if (!set || !set.size) return;
+        if (!combinedActiveServiceIds) combinedActiveServiceIds = new Set();
+        for (const id of set) combinedActiveServiceIds.add(id);
+      };
+
       const rawStopsById = new Map();
       const rawStopChildrenByParent = new Map();
       const stops = await parseCSVAny(FILES.stops);
@@ -1935,9 +2406,6 @@ function setLayerGroupVisibility(group, visible){
         });
       }
       for (const [k,v] of stopTimesByTrip) v.sort((a,b)=>a.seq-b.seq);
-
-       const axisStopIds = new Set();
-      const axisTripIds = new Set();
 
       for (const [tripId, seq] of Array.from(stopTimesByTrip.entries())){
         if (!tripPassesAxis(seq, rawStopsById)){
@@ -1981,8 +2449,6 @@ function setLayerGroupVisibility(group, visible){
       rawStopsById.clear();
       rawStopChildrenByParent.clear();
 
-      const axisRouteIds = new Set();
-
       // trips (optionnel)
       try {
         const trips = await parseCSVAny(FILES.trips);
@@ -2013,13 +2479,24 @@ function setLayerGroupVisibility(group, visible){
         calendarDateRows = await parseCSVAny(FILES.calendar_dates);
       } catch(_){ /* ok si absent */ }
 
-      activeServiceIds = computeActiveServiceSet(calendarRows, calendarDateRows);
+      mergeActiveServices(computeActiveServiceSet(calendarRows, calendarDateRows));
+
+      const stopsBeforeCfl = stopsById.size;
+      const tripsBeforeCfl = stopTimesByTrip.size;
+      await integrateCflGtfs({ axisStopIds, axisTripIds, axisRouteIds, mergeActiveServices });
+      const cflStopsAdded = Math.max(0, stopsById.size - stopsBeforeCfl);
+      const cflTripsAdded = Math.max(0, stopTimesByTrip.size - tripsBeforeCfl);
+
+      activeServiceIds = combinedActiveServiceIds && combinedActiveServiceIds.size ? combinedActiveServiceIds : null;
       if (activeServiceIds && !tripsById.size) activeServiceIds = null;
 
       prepareStationMetadata();
       renderAxisStations();
 
       let statusMsg = 'GTFS chargé — ' + stopsById.size + ' gares, ' + stopTimesByTrip.size + ' trips';
+      if (cflStopsAdded || cflTripsAdded){
+        statusMsg += ` (CFL +${cflStopsAdded} gares, +${cflTripsAdded} trips)`;
+      }
       if (activeServiceIds) statusMsg += ', ' + activeServiceIds.size + ' services actifs aujourd\'hui';
       setStatus(statusMsg + '.');
     } catch(e){
@@ -2027,6 +2504,187 @@ function setLayerGroupVisibility(group, visible){
     }
   }
 
+async function integrateCflGtfs({ axisStopIds, axisTripIds, axisRouteIds, mergeActiveServices } = {}){
+    try {
+      const routeRows = await parseCSVAny(CFL_FILES.routes, CFL_BASES);
+      const cflRoutes = new Map(); // original -> { key, short, long, agency_id, original }
+      for (const row of routeRows){
+        const routeId = (row.route_id || '').trim();
+        const agencyId = (row.agency_id || '').trim();
+        if (!routeId || !CFL_ROUTE_IDS_ALLOWED.has(routeId)) continue;
+        if (agencyId !== '11') continue;
+        const key = `CFL:${routeId}`;
+        cflRoutes.set(routeId, {
+          key,
+          short: (row.route_short_name || '').trim(),
+          long: (row.route_long_name || '').trim(),
+          agency_id: agencyId,
+          original: routeId
+        });
+      }
+
+      if (!cflRoutes.size) return null;
+
+      const stopRows = await parseCSVAny(CFL_FILES.stops, CFL_BASES);
+      const cflStopsById = new Map();
+      const stopIdMap = new Map(); // original -> prefixed
+      for (const row of stopRows){
+        const rawId = (row.stop_id || '').trim();
+        const rawName = (row.stop_name || '').trim();
+        if (!rawId || !rawName) continue;
+        if (!isCflStationCandidate(rawName)) continue;
+        const lat = parseFloat(row.stop_lat);
+        const lon = parseFloat(row.stop_lon);
+        if (!isFinite(lat) || !isFinite(lon)) continue;
+        const stopKey = `CFL:${rawId}`;
+        stopIdMap.set(rawId, stopKey);
+        const entry = {
+          stop_id: stopKey,
+          stop_id_original: rawId,
+          name: sanitizeCflStationName(rawName),
+          stop_name: rawName,
+          stop_desc: (row.stop_desc || '').trim() || undefined,
+          lat,
+          lon,
+          parent_station: null,
+          location_type: Number(row.location_type ?? 0) || 0,
+          source: 'CFL'
+        };
+        cflStopsById.set(stopKey, entry);
+      }
+
+      if (!cflStopsById.size) return null;
+
+      const tripRows = await parseCSVAny(CFL_FILES.trips, CFL_BASES);
+      const cflTripsMeta = new Map(); // original trip id -> meta
+      for (const row of tripRows){
+        const rawTripId = (row.trip_id || '').trim();
+        const rawRouteId = (row.route_id || '').trim();
+        const rawServiceId = (row.service_id || '').trim();
+        if (!rawTripId || !rawRouteId || !rawServiceId) continue;
+        if (!cflRoutes.has(rawRouteId)) continue;
+        const tripKey = `CFL:${rawTripId}`;
+        const serviceKey = `CFL:${rawServiceId}`;
+        const routeInfo = cflRoutes.get(rawRouteId);
+        cflTripsMeta.set(rawTripId, {
+          tripKey,
+          originalTripId: rawTripId,
+          routeKey: routeInfo.key,
+          serviceKey,
+          headsign: (row.trip_headsign || '').trim(),
+          shortName: (row.trip_short_name || '').trim()
+        });
+      }
+
+      if (!cflTripsMeta.size) return null;
+
+      const stopTimeRows = await parseCSVAny(CFL_FILES.stop_times, CFL_BASES);
+      const cflStopTimesByTrip = new Map();
+      for (const row of stopTimeRows){
+        const rawTripId = (row.trip_id || '').trim();
+        const meta = cflTripsMeta.get(rawTripId);
+        if (!meta) continue;
+        const rawStopId = (row.stop_id || '').trim();
+        const stopKey = stopIdMap.get(rawStopId);
+        if (!stopKey) continue;
+        if (!cflStopTimesByTrip.has(rawTripId)) cflStopTimesByTrip.set(rawTripId, []);
+        cflStopTimesByTrip.get(rawTripId).push({
+          stop_id: stopKey,
+          arrival: gtfsTimeToSec(row.arrival_time),
+          departure: gtfsTimeToSec(row.departure_time),
+          seq: Number(row.stop_sequence)
+        });
+      }
+
+      const usedRouteKeys = new Set();
+      const keptServiceIds = new Set();
+      let addedStops = 0;
+      let addedTrips = 0;
+
+      for (const [rawTripId, seq] of cflStopTimesByTrip.entries()){
+        seq.sort((a,b)=>a.seq-b.seq);
+        if (seq.length < 2) continue;
+        const meta = cflTripsMeta.get(rawTripId);
+        if (!meta) continue;
+        if (!tripPassesAxis(seq, cflStopsById)) continue;
+
+        const { tripKey, routeKey, serviceKey, headsign, shortName, originalTripId } = meta;
+        if (stopTimesByTrip.has(tripKey)) continue;
+        stopTimesByTrip.set(tripKey, seq);
+        addedTrips++;
+        usedRouteKeys.add(routeKey);
+        keptServiceIds.add(serviceKey);
+        if (axisTripIds) axisTripIds.add(tripKey);
+        if (axisRouteIds) axisRouteIds.add(routeKey);
+        tripsById.set(tripKey, {
+          route_id: routeKey,
+          headsign,
+          service_id: serviceKey,
+          trip_short_name: shortName,
+          source: 'CFL',
+          original_trip_id: originalTripId
+        });
+        for (const st of seq){
+          if (axisStopIds) axisStopIds.add(st.stop_id);
+          const stopMeta = cflStopsById.get(st.stop_id);
+          if (!stopMeta) continue;
+          if (!stopsById.has(st.stop_id)){
+            stopsById.set(st.stop_id, stopMeta);
+            addedStops++;
+          }
+        }
+      }
+
+      for (const routeInfo of cflRoutes.values()){
+        if (!usedRouteKeys.has(routeInfo.key)) continue;
+        if (!routesById.has(routeInfo.key)){
+          routesById.set(routeInfo.key, {
+            short: routeInfo.short,
+            long: routeInfo.long,
+            agency_id: routeInfo.agency_id,
+            source: 'CFL',
+            original_route_id: routeInfo.original
+          });
+        }
+      }
+
+      if (keptServiceIds.size){
+        let calendarRows = null;
+        try {
+          const rows = await parseCSVAny(CFL_FILES.calendar, CFL_BASES);
+          calendarRows = rows.map(row => {
+            const svcRaw = (row.service_id || '').trim();
+            if (!svcRaw) return null;
+            const serviceKey = `CFL:${svcRaw}`;
+            if (!keptServiceIds.has(serviceKey)) return null;
+            return { ...row, service_id: serviceKey };
+          }).filter(Boolean);
+        } catch(_){ /* ok si absent */ }
+
+        let calendarDateRows = null;
+        try {
+          const rows = await parseCSVAny(CFL_FILES.calendar_dates, CFL_BASES);
+          calendarDateRows = rows.map(row => {
+            const svcRaw = (row.service_id || '').trim();
+            if (!svcRaw) return null;
+            const serviceKey = `CFL:${svcRaw}`;
+            if (!keptServiceIds.has(serviceKey)) return null;
+            return { ...row, service_id: serviceKey };
+          }).filter(Boolean);
+        } catch(_){ /* ok si absent */ }
+
+        if ((calendarRows && calendarRows.length) || (calendarDateRows && calendarDateRows.length)){
+          mergeActiveServices?.(computeActiveServiceSet(calendarRows, calendarDateRows));
+        }
+      }
+
+      return { addedStops, addedTrips };
+    } catch(e){
+      console.warn('[CFL] Chargement GTFS CFL impossible', e);
+      return null;
+    }
+  }
+    
   // ---------- Filtre sillon & service du jour ----------
   function tripPassesAxis(seq, lookup = stopsById){
     const names = seq.map(s=> (lookup.get(s.stop_id)?.name || '').toLowerCase());
@@ -2051,8 +2709,12 @@ function setLayerGroupVisibility(group, visible){
 
       const trip = tripsById.get(trip_id) || {};
       const route = routesById.get(trip.route_id) || {};
-      const number = trainNumberForTrip(trip, route, trip_id);
-      const numberKey = extractTrainNumberCandidate(number) || extractTrainNumberCandidate(trip_id) || null;
+      const rawNumber = trainNumberForTrip(trip, route, trip_id);
+      const numberCandidate = extractTrainNumberCandidate(rawNumber);
+      const fallbackNumberCandidate = numberCandidate || extractTrainNumberCandidate(trip_id) || null;
+      const branding = computeTrainBranding(trip_id, trip, route, rawNumber, numberCandidate || fallbackNumberCandidate);
+      const numberDisplay = branding.displayNumber || rawNumber || (fallbackNumberCandidate != null ? String(fallbackNumberCandidate) : null);
+      const numberKey = fallbackNumberCandidate != null ? String(fallbackNumberCandidate) : null;
       const realtimeProfile = computeRealtimeStopData(trip_id, seq, numberKey);
 
       const startPlanned = seq[0].departure ?? seq[0].arrival;
@@ -2064,9 +2726,9 @@ function setLayerGroupVisibility(group, visible){
       const totalSpan = endEffective - startEffective;
       const tripProgress = totalSpan > 0 ? (nowSec - startEffective) / totalSpan : null;
       const headsign = (()=>{
-        if (trip.headsign && trip.headsign !== number) return trip.headsign;
-        if (route.long && route.long !== number) return route.long;
-        if (route.short && route.short !== number) return route.short;
+        if (trip.headsign && trip.headsign !== numberDisplay) return trip.headsign;
+        if (route.long && route.long !== numberDisplay) return route.long;
+        if (route.short && route.short !== numberDisplay) return route.short;
         return '';
       })();
 
@@ -2095,8 +2757,11 @@ function setLayerGroupVisibility(group, visible){
           lat: stopMeta.lat,
           lon: stopMeta.lon,
           route_id: trip.route_id,
-          number,
+          number: numberDisplay,
+          numberRaw: rawNumber || null,
+          numberDigits: branding.digits || null,
           numberKey,
+          branding,
           startSec: startEffective,
           endSec: endEffective,
           scheduledStartSec: startPlanned,
@@ -2142,8 +2807,11 @@ function setLayerGroupVisibility(group, visible){
           lat,
           lon,
           route_id: trip.route_id,
-          number,
+          number: numberDisplay,
+          numberRaw: rawNumber || null,
+          numberDigits: branding.digits || null,
           numberKey,
+          branding,
           startSec: startEffective,
           endSec: endEffective,
           scheduledStartSec: startPlanned,
@@ -2169,7 +2837,8 @@ function setLayerGroupVisibility(group, visible){
       seen.add(t.id);
       const delayInfo = computeTrainDelayInfo(t);
       t.delayInfo = delayInfo;
-      const displayName = t.number ? (t.headsign ? `${t.headsign} — Train ${t.number}` : `Train ${t.number}`) : (t.headsign || t.id);
+      const labelWithTrain = formatTrainLabel(t, { includeTrainWord:true, fallbackId:t.id });
+      const displayName = t.headsign ? `${t.headsign} — ${labelWithTrain}` : labelWithTrain;
       t.displayName = displayName;
       trainDataById.set(t.id, t);
 
@@ -2234,9 +2903,13 @@ function setLayerGroupVisibility(group, visible){
   // ---------- Boot ----------
   (async function boot(){
     setRealtimeStatus('Retards temps réel : chargement…');
-    const realtimePromise = loadGtfsRetards({ forceFresh: true }).catch(err => {
+    const gtfsPromise = loadGtfsRetards({ forceFresh: true }).catch(err => {
       console.error('[GTFS-RT] échec initial', err);
-      updateRealtimeStatus({ error: 'indisponibles' });
+      setRealtimeSourceError('gtfs', 'indisponibles');
+    });
+    const hafasPromise = loadHafasDelays().catch(err => {
+      console.error('[HAFAS] échec initial', err);
+      setRealtimeSourceError('hafas', 'indisponibles');
     });
 
     await loadNetworks();
@@ -2244,14 +2917,24 @@ function setLayerGroupVisibility(group, visible){
     tick();
     requestAnimationFrame(loop);
 
-    realtimePromise.finally(()=>{
+    gtfsPromise.finally(()=>{
       if (gtfsRtRefreshTimer == null){
         gtfsRtRefreshTimer = setInterval(()=>{
           loadGtfsRetards({ forceFresh: true }).catch(err => {
             console.warn('[GTFS-RT] rafraîchissement en échec', err);
-            updateRealtimeStatus({ error: trainDelayLastUpdated ? 'rafraîchissement en échec' : 'indisponibles' });
+            setRealtimeSourceError('gtfs', trainDelayLastUpdated ? 'rafraîchissement en échec' : 'indisponibles');
           });
         }, GTFS_RT_REFRESH_INTERVAL_MS);
+      }
+    });
+    hafasPromise.finally(()=>{
+      if (hafasRefreshTimer == null){
+        hafasRefreshTimer = setInterval(()=>{
+          loadHafasDelays().catch(err => {
+            console.warn('[HAFAS] rafraîchissement en échec', err);
+            setRealtimeSourceError('hafas', 'rafraîchissement en échec');
+          });
+        }, HAFAS_REFRESH_INTERVAL_MS);
       }
     });
   })().catch(e=> setStatus('Erreur initialisation: '+e.message, true));
