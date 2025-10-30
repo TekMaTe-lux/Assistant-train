@@ -261,7 +261,7 @@ function escapeHTML(str){
       '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;'
     })[c]);
   }
- function extractTrainNumberCandidate(value){
+  function extractTrainNumberCandidate(value){
     if (value == null) return null;
     const raw = String(value).trim();
     if (!raw) return null;
@@ -278,7 +278,15 @@ function escapeHTML(str){
     }
     return null;
   }
-
+ function normalizeTrainNumberKey(value){
+    if (value == null) return null;
+    const raw = String(value).trim();
+    if (!raw) return null;
+    const trimmed = raw.replace(/^0+/, '');
+    if (trimmed.length) return trimmed;
+    return raw.length ? '0' : null;
+  } 
+    
   function trainNumberForTrip(trip, route, tripId){
     const candidates = [
       trip?.trip_short_name,
@@ -575,7 +583,9 @@ function escapeHTML(str){
         }
       }
       if (perStation.size){
-         perTrain.set(String(trainNum), perStation);
+         const rawKey = String(trainNum);
+        const normalizedKey = normalizeTrainNumberKey(rawKey) || rawKey;
+        perTrain.set(normalizedKey, perStation);
       }
     }
     const originLabel = describeRealtimeSource(source);
@@ -598,7 +608,9 @@ function escapeHTML(str){
           stationMap.set(String(norm), { original: entry.original, value: entry.value });
         }
         if (stationMap.size){
-          normalized.set(String(trainNum), stationMap);
+          const rawKey = String(trainNum);
+          const normalizedKey = normalizeTrainNumberKey(rawKey) || rawKey;
+          normalized.set(normalizedKey, stationMap);
         }
       }
     }
@@ -741,7 +753,8 @@ function escapeHTML(str){
             if (!delay) continue;
             if (!delay.cancelled && delay.minutes == null) continue;
             const value = delay.cancelled ? null : Number(delay.minutes ?? 0);
-            const key = String(number);
+            const keyRaw = String(number);
+            const key = normalizeTrainNumberKey(keyRaw) || keyRaw;
             let perStation = perTrain.get(key);
             if (!perStation){
               perStation = new Map();
@@ -840,7 +853,7 @@ function escapeHTML(str){
 
   function computeTrainDelayInfo(train){
     if (!train || !trainDelaysByNumber.size) return null;
-    const numberKey = train.numberKey || extractTrainNumberCandidate(train.number) || null;
+    const numberKey = normalizeTrainNumberKey(train.numberKey || extractTrainNumberCandidate(train.number) || null);
     if (!numberKey) return null;
     const perStation = trainDelaysByNumber.get(String(numberKey));
     if (!perStation) return null;
@@ -997,7 +1010,8 @@ function escapeHTML(str){
       realtimeStopDataByTrip.delete(tripId);
       return null;
     }
-    const perStation = numberKey ? trainDelaysByNumber.get(String(numberKey)) : null;
+    const normalizedKey = normalizeTrainNumberKey(numberKey);
+    const perStation = normalizedKey ? trainDelaysByNumber.get(String(normalizedKey)) : null;
     const startPlanned = seq[0]?.departure ?? seq[0]?.arrival ?? null;
     const lastStop = seq[seq.length - 1] || null;
     const endPlanned = lastStop?.arrival ?? lastStop?.departure ?? null;
@@ -2726,9 +2740,10 @@ async function integrateCflGtfs({ axisStopIds, axisTripIds, axisRouteIds, mergeA
       const rawNumber = trainNumberForTrip(trip, route, trip_id);
       const numberCandidate = extractTrainNumberCandidate(rawNumber);
       const fallbackNumberCandidate = numberCandidate || extractTrainNumberCandidate(trip_id) || null;
+      const numberKeyRaw = fallbackNumberCandidate != null ? String(fallbackNumberCandidate) : null;
+      const numberKey = numberKeyRaw ? normalizeTrainNumberKey(numberKeyRaw) : null;
       const branding = computeTrainBranding(trip_id, trip, route, rawNumber, numberCandidate || fallbackNumberCandidate);
-      const numberDisplay = branding.displayNumber || rawNumber || (fallbackNumberCandidate != null ? String(fallbackNumberCandidate) : null);
-      const numberKey = fallbackNumberCandidate != null ? String(fallbackNumberCandidate) : null;
+      const numberDisplay = branding.displayNumber || rawNumber || (numberKey != null ? String(numberKey) : (numberKeyRaw != null ? String(numberKeyRaw) : null));
       const realtimeProfile = computeRealtimeStopData(trip_id, seq, numberKey);
 
       const startPlanned = seq[0].departure ?? seq[0].arrival;
