@@ -3628,7 +3628,6 @@ function renderRowsChunked(htmlRows, tbody, chunk=200){
 
 <!-- BLOC 2 : Infos trains -->
 <div id="trainInfo"></div>
-<div id="lastUpdated" class="last-updated" aria-live="polite"></div>
   
 <div id="refreshContainer" style="display:none; text-align:center; margin:18px 0;">
   <button id="refreshButton" class="refresh-btn">Actualiser les données</button>
@@ -4865,6 +4864,34 @@ function cflIsAllowedTrainType(shortName){
   const upper = String(shortName || '').trim().toUpperCase();
   return upper && CFL_ALLOWED_ROUTE_SHORT_NAMES.has(upper);
 }
+    const CFL_TRAIN_TYPE_REGISTRY = new Map();
+
+function normalizeCflTrainType(trainType){
+  const upper = String(trainType || '').trim().toUpperCase();
+  return upper && CFL_ALLOWED_ROUTE_SHORT_NAMES.has(upper) ? upper : '';
+}
+
+function stripLeadingZerosForDisplay(value){
+  const raw = String(value ?? '').trim();
+  const stripped = raw.replace(/^0+/, '');
+  return stripped || '0';
+}
+
+function registerCflTrainType(selectionKey, trainType){
+  if (!selectionKey || !selectionKey.startsWith('CFL-')) return;
+  const normalized = normalizeCflTrainType(trainType);
+  if (normalized) CFL_TRAIN_TYPE_REGISTRY.set(selectionKey, normalized);
+}
+
+function lookupRegisteredCflTrainType(selectionKey){
+  const stored = selectionKey ? CFL_TRAIN_TYPE_REGISTRY.get(selectionKey) : '';
+  return normalizeCflTrainType(stored);
+}
+
+function buildCflDisplayLabel(trainType, numero){
+  const prefix = normalizeCflTrainType(trainType) || 'CFL';
+  return `${prefix}${stripLeadingZerosForDisplay(numero)}`;
+}
 const CFL_STATION_ALIASES = {
   'luxembourg': ['Luxembourg, Gare Centrale'],
   'luxembourg gare': ['Luxembourg, Gare Centrale'],
@@ -5228,6 +5255,7 @@ function cflFindDirectTrainsBetween({ fromNames = [], toNames = [], minDeparture
     const routeMeta = CFL_GTFS.routes.get(tripMeta.route_id) || {};
     const trainType = routeMeta.shortName || '';
     if (!cflIsAllowedTrainType(trainType)) return;
+    const normalizedType = normalizeCflTrainType(trainType);
     const numero = (tripMeta.shortName && tripMeta.shortName.trim()) || extractTrainNumber(tripMeta.headsign) || null;
     if (!numero) return;
 
@@ -5235,16 +5263,20 @@ function cflFindDirectTrainsBetween({ fromNames = [], toNames = [], minDeparture
     if (seen.has(key)) return;
     seen.add(key);
 
+    const numeroStr = String(numero);
+    const selectionKey = `CFL-${numeroStr}`;
+    registerCflTrainType(selectionKey, normalizedType);
+
     results.push({
-      numero: String(numero),
-      selectionKey: `CFL-${String(numero)}`,
-      displayLabel: `${trainType ? (trainType + ' ') : 'CFL '}${String(numero)}`.trim(),
+      numero: numeroStr,
+      selectionKey,
+      displayLabel: buildCflDisplayLabel(normalizedType, numeroStr),
       dep: minutesToClock(depStop.dep),
       arr: arrStop.arr != null ? minutesToClock(arrStop.arr) : null,
       depMin: depStop.dep,
       arrMin: arrStop.arr,
       source: 'CFL',
-      trainType,
+      trainType: normalizedType,
       viaStart: depStop.stop_id,
       viaEnd: arrStop.stop_id,
       tripId
@@ -5569,6 +5601,13 @@ async function buildCflResult(selectionKey, { ymd } = {}){
   if (!cflIsAllowedTrainType(trainType)){
     return { error: 'Train CFL non pris en charge' };
   }
+  const normalizedType = normalizeCflTrainType(trainType);
+  const canonicalKey = (selectionKey && selectionKey.startsWith('CFL-'))
+    ? selectionKey
+    : `CFL-${numero}`;
+  registerCflTrainType(canonicalKey, normalizedType);
+
+  const displayLabel = buildCflDisplayLabel(normalizedType, numero);
   const impacted = {};
   const disruptions = [];
   const disruptionCauses = [];
@@ -5643,7 +5682,10 @@ async function buildCflResult(selectionKey, { ymd } = {}){
     disruptions,
     disruptionCauses,
     tripId: chosenTripId,
-    source: 'CFL'
+    source: 'CFL',
+    trainType: normalizedType,
+    displayLabel,
+    selectionKey: canonicalKey
   };
 }
 
@@ -6744,7 +6786,9 @@ async function proposerTrainsOD(eventOrOptions){
     if (label) {
       t.textContent = label;
     } else if (chip.dataset.num) {
-      t.textContent = chip.dataset.num;
+      t.textContent = chip.dataset.num.startsWith('CFL-')
+        ? formatTrainDisplayLabel(chip.dataset.num)
+        : chip.dataset.num;
     }
   });
 
@@ -6820,6 +6864,40 @@ const PRESET_PM = "88741,88743,88745,88747,88530,88749,88751,88753,88532,88755,8
 /* ====================== ÉTAT CENTRAL ====================== */
 const selectedTrains = new Set();
 const TRAIN_LABEL_REGISTRY = new Map();
+
+function extractCflTrainTypeFromResult(result){
+  if (!result || typeof result !== 'object') return '';
+  if (result.trainType){
+    const direct = normalizeCflTrainType(result.trainType);
+    if (direct) return direct;
+  }
+  if (result.cflMeta && result.cflMeta.trainType){
+    const metaType = normalizeCflTrainType(result.cflMeta.trainType);
+    if (metaType) return metaType;
+  }
+  const mode = result.train?.display_informations?.commercial_mode || '';
+  if (mode){
+    const match = mode.match(/\b(RB|RE|IC)\b/i);
+    if (match) {
+      const inferred = normalizeCflTrainType(match[1]);
+      if (inferred) return inferred;
+    }
+  }
+  return '';
+}
+
+function formatTrainDisplayLabel(selectionKey, { result, trainType } = {}){
+  if (!selectionKey || !selectionKey.startsWith('CFL-')) return selectionKey;
+  const rawNumero = String(selectionKey).replace(/^CFL-/, '');
+  let prefix = normalizeCflTrainType(trainType);
+  if (!prefix && result){
+    prefix = extractCflTrainTypeFromResult(result);
+  }
+  if (!prefix){
+    prefix = lookupRegisteredCflTrainType(selectionKey);
+  }
+  return buildCflDisplayLabel(prefix, rawNumero);
+}
 
 let lastRapidPreset = null;
 let rapidPresetRefreshTimer = null;
@@ -7007,7 +7085,7 @@ function updateSelectionUI(){
     // (ré)génère le HTML des chips
     zone.innerHTML = arr.map(num => {
       const label = TRAIN_LABEL_REGISTRY.get(num)
-        || (num.startsWith('CFL-') ? `CFL ${num.slice(4)}` : num);
+        || (num.startsWith('CFL-') ? formatTrainDisplayLabel(num) : num);
       const safeNum = escapeHtml(num);
       const safeLabel = escapeHtml(label);
       const classes = ['chip-tag'];
@@ -7692,13 +7770,13 @@ if (!newStart) {
       const compClass   = getCompoClass(composition, true); // ← force blanc si inconnu
       const result = results[num];
       const isCfl = num.startsWith('CFL-');
-      const displayNumber = isCfl ? num.slice(4) : num;
-      const headerLabel = isCfl ? `CFL ${displayNumber}` : displayNumber;
+      const headerLabel = isCfl ? formatTrainDisplayLabel(num, { result }) : num;
       const classes = [`train-header`, compClass];
       if (isCfl) classes.push('cfl-train');
       const fallbackAttr = (!isCfl && result?.gtfsFallback) ? ' data-gtfs-fallback="1"' : '';
       const safeNumber = escapeHtml(num);
       const safeLabel = escapeHtml(headerLabel);
+      TRAIN_LABEL_REGISTRY.set(num, headerLabel);
       html += `<th class="${classes.join(' ')}" data-train-number="${safeNumber}" data-train-label="${safeLabel}"${fallbackAttr}>${safeLabel}</th>`;
     });
     html += '</tr><tr><th></th>';
@@ -7930,11 +8008,16 @@ function linkifyGaresAndTrains(root){
   scope.querySelectorAll('#trainInfo th[data-train-number]').forEach(th => {
     const numero = th.dataset.trainNumber;
     if (numero.startsWith('CFL-')) {
-      const label = th.dataset.trainLabel || `CFL ${numero.slice(4)}`;
+      const label = th.dataset.trainLabel || formatTrainDisplayLabel(numero);
       const safeLabel = escapeHtml(label);
+      const href = 'https://www.cfl.lu/fr-fr';
       const existing = th.querySelector('.train-link-cfl');
-      if (existing) existing.textContent = label;
-      else th.innerHTML = `<span class="train-link-cfl">${safeLabel}</span>`;
+      if (existing) {
+        existing.textContent = label;
+        existing.setAttribute('href', href);
+      } else {
+        th.innerHTML = `<a href="${href}" target="_blank" rel="noopener" class="train-link train-link-cfl">${safeLabel}</a>`;
+      }
       return;
     }
     const already = th.querySelector('a.train-link');
@@ -8060,7 +8143,9 @@ scheduleWeatherAfterTableSettled();
             };
           }
 
-          const displayNum = num.startsWith('CFL-') ? `CFL ${num.slice(4)}` : num;
+          const displayNum = num.startsWith('CFL-')
+            ? formatTrainDisplayLabel(num, { result })
+            : num;
           groupedDisruptions[key].trains.add(displayNum);
 
           // attrape aussi les n° dans impacted_objects
