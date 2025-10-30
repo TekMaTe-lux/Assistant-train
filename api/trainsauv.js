@@ -315,6 +315,20 @@ export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  res.setHeader(
+    'Access-Control-Expose-Headers',
+    [
+      'X-Sncf-Cache-State',
+      'X-Sncf-Cache-Expires',
+      'X-Sncf-Usage-Date',
+      'X-Sncf-Usage-Requests',
+      'X-Sncf-Usage-ApiRequests',
+      'X-Sncf-Usage-CacheHits',
+      'X-Sncf-Usage-Updated-At',
+      'X-Sncf-Usage-Quota',
+      'X-Sncf-Usage-Remaining'
+    ].join(', ')
+  );
   res.setHeader('Cache-Control', 'no-store');
 
   if (req.method === 'OPTIONS') {
