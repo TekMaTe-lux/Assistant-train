@@ -75,13 +75,21 @@
     const today = todayIso();
     if (!usage || usage.date !== today) {
       usage = {
-        date: today,
-        userRequests: 0,
-        apiRequests: 0,
-        cacheHits: 0,
-        lastReset: now()
-      };
+  date: today,
+  userRequests: 0,
+  apiRequests: 0,
+  cacheHits: 0,
+  lastReset: now(),
+
+  // nouveau :
+  realCalls: [],   // tableau des trains pour lesquels on a FAIT un appel réseau aujourd'hui
+  cacheServes: []  // tableau des trains qu'on a servis via cache (sans nouvel appel réseau)
+};
     }
+
+    // Sécurité rétrocompatibilité
+if (!Array.isArray(usage.realCalls)) usage.realCalls = [];
+if (!Array.isArray(usage.cacheServes)) usage.cacheServes = [];
 
     if (storageAvailable) {
       localStorage.setItem(STORAGE_KEYS.usage, JSON.stringify(usage));
@@ -110,14 +118,18 @@
   function getUsageSnapshot() {
     const usage = ensureUsageState();
     return Object.freeze({
-      date: usage.date,
-      userRequests: usage.userRequests,
-      apiRequests: usage.apiRequests,
-      cacheHits: usage.cacheHits,
-      lastReset: usage.lastReset,
-      lastUpdated: usage.lastUpdated || usage.lastReset,
-      remainingQuota: Math.max(0, DAILY_QUOTA - usage.apiRequests)
-    });
+  date: usage.date,
+  userRequests: usage.userRequests,
+  apiRequests: usage.apiRequests,
+  cacheHits: usage.cacheHits,
+  lastReset: usage.lastReset,
+  lastUpdated: usage.lastUpdated || usage.lastReset,
+  remainingQuota: Math.max(0, DAILY_QUOTA - usage.apiRequests),
+
+  // nouveau :
+  realCalls: usage.realCalls.slice(-200),     // on renvoie juste les derniers 200 pour pas exploser la page
+  cacheServes: usage.cacheServes.slice(-200) // idem
+});
   }
 
   function notifyUsageSubscribers() {
@@ -152,6 +164,28 @@
     saveUsage(usage);
   }
 
+function recordRealCall(trainNumber, serviceDate) {
+  const usage = ensureUsageState();
+  usage.apiRequests += 1; // une vraie requête réseau = on facture 1
+  usage.realCalls.push({
+    trainNumber,
+    serviceDate,
+    ts: now()
+  });
+  saveUsage(usage);
+}
+
+function recordCacheServe(trainNumber, serviceDate) {
+  const usage = ensureUsageState();
+  usage.cacheHits += 1;
+  usage.cacheServes.push({
+    trainNumber,
+    serviceDate,
+    ts: now()
+  });
+  saveUsage(usage);
+}
+  
   function parseTargetDate({ isoDate, ymdDate }) {
     const raw = isoDate || ymdDate;
     if (!raw) return null;
@@ -434,16 +468,19 @@
     const cacheKey = buildCacheKey(trainNumber, isoDate, ymdDate);
     const cachedEntry = getCacheEntry(cacheKey);
     if (cachedEntry && cachedEntry.data) {
-      recordCacheHit(1);
-      return {
-        data: cachedEntry.data,
-        fromCache: true,
-        cacheTimestamp: cachedEntry.createdAt,
-        expiresAt: cachedEntry.expiresAt,
-        enforcedIntervalMs: cachedEntry.policy?.intervalMs || null,
-        targetDiffDays: cachedEntry.policy?.diffDays ?? null
-      };
-    }
+  // train servi depuis cache => pas de nouvelle requête API
+  const serviceDate = isoDate || ymdDate || 'unknown-date';
+  recordCacheServe(trainNumber, serviceDate);
+
+  return {
+    data: cachedEntry.data,
+    fromCache: true,
+    cacheTimestamp: cachedEntry.createdAt,
+    expiresAt: cachedEntry.expiresAt,
+    enforcedIntervalMs: cachedEntry.policy?.intervalMs || null,
+    targetDiffDays: cachedEntry.policy?.diffDays ?? null
+  };
+}
 
     if (inFlightRequests.has(cacheKey)) {
       return inFlightRequests.get(cacheKey);
@@ -473,32 +510,37 @@
     };
 
     const scheduledPromise = scheduleNetworkCall(fetchTask)
-      .then(data => {
-        recordApiRequest(1);
-        const policy = computeCachePolicy({ isoDate, ymdDate, requestDate: new Date() });
-        const createdAt = now();
-        const ttl = Math.max(MS_PER_MINUTE, policy.ttlMs || 0);
-        const entry = {
-          createdAt,
-          expiresAt: createdAt + ttl,
-          data,
-          policy: {
-            intervalMs: policy.intervalMs,
-            ttlMs: ttl,
-            diffDays: policy.diffDays
-          }
-        };
-        setCacheEntry(cacheKey, entry);
-        trimCache();
-        return {
-          data,
-          fromCache: false,
-          cacheTimestamp: entry.createdAt,
-          expiresAt: entry.expiresAt,
-          enforcedIntervalMs: policy.intervalMs,
-          targetDiffDays: policy.diffDays
-        };
-      })
+  .then(data => {
+    const serviceDate = isoDate || ymdDate || 'unknown-date';
+    recordRealCall(trainNumber, serviceDate);
+
+    const policy = computeCachePolicy({ isoDate, ymdDate, requestDate: new Date() });
+    const createdAt = now();
+    const ttl = Math.max(MS_PER_MINUTE, policy.ttlMs || 0);
+
+    const entry = {
+      createdAt,
+      expiresAt: createdAt + ttl,
+      data,
+      policy: {
+        intervalMs: policy.intervalMs,
+        ttlMs: ttl,
+        diffDays: policy.diffDays
+      }
+    };
+
+    setCacheEntry(cacheKey, entry);
+    trimCache();
+
+    return {
+      data,
+      fromCache: false,
+      cacheTimestamp: entry.createdAt,
+      expiresAt: entry.expiresAt,
+      enforcedIntervalMs: policy.intervalMs,
+      targetDiffDays: policy.diffDays
+    };
+  })
       .finally(() => {
         inFlightRequests.delete(cacheKey);
       })
