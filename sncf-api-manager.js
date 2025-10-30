@@ -27,6 +27,8 @@
 
   const CACHE_PREFIX = 'sncf:journey-cache:';
 
+  const DEFAULT_PROXY_ENDPOINT = '/api/trainsauv';
+
   // -------------------------------------------------
   // Stockage persistant (localStorage / cookie / mémoire)
   // -------------------------------------------------
@@ -146,6 +148,144 @@
     const mm = String(d.getMonth() + 1).padStart(2, '0');
     const dd = String(d.getDate()).padStart(2, '0');
     return `${yyyy}-${mm}-${dd}`;
+  }
+
+  function resolveProxyEndpoint() {
+    if (typeof window !== 'undefined' && window.__SNCF_PROXY_ENDPOINT__) {
+      return String(window.__SNCF_PROXY_ENDPOINT__);
+    }
+    return DEFAULT_PROXY_ENDPOINT;
+  }
+
+  function normaliseTtlSeconds(ttlMs) {
+    if (!Number.isFinite(ttlMs) || ttlMs <= 0) {
+      return null;
+    }
+    const seconds = Math.round(ttlMs / 1000);
+    return Math.max(60, seconds);
+  }
+
+  function buildProxyRequestConfig(originalUrl, options = {}) {
+    const config = {
+      originalUrl,
+      primaryUrl: originalUrl,
+      fallbackUrl: null,
+      primaryUsesAuth: true,
+      fallbackUsesAuth: true,
+      usesProxy: false,
+      ttlSeconds: options && Number.isFinite(options.ttlSeconds)
+        ? Math.max(1, Math.round(options.ttlSeconds))
+        : null
+    };
+
+    if (!originalUrl || typeof originalUrl !== 'string') {
+      return config;
+    }
+
+    try {
+      const candidate = new URL(originalUrl);
+      if (!candidate.hostname || candidate.hostname.indexOf('api.sncf.com') === -1) {
+        return config;
+      }
+
+      const prefix = '/coverage/sncf/';
+      const idx = candidate.pathname.indexOf(prefix);
+      if (idx === -1) {
+        return config;
+      }
+
+      const relativePath = candidate.pathname.slice(idx + prefix.length);
+      const search = candidate.search || '';
+      const pathWithQuery = `${relativePath}${search}`;
+      const params = new URLSearchParams();
+      params.set('url', pathWithQuery);
+
+      if (Number.isFinite(config.ttlSeconds) && config.ttlSeconds > 0) {
+        params.set('ttl', String(Math.max(60, config.ttlSeconds)));
+      }
+
+      const endpoint = resolveProxyEndpoint();
+      config.primaryUrl = `${endpoint}?${params.toString()}`;
+      config.fallbackUrl = originalUrl;
+      config.primaryUsesAuth = false;
+      config.fallbackUsesAuth = true;
+      config.usesProxy = true;
+    } catch (err) {
+      // ignore invalid URL parsing
+    }
+
+    return config;
+  }
+
+  function buildFetchAttempts(config) {
+    if (!config || typeof config !== 'object') {
+      return [{ url: config, useAuth: true, isProxy: false }];
+    }
+
+    const attempts = [];
+    if (config.primaryUrl) {
+      attempts.push({
+        url: config.primaryUrl,
+        useAuth: Boolean(config.primaryUsesAuth),
+        isProxy: Boolean(config.usesProxy)
+      });
+    }
+
+    if (config.fallbackUrl && config.fallbackUrl !== config.primaryUrl) {
+      attempts.push({
+        url: config.fallbackUrl,
+        useAuth: Boolean(config.fallbackUsesAuth),
+        isProxy: false
+      });
+    }
+
+    return attempts.length > 0 ? attempts : [{ url: config.originalUrl || config, useAuth: true, isProxy: false }];
+  }
+
+  function createHttpError(status, statusText) {
+    const error = new Error('HTTP ' + status);
+    error.status = status;
+    error.statusText = statusText;
+    return error;
+  }
+
+  async function fetchFromConfig(config, signal) {
+    const attempts = buildFetchAttempts(config);
+    let lastError = null;
+
+    for (const attempt of attempts) {
+      const headers = {};
+      if (attempt.useAuth && typeof getSncfAuthHeader === 'function') {
+        headers['Authorization'] = getSncfAuthHeader();
+      }
+
+      try {
+        const response = await fetch(attempt.url, {
+          headers,
+          cache: 'no-store',
+          signal
+        });
+
+        if (!response.ok) {
+          lastError = createHttpError(response.status, response.statusText);
+          continue;
+        }
+
+        const data = await response.json();
+        return {
+          data,
+          response,
+          attempt
+        };
+      } catch (err) {
+        lastError = err;
+      }
+    }
+
+    if (lastError) {
+      throw lastError;
+    }
+    throw new Error('Échec de récupération des données SNCF');
   }
 
   // -------------------------------------------------
@@ -630,23 +770,9 @@
   // -------------------------------------------------
   // Fetch train avec voie rapide UI + maj quota en arrière-plan
   // -------------------------------------------------
-  async function fastFetchNoQueue(url, signal) {
-    const headers = {};
-    if (typeof getSncfAuthHeader === 'function') {
-      headers['Authorization'] = getSncfAuthHeader();
-    }
-    const resp = await fetch(url, {
-      headers,
-      cache: 'no-store',
-      signal
-    });
-    if (!resp.ok) {
-      const error = new Error('HTTP ' + resp.status);
-      error.status = resp.status;
-      error.statusText = resp.statusText;
-      throw error;
-    }
-    return resp.json();
+  
+  async function fastFetchNoQueue(requestConfig, signal) {
+    return fetchFromConfig(requestConfig, signal);
   }
 
   async function fetchVehicleJourney({
@@ -662,6 +788,17 @@
 
     // 1. côté UX : on note la demande utilisateur immédiatement
     recordUserRequest(1);
+
+    const cachePolicy = computeCachePolicy({
+      isoDate,
+      ymdDate,
+      requestDate: new Date()
+    });
+    const ttlMs = Math.max(MS_PER_MINUTE, cachePolicy.ttlMs || 0);
+    const sharedCacheTtlSeconds = normaliseTtlSeconds(ttlMs);
+    const requestConfig = buildProxyRequestConfig(url, {
+      ttlSeconds: sharedCacheTtlSeconds
+    });
 
     // 2. cache instantané
     const cacheKey = buildCacheKey(trainNumber, isoDate, ymdDate);
@@ -689,22 +826,7 @@
         const abortErr = new DOMException('Aborted', 'AbortError');
         throw abortErr;
       }
-      const headers = {};
-      if (typeof getSncfAuthHeader === 'function') {
-        headers['Authorization'] = getSncfAuthHeader();
-      }
-      const response = await fetch(url, {
-        headers,
-        cache: 'no-store',
-        signal
-      });
-      if (!response.ok) {
-        const error = new Error('HTTP ' + response.status);
-        error.status = response.status;
-        error.statusText = response.statusText;
-        throw error;
-      }
-      return response.json();
+      return fetchFromConfig(requestConfig, signal);
     };
 
     // On crée une promesse "rapide pour l'UI"
@@ -712,14 +834,17 @@
       // A. ESSAYER LA VOIE RAPIDE
       // On va chercher les infos directes sans attendre le throttle,
       // pour afficher le tableau le plus vite possible.
-      let data;
+      let bundle;
       try {
-        data = await fastFetchNoQueue(url, signal);
+                bundle = await fastFetchNoQueue(requestConfig, signal);
       } catch (fastErr) {
         // si la voie rapide échoue (429 proxy / CORS / etc.), on retombe
         // sur le chemin lent (throttle global)
-        data = await scheduleNetworkCall(throttledTask);
+        bundle = await scheduleNetworkCall(throttledTask);
       }
+
+      const data = bundle?.data;
+      const sharedCacheState = bundle?.response?.headers?.get?.('x-sncf-cache-state') || null;
 
       // On a les infos train -> on peut déjà les renvoyer à la page
       const result = {
@@ -728,7 +853,8 @@
         cacheTimestamp: now(),
         expiresAt: null,
         enforcedIntervalMs: null,
-        targetDiffDays: null
+        targetDiffDays: null,
+        sharedCacheState: sharedCacheState ? sharedCacheState.toUpperCase() : null
       };
 
       // B. En arrière-plan : on met à jour le compteur API,
@@ -743,10 +869,12 @@
             // si fastFetch a réussi on réutilise 'data' plutôt que re-fetch.
             // On devrait idéalement ne pas re-fetch si fastFetch a marché.
             // Donc :
-            let confirmedData = data;
-            if (!confirmedData) {
+            let confirmedBundle = bundle;
+            let confirmedData = confirmedBundle?.data || data;
+            if (!confirmedBundle || !confirmedData) {
               try {
-                confirmedData = await scheduleNetworkCall(throttledTask);
+                confirmedBundle = await scheduleNetworkCall(throttledTask);
+                confirmedData = confirmedBundle?.data || confirmedData;
               } catch (fallbackErr) {
                 // si même ça échoue, tant pis, on ne casse pas l'UI
                 confirmedData = data;
@@ -754,26 +882,31 @@
             }
 
             // incrément compteur API (1 hit réel SNCF/Vercel)
-            recordApiRequest(1);
+            const cacheHeader = confirmedBundle?.response?.headers?.get?.('x-sncf-cache-state');
+            const headerState = typeof cacheHeader === 'string'
+              ? cacheHeader.toUpperCase()
+              : null;
+            const usedDirectAuth = Boolean(confirmedBundle?.attempt?.useAuth);
+            if (headerState) {
+              result.sharedCacheState = headerState;
+            }
+            if (usedDirectAuth || (headerState && headerState !== 'HIT')) {
+              recordApiRequest(1);
+            }
 
             // politique cache
-            const policy = computeCachePolicy({
-              isoDate,
-              ymdDate,
-              requestDate: new Date()
-            });
-
+            
             const createdAt = now();
-            const ttl = Math.max(MS_PER_MINUTE, policy.ttlMs || 0);
+            const ttl = Math.max(MS_PER_MINUTE, cachePolicy.ttlMs || 0);
 
             const entry = {
               createdAt,
               expiresAt: createdAt + ttl,
               data: confirmedData,
               policy: {
-                intervalMs: policy.intervalMs,
+                intervalMs: cachePolicy.intervalMs,
                 ttlMs: ttl,
-                diffDays: policy.diffDays
+                diffDays: cachePolicy.diffDays
               }
             };
 
@@ -783,8 +916,8 @@
             // on enrichit l'objet déjà renvoyé (pour les lecteurs qui le gardent)
             result.cacheTimestamp = entry.createdAt;
             result.expiresAt = entry.expiresAt;
-            result.enforcedIntervalMs = policy.intervalMs;
-            result.targetDiffDays = policy.diffDays;
+            result.enforcedIntervalMs = cachePolicy.intervalMs;
+            result.targetDiffDays = cachePolicy.diffDays;
           } catch (err) {
             console.error('[SncfApiManager] post-cache update failed', err);
           } finally {
