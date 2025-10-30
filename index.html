@@ -4871,6 +4871,13 @@ function normalizeCflTrainType(trainType){
   return upper && CFL_ALLOWED_ROUTE_SHORT_NAMES.has(upper) ? upper : '';
 }
 
+function canonicalizeCflNumero(value){
+  const raw = String(value ?? '').trim();
+  if (!raw) return '';
+  const stripped = raw.replace(/^0+/, '');
+  return stripped || raw;
+}
+    
 function stripLeadingZerosForDisplay(value){
   const raw = String(value ?? '').trim();
   const stripped = raw.replace(/^0+/, '');
@@ -5131,13 +5138,21 @@ async function ensureCFLGTFSLoaded(){
         headsign,
         shortName
       });
-      const numero =
+      const numeroRaw =
         (shortName && extractTrainNumber(shortName)) ||
         (headsign && extractTrainNumber(headsign)) ||
         extractTrainNumber(trip_id);
-      if (numero){
-        if (!CFL_GTFS.tripsByNumber.has(numero)) CFL_GTFS.tripsByNumber.set(numero, new Set());
-        CFL_GTFS.tripsByNumber.get(numero).add(trip_id);
+      if (numeroRaw){
+        const numeroStr = String(numeroRaw).trim();
+        if (numeroStr){
+          const canonical = canonicalizeCflNumero(numeroStr);
+          const keys = new Set([numeroStr]);
+          if (canonical && canonical !== numeroStr) keys.add(canonical);
+          keys.forEach(key => {
+            if (!CFL_GTFS.tripsByNumber.has(key)) CFL_GTFS.tripsByNumber.set(key, new Set());
+            CFL_GTFS.tripsByNumber.get(key).add(trip_id);
+          });
+        }
       }
     }
 
@@ -5256,14 +5271,15 @@ function cflFindDirectTrainsBetween({ fromNames = [], toNames = [], minDeparture
     const trainType = routeMeta.shortName || '';
     if (!cflIsAllowedTrainType(trainType)) return;
     const normalizedType = normalizeCflTrainType(trainType);
-    const numero = (tripMeta.shortName && tripMeta.shortName.trim()) || extractTrainNumber(tripMeta.headsign) || null;
-    if (!numero) return;
+    const numeroRaw = (tripMeta.shortName && tripMeta.shortName.trim()) || extractTrainNumber(tripMeta.headsign) || null;
+    if (!numeroRaw) return;
 
     const key = `${tripId}|${depStop.seq}|${arrStop.seq}`;
     if (seen.has(key)) return;
     seen.add(key);
 
-    const numeroStr = String(numero);
+    const numeroStr = String(numeroRaw).trim();
+    if (!numeroStr) return;
     const selectionKey = `CFL-${numeroStr}`;
     registerCflTrainType(selectionKey, normalizedType);
 
@@ -5505,10 +5521,33 @@ function extractHafasCause(dep){
   return filtered || null;
 }
 
-function hafasMatchesCflNumber(dep, numero){
-  if (!dep || !numero) return false;
-  const target = String(numero).trim();
-  if (!target) return false;
+function normalizeCflMatchToken(value){
+  return String(value ?? '').trim().replace(/[^0-9A-Z]/gi, '').toUpperCase();
+}
+
+function hafasMatchesCflNumber(dep, info = {}){
+  if (!dep) return false;
+  const numeroRaw = String(info.numeroRaw ?? '').trim();
+  const canonicalNumero = String(info.canonicalNumero ?? '').trim() || canonicalizeCflNumero(numeroRaw);
+  const trainType = normalizeCflTrainType(info.trainType);
+  const tokens = new Set();
+  if (numeroRaw) tokens.add(numeroRaw);
+  if (canonicalNumero && canonicalNumero !== numeroRaw) tokens.add(canonicalNumero);
+  const displayNumero = stripLeadingZerosForDisplay(numeroRaw || canonicalNumero);
+  if (displayNumero) tokens.add(displayNumero);
+  if (trainType){
+    const combos = new Set([displayNumero, canonicalNumero, numeroRaw]);
+    combos.forEach(num => {
+      const clean = String(num || '').trim();
+      if (!clean) return;
+      tokens.add(`${trainType}${clean}`);
+      tokens.add(`${trainType} ${clean}`);
+    });
+  }
+  const normalizedTargets = Array.from(tokens)
+    .map(normalizeCflMatchToken)
+    .filter(Boolean);
+  if (!normalizedTargets.length) return false;
   const candidates = [
     dep?.Product?.number,
     dep?.Product?.name,
@@ -5518,7 +5557,12 @@ function hafasMatchesCflNumber(dep, numero){
     dep?.line,
     dep?.direction
   ];
-  return candidates.some(val => typeof val === 'string' && val.includes(target));
+  return candidates.some(val => {
+    if (typeof val !== 'string') return false;
+    const normalized = normalizeCflMatchToken(val);
+    if (!normalized) return false;
+    return normalizedTargets.some(target => normalized.includes(target));
+  });
 }
 
 async function fetchCflHafasDepartures({ stopId, dateYmd, baseTimeHHMM, durationMinutes = 180 }){
@@ -5551,8 +5595,13 @@ async function fetchCflHafasDepartures({ stopId, dateYmd, baseTimeHHMM, duration
 }
 
 async function buildCflResult(selectionKey, { ymd } = {}){
-  const numero = String(selectionKey || '').replace(/^CFL-/, '').trim();
-  if (!numero) return { error: 'Non trouvé' };
+  const numeroRaw = String(selectionKey || '').replace(/^CFL-/, '').trim();
+  if (!numeroRaw) return { error: 'Non trouvé' };
+  const canonicalNumero = canonicalizeCflNumero(numeroRaw);
+  const lookupKeys = [];
+  if (numeroRaw) lookupKeys.push(numeroRaw);
+  if (canonicalNumero && canonicalNumero !== numeroRaw) lookupKeys.push(canonicalNumero);
+  const effectiveNumero = canonicalNumero || numeroRaw;
 
   try {
     await ensureCFLGTFSLoaded();
@@ -5562,7 +5611,14 @@ async function buildCflResult(selectionKey, { ymd } = {}){
   }
 
   if (!CFL_GTFS.ready) return { error: 'Données CFL indisponibles' };
-  const set = CFL_GTFS.tripsByNumber?.get(numero);
+  let set = null;
+  for (const key of lookupKeys){
+    const candidate = CFL_GTFS.tripsByNumber?.get(key);
+    if (candidate && candidate.size){
+      set = candidate;
+      break;
+    }
+  }
   if (!set || !set.size) return { error: 'Non trouvé' };
 
   const ymdDate = (ymd && /^\d{8}$/.test(ymd)) ? ymd : null;
@@ -5604,10 +5660,10 @@ async function buildCflResult(selectionKey, { ymd } = {}){
   const normalizedType = normalizeCflTrainType(trainType);
   const canonicalKey = (selectionKey && selectionKey.startsWith('CFL-'))
     ? selectionKey
-    : `CFL-${numero}`;
+    : `CFL-${numeroRaw}`;
   registerCflTrainType(canonicalKey, normalizedType);
 
-  const displayLabel = buildCflDisplayLabel(normalizedType, numero);
+  const displayLabel = buildCflDisplayLabel(normalizedType, numeroRaw);
   const impacted = {};
   const disruptions = [];
   const disruptionCauses = [];
@@ -5621,7 +5677,11 @@ async function buildCflResult(selectionKey, { ymd } = {}){
         baseTimeHHMM: minutesToRawHHMM(firstDeparture.dep)
       });
       const departures = hafasRecord?.departures || [];
-      const match = departures.find(dep => hafasMatchesCflNumber(dep, numero));
+      const match = departures.find(dep => hafasMatchesCflNumber(dep, {
+        numeroRaw,
+        canonicalNumero: effectiveNumero,
+        trainType: normalizedType
+      }));
       if (match){
         const baseDepartureRaw = minutesToRawHHMM(firstDeparture.dep);
         const baseArrivalRaw = minutesToRawHHMM(firstDeparture.arr);
@@ -5756,7 +5816,8 @@ async function buildCflResult(selectionKey, { ymd } = {}){
     cflMeta: {
       trainType: normalizedType,
       routeId: tripMeta.route_id,
-      numero
+      numero: stripLeadingZerosForDisplay(numeroRaw),
+      numeroRaw
     },
     displayLabel,
     selectionKey: canonicalKey
