@@ -266,6 +266,8 @@
           signal
         });
 
+        syncUsageFromHeaders(response.headers);
+
         if (!response.ok) {
           lastError = createHttpError(response.status, response.statusText);
           continue;
@@ -330,9 +332,12 @@
     return usage;
   }
 
-  function saveUsage(usage) {
+  function saveUsage(usage, options = {}) {
     if (!usage) return;
-    usage.lastUpdated = now();
+    const { preserveLastUpdated = false, broadcast = true } = options;
+    if (!preserveLastUpdated) {
+      usage.lastUpdated = now();
+    }
     let persisted = false;
     if (usageStorage.type !== 'memory') {
       try {
@@ -345,18 +350,101 @@
     if (!persisted) {
       memoryUsage = usage;
     }
-    notifyUsageSubscribers();
-    if (usageChannel) {
-      try {
-        usageChannel.postMessage({ type: 'usage-update' });
-      } catch (err) {
-        // ignore broadcast failures
+    if (broadcast) {
+      notifyUsageSubscribers();
+      if (usageChannel) {
+        try {
+          usageChannel.postMessage({ type: 'usage-update' });
+        } catch (err) {
+          // ignore broadcast failures
+        }
       }
     }
   }
+function parseHeaderInteger(headers, name) {
+    if (!headers || typeof headers.get !== 'function') {
+      return null;
+    }
+    const value = headers.get(name);
+    if (value === null || typeof value === 'undefined') {
+      return null;
+    }
+    const parsed = Number.parseInt(value, 10);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
 
+  function isoDateToUtcStartMs(isoDate) {
+    if (typeof isoDate !== 'string' || !isoDate) {
+      return now();
+    }
+    const parsed = Date.parse(`${isoDate}T00:00:00Z`);
+    return Number.isFinite(parsed) ? parsed : now();
+  }
+
+  function syncUsageFromHeaders(headers) {
+    if (!headers || typeof headers.get !== 'function') {
+      return;
+    }
+
+    const sharedDate = headers.get('x-sncf-usage-date');
+    if (!sharedDate) {
+      return;
+    }
+
+    const usage = ensureUsageState();
+    if (usage.date !== sharedDate) {
+      usage.date = sharedDate;
+      usage.userRequests = 0;
+      usage.apiRequests = 0;
+      usage.cacheHits = 0;
+      usage.lastReset = isoDateToUtcStartMs(sharedDate);
+    }
+
+    const userRequests = parseHeaderInteger(headers, 'x-sncf-usage-requests');
+    if (userRequests !== null) {
+      usage.userRequests = userRequests;
+    }
+
+    const apiRequests = parseHeaderInteger(headers, 'x-sncf-usage-apirequests');
+    if (apiRequests !== null) {
+      usage.apiRequests = apiRequests;
+    }
+
+    const cacheHits = parseHeaderInteger(headers, 'x-sncf-usage-cachehits');
+    if (cacheHits !== null) {
+      usage.cacheHits = cacheHits;
+    }
+
+    const quota = parseHeaderInteger(headers, 'x-sncf-usage-quota');
+    if (quota !== null) {
+      usage.sharedQuota = quota;
+    }
+
+    const remaining = parseHeaderInteger(headers, 'x-sncf-usage-remaining');
+    if (remaining !== null) {
+      usage.sharedRemaining = remaining;
+    }
+
+    const updatedHeader = headers.get('x-sncf-usage-updated-at');
+    if (updatedHeader) {
+      const parsedUpdated = Date.parse(updatedHeader);
+      if (Number.isFinite(parsedUpdated)) {
+        usage.lastUpdated = parsedUpdated;
+      }
+    } else {
+      usage.lastUpdated = now();
+    }
+
+    saveUsage(usage, { preserveLastUpdated: true });
+  }
+  
   function getUsageSnapshot() {
     const usage = ensureUsageState();
+    const quota = Number.isFinite(usage.sharedQuota) ? usage.sharedQuota : DAILY_QUOTA;
+    const remaining = Number.isFinite(usage.sharedRemaining)
+      ? usage.sharedRemaining
+      : Math.max(0, quota - usage.apiRequests);
+
     return Object.freeze({
       date: usage.date,
       userRequests: usage.userRequests,
@@ -364,7 +452,8 @@
       cacheHits: usage.cacheHits,
       lastReset: usage.lastReset,
       lastUpdated: usage.lastUpdated || usage.lastReset,
-      remainingQuota: Math.max(0, DAILY_QUOTA - usage.apiRequests),
+      remainingQuota: remaining,
+      quota,
       cacheSize: getCacheIndex().length
     });
   }
@@ -390,7 +479,9 @@
   function recordApiRequest(count = 1) {
     if (!Number.isFinite(count) || count <= 0) return;
     const usage = ensureUsageState();
-    usage.apiRequests += count;
+    if (Number.isFinite(usage.sharedRemaining)) {
+      usage.sharedRemaining = Math.max(0, usage.sharedRemaining - count);
+    }
     saveUsage(usage);
   }
 
@@ -660,7 +751,10 @@
   function computeGlobalThrottleDelay(elapsedMs) {
     try {
       const usage = ensureUsageState();
-      const remainingRequests = Math.max(0, DAILY_QUOTA - usage.apiRequests);
+      const quota = Number.isFinite(usage.sharedQuota) ? usage.sharedQuota : DAILY_QUOTA;
+      const remainingRequests = Number.isFinite(usage.sharedRemaining)
+        ? usage.sharedRemaining
+        : Math.max(0, quota - usage.apiRequests);
 
       const endOfDay = new Date();
       endOfDay.setHours(23, 59, 59, 999);
@@ -669,8 +763,10 @@
 
       let dynamicCap = MAX_GLOBAL_WAIT_MS;
 
+      const effectiveMinInterval = Math.ceil((24 * 60 * 60 * 1000) / Math.max(1, quota));
+
       if (remainingRequests <= 250) {
-        dynamicCap = Math.max(dynamicCap, MIN_INTERVAL_MS);
+        dynamicCap = Math.max(dynamicCap, Math.max(MIN_INTERVAL_MS, effectiveMinInterval));
       }
       if (remainingRequests <= 50) {
         dynamicCap = Math.max(dynamicCap, 5 * 60 * 1000); // 5 min
