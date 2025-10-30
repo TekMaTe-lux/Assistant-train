@@ -1,5 +1,7 @@
 const DEFAULT_CACHE_TTL_SECONDS = Number.parseInt(process.env.SNCF_CACHE_TTL_SECONDS || '', 10) || 300;
 const CACHE_MAX_ENTRIES = Number.parseInt(process.env.SNCF_CACHE_MAX_ENTRIES || '', 10) || 250;
+const DAILY_QUOTA = Number.parseInt(process.env.SNCF_DAILY_QUOTA || '', 10) || 5000;
+const MAX_GITHUB_PERSIST_ATTEMPTS = Number.parseInt(process.env.GITHUB_CACHE_MAX_ATTEMPTS || '', 10) || 3;
 
 const githubConfig = (() => {
   const token = process.env.GITHUB_TOKEN || process.env.GH_TOKEN || process.env.GITHUB_PERSONAL_TOKEN;
@@ -26,23 +28,76 @@ function buildGithubHeaders(token) {
   };
 }
 
-function createEmptyCache() {
+function isoDateFromMs(ms) {
+  const date = new Date(ms);
+  const yyyy = date.getUTCFullYear();
+  const mm = String(date.getUTCMonth() + 1).padStart(2, '0');
+  const dd = String(date.getUTCDate()).padStart(2, '0');
+  return `${yyyy}-${mm}-${dd}`;
+}
+
+function createEmptyUsage(nowMs = Date.now()) {
+  const nowIso = new Date(nowMs).toISOString();
   return {
-    version: 1,
-    updatedAt: new Date().toISOString(),
-    entries: {}
+    date: isoDateFromMs(nowMs),
+    userRequests: 0,
+    apiRequests: 0,
+    cacheHits: 0,
+    lastReset: nowIso,
+    lastUpdated: nowIso
   };
 }
 
-function normaliseCache(raw) {
+function createEmptyCache(nowMs = Date.now()) {
+  return {
+    version: 2,
+    updatedAt: new Date(nowMs).toISOString(),
+    entries: {},
+    usage: createEmptyUsage(nowMs)
+  };
+}
+
+function normaliseUsage(raw, nowMs = Date.now()) {
+  const base = createEmptyUsage(nowMs);
   if (!raw || typeof raw !== 'object') {
-    return createEmptyCache();
+    return base;
   }
 
   const safe = {
-    version: Number.isFinite(raw.version) ? raw.version : 1,
-    updatedAt: typeof raw.updatedAt === 'string' ? raw.updatedAt : new Date().toISOString(),
-    entries: {}
+    date: typeof raw.date === 'string' && raw.date ? raw.date : base.date,
+    userRequests: Number.isFinite(raw.userRequests) ? raw.userRequests : 0,
+    apiRequests: Number.isFinite(raw.apiRequests) ? raw.apiRequests : 0,
+    cacheHits: Number.isFinite(raw.cacheHits) ? raw.cacheHits : 0,
+    lastReset: typeof raw.lastReset === 'string' ? raw.lastReset : base.lastReset,
+    lastUpdated: typeof raw.lastUpdated === 'string' ? raw.lastUpdated : base.lastUpdated
+  };
+
+  const today = isoDateFromMs(nowMs);
+  if (safe.date !== today) {
+    safe.date = today;
+    safe.userRequests = 0;
+    safe.apiRequests = 0;
+    safe.cacheHits = 0;
+    safe.lastReset = base.lastReset;
+  }
+
+  if (!safe.lastUpdated) {
+    safe.lastUpdated = base.lastUpdated;
+  }
+
+  return safe;
+}
+
+function normaliseCache(raw, nowMs = Date.now()) {
+  if (!raw || typeof raw !== 'object') {
+    return createEmptyCache(nowMs);
+  }
+
+  const safe = {
+    version: Number.isFinite(raw.version) ? raw.version : 2,
+    updatedAt: typeof raw.updatedAt === 'string' ? raw.updatedAt : new Date(nowMs).toISOString(),
+    entries: {},
+    usage: createEmptyUsage(nowMs)
   };
 
   if (raw.entries && typeof raw.entries === 'object') {
@@ -58,6 +113,8 @@ function normaliseCache(raw) {
     }
   }
 
+  safe.usage = normaliseUsage(raw.usage, nowMs);
+  
   return safe;
 }
 
@@ -115,11 +172,111 @@ async function persistGithubCache(config, cache, sha) {
   });
 
   if (!response.ok) {
-    throw new Error(`GitHub cache update failed: ${response.status} ${response.statusText}`);
+    const error = new Error(`GitHub cache update failed: ${response.status} ${response.statusText}`);
+    error.status = response.status;
+    throw error;
   }
 
   const payload = await response.json();
   return payload.content?.sha || sha || null;
+}
+
+function computeNextUsage(rawUsage, nowMs, deltas) {
+  const usage = normaliseUsage(rawUsage, nowMs);
+  const next = { ...usage };
+  let changed = false;
+
+  const nowIso = new Date(nowMs).toISOString();
+
+  const rawDate = rawUsage && typeof rawUsage === 'object' && typeof rawUsage.date === 'string'
+    ? rawUsage.date
+    : usage.date;
+
+  if (deltas) {
+    const { userRequests = 0, apiRequests = 0, cacheHits = 0 } = deltas;
+    if (userRequests) {
+      next.userRequests += userRequests;
+      changed = true;
+    }
+    if (apiRequests) {
+      next.apiRequests += apiRequests;
+      changed = true;
+    }
+    if (cacheHits) {
+      next.cacheHits += cacheHits;
+      changed = true;
+    }
+  }
+
+  if (rawDate !== usage.date) {
+    changed = true;
+  }
+
+  if (changed) {
+    next.lastUpdated = nowIso;
+  }
+
+  return { usage: next, changed };
+}
+
+function applyUpdatesToCache(cache, nowMs, updates = {}) {
+  if (!cache || typeof cache !== 'object') {
+    return { changed: false };
+  }
+
+  const { usageDelta = null, entry = null } = updates;
+  const result = computeNextUsage(cache.usage, nowMs, usageDelta);
+  let changed = result.changed;
+
+  if (entry && entry.key) {
+    cache.entries[entry.key] = entry.value;
+    changed = true;
+  }
+
+  if (!changed) {
+    return { changed: false, usage: result.usage };
+  }
+
+  cache.usage = result.usage;
+  cache.updatedAt = new Date(nowMs).toISOString();
+  trimCacheEntries(cache, CACHE_MAX_ENTRIES);
+  return { changed: true, usage: result.usage };
+}
+
+async function persistCacheWithRetry(config, initialPayload, updates, nowMs) {
+  if (!config) {
+    return null;
+  }
+
+  let attempt = 0;
+  let payload = initialPayload;
+  let lastError = null;
+
+  while (attempt < MAX_GITHUB_PERSIST_ATTEMPTS) {
+    const workingPayload = payload || { cache: createEmptyCache(nowMs), sha: null };
+    const cache = normaliseCache(workingPayload.cache, nowMs);
+    const applyResult = applyUpdatesToCache(cache, nowMs, updates);
+
+    if (!applyResult.changed) {
+      return applyResult.usage;
+    }
+
+    try {
+      const newSha = await persistGithubCache(config, cache, workingPayload.sha);
+      payload = { cache, sha: newSha };
+      return applyResult.usage;
+    } catch (err) {
+      lastError = err;
+      if (err && (err.status === 409 || err.status === 422)) {
+        payload = await loadGithubCache(config);
+        attempt += 1;
+        continue;
+      }
+      throw err;
+    }
+  }
+
+  throw lastError || new Error('Unable to persist GitHub cache');
 }
 
 function trimCacheEntries(cache, limit = CACHE_MAX_ENTRIES) {
@@ -193,8 +350,7 @@ export default async function handler(req, res) {
   const nowMs = Date.now();
   const nowIso = new Date(nowMs).toISOString();
 
-  let cacheState = 'BYPASS';
-  let cachePayload = { cache: createEmptyCache(), sha: null };
+  let cachePayload = { cache: createEmptyCache(nowMs), sha: null };
   let cacheEnabled = Boolean(githubConfig);
 
   if (githubConfig) {
@@ -206,56 +362,98 @@ export default async function handler(req, res) {
     }
   }
 
-  const cache = cachePayload.cache || createEmptyCache();
-  let sha = cachePayload.sha || null;
+  const cache = cachePayload.cache || createEmptyCache(nowMs);
+  const cacheKeyNormalised = buildCacheKey(cacheKey);
+  const existing = cache.entries?.[cacheKeyNormalised];
+
+  const usageDelta = { userRequests: 1, apiRequests: 0, cacheHits: 0 };
+  let cacheState = cacheEnabled ? 'MISS' : 'BYPASS';
+  let cacheExpiresAt = null;
+  let entryUpdate = null;
+  let responseData = null;
+  let responseStatus = 200;
+  let responseError = null;
+
+  if (cacheEnabled && isEntryValid(existing, nowMs)) {
+    cacheState = 'HIT';
+    usageDelta.cacheHits = 1;
+    cacheExpiresAt = existing.expiresAt || null;
+    responseData = existing.data;
+  } else {
+    try {
+      const response = await fetch(apiUrl, {
+        headers: { Authorization: `Basic ${auth}` }
+      });
+
+      usageDelta.apiRequests = 1;
+
+      if (!response.ok) {
+        responseStatus = response.status;
+        responseError = { error: `Erreur API SNCF : ${response.statusText}` };
+      } else {
+        const data = await response.json();
+        responseData = data;
+        cacheExpiresAt = new Date(nowMs + ttlSeconds * 1000).toISOString();
+        if (cacheEnabled) {
+          entryUpdate = {
+            key: cacheKeyNormalised,
+            value: {
+              data,
+              fetchedAt: nowIso,
+              expiresAt: cacheExpiresAt,
+              ttlSeconds,
+              meta: { cacheKey: cacheKeyNormalised }
+            }
+          };
+        }
+      }
+    } catch (err) {
+      usageDelta.apiRequests = 1;
+      responseStatus = 500;
+      responseError = { error: 'Erreur interne du proxy SNCF', details: err.message };
+      console.error('[sncf-cache] Échec de récupération auprès de l\'API SNCF', err);
+    }
+  }
+
+  let sharedUsage = computeNextUsage(cache.usage, nowMs, usageDelta).usage;
 
   if (cacheEnabled) {
-    const existing = cache.entries?.[buildCacheKey(cacheKey)];
-    if (isEntryValid(existing, nowMs)) {
-      cacheState = 'HIT';
-      res.setHeader('X-Sncf-Cache-State', cacheState);
-      res.setHeader('X-Sncf-Cache-Expires', existing.expiresAt);
-      return res.status(200).json(existing.data);
-    }
-  }
-
-  try {
-    const response = await fetch(apiUrl, {
-      headers: { Authorization: `Basic ${auth}` }
-    });
-
-    if (!response.ok) {
-      return res.status(response.status).json({ error: `Erreur API SNCF : ${response.statusText}` });
-    }
-
-    const data = await response.json();
-    cacheState = cacheEnabled ? 'MISS' : 'BYPASS';
-    res.setHeader('X-Sncf-Cache-State', cacheState);
-    res.setHeader('X-Sncf-Cache-Expires', new Date(nowMs + ttlSeconds * 1000).toISOString());
-    res.status(200).json(data);
-
-    if (cacheEnabled) {
-      try {
-        const entry = {
-          data,
-          fetchedAt: nowIso,
-          expiresAt: new Date(nowMs + ttlSeconds * 1000).toISOString(),
-          ttlSeconds,
-          meta: {
-            cacheKey: buildCacheKey(cacheKey)
-          }
-        };
-
-        cache.entries[buildCacheKey(cacheKey)] = entry;
-        cache.updatedAt = nowIso;
-        trimCacheEntries(cache, CACHE_MAX_ENTRIES);
-        sha = await persistGithubCache(githubConfig, cache, sha);
-      } catch (persistErr) {
-        console.error('[sncf-cache] Impossible d\'enregistrer le cache GitHub', persistErr);
+    try {
+      const persisted = await persistCacheWithRetry(
+        githubConfig,
+        cachePayload,
+        { usageDelta, entry: entryUpdate },
+        nowMs
+      );
+      if (persisted) {
+        sharedUsage = persisted;
       }
+    } catch (persistErr) {
+      console.error('[sncf-cache] Impossible d\'enregistrer le cache GitHub', persistErr);
     }
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: 'Erreur interne du proxy SNCF', details: err.message });
   }
+
+  res.setHeader('X-Sncf-Cache-State', cacheState);
+  if (cacheExpiresAt) {
+    res.setHeader('X-Sncf-Cache-Expires', cacheExpiresAt);
+  }
+
+    if (sharedUsage) {
+    res.setHeader('X-Sncf-Usage-Date', sharedUsage.date);
+    res.setHeader('X-Sncf-Usage-Requests', String(sharedUsage.userRequests));
+    res.setHeader('X-Sncf-Usage-ApiRequests', String(sharedUsage.apiRequests));
+    res.setHeader('X-Sncf-Usage-CacheHits', String(sharedUsage.cacheHits));
+    res.setHeader('X-Sncf-Usage-Updated-At', sharedUsage.lastUpdated || nowIso);
+    res.setHeader('X-Sncf-Usage-Quota', String(DAILY_QUOTA));
+    res.setHeader(
+      'X-Sncf-Usage-Remaining',
+      String(Math.max(0, DAILY_QUOTA - (sharedUsage.apiRequests || 0)))
+    );
+  }
+  
+if (responseError) {
+    return res.status(responseStatus).json(responseError);
+  }
+
+  return res.status(responseStatus).json(responseData);
 }
