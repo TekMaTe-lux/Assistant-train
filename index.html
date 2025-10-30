@@ -930,7 +930,10 @@ table[data-snapshotting="true"] tbody tr:nth-child(even) {
 .train-header.no-compo-text a.train-link{
   color: inherit !important;  /* le lien reste blanc comme le texte */
 }
-
+#trainInfo .train-link-cfl {
+  color: inherit;
+  font-weight: inherit;
+}
   .icon[title]:hover::after {
   content: attr(title);
   position: absolute;
@@ -4780,6 +4783,10 @@ function minutesToClock(mins){
   const minutes = total % 60;
   return String(hours).padStart(2, '0') + ':' + String(minutes).padStart(2, '0');
 }
+function minutesToRawHHMM(mins){
+  const clock = minutesToClock(mins);
+  return clock ? clock.replace(':', '') : null;
+}
 function computeRetardedTime(raw, delay){
   if (!Number.isFinite(delay)) return null;
   const baseMinutes = rawHHMMToMinutes(raw);
@@ -4864,6 +4871,11 @@ const CFL_STATION_ALIASES = {
   'bettembourg gare': ['Bettembourg, Gare'],
   'gare de bettembourg': ['Bettembourg, Gare']
 };
+ const CFL_STOP_DISPLAY_OVERRIDES = {
+  'Luxembourg, Gare Centrale': 'Luxembourg',
+  'Howald, Gare': 'Howald',
+  'Bettembourg, Gare': 'Bettembourg' 
+ };   
    const MAINLINE_STATION_ORDER = {
   'nancy': 0,
   'garedenancy': 0,
@@ -4911,7 +4923,8 @@ const CFL_BASES = [
   'https://raw.githubusercontent.com/TekMaTe-lux/Assistant-train/main/CFL/',
   'https://cdn.jsdelivr.net/gh/TekMaTe-lux/Assistant-train@main/CFL/'
 ];
-
+const CFL_HAFAS_CACHE = new Map();
+    
 let CFL_GTFS = {
   ready: false,
   routes: new Map(),
@@ -4919,7 +4932,8 @@ let CFL_GTFS = {
   stopsByName: new Map(),
   tripsById: new Map(),
   tripsStops: new Map(),
-  calendar: new Map()
+  calendar: new Map(),
+  tripsByNumber: new Map()
 };
 let CFL_LOADING_PROMISE = null;
 
@@ -5038,7 +5052,8 @@ async function ensureCFLGTFSLoaded(){
       stopsByName: new Map(),
       tripsById: new Map(),
       tripsStops: new Map(),
-      calendar: new Map()
+      calendar: new Map(),
+      tripsByNumber: new Map()
     };
 
     for (const r of routesRows){
@@ -5075,13 +5090,22 @@ async function ensureCFLGTFSLoaded(){
       const route_id = (t.route_id || '').trim();
       const service_id = (t.service_id || '').trim();
       if (!trip_id || !route_id || !service_id) continue;
-      if (!CFL_GTFS.routes.has(route_id)) continue;
+      const headsign = (t.trip_headsign || '').trim();
+      const shortName = (t.trip_short_name || '').trim();
       CFL_GTFS.tripsById.set(trip_id, {
         route_id,
         service_id,
-        headsign: (t.trip_headsign || '').trim(),
-        shortName: (t.trip_short_name || '').trim()
+        headsign,
+        shortName
       });
+      const numero =
+        (shortName && extractTrainNumber(shortName)) ||
+        (headsign && extractTrainNumber(headsign)) ||
+        extractTrainNumber(trip_id);
+      if (numero){
+        if (!CFL_GTFS.tripsByNumber.has(numero)) CFL_GTFS.tripsByNumber.set(numero, new Set());
+        CFL_GTFS.tripsByNumber.get(numero).add(trip_id);
+      }
     }
 
     for (const c of calRows){
@@ -5133,15 +5157,24 @@ async function ensureCFLGTFSLoaded(){
         seq: Number(st.stop_sequence || '0')
       });
     }
-
+    
+    const removedTripIds = new Set();
     CFL_GTFS.tripsStops.forEach((arrs, tripId) => {
       arrs.sort((a,b) => a.seq - b.seq);
       if (arrs.length < 2){
         CFL_GTFS.tripsStops.delete(tripId);
         CFL_GTFS.tripsById.delete(tripId);
+        removedTripIds.add(tripId);
       }
     });
 
+    if (removedTripIds.size && CFL_GTFS.tripsByNumber){
+      CFL_GTFS.tripsByNumber.forEach((set, numero) => {
+        removedTripIds.forEach(id => set.delete(id));
+        if (!set.size) CFL_GTFS.tripsByNumber.delete(numero);
+      });
+    }
+    
     CFL_GTFS.ready = true;
   })();
 
@@ -5391,9 +5424,222 @@ async function computeCflHybridTransfers({
   return results;
 }
 
-let GTFS = { 
-  stops:null, 
-  stopTimes:null, 
+function cflStopIdToHafas(stopId){
+  if (!stopId) return null;
+  const str = String(stopId).trim();
+  if (!str) return null;
+  const numeric = Number(str);
+  if (Number.isFinite(numeric)) return String(numeric);
+  const withoutZeros = str.replace(/^0+/, '');
+  return withoutZeros || str;
+}
+
+function cflFormatStopDisplayName(name){
+  const raw = (name || '').trim();
+  if (!raw) return '';
+  if (CFL_STOP_DISPLAY_OVERRIDES[raw]) return CFL_STOP_DISPLAY_OVERRIDES[raw];
+  if (/[,\s]Gare Centrale$/i.test(raw)) return raw.replace(/[,\s]Gare Centrale$/i, '');
+  if (/[,\s]Gare$/i.test(raw)) return raw.replace(/[,\s]Gare$/i, '');
+  return raw;
+}
+
+function parseHafasRealtimeTime(value){
+  if (!value) return null;
+  const digits = String(value).replace(/[^0-9]/g, '');
+  if (digits.length >= 4) return digits.slice(0, 4);
+  return null;
+}
+
+function extractHafasCause(dep){
+  const pool = [];
+  if (Array.isArray(dep?.messages)){
+    dep.messages.forEach(msg => {
+      const txt = typeof msg?.text === 'string' ? msg.text.trim() : '';
+      if (txt) pool.push(txt);
+    });
+  }
+  [dep?.rtReason, dep?.infoText, dep?.Product?.note].forEach(val => {
+    const txt = typeof val === 'string' ? val.trim() : '';
+    if (txt) pool.push(txt);
+  });
+  const filtered = pool.find(t => t && t.toLowerCase() !== 'à l\'heure' && t.toLowerCase() !== "on time");
+  return filtered || null;
+}
+
+function hafasMatchesCflNumber(dep, numero){
+  if (!dep || !numero) return false;
+  const target = String(numero).trim();
+  if (!target) return false;
+  const candidates = [
+    dep?.Product?.number,
+    dep?.Product?.name,
+    dep?.Product?.line,
+    dep?.journeyNumber,
+    dep?.name,
+    dep?.line,
+    dep?.direction
+  ];
+  return candidates.some(val => typeof val === 'string' && val.includes(target));
+}
+
+async function fetchCflHafasDepartures({ stopId, dateYmd, baseTimeHHMM, durationMinutes = 180 }){
+  const hafasId = cflStopIdToHafas(stopId);
+  if (!hafasId || !dateYmd) return null;
+  if (!/^\d{8}$/.test(dateYmd)) return null;
+  const dateStr = `${dateYmd.slice(0,4)}-${dateYmd.slice(4,6)}-${dateYmd.slice(6,8)}`;
+  const baseMinutes = rawHHMMToMinutes(baseTimeHHMM);
+  const startMinutes = baseMinutes == null ? null : Math.max(0, baseMinutes - 15);
+  const startClock = startMinutes == null ? '00:00' : minutesToClock(startMinutes) || '00:00';
+  const timeParam = `${startClock}:00`;
+  const duration = Number.isFinite(durationMinutes) ? Math.max(30, durationMinutes) : 180;
+  const cacheKey = `${hafasId}|${dateStr}|${startClock}|${duration}`;
+
+  if (!CFL_HAFAS_CACHE.has(cacheKey)){
+    try {
+      const url = `https://cdt.hafas.de/opendata/apiserver/departureBoard?accessId=58ef9a71-6837-4405-bd5d-23beaf92864c&id=${hafasId}&date=${dateStr}&time=${timeParam}&duration=${duration}&maxJourneys=50&format=json`;
+      const resp = await fetch(url, { cache: 'no-store' });
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      const data = await resp.json();
+      const departures = Array.isArray(data?.Departure) ? data.Departure : [];
+      CFL_HAFAS_CACHE.set(cacheKey, { departures });
+    } catch (err){
+      console.warn('[CFL][HAFAS]', err);
+      CFL_HAFAS_CACHE.set(cacheKey, { departures: [], error: err });
+    }
+  }
+
+  return CFL_HAFAS_CACHE.get(cacheKey) || null;
+}
+
+async function buildCflResult(selectionKey, { ymd } = {}){
+  const numero = String(selectionKey || '').replace(/^CFL-/, '').trim();
+  if (!numero) return { error: 'Non trouvé' };
+
+  try {
+    await ensureCFLGTFSLoaded();
+  } catch (err){
+    console.warn('[CFL] Chargement GTFS impossible', err);
+    return { error: 'Données CFL indisponibles' };
+  }
+
+  if (!CFL_GTFS.ready) return { error: 'Données CFL indisponibles' };
+  const set = CFL_GTFS.tripsByNumber?.get(numero);
+  if (!set || !set.size) return { error: 'Non trouvé' };
+
+  const ymdDate = (ymd && /^\d{8}$/.test(ymd)) ? ymd : null;
+  const weekdayIdx = ymdDate ? cflWeekdayIdxFromYMD(ymdDate) : null;
+  const candidates = Array.from(set);
+  let chosenTripId = null;
+  if (ymdDate){
+    for (const tripId of candidates){
+      const meta = CFL_GTFS.tripsById.get(tripId);
+      if (meta && cflServiceRunsOnDate(meta.service_id, ymdDate, weekdayIdx)){
+        chosenTripId = tripId;
+        break;
+      }
+    }
+  }
+  if (!chosenTripId) chosenTripId = candidates[0];
+  const tripMeta = CFL_GTFS.tripsById.get(chosenTripId);
+  const stopSeq = CFL_GTFS.tripsStops.get(chosenTripId);
+  if (!tripMeta || !stopSeq || !stopSeq.length) return { error: 'Non trouvé' };
+
+  const stop_times = stopSeq.map(row => {
+    const stopMeta = CFL_GTFS.stopsById.get(row.stop_id) || {};
+    const displayName = cflFormatStopDisplayName(stopMeta.name || row.stop_id);
+    return {
+      stop_point: {
+        id: row.stop_id,
+        name: displayName
+      },
+      arrival_time: minutesToRawHHMM(row.arr),
+      departure_time: minutesToRawHHMM(row.dep)
+    };
+  });
+
+  const routeMeta = CFL_GTFS.routes.get(tripMeta.route_id) || {};
+  const trainType = (routeMeta.shortName || '').trim();
+  const impacted = {};
+  const disruptions = [];
+  const disruptionCauses = [];
+
+  if (ymdDate){
+    const firstDeparture = stopSeq.find(s => Number.isFinite(s.dep));
+    if (firstDeparture){
+      const hafasRecord = await fetchCflHafasDepartures({
+        stopId: firstDeparture.stop_id,
+        dateYmd: ymdDate,
+        baseTimeHHMM: minutesToRawHHMM(firstDeparture.dep)
+      });
+      const departures = hafasRecord?.departures || [];
+      const match = departures.find(dep => hafasMatchesCflNumber(dep, numero));
+      if (match){
+        const baseDepartureRaw = minutesToRawHHMM(firstDeparture.dep);
+        const baseArrivalRaw = minutesToRawHHMM(firstDeparture.arr);
+        const realtimeRaw = parseHafasRealtimeTime(match.rtTime || match.rtDepTime || match.rtDepartureTime);
+        let delayMinutes = null;
+        if (typeof match.rtDelay !== 'undefined' && match.rtDelay !== null && match.rtDelay !== ''){
+          const parsed = Number(match.rtDelay);
+          if (Number.isFinite(parsed)) delayMinutes = parsed;
+        }
+        if (!Number.isFinite(delayMinutes) && realtimeRaw && baseDepartureRaw){
+          const diff = dl(baseDepartureRaw, realtimeRaw);
+          if (Number.isFinite(diff)) delayMinutes = diff;
+        }
+        const status = String(match.status || '').toLowerCase();
+        const isCancelled = match.cancelled === true || status === 'cancelled' || status === 'canceled' || status === 'deleted';
+        const stopName = cflFormatStopDisplayName(CFL_GTFS.stopsById.get(firstDeparture.stop_id)?.name || '');
+        const impactedEntry = {
+          stop_point: { id: firstDeparture.stop_id, name: stopName },
+          base_departure_time: baseDepartureRaw,
+          base_arrival_time: baseArrivalRaw
+        };
+        if (isCancelled){
+          impactedEntry.departure_status = 'deleted';
+          impactedEntry.stop_time_effect = 'deleted';
+        } else if (Number.isFinite(delayMinutes) && delayMinutes > 0 && realtimeRaw){
+          impactedEntry.amended_departure_time = realtimeRaw;
+        }
+        impacted[firstDeparture.stop_id] = impactedEntry;
+
+        const cause = extractHafasCause(match);
+        if (cause) disruptionCauses.push(cause);
+        if (isCancelled){
+          disruptions.push({
+            severity: { effect: 'NO_SERVICE' },
+            messages: cause ? [{ text: cause }] : []
+          });
+        } else if (Number.isFinite(delayMinutes) && delayMinutes > 0){
+          disruptions.push({
+            severity: { effect: 'SIGNIFICANT_DELAYS' },
+            messages: cause ? [{ text: cause }] : []
+          });
+        }
+      }
+    }
+  }
+
+  return {
+    train: {
+      stop_times,
+      display_informations: {
+        commercial_mode: trainType ? `CFL ${trainType}` : 'CFL',
+        physical_mode: 'CFL'
+      }
+    },
+    impacted,
+    newStart: null,
+    newEnd: null,
+    disruptions,
+    disruptionCauses,
+    tripId: chosenTripId,
+    source: 'CFL'
+  };
+}
+
+let GTFS = {
+  stops:null,
+  stopTimes:null,
   trips:null, 
   tripById:null, 
   stopNameToId:null, 
@@ -7205,12 +7451,36 @@ function addManualTrain(){
     const fixedStops = getStopsForDirection(sensInverse);
 
     const date = $('#trainDate').val();
-    const numbers = $('#trainNumbers').val().split(',').map(s => s.trim()).filter(Boolean);
+    const rawSelection = (typeof selectedTrains !== 'undefined' && selectedTrains.size > 0)
+      ? Array.from(selectedTrains)
+      : $('#trainNumbers').val().split(',').map(s => s.trim()).filter(Boolean);
+
+    const numbers = [];
+    const sncfNumbers = [];
+    const cflKeys = [];
+    const ignoredSelections = [];
+    rawSelection.forEach(val => {
+      const token = String(val || '').trim();
+      if (!token) return;
+      if (/^CFL-\d+$/.test(token)) {
+        numbers.push(token);
+        cflKeys.push(token);
+      } else if (/^\d{5,6}$/.test(token)) {
+        numbers.push(token);
+        sncfNumbers.push(token);
+      } else {
+        ignoredSelections.push(token);
+      }
+    });
     const ymdDate = dateInputToYMD(date);
 
     if (!numbers.length || !date) {
       $('#trainInfo').html('<p class="deleted">Veuillez indiquer au moins un numéro de train et une date.</p>');
       return;
+    }
+
+    if (ignoredSelections.length) {
+      console.warn('[Sélection] Ignoré(s):', ignoredSelections.join(', '));
     }
 
    GTFSLoadingUI.show('Chargement des Bétaillères…'); 
@@ -7243,7 +7513,7 @@ function addManualTrain(){
       const results = {};
 
       /* 1) Récupération des données API pour chaque train */
-    for (const num of numbers) {
+    for (const num of sncfNumbers) {
       const url = `https://api.sncf.com/v1/coverage/sncf/vehicle_journeys/vehicle_journey:SNCF:${date}:${num}:1187:Train`;
       try {
         let res;
@@ -7359,6 +7629,15 @@ if (!newStart) {
       }
     }
 
+    for (const key of cflKeys) {
+      try {
+        results[key] = await buildCflResult(key, { ymd: ymdDate });
+      } catch (err) {
+        console.warn('[CFL] Erreur', err);
+        results[key] = { error: 'Erreur CFL' };
+      }
+    }  
+
     /* (1.5) Recenser les gares ajoutées (stop_time_effect = added) */
     const addedStopsNames = new Set();
     numbers.forEach(num => {
@@ -7400,11 +7679,18 @@ if (!newStart) {
     let html = '<table><thead><tr><th>Gare</th>';
     numbers.forEach(num => {
   const composition = (typeof compoData !== 'undefined' && compoData) ? compoData[num] : '';
-  const compClass   = getCompoClass(composition, true); // ← force blanc si inconnu
-  const result = results[num];
-  const fallbackAttr = result?.gtfsFallback ? ' data-gtfs-fallback="1"' : '';
-  html += `<th class="train-header ${compClass}" data-train-number="${num}"${fallbackAttr}>${num}</th>`;
-});
+      const compClass   = getCompoClass(composition, true); // ← force blanc si inconnu
+      const result = results[num];
+      const isCfl = num.startsWith('CFL-');
+      const displayNumber = isCfl ? num.slice(4) : num;
+      const headerLabel = isCfl ? `CFL ${displayNumber}` : displayNumber;
+      const classes = [`train-header`, compClass];
+      if (isCfl) classes.push('cfl-train');
+      const fallbackAttr = (!isCfl && result?.gtfsFallback) ? ' data-gtfs-fallback="1"' : '';
+      const safeNumber = escapeHtml(num);
+      const safeLabel = escapeHtml(headerLabel);
+      html += `<th class="${classes.join(' ')}" data-train-number="${safeNumber}" data-train-label="${safeLabel}"${fallbackAttr}>${safeLabel}</th>`;
+    });
     html += '</tr><tr><th></th>';
 
     /* Ligne d’icônes (statut) */
@@ -7593,7 +7879,7 @@ injectTableChunkedIntoTrainInfo(html, { chunk: 180 });
         banner.setAttribute('aria-live', 'polite');
         const fallbackNumbers = Array.from(sncfFallback.numbers).sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
         let trainsLabel = 'certains trains demandés';
-        if (fallbackNumbers.length === numbers.length && numbers.length > 0) {
+        if (fallbackNumbers.length === sncfNumbers.length && sncfNumbers.length > 0) {
           trainsLabel = 'tous les trains demandés';
         } else if (fallbackNumbers.length === 1) {
           trainsLabel = `le train ${fallbackNumbers[0]}`;
@@ -7633,7 +7919,14 @@ function linkifyGaresAndTrains(root){
   const dateCirculation = $('#trainDate').val();
   scope.querySelectorAll('#trainInfo th[data-train-number]').forEach(th => {
     const numero = th.dataset.trainNumber;
-    if (!numero) return;
+    if (numero.startsWith('CFL-')) {
+      const label = th.dataset.trainLabel || `CFL ${numero.slice(4)}`;
+      const safeLabel = escapeHtml(label);
+      const existing = th.querySelector('.train-link-cfl');
+      if (existing) existing.textContent = label;
+      else th.innerHTML = `<span class="train-link-cfl">${safeLabel}</span>`;
+      return;
+    }
     const already = th.querySelector('a.train-link');
     const url = `https://www.sncf-voyageurs.com/fr/voyagez-avec-nous/horaires-et-itineraires/recherche-de-train/detail-train/?numeroCirculation=${numero}&dateCirculation=${dateCirculation}`;
     if (already) { already.href = url; already.textContent = numero; }
@@ -7757,7 +8050,8 @@ scheduleWeatherAfterTableSettled();
             };
           }
 
-          groupedDisruptions[key].trains.add(num);
+          const displayNum = num.startsWith('CFL-') ? `CFL ${num.slice(4)}` : num;
+          groupedDisruptions[key].trains.add(displayNum);
 
           // attrape aussi les n° dans impacted_objects
           if (disruption.impacted_objects) {
