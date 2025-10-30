@@ -571,11 +571,14 @@
       throw new Error('trainNumber requis');
     }
 
+    // On loggue la demande UTILISATEUR tout de suite (c'est rapide, local)
     recordUserRequest(1);
 
+    // 1. TENTE LE CACHE DIRECT
     const cacheKey = buildCacheKey(trainNumber, isoDate, ymdDate);
     const cachedEntry = getCacheEntry(cacheKey);
     if (cachedEntry && cachedEntry.data) {
+      // <- IMPORTANT : ici on répond tout de suite, pas de throttle, pas d'attente
       recordCacheHit(1);
       return {
         data: cachedEntry.data,
@@ -587,10 +590,12 @@
       };
     }
 
+    // 2. DÉDUP ENTRE ONGLETS / APPELS CONCURRENTS
     if (inFlightRequests.has(cacheKey)) {
       return inFlightRequests.get(cacheKey);
     }
 
+    // -- fonction qui fait VRAIMENT le fetch au réseau protégée par le throttle --
     const fetchTask = async () => {
       if (signal?.aborted) {
         const abortErr = new DOMException('Aborted', 'AbortError');
@@ -614,44 +619,70 @@
       return response.json();
     };
 
-    const scheduledPromise = scheduleNetworkCall(fetchTask)
-      .then(data => {
-        recordApiRequest(1);
-        const policy = computeCachePolicy({ isoDate, ymdDate, requestDate: new Date() });
-        const createdAt = now();
-        const ttl = Math.max(MS_PER_MINUTE, policy.ttlMs || 0);
-        const entry = {
-          createdAt,
-          expiresAt: createdAt + ttl,
-          data,
-          policy: {
-            intervalMs: policy.intervalMs,
-            ttlMs: ttl,
-            diffDays: policy.diffDays
-          }
-        };
-        setCacheEntry(cacheKey, entry);
-        trimCache();
-        return {
-          data,
-          fromCache: false,
-          cacheTimestamp: entry.createdAt,
-          expiresAt: entry.expiresAt,
-          enforcedIntervalMs: policy.intervalMs,
-          targetDiffDays: policy.diffDays
-        };
-      })
-      .finally(() => {
-        inFlightRequests.delete(cacheKey);
-      })
-      .catch(err => {
-        throw err;
+    // 3. ON LANCE UNE PROMESSE QUI :
+    //    - attend le throttle + fetch réseau
+    //    - RENVOIE LA DATA IMMÉDIATEMENT À L'APPELANT
+    //    - puis fait la mise à jour du compteur / cache en arrière-plan
+    const immediatePromise = (async () => {
+      // a) on respecte encore l'anti-burst, quota, etc.
+      const data = await scheduleNetworkCall(fetchTask);
+
+      // b) on renvoie le résultat tout de suite à l'appelant
+      //    (=> la page peut remplir le tableau)
+      const result = {
+        data,
+        fromCache: false,
+        cacheTimestamp: now(),
+        expiresAt: null,            // on mettra à jour juste après
+        enforcedIntervalMs: null,   // idem
+        targetDiffDays: null
+      };
+
+      // c) post-traitement async non bloquant UI
+      //    NOTE: pas d'await ici
+      queueMicrotask(() => {
+        try {
+          // on marque que c'était bien un hit API réelle
+          recordApiRequest(1);
+
+          const policy = computeCachePolicy({ isoDate, ymdDate, requestDate: new Date() });
+          const createdAt = now();
+          const ttl = Math.max(MS_PER_MINUTE, policy.ttlMs || 0);
+
+          const entry = {
+            createdAt,
+            expiresAt: createdAt + ttl,
+            data,
+            policy: {
+              intervalMs: policy.intervalMs,
+              ttlMs: ttl,
+              diffDays: policy.diffDays
+            }
+          };
+
+          setCacheEntry(cacheKey, entry);
+          trimCache();
+
+          // mets à jour les champs qu'on avait pas encore
+          result.cacheTimestamp = entry.createdAt;
+          result.expiresAt = entry.expiresAt;
+          result.enforcedIntervalMs = policy.intervalMs;
+          result.targetDiffDays = policy.diffDays;
+        } catch (err) {
+          // le post-processing a raté ? pas grave pour l'affichage du tableau
+          console.error('[SncfApiManager] post-cache update failed', err);
+        } finally {
+          inFlightRequests.delete(cacheKey);
+        }
       });
 
-    inFlightRequests.set(cacheKey, scheduledPromise);
-    return scheduledPromise;
-  }
+      return result;
+    })();
 
+    inFlightRequests.set(cacheKey, immediatePromise);
+    return immediatePromise;
+  }
+  
   function clearCache() {
     const index = getCacheIndex();
     index.forEach(entry => {
