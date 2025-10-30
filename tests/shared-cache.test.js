@@ -266,6 +266,23 @@ test('shared usage counters advance across three independent clients', async () 
     assert.equal(state.apiCalls, 1, 'API should only be called once across three clients');
     assert.equal(state.githubGetCalls, 3, 'GitHub cache should be read for each client');
     assert.equal(state.githubPutCalls, 3, 'GitHub cache should persist usage for each response');
+    
+    const persisted = JSON.parse(state.githubContent || '{}');
+    assert.equal(
+      persisted?.usage?.userRequests,
+      3,
+      'GitHub usage counter should match total requests across clients'
+    );
+    assert.equal(
+      persisted?.usage?.apiRequests,
+      1,
+      'GitHub should record a single upstream API call across clients'
+    );
+    assert.equal(
+      persisted?.usage?.cacheHits,
+      2,
+      'GitHub usage should show two cache hits for the later clients'
+    );
   } finally {
     restoreEnv();
   }
