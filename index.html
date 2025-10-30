@@ -5206,7 +5206,8 @@ function cflFindDirectTrainsBetween({ fromNames = [], toNames = [], minDeparture
       source: 'CFL',
       trainType,
       viaStart: depStop.stop_id,
-      viaEnd: arrStop.stop_id
+      viaEnd: arrStop.stop_id,
+      tripId
     });
   });
   results.sort((a,b) => (a.depMin - b.depMin) || a.numero.localeCompare(b.numero));
@@ -5323,7 +5324,9 @@ async function computeCflHybridTransfers({
             dep2: match.dep,
             arr2: match.arr,
             waitMin,
-            durMin
+            durMin,
+            trip1: leg1.tripId || null,
+            trip2: match.tripId || null
           });
         }
       }
@@ -5376,7 +5379,9 @@ async function computeCflHybridTransfers({
             dep2: match.dep,
             arr2: match.arr,
             waitMin,
-            durMin
+            durMin,
+            trip1: leg1.tripId || null,
+            trip2: match.tripId || null
           });
         }
       }
@@ -6098,7 +6103,11 @@ function findOneTransferItineraries({
           dep2:    toHHMM(st2[idxInter2].depS),
           arr2:    toHHMM(toDest.arrS),
           waitMin: Math.max(0, Math.round((st2[idxInter2].depS - inter.arrS)/60)),
-          durMin:  Math.max(0, Math.round((toDest.arrS - dep1S)/60))
+          durMin:  Math.max(0, Math.round((toDest.arrS - dep1S)/60)),
+          trip1,
+          trip2,
+          dep1S,
+          arr2S: toDest.arrS
         };
         break; // on ne garde que la plus proche
       }
@@ -6150,7 +6159,11 @@ function findOneTransferItineraries({
             dep2:    toHHMM(st2[idxInter2].depS),
             arr2:    toHHMM(toDest.arrS),
             waitMin: Math.max(0, Math.round((st2[idxInter2].depS - interJ.arrS)/60)),
-            durMin:  Math.max(0, Math.round((toDest.arrS - dep1S)/60))
+            durMin:  Math.max(0, Math.round((toDest.arrS - dep1S)/60)),
+            trip1,
+            trip2,
+            dep1S,
+            arr2S: toDest.arrS
           };
           break;
         }
@@ -6272,12 +6285,16 @@ async function computeItineraryProposals({
         ymd: targetYMD
       }));
     }
-   }
+  }
 
-    const directsUniqList = uniqDirects(directsCandidates).sort((a,b)=>{
+  const directsUniqList = uniqDirects(directsCandidates).sort((a,b)=>{
     if (a.depMin != null && b.depMin != null && a.depMin !== b.depMin) return a.depMin - b.depMin;
     return (a.displayLabel || a.numero || '').localeCompare(b.displayLabel || b.numero || '');
   });
+
+  const directTripIds = new Set(directsUniqList
+    .map(d => d.tripId)
+    .filter(tripId => typeof tripId === 'string' && tripId.length))
   
   let transfersCombined = [];
   if (allowTransfers && originIds.size && destIds.size){
@@ -6306,9 +6323,13 @@ async function computeItineraryProposals({
       dep2: t.dep2,
       arr2: t.arr2,
       waitMin: t.waitMin,
-      durMin: t.durMin
+      durMin: t.durMin,
+      trip1: t.trip1,
+      trip2: t.trip2
     }));
-    const filteredBaseTransfers = baseTransfers.filter(t => isPivotDirectionallyValid(start, t.viaName || '', end));
+    const filteredBaseTransfers = baseTransfers
+      .filter(t => !t.trip1 || !directTripIds.has(t.trip1))
+      .filter(t => isPivotDirectionallyValid(start, t.viaName || '', end));
     transfersCombined = transfersCombined.concat(filteredBaseTransfers);
   }
 
@@ -6322,7 +6343,8 @@ async function computeItineraryProposals({
       minTransferMin,
       maxTransferMin
     });
-    transfersCombined = transfersCombined.concat(hybrid);
+    const filteredHybrid = hybrid.filter(t => !t.trip1 || !directTripIds.has(t.trip1));
+    transfersCombined = transfersCombined.concat(filteredHybrid);
   }
 
   if (transfersCombined.length){
