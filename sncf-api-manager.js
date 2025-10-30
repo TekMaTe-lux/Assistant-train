@@ -7,15 +7,17 @@
   const MAX_GLOBAL_WAIT_MS = 1500;
   const CACHE_LIMIT = 150;
   const MS_PER_MINUTE = 60 * 1000;
+
   const SAME_DAY_WINDOWS = [
     { startMinutes: 270, endMinutes: 570, intervalMinutes: 4 },   // 04:30 – 09:30
     { startMinutes: 570, endMinutes: 930, intervalMinutes: 8 },   // 09:30 – 15:30
     { startMinutes: 930, endMinutes: 1260, intervalMinutes: 4 }   // 15:30 – 21:00
   ];
-  const NIGHT_INTERVAL_MINUTES = 20; // 21:00 – 04:30
-  const NEXT_DAY_INTERVAL_MINUTES = 4 * 60; // 4 h
-  const FUTURE_DAY_INTERVAL_MINUTES = 12 * 60; // 12 h → 2 requêtes / jour
-  const PAST_DAY_INTERVAL_MINUTES = 30; // requêtes historiques plus souples
+
+  const NIGHT_INTERVAL_MINUTES = 20;          // 21:00 – 04:30
+  const NEXT_DAY_INTERVAL_MINUTES = 4 * 60;   // J+1 : toutes les 4h
+  const FUTURE_DAY_INTERVAL_MINUTES = 12 * 60;// J+2+ : toutes les 12h
+  const PAST_DAY_INTERVAL_MINUTES = 30;       // historique plus souple
 
   const STORAGE_KEYS = {
     usage: 'sncf:usage-tracking',
@@ -25,6 +27,9 @@
 
   const CACHE_PREFIX = 'sncf:journey-cache:';
 
+  // -------------------------------------------------
+  // Stockage persistant (localStorage / cookie / mémoire)
+  // -------------------------------------------------
   function buildStorageDriver() {
     if (typeof localStorage !== 'undefined') {
       try {
@@ -46,17 +51,22 @@
       const cookieDriver = {
         type: 'cookie',
         getItem(key) {
-          const pattern = `(?:^|; )${encodeURIComponent(key)}=`;
+          const pattern = '(?:^|; )' + encodeURIComponent(key) + '=';
           const match = document.cookie.match(new RegExp(pattern + '([^;]*)'));
           return match ? decodeURIComponent(match[1]) : null;
         },
         setItem(key, value) {
           const expires = new Date();
           expires.setHours(23, 59, 59, 999);
-          document.cookie = `${encodeURIComponent(key)}=${encodeURIComponent(value)};expires=${expires.toUTCString()};path=/;SameSite=Lax`;
+          document.cookie =
+            encodeURIComponent(key) + '=' + encodeURIComponent(value) +
+            ';expires=' + expires.toUTCString() +
+            ';path=/;SameSite=Lax';
         },
         removeItem(key) {
-          document.cookie = `${encodeURIComponent(key)}=;expires=Thu, 01 Jan 1970 00:00:00 GMT;path=/;SameSite=Lax`;
+          document.cookie =
+            encodeURIComponent(key) +
+            '=;expires=Thu, 01 Jan 1970 00:00:00 GMT;path=/;SameSite=Lax';
         }
       };
 
@@ -69,6 +79,7 @@
       }
     }
 
+    // fallback mémoire
     const memoryStore = new Map();
     return {
       type: 'memory',
@@ -91,7 +102,7 @@
           removeItem: (key) => localStorage.removeItem(key)
         };
       } catch (err) {
-        // ignore and fallback to memory store
+        // fallback mémoire
       }
     }
 
@@ -106,9 +117,13 @@
 
   const usageStorage = buildStorageDriver();
 
+  // -------------------------------------------------
+  // État runtime
+  // -------------------------------------------------
   let memoryUsage = null;
   let memoryCacheIndex = null;
   let lastRequestTimestamp = 0;
+
   const usageChannel = (typeof BroadcastChannel !== 'undefined')
     ? new BroadcastChannel('sncf:usage-sync')
     : null;
@@ -118,6 +133,9 @@
   const requestQueue = [];
   let queueActive = false;
 
+  // -------------------------------------------------
+  // Helpers généraux
+  // -------------------------------------------------
   function now() {
     return Date.now();
   }
@@ -130,6 +148,9 @@
     return `${yyyy}-${mm}-${dd}`;
   }
 
+  // -------------------------------------------------
+  // Suivi usage / quota
+  // -------------------------------------------------
   function ensureUsageState() {
     let usage;
     if (usageStorage.type !== 'memory') {
@@ -240,14 +261,18 @@
     saveUsage(usage);
   }
 
+  // -------------------------------------------------
+  // Politique de rafraîchissement / cache
+  // -------------------------------------------------
   function parseTargetDate({ isoDate, ymdDate }) {
     const raw = isoDate || ymdDate;
     if (!raw) return null;
     let normalized = raw;
     if (/^\d{8}$/.test(raw)) {
+        // yyyymmdd -> yyyy-mm-dd
       normalized = `${raw.slice(0, 4)}-${raw.slice(4, 6)}-${raw.slice(6, 8)}`;
     }
-    const parsed = new Date(`${normalized}T00:00:00`);
+    const parsed = new Date(normalized + 'T00:00:00');
     if (Number.isNaN(parsed.getTime())) return null;
     return parsed;
   }
@@ -281,7 +306,10 @@
       requestDate.getMonth(),
       requestDate.getDate()
     );
-    const diffDays = Math.round((targetDate - startOfRequestDay) / (24 * 60 * 60 * 1000));
+
+    const diffDays = Math.round(
+      (targetDate - startOfRequestDay) / (24 * 60 * 60 * 1000)
+    );
 
     if (diffDays === 0) {
       const intervalMinutes = getSameDayIntervalMinutes(requestDate);
@@ -303,6 +331,9 @@
     return { intervalMs, ttlMs: intervalMs, diffDays };
   }
 
+  // -------------------------------------------------
+  // Cache (localStorage / mémoire)
+  // -------------------------------------------------
   function getCacheIndex() {
     if (cacheStorage.type === 'localStorage') {
       try {
@@ -334,9 +365,11 @@
   }
 
   function buildCacheKey(trainNumber, isoDate, ymdDate) {
-    const normalizedDate = isoDate || (ymdDate && /^\d{8}$/.test(ymdDate)
-      ? `${ymdDate.slice(0, 4)}-${ymdDate.slice(4, 6)}-${ymdDate.slice(6, 8)}`
-      : ymdDate || 'unknown');
+    const normalizedDate = isoDate || (
+      ymdDate && /^\d{8}$/.test(ymdDate)
+        ? `${ymdDate.slice(0, 4)}-${ymdDate.slice(4, 6)}-${ymdDate.slice(6, 8)}`
+        : (ymdDate || 'unknown')
+    );
     return `${CACHE_PREFIX}${normalizedDate}:${trainNumber}`;
   }
 
@@ -347,7 +380,7 @@
 
     let entry;
     try {
-      entry = typeof raw === 'string' ? JSON.parse(raw) : raw;
+      entry = (typeof raw === 'string') ? JSON.parse(raw) : raw;
     } catch (err) {
       cacheStorage.removeItem(key);
       return null;
@@ -358,6 +391,7 @@
       return null;
     }
 
+    // purger si expiré
     if (entry.expiresAt && entry.expiresAt <= now()) {
       removeCacheEntry(key);
       return null;
@@ -369,16 +403,17 @@
   function setCacheEntry(key, entry) {
     if (!key || !entry) return;
     const payload = JSON.stringify(entry);
+
     if (cacheStorage.type === 'localStorage') {
       try {
         cacheStorage.setItem(key, payload);
       } catch (err) {
-        // si quota dépassé, on essaie de purger et réessayer une fois
+        // quota localStorage trop plein -> purge puis retry
         trimCache(Math.max(20, Math.floor(CACHE_LIMIT * 0.8)));
         try {
           cacheStorage.setItem(key, payload);
         } catch (err2) {
-          // abandonne silencieusement
+          // abandon silencieux
         }
       }
     } else {
@@ -400,16 +435,64 @@
   function trimCache(limit = CACHE_LIMIT) {
     const index = getCacheIndex();
     if (index.length <= limit) return;
+
     index.sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
     while (index.length > limit) {
       const entry = index.shift();
-      if (entry?.key) {
+      if (entry && entry.key) {
         cacheStorage.removeItem(entry.key);
       }
     }
+
     saveCacheIndex(index);
   }
 
+  function clearCache() {
+    const index = getCacheIndex();
+    index.forEach(entry => {
+      if (entry && entry.key) {
+        cacheStorage.removeItem(entry.key);
+      }
+    });
+    saveCacheIndex([]);
+  }
+
+  function getCacheSnapshot() {
+    const index = getCacheIndex();
+    const rows = [];
+    index.forEach(entry => {
+      if (!entry || !entry.key) return;
+      const meta = parseCacheKey(entry.key);
+      if (!meta) return;
+      const cached = getCacheEntry(entry.key);
+      if (!cached || !cached.data) return;
+      rows.push({
+        key: entry.key,
+        trainNumber: meta.trainNumber,
+        isoDate: meta.isoDate,
+        createdAt: cached.createdAt || entry.createdAt || null,
+        expiresAt: cached.expiresAt || null,
+        policy: cached.policy || null
+      });
+    });
+    rows.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+    return rows;
+  }
+
+  function parseCacheKey(key) {
+    if (!key || typeof key !== 'string') return null;
+    if (!key.startsWith(CACHE_PREFIX)) return null;
+    const raw = key.slice(CACHE_PREFIX.length);
+    const parts = raw.split(':');
+    if (parts.length < 2) return null;
+    const isoDate = parts[0];
+    const trainNumber = parts.slice(1).join(':');
+    return { isoDate, trainNumber };
+  }
+
+  // -------------------------------------------------
+  // Throttle global (quota journalier)
+  // -------------------------------------------------
   function delay(ms) {
     return new Promise(resolve => setTimeout(resolve, ms));
   }
@@ -434,62 +517,38 @@
     }
   }
 
-  function parseCacheKey(key) {
-    if (!key || typeof key !== 'string') return null;
-    if (!key.startsWith(CACHE_PREFIX)) return null;
-    const raw = key.slice(CACHE_PREFIX.length);
-    const parts = raw.split(':');
-    if (parts.length < 2) return null;
-    const isoDate = parts[0];
-    const trainNumber = parts.slice(1).join(':');
-    return { isoDate, trainNumber };
-  }
-
-  function getCacheSnapshot() {
-    const index = getCacheIndex();
-    const rows = [];
-    index.forEach(entry => {
-      if (!entry?.key) return;
-      const meta = parseCacheKey(entry.key);
-      if (!meta) return;
-      const cached = getCacheEntry(entry.key);
-      if (!cached || !cached.data) return;
-      rows.push({
-        key: entry.key,
-        trainNumber: meta.trainNumber,
-        isoDate: meta.isoDate,
-        createdAt: cached.createdAt || entry.createdAt || null,
-        expiresAt: cached.expiresAt || null,
-        policy: cached.policy || null
-      });
-    });
-    rows.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
-    return rows;
-  }
-
   function computeGlobalThrottleDelay(elapsedMs) {
     try {
       const usage = ensureUsageState();
       const remainingRequests = Math.max(0, DAILY_QUOTA - usage.apiRequests);
+
       const endOfDay = new Date();
       endOfDay.setHours(23, 59, 59, 999);
+
       const millisLeft = Math.max(0, endOfDay.getTime() - now());
 
       let dynamicCap = MAX_GLOBAL_WAIT_MS;
+
       if (remainingRequests <= 250) {
         dynamicCap = Math.max(dynamicCap, MIN_INTERVAL_MS);
       }
       if (remainingRequests <= 50) {
-        dynamicCap = Math.max(dynamicCap, 5 * 60 * 1000);
+        dynamicCap = Math.max(dynamicCap, 5 * 60 * 1000); // 5 min
       }
 
       const ideal = (remainingRequests > 0 && millisLeft > 0)
-        ? millisLeft / remainingRequests
+        ? (millisLeft / remainingRequests)
         : dynamicCap;
-      const boundedTarget = Math.min(dynamicCap, Math.max(MIN_BURST_INTERVAL_MS, ideal));
+
+      const boundedTarget = Math.min(
+        dynamicCap,
+        Math.max(MIN_BURST_INTERVAL_MS, ideal)
+      );
+
       const wait = boundedTarget - (elapsedMs || 0);
       return wait > 0 ? wait : 0;
     } catch (err) {
+      // fallback en cas de bug dans le calcul
       return Math.max(0, MIN_BURST_INTERVAL_MS - (elapsedMs || 0));
     }
   }
@@ -508,14 +567,18 @@
       while (requestQueue.length > 0) {
         const item = requestQueue.shift();
         if (!item) continue;
+
         const { task, resolve, reject } = item;
         const elapsed = now() - getLastRequestTimestamp();
+
         const burstGap = Math.max(0, MIN_BURST_INTERVAL_MS - elapsed);
         const quotaGap = computeGlobalThrottleDelay(elapsed);
         const waitMs = Math.max(burstGap, quotaGap);
+
         if (waitMs > 0) {
           await delay(waitMs);
         }
+
         try {
           const result = await task();
           updateLastRequestTimestamp(now());
@@ -530,6 +593,9 @@
     }
   }
 
+  // -------------------------------------------------
+  // Sync multi-onglets du compteur
+  // -------------------------------------------------
   function subscribeToUsage(callback) {
     if (typeof callback !== 'function') return () => {};
     usageSubscribers.add(callback);
@@ -541,7 +607,8 @@
     return () => usageSubscribers.delete(callback);
   }
 
-  if (typeof window !== 'undefined' && (cacheStorage.type === 'localStorage' || usageStorage.type === 'localStorage')) {
+  if (typeof window !== 'undefined' &&
+      (cacheStorage.type === 'localStorage' || usageStorage.type === 'localStorage')) {
     window.addEventListener('storage', (event) => {
       if (!event) return;
       if (event.key === STORAGE_KEYS.lastRequestAt) {
@@ -560,6 +627,28 @@
     });
   }
 
+  // -------------------------------------------------
+  // Fetch train avec voie rapide UI + maj quota en arrière-plan
+  // -------------------------------------------------
+  async function fastFetchNoQueue(url, signal) {
+    const headers = {};
+    if (typeof getSncfAuthHeader === 'function') {
+      headers['Authorization'] = getSncfAuthHeader();
+    }
+    const resp = await fetch(url, {
+      headers,
+      cache: 'no-store',
+      signal
+    });
+    if (!resp.ok) {
+      const error = new Error('HTTP ' + resp.status);
+      error.status = resp.status;
+      error.statusText = resp.statusText;
+      throw error;
+    }
+    return resp.json();
+  }
+
   async function fetchVehicleJourney({
     url,
     trainNumber,
@@ -571,14 +660,13 @@
       throw new Error('trainNumber requis');
     }
 
-    // On loggue la demande UTILISATEUR tout de suite (c'est rapide, local)
+    // 1. côté UX : on note la demande utilisateur immédiatement
     recordUserRequest(1);
 
-    // 1. TENTE LE CACHE DIRECT
+    // 2. cache instantané
     const cacheKey = buildCacheKey(trainNumber, isoDate, ymdDate);
     const cachedEntry = getCacheEntry(cacheKey);
     if (cachedEntry && cachedEntry.data) {
-      // <- IMPORTANT : ici on répond tout de suite, pas de throttle, pas d'attente
       recordCacheHit(1);
       return {
         data: cachedEntry.data,
@@ -590,14 +678,14 @@
       };
     }
 
-    // 2. DÉDUP ENTRE ONGLETS / APPELS CONCURRENTS
+    // 3. si une requête identique est déjà en cours, on la réutilise
     if (inFlightRequests.has(cacheKey)) {
       return inFlightRequests.get(cacheKey);
     }
 
-    // -- fonction qui fait VRAIMENT le fetch au réseau protégée par le throttle --
-    const fetchTask = async () => {
-      if (signal?.aborted) {
+    // Tâche "officielle" (protégée par le quota global)
+    const throttledTask = async () => {
+      if (signal && signal.aborted) {
         const abortErr = new DOMException('Aborted', 'AbortError');
         throw abortErr;
       }
@@ -611,7 +699,7 @@
         signal
       });
       if (!response.ok) {
-        const error = new Error(`HTTP ${response.status}`);
+        const error = new Error('HTTP ' + response.status);
         error.status = response.status;
         error.statusText = response.statusText;
         throw error;
@@ -619,61 +707,90 @@
       return response.json();
     };
 
-    // 3. ON LANCE UNE PROMESSE QUI :
-    //    - attend le throttle + fetch réseau
-    //    - RENVOIE LA DATA IMMÉDIATEMENT À L'APPELANT
-    //    - puis fait la mise à jour du compteur / cache en arrière-plan
+    // On crée une promesse "rapide pour l'UI"
     const immediatePromise = (async () => {
-      // a) on respecte encore l'anti-burst, quota, etc.
-      const data = await scheduleNetworkCall(fetchTask);
+      // A. ESSAYER LA VOIE RAPIDE
+      // On va chercher les infos directes sans attendre le throttle,
+      // pour afficher le tableau le plus vite possible.
+      let data;
+      try {
+        data = await fastFetchNoQueue(url, signal);
+      } catch (fastErr) {
+        // si la voie rapide échoue (429 proxy / CORS / etc.), on retombe
+        // sur le chemin lent (throttle global)
+        data = await scheduleNetworkCall(throttledTask);
+      }
 
-      // b) on renvoie le résultat tout de suite à l'appelant
-      //    (=> la page peut remplir le tableau)
+      // On a les infos train -> on peut déjà les renvoyer à la page
       const result = {
         data,
         fromCache: false,
         cacheTimestamp: now(),
-        expiresAt: null,            // on mettra à jour juste après
-        enforcedIntervalMs: null,   // idem
+        expiresAt: null,
+        enforcedIntervalMs: null,
         targetDiffDays: null
       };
 
-      // c) post-traitement async non bloquant UI
-      //    NOTE: pas d'await ici
+      // B. En arrière-plan : on met à jour le compteur API,
+      // la politique cache, etc.
       queueMicrotask(() => {
-        try {
-          // on marque que c'était bien un hit API réelle
-          recordApiRequest(1);
-
-          const policy = computeCachePolicy({ isoDate, ymdDate, requestDate: new Date() });
-          const createdAt = now();
-          const ttl = Math.max(MS_PER_MINUTE, policy.ttlMs || 0);
-
-          const entry = {
-            createdAt,
-            expiresAt: createdAt + ttl,
-            data,
-            policy: {
-              intervalMs: policy.intervalMs,
-              ttlMs: ttl,
-              diffDays: policy.diffDays
+        // important : pas d'await ici => n'impacte pas l'UI
+        (async () => {
+          try {
+            // On va "régulariser" l'appel côté quota si la voie rapide a contourné le throttle
+            // Astuce : on force un passage dans la queue pour ce train.
+            // MAIS pour éviter de redéclencher un vrai appel réseau inutile,
+            // si fastFetch a réussi on réutilise 'data' plutôt que re-fetch.
+            // On devrait idéalement ne pas re-fetch si fastFetch a marché.
+            // Donc :
+            let confirmedData = data;
+            if (!confirmedData) {
+              try {
+                confirmedData = await scheduleNetworkCall(throttledTask);
+              } catch (fallbackErr) {
+                // si même ça échoue, tant pis, on ne casse pas l'UI
+                confirmedData = data;
+              }
             }
-          };
 
-          setCacheEntry(cacheKey, entry);
-          trimCache();
+            // incrément compteur API (1 hit réel SNCF/Vercel)
+            recordApiRequest(1);
 
-          // mets à jour les champs qu'on avait pas encore
-          result.cacheTimestamp = entry.createdAt;
-          result.expiresAt = entry.expiresAt;
-          result.enforcedIntervalMs = policy.intervalMs;
-          result.targetDiffDays = policy.diffDays;
-        } catch (err) {
-          // le post-processing a raté ? pas grave pour l'affichage du tableau
-          console.error('[SncfApiManager] post-cache update failed', err);
-        } finally {
-          inFlightRequests.delete(cacheKey);
-        }
+            // politique cache
+            const policy = computeCachePolicy({
+              isoDate,
+              ymdDate,
+              requestDate: new Date()
+            });
+
+            const createdAt = now();
+            const ttl = Math.max(MS_PER_MINUTE, policy.ttlMs || 0);
+
+            const entry = {
+              createdAt,
+              expiresAt: createdAt + ttl,
+              data: confirmedData,
+              policy: {
+                intervalMs: policy.intervalMs,
+                ttlMs: ttl,
+                diffDays: policy.diffDays
+              }
+            };
+
+            setCacheEntry(cacheKey, entry);
+            trimCache();
+
+            // on enrichit l'objet déjà renvoyé (pour les lecteurs qui le gardent)
+            result.cacheTimestamp = entry.createdAt;
+            result.expiresAt = entry.expiresAt;
+            result.enforcedIntervalMs = policy.intervalMs;
+            result.targetDiffDays = policy.diffDays;
+          } catch (err) {
+            console.error('[SncfApiManager] post-cache update failed', err);
+          } finally {
+            inFlightRequests.delete(cacheKey);
+          }
+        })();
       });
 
       return result;
@@ -682,17 +799,10 @@
     inFlightRequests.set(cacheKey, immediatePromise);
     return immediatePromise;
   }
-  
-  function clearCache() {
-    const index = getCacheIndex();
-    index.forEach(entry => {
-      if (entry?.key) {
-        cacheStorage.removeItem(entry.key);
-      }
-    });
-    saveCacheIndex([]);
-  }
 
+  // -------------------------------------------------
+  // API publique
+  // -------------------------------------------------
   const api = Object.freeze({
     DAILY_QUOTA,
     MIN_INTERVAL_MS,
