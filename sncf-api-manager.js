@@ -23,22 +23,93 @@
 
   const CACHE_PREFIX = 'sncf:journey-cache:';
 
-  const storageAvailable = (() => {
-    try {
-      if (typeof localStorage === 'undefined') return false;
-      const testKey = '__sncf_test__';
-      localStorage.setItem(testKey, '1');
-      localStorage.removeItem(testKey);
-      return true;
-    } catch (err) {
-      return false;
+  function buildStorageDriver() {
+    if (typeof localStorage !== 'undefined') {
+      try {
+        const testKey = '__sncf_usage_test__';
+        localStorage.setItem(testKey, '1');
+        localStorage.removeItem(testKey);
+        return {
+          type: 'localStorage',
+          getItem: (key) => localStorage.getItem(key),
+          setItem: (key, value) => localStorage.setItem(key, value),
+          removeItem: (key) => localStorage.removeItem(key)
+        };
+      } catch (err) {
+        // ignore and continue to next fallback
+      }
     }
+
+    if (typeof document !== 'undefined') {
+      const cookieDriver = {
+        type: 'cookie',
+        getItem(key) {
+          const pattern = `(?:^|; )${encodeURIComponent(key)}=`;
+          const match = document.cookie.match(new RegExp(pattern + '([^;]*)'));
+          return match ? decodeURIComponent(match[1]) : null;
+        },
+        setItem(key, value) {
+          const expires = new Date();
+          expires.setHours(23, 59, 59, 999);
+          document.cookie = `${encodeURIComponent(key)}=${encodeURIComponent(value)};expires=${expires.toUTCString()};path=/;SameSite=Lax`;
+        },
+        removeItem(key) {
+          document.cookie = `${encodeURIComponent(key)}=;expires=Thu, 01 Jan 1970 00:00:00 GMT;path=/;SameSite=Lax`;
+        }
+      };
+
+      try {
+        cookieDriver.setItem('__sncf_cookie_test__', '1');
+        cookieDriver.removeItem('__sncf_cookie_test__');
+        return cookieDriver;
+      } catch (err) {
+        // ignore and fallback to in-memory store
+      }
+    }
+
+    const memoryStore = new Map();
+    return {
+      type: 'memory',
+      getItem: (key) => (memoryStore.has(key) ? memoryStore.get(key) : null),
+      setItem: (key, value) => memoryStore.set(key, value),
+      removeItem: (key) => memoryStore.delete(key)
+    };
+  }
+
+  const cacheStorage = (() => {
+    if (typeof localStorage !== 'undefined') {
+      try {
+        const testKey = '__sncf_cache_test__';
+        localStorage.setItem(testKey, '1');
+        localStorage.removeItem(testKey);
+        return {
+          type: 'localStorage',
+          getItem: (key) => localStorage.getItem(key),
+          setItem: (key, value) => localStorage.setItem(key, value),
+          removeItem: (key) => localStorage.removeItem(key)
+        };
+      } catch (err) {
+        // ignore and fallback to memory store
+      }
+    }
+
+    const memoryStore = new Map();
+    return {
+      type: 'memory',
+      getItem: (key) => (memoryStore.has(key) ? memoryStore.get(key) : null),
+      setItem: (key, value) => memoryStore.set(key, value),
+      removeItem: (key) => memoryStore.delete(key)
+    };
   })();
 
-  const memoryCache = new Map();
+  const usageStorage = buildStorageDriver();
+
   let memoryUsage = null;
   let memoryCacheIndex = null;
   let lastRequestTimestamp = 0;
+  const usageChannel = (typeof BroadcastChannel !== 'undefined')
+    ? new BroadcastChannel('sncf:usage-sync')
+    : null;
 
   const usageSubscribers = new Set();
   const inFlightRequests = new Map();
@@ -59,8 +130,8 @@
 
   function ensureUsageState() {
     let usage;
-    if (storageAvailable) {
-      const raw = localStorage.getItem(STORAGE_KEYS.usage);
+    if (usageStorage.type !== 'memory') {
+      const raw = usageStorage.getItem(STORAGE_KEYS.usage);
       if (raw) {
         try {
           usage = JSON.parse(raw);
@@ -75,25 +146,21 @@
     const today = todayIso();
     if (!usage || usage.date !== today) {
       usage = {
-  date: today,
-  userRequests: 0,
-  apiRequests: 0,
-  cacheHits: 0,
-  lastReset: now(),
-
-  // nouveau :
-  realCalls: [],   // tableau des trains pour lesquels on a FAIT un appel réseau aujourd'hui
-  cacheServes: []  // tableau des trains qu'on a servis via cache (sans nouvel appel réseau)
-};
+        date: today,
+        userRequests: 0,
+        apiRequests: 0,
+        cacheHits: 0,
+        lastReset: now()
+      };
     }
 
-    // Sécurité rétrocompatibilité
-if (!Array.isArray(usage.realCalls)) usage.realCalls = [];
-if (!Array.isArray(usage.cacheServes)) usage.cacheServes = [];
-
-    if (storageAvailable) {
-      localStorage.setItem(STORAGE_KEYS.usage, JSON.stringify(usage));
-    } else {
+    try {
+      if (usageStorage.type !== 'memory') {
+        usageStorage.setItem(STORAGE_KEYS.usage, JSON.stringify(usage));
+      } else {
+        memoryUsage = usage;
+      }
+    } catch (err) {
       memoryUsage = usage;
     }
 
@@ -103,33 +170,40 @@ if (!Array.isArray(usage.cacheServes)) usage.cacheServes = [];
   function saveUsage(usage) {
     if (!usage) return;
     usage.lastUpdated = now();
-    if (storageAvailable) {
+    let persisted = false;
+    if (usageStorage.type !== 'memory') {
       try {
-        localStorage.setItem(STORAGE_KEYS.usage, JSON.stringify(usage));
+        usageStorage.setItem(STORAGE_KEYS.usage, JSON.stringify(usage));
+        persisted = true;
       } catch (err) {
         // ignore quota errors, fallback to memory only
       }
-    } else {
+    }
+    if (!persisted) {
       memoryUsage = usage;
     }
     notifyUsageSubscribers();
+    if (usageChannel) {
+      try {
+        usageChannel.postMessage({ type: 'usage-update' });
+      } catch (err) {
+        // ignore broadcast failures
+      }
+    }
   }
 
   function getUsageSnapshot() {
     const usage = ensureUsageState();
     return Object.freeze({
-  date: usage.date,
-  userRequests: usage.userRequests,
-  apiRequests: usage.apiRequests,
-  cacheHits: usage.cacheHits,
-  lastReset: usage.lastReset,
-  lastUpdated: usage.lastUpdated || usage.lastReset,
-  remainingQuota: Math.max(0, DAILY_QUOTA - usage.apiRequests),
-
-  // nouveau :
-  realCalls: usage.realCalls.slice(-200),     // on renvoie juste les derniers 200 pour pas exploser la page
-  cacheServes: usage.cacheServes.slice(-200) // idem
-});
+      date: usage.date,
+      userRequests: usage.userRequests,
+      apiRequests: usage.apiRequests,
+      cacheHits: usage.cacheHits,
+      lastReset: usage.lastReset,
+      lastUpdated: usage.lastUpdated || usage.lastReset,
+      remainingQuota: Math.max(0, DAILY_QUOTA - usage.apiRequests),
+      cacheSize: getCacheIndex().length
+    });
   }
 
   function notifyUsageSubscribers() {
@@ -164,28 +238,6 @@ if (!Array.isArray(usage.cacheServes)) usage.cacheServes = [];
     saveUsage(usage);
   }
 
-function recordRealCall(trainNumber, serviceDate) {
-  const usage = ensureUsageState();
-  usage.apiRequests += 1; // une vraie requête réseau = on facture 1
-  usage.realCalls.push({
-    trainNumber,
-    serviceDate,
-    ts: now()
-  });
-  saveUsage(usage);
-}
-
-function recordCacheServe(trainNumber, serviceDate) {
-  const usage = ensureUsageState();
-  usage.cacheHits += 1;
-  usage.cacheServes.push({
-    trainNumber,
-    serviceDate,
-    ts: now()
-  });
-  saveUsage(usage);
-}
-  
   function parseTargetDate({ isoDate, ymdDate }) {
     const raw = isoDate || ymdDate;
     if (!raw) return null;
@@ -250,9 +302,9 @@ function recordCacheServe(trainNumber, serviceDate) {
   }
 
   function getCacheIndex() {
-    if (storageAvailable) {
+    if (cacheStorage.type === 'localStorage') {
       try {
-        const raw = localStorage.getItem(STORAGE_KEYS.cacheIndex);
+        const raw = cacheStorage.getItem(STORAGE_KEYS.cacheIndex);
         if (raw) {
           const parsed = JSON.parse(raw);
           if (Array.isArray(parsed)) return parsed;
@@ -268,9 +320,9 @@ function recordCacheServe(trainNumber, serviceDate) {
 
   function saveCacheIndex(index) {
     if (!Array.isArray(index)) index = [];
-    if (storageAvailable) {
+    if (cacheStorage.type === 'localStorage') {
       try {
-        localStorage.setItem(STORAGE_KEYS.cacheIndex, JSON.stringify(index));
+        cacheStorage.setItem(STORAGE_KEYS.cacheIndex, JSON.stringify(index));
       } catch (err) {
         // ignore storage quota issues
       }
@@ -288,26 +340,19 @@ function recordCacheServe(trainNumber, serviceDate) {
 
   function getCacheEntry(key) {
     if (!key) return null;
-    let raw;
-    if (storageAvailable) {
-      raw = localStorage.getItem(key);
-    } else {
-      raw = memoryCache.get(key);
-    }
+    const raw = cacheStorage.getItem(key);
     if (!raw) return null;
 
     let entry;
     try {
       entry = typeof raw === 'string' ? JSON.parse(raw) : raw;
     } catch (err) {
-      if (storageAvailable) localStorage.removeItem(key);
-      else memoryCache.delete(key);
+      cacheStorage.removeItem(key);
       return null;
     }
 
     if (!entry || typeof entry !== 'object') {
-      if (storageAvailable) localStorage.removeItem(key);
-      else memoryCache.delete(key);
+      cacheStorage.removeItem(key);
       return null;
     }
 
@@ -322,20 +367,20 @@ function recordCacheServe(trainNumber, serviceDate) {
   function setCacheEntry(key, entry) {
     if (!key || !entry) return;
     const payload = JSON.stringify(entry);
-    if (storageAvailable) {
+    if (cacheStorage.type === 'localStorage') {
       try {
-        localStorage.setItem(key, payload);
+        cacheStorage.setItem(key, payload);
       } catch (err) {
         // si quota dépassé, on essaie de purger et réessayer une fois
         trimCache(Math.max(20, Math.floor(CACHE_LIMIT * 0.8)));
         try {
-          localStorage.setItem(key, payload);
+          cacheStorage.setItem(key, payload);
         } catch (err2) {
           // abandonne silencieusement
         }
       }
     } else {
-      memoryCache.set(key, payload);
+      cacheStorage.setItem(key, payload);
     }
 
     const index = getCacheIndex().filter(item => item.key !== key);
@@ -345,11 +390,7 @@ function recordCacheServe(trainNumber, serviceDate) {
 
   function removeCacheEntry(key) {
     if (!key) return;
-    if (storageAvailable) {
-      localStorage.removeItem(key);
-    } else {
-      memoryCache.delete(key);
-    }
+    cacheStorage.removeItem(key);
     const index = getCacheIndex().filter(item => item.key !== key);
     saveCacheIndex(index);
   }
@@ -361,11 +402,7 @@ function recordCacheServe(trainNumber, serviceDate) {
     while (index.length > limit) {
       const entry = index.shift();
       if (entry?.key) {
-        if (storageAvailable) {
-          localStorage.removeItem(entry.key);
-        } else {
-          memoryCache.delete(entry.key);
-        }
+        cacheStorage.removeItem(entry.key);
       }
     }
     saveCacheIndex(index);
@@ -377,8 +414,8 @@ function recordCacheServe(trainNumber, serviceDate) {
 
   function getLastRequestTimestamp() {
     if (lastRequestTimestamp) return lastRequestTimestamp;
-    if (storageAvailable) {
-      const raw = localStorage.getItem(STORAGE_KEYS.lastRequestAt);
+    if (cacheStorage.type === 'localStorage') {
+      const raw = cacheStorage.getItem(STORAGE_KEYS.lastRequestAt);
       if (raw) lastRequestTimestamp = Number(raw) || 0;
     }
     return lastRequestTimestamp;
@@ -386,13 +423,46 @@ function recordCacheServe(trainNumber, serviceDate) {
 
   function updateLastRequestTimestamp(ts) {
     lastRequestTimestamp = ts;
-    if (storageAvailable) {
+    if (cacheStorage.type === 'localStorage') {
       try {
-        localStorage.setItem(STORAGE_KEYS.lastRequestAt, String(ts));
+        cacheStorage.setItem(STORAGE_KEYS.lastRequestAt, String(ts));
       } catch (err) {
         // ignore
       }
     }
+  }
+
+  function parseCacheKey(key) {
+    if (!key || typeof key !== 'string') return null;
+    if (!key.startsWith(CACHE_PREFIX)) return null;
+    const raw = key.slice(CACHE_PREFIX.length);
+    const parts = raw.split(':');
+    if (parts.length < 2) return null;
+    const isoDate = parts[0];
+    const trainNumber = parts.slice(1).join(':');
+    return { isoDate, trainNumber };
+  }
+
+  function getCacheSnapshot() {
+    const index = getCacheIndex();
+    const rows = [];
+    index.forEach(entry => {
+      if (!entry?.key) return;
+      const meta = parseCacheKey(entry.key);
+      if (!meta) return;
+      const cached = getCacheEntry(entry.key);
+      if (!cached || !cached.data) return;
+      rows.push({
+        key: entry.key,
+        trainNumber: meta.trainNumber,
+        isoDate: meta.isoDate,
+        createdAt: cached.createdAt || entry.createdAt || null,
+        expiresAt: cached.expiresAt || null,
+        policy: cached.policy || null
+      });
+    });
+    rows.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+    return rows;
   }
 
   async function scheduleNetworkCall(task) {
@@ -440,7 +510,7 @@ function recordCacheServe(trainNumber, serviceDate) {
     return () => usageSubscribers.delete(callback);
   }
 
-  if (typeof window !== 'undefined' && storageAvailable) {
+  if (typeof window !== 'undefined' && (cacheStorage.type === 'localStorage' || usageStorage.type === 'localStorage')) {
     window.addEventListener('storage', (event) => {
       if (!event) return;
       if (event.key === STORAGE_KEYS.lastRequestAt) {
@@ -449,6 +519,13 @@ function recordCacheServe(trainNumber, serviceDate) {
       if (event.key === STORAGE_KEYS.usage) {
         notifyUsageSubscribers();
       }
+    });
+  }
+
+  if (usageChannel) {
+    usageChannel.addEventListener('message', (event) => {
+      if (!event || event.data?.type !== 'usage-update') return;
+      notifyUsageSubscribers();
     });
   }
 
@@ -468,19 +545,16 @@ function recordCacheServe(trainNumber, serviceDate) {
     const cacheKey = buildCacheKey(trainNumber, isoDate, ymdDate);
     const cachedEntry = getCacheEntry(cacheKey);
     if (cachedEntry && cachedEntry.data) {
-  // train servi depuis cache => pas de nouvelle requête API
-  const serviceDate = isoDate || ymdDate || 'unknown-date';
-  recordCacheServe(trainNumber, serviceDate);
-
-  return {
-    data: cachedEntry.data,
-    fromCache: true,
-    cacheTimestamp: cachedEntry.createdAt,
-    expiresAt: cachedEntry.expiresAt,
-    enforcedIntervalMs: cachedEntry.policy?.intervalMs || null,
-    targetDiffDays: cachedEntry.policy?.diffDays ?? null
-  };
-}
+      recordCacheHit(1);
+      return {
+        data: cachedEntry.data,
+        fromCache: true,
+        cacheTimestamp: cachedEntry.createdAt,
+        expiresAt: cachedEntry.expiresAt,
+        enforcedIntervalMs: cachedEntry.policy?.intervalMs || null,
+        targetDiffDays: cachedEntry.policy?.diffDays ?? null
+      };
+    }
 
     if (inFlightRequests.has(cacheKey)) {
       return inFlightRequests.get(cacheKey);
@@ -510,37 +584,32 @@ function recordCacheServe(trainNumber, serviceDate) {
     };
 
     const scheduledPromise = scheduleNetworkCall(fetchTask)
-  .then(data => {
-    const serviceDate = isoDate || ymdDate || 'unknown-date';
-    recordRealCall(trainNumber, serviceDate);
-
-    const policy = computeCachePolicy({ isoDate, ymdDate, requestDate: new Date() });
-    const createdAt = now();
-    const ttl = Math.max(MS_PER_MINUTE, policy.ttlMs || 0);
-
-    const entry = {
-      createdAt,
-      expiresAt: createdAt + ttl,
-      data,
-      policy: {
-        intervalMs: policy.intervalMs,
-        ttlMs: ttl,
-        diffDays: policy.diffDays
-      }
-    };
-
-    setCacheEntry(cacheKey, entry);
-    trimCache();
-
-    return {
-      data,
-      fromCache: false,
-      cacheTimestamp: entry.createdAt,
-      expiresAt: entry.expiresAt,
-      enforcedIntervalMs: policy.intervalMs,
-      targetDiffDays: policy.diffDays
-    };
-  })
+      .then(data => {
+        recordApiRequest(1);
+        const policy = computeCachePolicy({ isoDate, ymdDate, requestDate: new Date() });
+        const createdAt = now();
+        const ttl = Math.max(MS_PER_MINUTE, policy.ttlMs || 0);
+        const entry = {
+          createdAt,
+          expiresAt: createdAt + ttl,
+          data,
+          policy: {
+            intervalMs: policy.intervalMs,
+            ttlMs: ttl,
+            diffDays: policy.diffDays
+          }
+        };
+        setCacheEntry(cacheKey, entry);
+        trimCache();
+        return {
+          data,
+          fromCache: false,
+          cacheTimestamp: entry.createdAt,
+          expiresAt: entry.expiresAt,
+          enforcedIntervalMs: policy.intervalMs,
+          targetDiffDays: policy.diffDays
+        };
+      })
       .finally(() => {
         inFlightRequests.delete(cacheKey);
       })
@@ -556,8 +625,7 @@ function recordCacheServe(trainNumber, serviceDate) {
     const index = getCacheIndex();
     index.forEach(entry => {
       if (entry?.key) {
-        if (storageAvailable) localStorage.removeItem(entry.key);
-        else memoryCache.delete(entry.key);
+        cacheStorage.removeItem(entry.key);
       }
     });
     saveCacheIndex([]);
@@ -570,7 +638,8 @@ function recordCacheServe(trainNumber, serviceDate) {
     getCachePolicy: computeCachePolicy,
     getUsageSnapshot,
     subscribeToUsage,
-    clearCache
+    clearCache,
+    getCacheSnapshot
   });
 
   global.SncfApiManager = api;
