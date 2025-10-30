@@ -3,6 +3,8 @@
 
   const DAILY_QUOTA = 5000;
   const MIN_INTERVAL_MS = Math.ceil((24 * 60 * 60 * 1000) / DAILY_QUOTA);
+  const MIN_BURST_INTERVAL_MS = 120;
+  const MAX_GLOBAL_WAIT_MS = 1500;
   const CACHE_LIMIT = 150;
   const MS_PER_MINUTE = 60 * 1000;
   const SAME_DAY_WINDOWS = [
@@ -465,6 +467,33 @@
     return rows;
   }
 
+  function computeGlobalThrottleDelay(elapsedMs) {
+    try {
+      const usage = ensureUsageState();
+      const remainingRequests = Math.max(0, DAILY_QUOTA - usage.apiRequests);
+      const endOfDay = new Date();
+      endOfDay.setHours(23, 59, 59, 999);
+      const millisLeft = Math.max(0, endOfDay.getTime() - now());
+
+      let dynamicCap = MAX_GLOBAL_WAIT_MS;
+      if (remainingRequests <= 250) {
+        dynamicCap = Math.max(dynamicCap, MIN_INTERVAL_MS);
+      }
+      if (remainingRequests <= 50) {
+        dynamicCap = Math.max(dynamicCap, 5 * 60 * 1000);
+      }
+
+      const ideal = (remainingRequests > 0 && millisLeft > 0)
+        ? millisLeft / remainingRequests
+        : dynamicCap;
+      const boundedTarget = Math.min(dynamicCap, Math.max(MIN_BURST_INTERVAL_MS, ideal));
+      const wait = boundedTarget - (elapsedMs || 0);
+      return wait > 0 ? wait : 0;
+    } catch (err) {
+      return Math.max(0, MIN_BURST_INTERVAL_MS - (elapsedMs || 0));
+    }
+  }
+
   async function scheduleNetworkCall(task) {
     return new Promise((resolve, reject) => {
       requestQueue.push({ task, resolve, reject });
@@ -481,7 +510,9 @@
         if (!item) continue;
         const { task, resolve, reject } = item;
         const elapsed = now() - getLastRequestTimestamp();
-        const waitMs = Math.max(0, MIN_INTERVAL_MS - elapsed);
+        const burstGap = Math.max(0, MIN_BURST_INTERVAL_MS - elapsed);
+        const quotaGap = computeGlobalThrottleDelay(elapsed);
+        const waitMs = Math.max(burstGap, quotaGap);
         if (waitMs > 0) {
           await delay(waitMs);
         }
