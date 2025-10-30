@@ -227,3 +227,46 @@ test('shared GitHub cache is reused across independent requests', async () => {
     restoreEnv();
   }
 });
+test('shared usage counters advance across three independent clients', async () => {
+  const restoreEnv = withEnv({
+    SNCF_KEY: 'test-key',
+    GITHUB_TOKEN: 'gh-token',
+    GITHUB_OWNER: 'owner',
+    GITHUB_REPO: 'owner/repo'
+  });
+
+  try {
+    const { fetch, state } = createFetchStub();
+    const handler = await createHandler(fetch);
+
+    const firstResponse = createMockResponse();
+    await handler({ method: 'GET', query: { id: 'journeys', ttl: '300' } }, firstResponse);
+
+    assert.equal(firstResponse.headers['X-Sncf-Cache-State'], 'MISS');
+    assert.equal(firstResponse.headers['X-Sncf-Usage-Requests'], '1');
+    assert.equal(firstResponse.headers['X-Sncf-Usage-ApiRequests'], '1');
+    assert.equal(firstResponse.headers['X-Sncf-Usage-CacheHits'], '0');
+
+    const secondResponse = createMockResponse();
+    await handler({ method: 'GET', query: { id: 'journeys', ttl: '300' } }, secondResponse);
+
+    assert.equal(secondResponse.headers['X-Sncf-Cache-State'], 'HIT');
+    assert.equal(secondResponse.headers['X-Sncf-Usage-Requests'], '2');
+    assert.equal(secondResponse.headers['X-Sncf-Usage-ApiRequests'], '1');
+    assert.equal(secondResponse.headers['X-Sncf-Usage-CacheHits'], '1');
+
+    const thirdResponse = createMockResponse();
+    await handler({ method: 'GET', query: { id: 'journeys', ttl: '300' } }, thirdResponse);
+
+    assert.equal(thirdResponse.headers['X-Sncf-Cache-State'], 'HIT');
+    assert.equal(thirdResponse.headers['X-Sncf-Usage-Requests'], '3');
+    assert.equal(thirdResponse.headers['X-Sncf-Usage-ApiRequests'], '1');
+    assert.equal(thirdResponse.headers['X-Sncf-Usage-CacheHits'], '2');
+
+    assert.equal(state.apiCalls, 1, 'API should only be called once across three clients');
+    assert.equal(state.githubGetCalls, 3, 'GitHub cache should be read for each client');
+    assert.equal(state.githubPutCalls, 3, 'GitHub cache should persist usage for each response');
+  } finally {
+    restoreEnv();
+  }
+});
