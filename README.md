@@ -21,6 +21,8 @@ Définissez les variables d'environnement suivantes sur l'hébergement (Vercel, 
 | `GITHUB_CACHE_BRANCH` | (optionnel) Branche à mettre à jour, par défaut `main`. |
 | `SNCF_CACHE_TTL_SECONDS` | (optionnel) Durée de vie par défaut des entrées (secondes). |
 | `SNCF_CACHE_MAX_ENTRIES` | (optionnel) Nombre maximal d'entrées mémorisées avant purge. |
+| `SNCF_DAILY_QUOTA` | (optionnel) Quota quotidien global à exposer aux clients (défaut : 5000). |
+| `GITHUB_CACHE_MAX_ATTEMPTS` | (optionnel) Nombre de tentatives de persistance en cas de conflit (défaut : 3). |
 
 À chaque requête, la fonction serverless :
 
@@ -31,4 +33,8 @@ Définissez les variables d'environnement suivantes sur l'hébergement (Vercel, 
 
 Les clients front-end (via `sncf-api-manager.js`) exploitent automatiquement ce proxy et
 transmettent la politique de rafraîchissement calculée localement pour aligner la durée
-de vie du cache partagé sur celle du cache navigateur.
+de vie du cache partagé sur celle du cache navigateur. À chaque réponse, le proxy renvoie
+également des en-têtes `X-Sncf-Usage-*` qui reflètent l'état global du quota journalier
+(requêtes effectuées, coups de cache, quota restant, etc.). Ces informations sont
+immédiatement synchronisées avec tous les visiteurs via le tableau de bord
+`sncf-usage-dashboard.html`.
