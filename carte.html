@@ -495,7 +495,7 @@ function escapeHTML(str){
     { axisId:'metz', hafasId:'400000071', label:'Metz', names:['Metz','Metz-Ville','Metz-Ville, Gare'] }
   ];
 
-  const HAFAS_COVERAGE_GAP_STATIONS = new Set([
+    const HAFAS_COVERAGE_GAP_STATIONS = new Set([
     'pfaffenthal-kirchberg','dommeldange','walferdange','heisdorf','lorentzweiler','lintgen','mersch','cruchten','colmar-berg','schieren','ettelbruck','michelau','goebelsmuhle','kautenbach','wiltz','clervaux','drauffelt','troisvierges','cents-hamm','sandweiler-contern','oetrange','munsbach','roodt','wecker','manternach','mertert','wasserbillig','luxembourg','bettembourg','howald','berchem','noertzange','schifflange','esch','belval-universite','belval-lycee','belval-redange','belvaux-soleuvre','differdange','oberkorn','niederkorn','petange','rodange','dudelange-usines','dudelange-ville','dudelange-centre','dudelange-burange','lamadelaine','bascharage-sanem','kleinbettingen','capellen','mamer','bertrange-strassen'
   ]);
 
@@ -931,82 +931,55 @@ function escapeHTML(str){
 
   function computeTrainDelayInfo(train){
     if (!train || !trainDelaysByNumber.size) return null;
+    const numberKey = normalizeTrainNumberKey(train.numberKey || extractTrainNumberCandidate(train.number) || null);
+    if (!numberKey) return null;
+    const perStation = trainDelaysByNumber.get(String(numberKey));
+    if (!perStation) return null;
 
-    const normalizedKeys = [];
-    const primaryKey = normalizeTrainNumberKey(train.numberKey || extractTrainNumberCandidate(train.number) || null);
-    if (primaryKey) normalizedKeys.push(String(primaryKey));
-    if (Array.isArray(train.delayKeys)){
-      for (const rawKey of train.delayKeys){
-        const normalizedKey = normalizeTrainNumberKey(rawKey) || rawKey;
-        if (!normalizedKey) continue;
-        const keyStr = String(normalizedKey);
-        if (!normalizedKeys.includes(keyStr)) normalizedKeys.push(keyStr);
-      }
-    }
-    if (!normalizedKeys.length) return null;
-
-    const computeFromPerStation = (perStation)=>{
-      if (!perStation || !perStation.size) return { info:null, fallback:null };
-
-      const candidateOrder = [];
-      const seen = new Set();
-      const pushCandidate = (name)=>{
-        if (!name) return;
-        const norm = normalizeStationName(name);
-        if (!norm || seen.has(norm)) return;
-        seen.add(norm);
-        candidateOrder.push({ norm, original: name });
-      };
-
-      if (train.segmentProgress != null){
-        if (train.segmentProgress <= 0.25 && train.from) pushCandidate(train.from);
-        if (train.to) pushCandidate(train.to);
-        if (train.from) pushCandidate(train.from);
-      } else {
-        if (train.to) pushCandidate(train.to);
-        if (train.from) pushCandidate(train.from);
-      }
-
-      for (const candidate of candidateOrder){
-        const entry = perStation.get(candidate.norm);
-        if (!entry) continue;
-        if (entry.value == null){
-          return { info: buildDelayInfo(entry), fallback: null };
-        }
-        const info = buildDelayInfo(entry);
-        if (info) return { info, fallback: null };
-      }
-
-      let fallback = null;
-      for (const entry of perStation.values()){
-        if (fallback && fallback.severity === 'cancelled') break;
-        if (entry.value == null){
-          const info = buildDelayInfo(entry);
-          if (info) fallback = info;
-          continue;
-        }
-        const info = buildDelayInfo(entry);
-        if (!info) continue;
-        if (!fallback || (fallback.minutes != null && info.minutes > fallback.minutes)){
-          fallback = info;
-        }
-      }
-      return { info:null, fallback };
+    const candidateOrder = [];
+    const seen = new Set();
+    const pushCandidate = (name)=>{
+      if (!name) return;
+      const norm = normalizeStationName(name);
+      if (!norm || seen.has(norm)) return;
+      seen.add(norm);
+      candidateOrder.push({ norm, original: name });
     };
 
-    let bestFallback = null;
-    for (const key of normalizedKeys){
-      const perStation = trainDelaysByNumber.get(key);
-      if (!perStation) continue;
-      const { info, fallback } = computeFromPerStation(perStation);
+    if (train.segmentProgress != null){
+      if (train.segmentProgress <= 0.25 && train.from) pushCandidate(train.from);
+      if (train.to) pushCandidate(train.to);
+      if (train.from) pushCandidate(train.from);
+    } else {
+      if (train.to) pushCandidate(train.to);
+      if (train.from) pushCandidate(train.from);
+    }
+
+    for (const candidate of candidateOrder){
+      const entry = perStation.get(candidate.norm);
+      if (!entry) continue;
+      if (entry.value == null){
+        return buildDelayInfo(entry);
+      }
+      const info = buildDelayInfo(entry);
       if (info) return info;
-      if (fallback){
-        if (!bestFallback) bestFallback = fallback;
-        else if (bestFallback.severity !== 'cancelled' && fallback.severity === 'cancelled') bestFallback = fallback;
-        else if (fallback.minutes != null && (bestFallback.minutes == null || fallback.minutes > bestFallback.minutes)) bestFallback = fallback;
+    }
+
+    let fallback = null;
+    for (const entry of perStation.values()){
+      if (fallback && fallback.severity === 'cancelled') break;
+      if (entry.value == null){
+        const info = buildDelayInfo(entry);
+        if (info) fallback = info;
+        continue;
+      }
+      const info = buildDelayInfo(entry);
+      if (!info) continue;
+      if (!fallback || (fallback.minutes != null && info.minutes > fallback.minutes)){
+        fallback = info;
       }
     }
-    return bestFallback;
+    return fallback;
   }
  function getStopNameCandidates(stopMeta){
     if (!stopMeta) return [];
@@ -1110,25 +1083,13 @@ function escapeHTML(str){
     }
   }
 
-  function computeRealtimeStopData(tripId, seq, numberKey, extraKeys){
+  function computeRealtimeStopData(tripId, seq, numberKey){
     if (!seq || !seq.length){
       realtimeStopDataByTrip.delete(tripId);
       return null;
     }
-
-    const keys = [];
-    const primaryKey = normalizeTrainNumberKey(numberKey);
-    if (primaryKey) keys.push(String(primaryKey));
-    if (Array.isArray(extraKeys)){
-      for (const raw of extraKeys){
-        const norm = normalizeTrainNumberKey(raw) || raw;
-        if (!norm) continue;
-        const keyStr = String(norm);
-        if (!keys.includes(keyStr)) keys.push(keyStr);
-      }
-    }
-    const perStationMaps = keys.map(key => trainDelaysByNumber.get(key)).filter(map => map && map.size);
-
+    const normalizedKey = normalizeTrainNumberKey(numberKey);
+    const perStation = normalizedKey ? trainDelaysByNumber.get(String(normalizedKey)) : null;
     const startPlanned = seq[0]?.departure ?? seq[0]?.arrival ?? null;
     const lastStop = seq[seq.length - 1] || null;
     const endPlanned = lastStop?.arrival ?? lastStop?.departure ?? null;
@@ -1144,7 +1105,7 @@ function escapeHTML(str){
       cancelled: false
     }));
 
-    if (!perStationMaps.length){
+    if (!perStation || !perStation.size){
       const data = {
         stops,
         startPlanned,
@@ -1161,17 +1122,9 @@ function escapeHTML(str){
     const refTimes = computeReferenceTimesForSeq(seq);
     let hasNumericDelay = false;
 
-    const entryForStop = (stopMeta)=>{
-      for (const map of perStationMaps){
-        const entry = findDelayEntryForStop(map, stopMeta);
-        if (entry) return entry;
-      }
-      return null;
-    };
-
     for (let i=0;i<seq.length;i++){
       const stopMeta = stopsById.get(seq[i].stop_id);
-      const entry = entryForStop(stopMeta);
+      const entry = findDelayEntryForStop(perStation, stopMeta);
       if (!entry) continue;
       if (entry.value == null){
         stops[i].cancelled = true;
@@ -1765,52 +1718,6 @@ const mapContainerEl = map.getContainer();
     }
   }
 
-  function mergedStopSequenceForTrip(primaryId, mergedIds){
-    const baseSeq = stopTimesByTrip.get(primaryId) || [];
-    if (!Array.isArray(mergedIds) || !mergedIds.length){
-      return baseSeq.map(st => ({ ...st }));
-    }
-    const combined = baseSeq.map(st => ({ ...st }));
-    const byKey = new Map();
-    const buildKey = (stop)=>{
-      const meta = stopsById.get(stop.stop_id);
-      const rawName = meta?.name || meta?.stop_name || stop.stop_id;
-      const normName = normalizeStationName(rawName) || stop.stop_id;
-      const timeVal = stop.arrival ?? stop.departure;
-      const bucket = Number.isFinite(timeVal) ? Math.round(timeVal / 60) : 'na';
-      return `${normName}|${bucket}`;
-    };
-    for (const st of combined){
-      byKey.set(buildKey(st), st);
-    }
-    for (const extraId of mergedIds){
-      const seq = stopTimesByTrip.get(extraId);
-      if (!seq) continue;
-      for (const orig of seq){
-        const clone = { ...orig };
-        const key = buildKey(clone);
-        if (byKey.has(key)){
-          const target = byKey.get(key);
-          if (target.arrival == null && clone.arrival != null) target.arrival = clone.arrival;
-          if (target.departure == null && clone.departure != null) target.departure = clone.departure;
-          continue;
-        }
-        combined.push(clone);
-        byKey.set(key, clone);
-      }
-    }
-    combined.sort((a,b)=>{
-      const timeA = (a.arrival ?? a.departure);
-      const timeB = (b.arrival ?? b.departure);
-      if (Number.isFinite(timeA) && Number.isFinite(timeB)) return timeA - timeB;
-      if (Number.isFinite(timeA)) return -1;
-      if (Number.isFinite(timeB)) return 1;
-      return (a.seq ?? 0) - (b.seq ?? 0);
-    });
-    for (let i=0;i<combined.length;i++) combined[i].seq = i;
-    return combined;
-  }
-
   function renderTripPanel(){
     if (!activeTripId){ hideTripPanel(); return; }
     const data = trainDataById.get(activeTripId);
@@ -1837,7 +1744,7 @@ const mapContainerEl = map.getContainer();
       tripPanelTrainEl.textContent = data.id || 'Sélectionnez une bétaillère';
     }
 
-    const seq = mergedStopSequenceForTrip(activeTripId, data.mergedTripIds);
+    const seq = stopTimesByTrip.get(activeTripId);
     if (!seq || !seq.length){
       tripPanelSummaryEl.textContent = 'Données de trajet indisponibles pour ce service.';
       tripProgressWrapEl.classList.add('hidden');
@@ -1847,12 +1754,7 @@ const mapContainerEl = map.getContainer();
     }
 
     const realtimeProfile = realtimeStopDataByTrip.get(activeTripId)
-      || computeRealtimeStopData(
-        activeTripId,
-        seq,
-        data.numberKey || extractTrainNumberCandidate(data.number) || extractTrainNumberCandidate(activeTripId),
-        data.delayKeys
-      );
+      || computeRealtimeStopData(activeTripId, seq, data.numberKey || extractTrainNumberCandidate(data.number) || extractTrainNumberCandidate(activeTripId));
 
     const buildTimePart = (type, plannedSec, realtimeSec)=>{
       if (plannedSec == null && realtimeSec == null) return null;
@@ -2144,12 +2046,7 @@ const mapContainerEl = map.getContainer();
       if (!target) continue;
 
       const realtimeProfile = realtimeStopDataByTrip.get(tripId)
-        || computeRealtimeStopData(
-          tripId,
-          seq,
-          train.numberKey || extractTrainNumberCandidate(train.number) || extractTrainNumberCandidate(tripId),
-          train.delayKeys
-        );
+        || computeRealtimeStopData(tripId, seq, train.numberKey || extractTrainNumberCandidate(train.number) || extractTrainNumberCandidate(tripId));
       const profileStop = targetIdx >= 0 ? realtimeProfile?.stops?.[targetIdx] : null;
 
       const arrPlanned = target.arrival ?? null;
@@ -2400,42 +2297,6 @@ function setLayerGroupVisibility(group, visible){
     [
       [49.45545408844863, 6.129087542059966],
       [49.45545408934669, 6.129087542114585]
-    ],
-    [
-      [49.109466000, 6.177052000],
-      [48.946634773, 6.477997589],
-      [48.954011881, 6.442003034],
-      [48.962353175, 6.331605976],
-      [48.954180827, 6.204144201],
-      [48.941725000, 6.103550001],
-      [48.968543001, 6.014686001],
-      [48.962941001, 5.921698000],
-      [48.968850940, 5.838409293],
-      [48.965225259, 5.706984566],
-      [48.951249837, 5.589443788],
-      [48.970325346, 5.459632746],
-      [48.971622819, 5.344515557],
-      [48.987881453, 5.173524700],
-      [49.007353837, 5.022115216],
-      [49.012034001, 4.857041001],
-      [49.020440000, 4.730880000],
-      [49.029599023, 4.590505716],
-      [49.078600585, 4.338530132],
-      [49.169227189, 4.173594798],
-      [49.190514001, 4.082468001],
-      [49.232585914, 3.950575714],
-      [49.240001323, 3.875951530],
-      [49.189736577, 3.727290335],
-      [49.146760183, 3.639355310],
-      [49.114044608, 3.507037187],
-      [49.061126960, 3.351042524],
-      [49.045249284, 3.229882562],
-      [49.056379585, 3.101588541],
-      [49.023084798, 2.947561169],
-      [48.993514663, 2.825376189],
-      [48.970018438, 2.734228889],
-      [48.910799221, 2.687070431],
-      [48.875336595, 2.642498841]
     ]
   ];
 
@@ -2987,121 +2848,6 @@ async function integrateCflGtfs({ axisStopIds, axisTripIds, axisRouteIds, mergeA
     return hits >= 2;
   }
 
-  const TRAIN_ID_PREFIX_CFL = 'CFL:';
-  function isCflTripId(tripId){
-    return typeof tripId === 'string' && tripId.startsWith(TRAIN_ID_PREFIX_CFL);
-  }
-
-  function collectTrainNumberCandidates(train){
-    const values = [];
-    if (!train) return values;
-    values.push(train.numberDigits, train.numberKey, train.numberRaw, train.number);
-    if (train.branding){
-      values.push(train.branding.digits, train.branding.displayNumber, train.branding.panelTitle);
-    }
-    return values.filter(v=> v != null && v !== '');
-  }
-
-  function normalizedTrainNumbersForGroup(trains){
-    const digits = new Set();
-    const delayKeys = new Set();
-    for (const train of trains){
-      const candidates = collectTrainNumberCandidates(train);
-      for (const candidate of candidates){
-        const norm = normalizeTrainNumberKey(candidate);
-        if (norm){
-          digits.add(String(norm));
-          delayKeys.add(String(norm));
-        }
-      }
-      if (train.numberKey != null){
-        const norm = normalizeTrainNumberKey(train.numberKey) || train.numberKey;
-        if (norm != null) delayKeys.add(String(norm));
-      }
-    }
-    return { digits: Array.from(digits), delayKeys: Array.from(delayKeys) };
-  }
-
-  function shouldMergeTrains(a, b){
-    if (!a || !b) return false;
-    if (isCflTripId(a.id) === isCflTripId(b.id)) return false;
-    const categoryA = a.branding?.category || null;
-    const categoryB = b.branding?.category || null;
-    if (categoryA && categoryB && categoryA !== categoryB) return false;
-    const dist = distLL({ lat:a.lat, lon:a.lon }, { lat:b.lat, lon:b.lon });
-    if (!Number.isFinite(dist) || dist > 2000) return false;
-    const timeDiff = Math.abs((a.nowSec ?? 0) - (b.nowSec ?? 0));
-    if (timeDiff > 300) return false;
-    const segDiff = Math.abs((a.segmentIndex ?? 0) - (b.segmentIndex ?? 0));
-    if (segDiff > 1) return false;
-    const toMatch = normalizeStationName(a.to) && normalizeStationName(a.to) === normalizeStationName(b.to);
-    const fromMatch = normalizeStationName(a.from) && normalizeStationName(a.from) === normalizeStationName(b.from);
-    if (toMatch || fromMatch) return true;
-    return dist < 600;
-  }
-
-  function mergeTrainGroup(trains){
-    if (!Array.isArray(trains) || !trains.length) return null;
-    const primary = trains.find(t=>!isCflTripId(t.id)) || trains[0];
-    const merged = { ...primary };
-    const extras = trains.filter(t=>t !== primary);
-    const { digits, delayKeys } = normalizedTrainNumbersForGroup(trains);
-
-    merged.mergedTripIds = extras.map(t=>t.id);
-    merged.mergedTrainIds = trains.map(t=>t.id);
-    merged.delayKeys = delayKeys;
-    merged.originalNumbers = trains.map(t=>t.number).filter(Boolean);
-    merged.originalSources = trains.map(t=>({ id:t.id, number:t.number, agency:isCflTripId(t.id)?'CFL':'SNCF' }));
-
-    if (digits.length){
-      digits.sort((a,b)=> a.localeCompare(b, 'fr', { numeric:true }));
-      const displayDigits = digits.join(' / ');
-      const branding = { ...(primary.branding || {}) };
-      if (branding.prefix){
-        branding.displayNumber = `${branding.prefix} ${displayDigits}`;
-        branding.panelTitle = branding.displayNumber;
-      } else {
-        branding.displayNumber = displayDigits;
-        branding.panelTitle = displayDigits;
-      }
-      branding.digits = digits.length === 1 ? digits[0] : null;
-      merged.branding = branding;
-      merged.number = branding.displayNumber;
-      merged.numberDigits = branding.digits;
-    }
-
-    let maxDelay = Number.isFinite(primary.currentDelaySec) ? primary.currentDelaySec : 0;
-    for (const train of trains){
-      const value = Number.isFinite(train.currentDelaySec) ? train.currentDelaySec : 0;
-      if (value > maxDelay) maxDelay = value;
-    }
-    merged.currentDelaySec = maxDelay;
-    return merged;
-  }
-
-  function mergeDuplicateTrains(list){
-    if (!Array.isArray(list) || list.length < 2) return list;
-    const used = new Array(list.length).fill(false);
-    const merged = [];
-    for (let i=0;i<list.length;i++){
-      if (used[i]) continue;
-      const group = [list[i]];
-      for (let j=i+1;j<list.length;j++){
-        if (used[j]) continue;
-        if (shouldMergeTrains(list[i], list[j])){
-          used[j] = true;
-          group.push(list[j]);
-        }
-      }
-      if (group.length > 1){
-        merged.push(mergeTrainGroup(group));
-      } else {
-        merged.push(group[0]);
-      }
-    }
-    return merged;
-  }
-
   function serviceAllowed(trip_id){
     if (!activeServiceIds) return true;
     const trip = tripsById.get(trip_id);
@@ -3126,7 +2872,7 @@ async function integrateCflGtfs({ axisStopIds, axisTripIds, axisRouteIds, mergeA
       const numberKey = numberKeyRaw ? normalizeTrainNumberKey(numberKeyRaw) : null;
       const branding = computeTrainBranding(trip_id, trip, route, rawNumber, numberCandidate || fallbackNumberCandidate);
       const numberDisplay = branding.displayNumber || rawNumber || (numberKey != null ? String(numberKey) : (numberKeyRaw != null ? String(numberKeyRaw) : null));
-      const realtimeProfile = computeRealtimeStopData(trip_id, seq, numberKey, null);
+      const realtimeProfile = computeRealtimeStopData(trip_id, seq, numberKey);
 
       const startPlanned = seq[0].departure ?? seq[0].arrival;
       const lastStop = seq[seq.length - 1];
@@ -3237,7 +2983,7 @@ async function integrateCflGtfs({ axisStopIds, axisTripIds, axisRouteIds, mergeA
         break;
       }
     }
-    return mergeDuplicateTrains(items);
+    return items;
   }
 
   function renderTrains(list){
