@@ -46,6 +46,26 @@
     opacity:.45; pointer-events:none; z-index:0;
   }
 
+  body::after{
+    content:"";
+    position:fixed; inset:-15%;
+    background:radial-gradient(circle at 15% 20%, rgba(255,99,255,.35), transparent 55%),
+               radial-gradient(circle at 80% 25%, rgba(0,255,204,.35), transparent 50%),
+               radial-gradient(circle at 50% 80%, rgba(255,214,126,.35), transparent 45%);
+    mix-blend-mode:screen;
+    opacity:.55;
+    filter:blur(12px);
+    pointer-events:none;
+    animation:aurora 24s ease-in-out infinite alternate;
+    z-index:0;
+  }
+
+  @keyframes aurora{
+    0%  { transform:translate3d(-2%, -1%, 0) scale(1.05) rotate(0deg); }
+    50% { transform:translate3d(2%, 3%, 0) scale(1.08) rotate(2deg); }
+    100%{ transform:translate3d(-3%, 1%, 0) scale(1.04) rotate(-2deg); }
+  }
+
   /* ===== Header (haut) ===== */
   header{
     position:sticky; top:0; z-index:2;
@@ -58,6 +78,18 @@
     text-shadow:0 0 12px var(--accent-strong), 0 0 22px rgba(0,240,255,.4);
     background: linear-gradient(to bottom, rgba(0,0,0,.35), rgba(0,0,0,0));
     backdrop-filter: blur(2px);
+  }
+
+  header::after{
+    content:"🦄🌈";
+    font-size:clamp(1.4rem, 3vw, 2rem);
+    letter-spacing:8px;
+    animation:pulseUnicorn 2.8s ease-in-out infinite;
+  }
+
+  @keyframes pulseUnicorn{
+    0%,100%{ transform:translateY(0); opacity:.7; }
+    50%    { transform:translateY(-4px) scale(1.05); opacity:1; }
   }
 
   /* ===== Zone centrale ===== */
@@ -111,6 +143,24 @@
   }
   #info span{ color:var(--accent-color); font-weight:600; }
   #info span[aria-hidden="true"]{ color:var(--muted-text); font-weight:400; }
+
+  #info span.badge{
+    display:inline-flex; align-items:center; gap:4px;
+    padding:2px 6px;
+    border-radius:999px;
+    background:linear-gradient(135deg, rgba(0,240,255,.18), rgba(255,99,255,.12));
+    box-shadow:0 0 6px rgba(0,240,255,.25);
+  }
+  #info span.badge::before{ content:attr(data-icon); }
+  #info span[data-aura="on"]{
+    color:#ffd8ff;
+    text-shadow:0 0 10px rgba(255,130,255,.85),0 0 20px rgba(111,182,255,.65);
+  }
+  #info span[data-aura="on"]::after{
+    content:"✨";
+    margin-left:4px;
+    filter:drop-shadow(0 0 4px rgba(255,255,255,.75));
+  }
 
   /* ===== Contrôles bas ===== */
   #controlPanel{
@@ -188,6 +238,13 @@
     margin:0; font-size:1.2rem; letter-spacing:1px; color:var(--accent-color);
     text-shadow:0 0 12px rgba(0,240,255,.6);
   }
+  #startMessage .start-subtitle{
+    margin-top:12px;
+    font-size:1rem;
+    letter-spacing:0;
+    color:#ffe5ff;
+    text-shadow:0 0 12px rgba(255,140,255,.6);
+  }
   #startMessage button{
     background:linear-gradient(135deg, var(--accent-color), rgba(0,166,210,.85));
     color:#002733; border:none; padding:12px 26px; margin-top:18px; border-radius:12px; font-size:18px;
@@ -251,6 +308,7 @@
   <div id="startOverlay">
     <div id="startMessage">
       <p>🚆 Prêt à démarrer ?</p>
+      <p class="start-subtitle">Attrape les licornes pour déclencher des arcs-en-ciel protecteurs !</p>
       <button id="startBtn">Jouer</button>
     </div>
   </div>
@@ -263,6 +321,10 @@
       Record : <span id="highscore">0</span>
       <span aria-hidden="true">•</span>
       Temps : <span id="timer">00:00</span>
+      <span aria-hidden="true">•</span>
+      <span class="badge" data-icon="🦄" aria-live="polite">Licornes : <span id="licorneCount">0</span></span>
+      <span aria-hidden="true">•</span>
+      <span class="badge" data-icon="🌈" aria-live="polite">Arc-en-ciel : <span id="rainbowCount">0</span></span>
     </div>
 
     <div id="gameWrapper">
@@ -311,6 +373,8 @@
       <h2>Règles express</h2>
       <ul>
         <li>Collectez le bétail jaune pour remplir la bétaillère.</li>
+        <li>Attrapez les licornes scintillantes pour obtenir des points bonus et libérer de nouveaux arcs-en-ciel.</li>
+        <li>Le halo arc-en-ciel vous protège brièvement des suppressions rouges et laisse une traînée lumineuse.</li>
         <li>Évitez les zones rouges (trains supprimés), les carrés oranges vous réservent des surprises.</li>
         <li>Attention aux vaches et aux TGV prioritaires qui traversent la ligne.</li>
         <li>Après 75 secondes, un train de fret s'engage et tombe en panne. Le percuter met fin à la partie.</li>        
@@ -330,6 +394,8 @@
     const infoBar  = document.getElementById("info");
     const controlPanel = document.getElementById("controlPanel");
     const gameWrapper  = document.getElementById("gameWrapper");
+    const licorneCountEl = document.getElementById("licorneCount");
+    const rainbowCountEl = document.getElementById("rainbowCount");
     let cols = 20, rows = 20, gridSize = 20;
 
     /* --- boucle stable au rAF --- */
@@ -379,6 +445,22 @@
     let pauseStartTime = 0;
     let resumeAfterRules = false;
 
+    let licornes, rainbowBursts;
+    let licorneCollected = 0;
+    let scheduleLicorneTimeoutId;
+    let rainbowAuraUntil = 0;
+    let displayedRainbowCount = 0;
+    let rainbowPhase = 0;
+
+    const LICORNE_SPAWN_DELAY = 4000;
+    const LICORNE_SPAWN_INTERVAL = 12000;
+    const MAX_LICORNES = 4;
+    const LICORNE_SCORE_BONUS = 2;
+    const RAINBOW_AURA_EXTENSION = 5000;
+    const RAINBOW_BURST_DURATION = 7000;
+    const SUPPRESSION_CLEAN_RADIUS = 2;
+    const RAINBOW_COLORS = ['#ff2c8d', '#ff7b00', '#ffe55c', '#2fffd1', '#3c8cff', '#a15bff'];
+
     /* ====== FRET (nouvelle difficulté) ====== */
     let freight = null;                  // { state, segments[], until, dir:{x,y}, stopCoord, speedSteps, step }
     let scheduleFreightTimeoutId;
@@ -406,6 +488,8 @@
       "Supprimé : retard lié à un incident dans le spa du train.",
       "Supprimé : fuite de fonte en fusion à PAM.",
       "Supprimé : l'agent de conduite a une urgence explosive.",
+      "Supprimé : une licorne arc-en-ciel illumine les signaux.",
+      "Supprimé : trop d'arcs-en-ciel sur la voie, ralentissement féerique.",
       "Supprimé : le TGV avec Thibault, Franck et David était prioritaire."
     ];
 
@@ -425,6 +509,15 @@
       speedModifier = 0;
       resumeAfterRules = false;
 
+      licornes = [];
+      rainbowBursts = [];
+      licorneCollected = 0;
+      rainbowAuraUntil = 0;
+      displayedRainbowCount = 0;
+      rainbowPhase = 0;
+      updateLicorneCount();
+      updateRainbowStatus(true);
+
       /* reset fret */
       freight = null;
       if (scheduleFreightTimeoutId) clearTimeout(scheduleFreightTimeoutId);
@@ -439,10 +532,12 @@
       if (scheduleTGVTimeoutId) clearTimeout(scheduleTGVTimeoutId);
       if (increaseTGVFreqTimeoutId) clearTimeout(increaseTGVFreqTimeoutId);
       if (tgvStartTimeoutId) clearTimeout(tgvStartTimeoutId);
+      if (scheduleLicorneTimeoutId) clearTimeout(scheduleLicorneTimeoutId);
 
       scheduleVachesTimeoutId = setTimeout(scheduleVaches, vacheFrequency);
       increaseVacheFreqTimeoutId = setTimeout(increaseVacheFrequency, 15000);
       tgvStartTimeoutId = setTimeout(startTGVs, 90000);
+      scheduleLicorneTimeoutId = setTimeout(spawnLicornes, LICORNE_SPAWN_DELAY);
 
       placePerturbations();
       generateBetail();
@@ -492,15 +587,183 @@
         || suppressions.some(p=>p.x===pos.x&&p.y===pos.y)
         || oranges.some(p=>p.x===pos.x&&p.y===pos.y)
         || (betail && betail.x===pos.x && betail.y===pos.y)
+        || (licornes && licornes.some(p=>p.x===pos.x && p.y===pos.y))
         || (tgvs && tgvs.some(convoy=>convoy.segments.some(s=>s.x===pos.x&&s.y===pos.y)))
         || (freight && freight.segments && freight.segments.some(s => s.x===pos.x && s.y===pos.y)); // FRET occupe ses cases
     }
 
+    function updateScore(points = 0){
+      score += points;
+      document.getElementById("score").textContent = score;
+      if (score > highscore){
+        highscore = score;
+        document.getElementById("highscore").textContent = highscore;
+        localStorage.setItem("highscore", highscore);
+      }
+    }
+
+
+    function hasRainbowAura(now = Date.now()){
+      return rainbowAuraUntil > now;
+    }
+
+    function updateLicorneCount(){
+      if (licorneCountEl){
+        licorneCountEl.textContent = licorneCollected.toString();
+      }
+    }
+
+    function updateRainbowStatus(force = false, now = Date.now()){
+      if (!rainbowCountEl) return;
+      const activeCount = rainbowBursts ? rainbowBursts.length : 0;
+      if (force || activeCount !== displayedRainbowCount){
+        rainbowCountEl.textContent = activeCount.toString();
+        displayedRainbowCount = activeCount;
+      }
+      if (hasRainbowAura(now)){
+        rainbowCountEl.setAttribute('data-aura', 'on');
+        const remaining = Math.max(0, Math.ceil((rainbowAuraUntil - now)/1000));
+        rainbowCountEl.setAttribute('title', `Halo arc-en-ciel actif ~${remaining}s`);
+      } else {
+        rainbowCountEl.removeAttribute('data-aura');
+        rainbowCountEl.removeAttribute('title');
+      }
+    }
+
+    function drawRainbowBackdrop(now){
+      if ((!rainbowBursts || rainbowBursts.length === 0) && !hasRainbowAura(now)) return;
+      ctx.save();
+      const auraBoost = hasRainbowAura(now) ? 0.14 : 0.08;
+      ctx.globalAlpha = auraBoost + 0.02 * Math.sin(rainbowPhase);
+      const gradient = ctx.createLinearGradient(0, 0, canvas.width, canvas.height);
+      const denom = Math.max(1, RAINBOW_COLORS.length - 1);
+      RAINBOW_COLORS.forEach((color, idx)=>{ gradient.addColorStop(idx/denom, color); });
+      ctx.fillStyle = gradient;
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.restore();
+    }
+
+    function drawRainbowBurst(burst, now){
+      const life = Math.max(0, burst.expires - now);
+      const progress = 1 - life / RAINBOW_BURST_DURATION;
+      const cx = burst.x*gridSize + gridSize/2;
+      const cy = burst.y*gridSize + gridSize/2;
+      const radius = burst.baseRadius * (1 + progress * 1.2);
+      ctx.save();
+      ctx.globalCompositeOperation = 'lighter';
+      ctx.globalAlpha = 0.6 * (1 - progress * 0.6);
+      const gradient = ctx.createRadialGradient(cx, cy, gridSize*0.1, cx, cy, radius);
+      gradient.addColorStop(0, 'rgba(255,255,255,1)');
+      const denom = Math.max(1, RAINBOW_COLORS.length);
+      RAINBOW_COLORS.forEach((color, idx)=>{ gradient.addColorStop(0.25 + (0.45/denom)*idx, color); });
+      gradient.addColorStop(0.98, 'rgba(0,0,0,0)');
+      ctx.fillStyle = gradient;
+      ctx.beginPath();
+      ctx.arc(cx, cy, radius, 0, Math.PI*2);
+      ctx.fill();
+      ctx.restore();
+    }
+
+    function drawTrainAura(pos, index){
+      const cx = pos.x*gridSize + gridSize/2;
+      const cy = pos.y*gridSize + gridSize/2;
+      const pulse = 0.55 + 0.12 * Math.sin(rainbowPhase + index);
+      const radius = gridSize * (0.55 + pulse * 0.35);
+      ctx.save();
+      ctx.globalCompositeOperation = 'lighter';
+      ctx.globalAlpha = 0.45;
+      const gradient = ctx.createRadialGradient(cx, cy, gridSize*0.1, cx, cy, radius);
+      gradient.addColorStop(0, 'rgba(255,255,255,0.95)');
+      const denom = Math.max(1, RAINBOW_COLORS.length);
+      RAINBOW_COLORS.forEach((color, idx)=>{ gradient.addColorStop(0.2 + (0.6/denom)*idx, color); });
+      gradient.addColorStop(1, 'rgba(0,0,0,0)');
+      ctx.fillStyle = gradient;
+      ctx.beginPath();
+      ctx.arc(cx, cy, radius, 0, Math.PI*2);
+      ctx.fill();
+      ctx.restore();
+    }
+
+    function drawLicorne(pos, now){
+      const cx = pos.x*gridSize + gridSize/2;
+      const baseY = pos.y*gridSize + gridSize/2;
+      const float = Math.sin((now/280) + pos.x*0.6 + pos.y*0.3) * (gridSize*0.15);
+      const cy = baseY + float;
+
+      ctx.save();
+      ctx.globalCompositeOperation = 'lighter';
+      ctx.globalAlpha = 0.55;
+      const glow = ctx.createRadialGradient(cx, cy, gridSize*0.12, cx, cy, gridSize*0.55);
+      glow.addColorStop(0, 'rgba(255,255,255,0.95)');
+      glow.addColorStop(0.5, 'rgba(255,170,255,0.45)');
+      glow.addColorStop(1, 'rgba(0,0,0,0)');
+      ctx.fillStyle = glow;
+      ctx.beginPath();
+      ctx.arc(cx, cy, gridSize*0.55, 0, Math.PI*2);
+      ctx.fill();
+      ctx.restore();
+
+      ctx.save();
+      ctx.font = `${gridSize*0.9}px "Noto Color Emoji","Apple Color Emoji","Segoe UI Emoji",sans-serif`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText('🦄', cx, cy);
+      ctx.restore();
+    }
+
+    function createRainbowBurst(at){
+      if (!at) return;
+      const now = Date.now();
+      const baseRadius = gridSize * (1.1 + Math.random()*0.6);
+      rainbowBursts.push({ x: at.x, y: at.y, baseRadius, expires: now + RAINBOW_BURST_DURATION });
+      updateRainbowStatus(true, now);
+    }
+
+    function clearSuppressionsAround(center, radius = SUPPRESSION_CLEAN_RADIUS){
+      if (!center || !suppressions || !suppressions.length) return;
+      suppressions = suppressions.filter(p => Math.abs(p.x - center.x) > radius || Math.abs(p.y - center.y) > radius);
+    }
+
+    function spawnLicornes(){
+      if (scheduleLicorneTimeoutId) clearTimeout(scheduleLicorneTimeoutId);
+      if (gameStopped) return;
+      if (gamePaused){
+        scheduleLicorneTimeoutId = setTimeout(spawnLicornes, 500);
+        return;
+      }
+      if (!licornes) licornes = [];
+      const desired = Math.min(MAX_LICORNES, 2 + Math.floor(score / 12));
+      let attempts = 0;
+      while (licornes.length < desired && attempts < 40){
+        const candidate = randomFreePosition();
+        if (!licornes.some(p=>p.x===candidate.x && p.y===candidate.y)){
+          licornes.push(candidate);
+        }
+        attempts++;
+      }
+      updateRainbowStatus(true);
+      const delay = LICORNE_SPAWN_INTERVAL + Math.floor(Math.random()*4000);
+      scheduleLicorneTimeoutId = setTimeout(spawnLicornes, delay);
+    }
+
     function draw(){
       ctx.clearRect(0,0,canvas.width,canvas.height);
-      suppressions.forEach(p=>{ ctx.fillStyle="red"; ctx.fillRect(p.x*gridSize, p.y*gridSize, gridSize, gridSize); });
+      const now = Date.now();
+      rainbowPhase = (rainbowPhase + 0.02) % (Math.PI * 2);
+      if (!rainbowBursts) rainbowBursts = [];
+      rainbowBursts = rainbowBursts.filter(b => b.expires > now);
+      drawRainbowBackdrop(now);
+      rainbowBursts.forEach(burst => drawRainbowBurst(burst, now));
+      updateRainbowStatus(false, now);
+
+      const auraActive = hasRainbowAura(now);
+      suppressions.forEach(p=>{
+        ctx.fillStyle = auraActive ? 'rgba(255,118,151,0.85)' : 'red';
+        ctx.fillRect(p.x*gridSize, p.y*gridSize, gridSize, gridSize);
+      });
       oranges.forEach(p=>{ ctx.fillStyle="orange"; ctx.fillRect(p.x*gridSize+4, p.y*gridSize+4, gridSize-8, gridSize-8); });
-      if (betail){ ctx.fillStyle="yellow"; ctx.beginPath(); ctx.arc(betail.x*gridSize+gridSize/2, betail.y*gridSize+gridSize/2, gridSize/3, 0, 2*Math.PI); ctx.fill(); }
+      if (betail){ ctx.fillStyle="yellow"; ctx.beginPath(); ctx.arc(betail.x*gridSize+gridSize/2, betail.y*gridSize+gridSize/2,gridSize/3, 0, 2*Math.PI); ctx.fill(); }
+      if (licornes && licornes.length){ licornes.forEach(pos => drawLicorne(pos, now)); }
       vaches.forEach(band=> band.forEach(p=>{ ctx.fillStyle="#fef9c3"; ctx.beginPath(); ctx.arc(p.x*gridSize+gridSize/2, p.y*gridSize+gridSize/2, gridSize/3, 0, 2*Math.PI); ctx.fill(); }));
 
       if (tgvs){
@@ -527,11 +790,16 @@
         });
       }
 
-      train.forEach((pos,i)=>{ ctx.fillStyle = (i===0) ? "#00f0ff" : "#006c8b"; ctx.fillRect(pos.x*gridSize+1, pos.y*gridSize+1, gridSize-2, gridSize-2); });
+      train.forEach((pos,i)=>{
+        ctx.fillStyle = (i===0) ? "#00f0ff" : "#006c8b";
+        ctx.fillRect(pos.x*gridSize+1, pos.y*gridSize+1, gridSize-2, gridSize-2);
+        if (auraActive){ drawTrainAura(pos, i); }
+      });
     }
 
     function update(){
       if (gameStopped || gamePaused) return;
+      const now = Date.now();
       direction = nextDirection;
       let newHead = { x: train[0].x + direction.x, y: train[0].y + direction.y };
       if (newHead.x<0) newHead.x=cols-1; if (newHead.x>=cols) newHead.x=0;
@@ -548,19 +816,49 @@
         return gameOver(why);
       }
 
-      if (suppressions.some(p=>p.x===newHead.x&&p.y===newHead.y)){
-        const msg = messagesSuppression[Math.floor(Math.random()*messagesSuppression.length)];
-        return gameOver(msg);
+      const auraActive = hasRainbowAura(now);
+      const suppressionIndex = suppressions.findIndex(p=>p.x===newHead.x&&p.y===newHead.y);
+      if (suppressionIndex !== -1){
+        if (auraActive){
+          const [removed] = suppressions.splice(suppressionIndex,1);
+          clearSuppressionsAround(removed, 1);
+          createRainbowBurst(removed);
+          updateScore(1);
+          updateRainbowStatus(true, now);
+        } else {
+          const msg = messagesSuppression[Math.floor(Math.random()*messagesSuppression.length)];
+          return gameOver(msg);
+        }
       }
 
       train.unshift(newHead);
-      if (betail && newHead.x===betail.x && newHead.y===betail.y){
-        score++; document.getElementById("score").textContent = score;
-        if (score > highscore){ highscore = score; document.getElementById("highscore").textContent = highscore; localStorage.setItem("highscore", highscore); }
-        generateBetail();
-      } else { train.pop(); }
+      let grew = false;
 
-      // Effet orange (accélère/ralentit 2 s)
+      if (betail && newHead.x===betail.x && newHead.y===betail.y){
+        updateScore(1);
+        grew = true;
+        generateBetail();
+      }
+
+      if (licornes && licornes.length){
+        const licorneIndex = licornes.findIndex(pos => pos.x===newHead.x && pos.y===newHead.y);
+        if (licorneIndex !== -1){
+          grew = true;
+          licorneCollected++;
+          updateLicorneCount();
+          const [captured] = licornes.splice(licorneIndex,1);
+          updateScore(LICORNE_SCORE_BONUS);
+          const extendFrom = Math.max(rainbowAuraUntil, now);
+          rainbowAuraUntil = extendFrom + RAINBOW_AURA_EXTENSION;
+          createRainbowBurst(captured);
+          clearSuppressionsAround(captured, SUPPRESSION_CLEAN_RADIUS);
+          updateRainbowStatus(true, now);
+          spawnLicornes();
+        }
+      }
+
+      if (!grew){ train.pop(); }
+
       if (oranges.some(p=>p.x===newHead.x&&p.y===newHead.y)){
         speedModifier = (Math.random()<0.5) ? -150 : 150;
         setTimeout(()=>{ speedModifier=0; }, 2000);
@@ -726,7 +1024,7 @@
       const elapsedTime = Math.floor((Date.now()-startTime)/1000);
       const minutes = Math.floor(elapsedTime/60).toString().padStart(2,'0');
       const seconds = (elapsedTime%60).toString().padStart(2,'0');
-      const textHTML = `<p>${message}</p><p>Score: ${score}</p><p>Temps : ${minutes}:${seconds}</p>`;
+      const textHTML = `<p>${message}</p><p>Score: ${score}</p><p>Licornes : ${licorneCollected}</p><p>Temps : ${minutes}:${seconds}</p>`;
       document.getElementById("gameOverText").innerHTML = textHTML;
       document.getElementById("overlay").style.display = "flex";
       document.getElementById("gameOverMessage").style.display = "block";
@@ -782,8 +1080,14 @@
         clearInterval(countdownInterval);
         lockCanvasSize = false;               // autorise le redimensionnement en pause
       } else {
-        const pauseDuration = Date.now()-pauseStartTime;
+        const resumeTime = Date.now();
+        const pauseDuration = resumeTime - pauseStartTime;
         startTime += pauseDuration; startTimer();
+        if (rainbowAuraUntil > resumeTime){ rainbowAuraUntil += pauseDuration; }
+        if (rainbowBursts && rainbowBursts.length){
+          rainbowBursts = rainbowBursts.map(b => ({ ...b, expires: b.expires + pauseDuration }));
+        }
+        updateRainbowStatus(true, resumeTime);
         lockCanvasSize = true;                // refige pendant le jeu
         requestAnimationFrame(() => resizeCanvas(true));
         // relance la boucle si elle a été mise en veille par le navigateur
