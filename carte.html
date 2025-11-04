@@ -929,12 +929,8 @@ function escapeHTML(str){
     };
   }
 
-  function computeTrainDelayInfo(train){
-    if (!train || !trainDelaysByNumber.size) return null;
-    const numberKey = normalizeTrainNumberKey(train.numberKey || extractTrainNumberCandidate(train.number) || null);
-    if (!numberKey) return null;
-    const perStation = trainDelaysByNumber.get(String(numberKey));
-    if (!perStation) return null;
+  function computeDelayInfoFromPerStation(perStation, train){
+    if (!perStation || !perStation.size) return null;
 
     const candidateOrder = [];
     const seen = new Set();
@@ -981,6 +977,47 @@ function escapeHTML(str){
     }
     return fallback;
   }
+ function computeTrainDelayInfo(train){
+    if (!train || !trainDelaysByNumber.size) return null;
+    const candidateKeys = [];
+    const pushKey = (value)=>{
+      if (value == null) return;
+      const candidate = extractTrainNumberCandidate(value) ?? value;
+      const normalized = normalizeTrainNumberKey(candidate);
+      if (!normalized && normalized !== 0) return;
+      const keyStr = String(normalized);
+      if (!keyStr) return;
+      if (candidateKeys.includes(keyStr)) return;
+      candidateKeys.push(keyStr);
+    };
+
+    pushKey(train.numberKey);
+    if (Array.isArray(train.delayNumberKeys)){
+      for (const key of train.delayNumberKeys) pushKey(key);
+    }
+    pushKey(train.numberDigits);
+    pushKey(train.number);
+    pushKey(train.numberRaw);
+    pushKey(train.branding?.digits);
+    pushKey(train.id);
+
+    if (!candidateKeys.length) return null;
+
+    let cancelledInfo = null;
+    for (const key of candidateKeys){
+      const perStation = trainDelaysByNumber.get(String(key));
+      if (!perStation) continue;
+      const info = computeDelayInfoFromPerStation(perStation, train);
+      if (!info) continue;
+      if (info.severity === 'cancelled'){
+        if (!cancelledInfo) cancelledInfo = info;
+        continue;
+      }
+      return info;
+    }
+    return cancelledInfo;
+  }   
+    
  function getStopNameCandidates(stopMeta){
     if (!stopMeta) return [];
     const key = stopMeta.stop_id || null;
@@ -1840,6 +1877,9 @@ const mapContainerEl = map.getContainer();
       const severityClass = `trip-panel-delay delay-${data.delayInfo.severity}`;
       const context = data.delayInfo.panelContext ? `<div class="trip-panel-delay-context">${escapeHTML(data.delayInfo.panelContext)}</div>` : '';
       summaryHtml += `<div class="${severityClass}">${escapeHTML(data.delayInfo.panelText)}${context}</div>`;
+    }
+    if (Array.isArray(data.numberList) && data.numberList.length > 1){
+      summaryHtml += `<div class="trip-panel-realtime"><strong>Numéros associés :</strong> ${escapeHTML(data.numberList.join(' / '))}</div>`;
     }
     const realtimeStartSec = realtimeProfile?.startRealtime ?? data.startSec ?? plannedStartSec;
     const realtimeEndSec = realtimeProfile?.endRealtime ?? data.endSec ?? plannedEndSec;
@@ -2905,6 +2945,12 @@ async function integrateCflGtfs({ axisStopIds, axisTripIds, axisRouteIds, mergeA
         const nextStopMeta = seq[i+1] ? stopsById.get(seq[i+1].stop_id) : null;
         const etaSec = Math.max(0, Math.round(dep - nowSec));
 
+        const displayForList = branding.displayNumber || numberDisplay || rawNumber || null;
+        const numberList = displayForList ? [displayForList] : [];
+        const delayNumberKeys = [];
+        if (numberKey != null) delayNumberKeys.push(String(numberKey));
+        const source = trip?.source === 'CFL' ? 'CFL' : 'SNCF';
+
         items.push({
           id: trip_id,
           headsign,
@@ -2928,7 +2974,10 @@ async function integrateCflGtfs({ axisStopIds, axisTripIds, axisRouteIds, mergeA
           segmentProgress: 0,
           nowSec,
           stopsCount: seq.length,
-          currentDelaySec: profileStop?.delaySec ?? 0
+          currentDelaySec: profileStop?.delaySec ?? 0,
+          source,
+          numberList,
+          delayNumberKeys
         });
         positioned = true;
         break;
@@ -2955,6 +3004,12 @@ async function integrateCflGtfs({ axisStopIds, axisTripIds, axisRouteIds, mergeA
         const { lat, lon } = pos;
         const etaSec = Math.max(0, Math.round(tB - nowSec));
 
+        const displayForList = branding.displayNumber || numberDisplay || rawNumber || null;
+        const numberList = displayForList ? [displayForList] : [];
+        const delayNumberKeys = [];
+        if (numberKey != null) delayNumberKeys.push(String(numberKey));
+        const source = trip?.source === 'CFL' ? 'CFL' : 'SNCF';
+
         items.push({
           id: trip_id,
           headsign,
@@ -2978,12 +3033,241 @@ async function integrateCflGtfs({ axisStopIds, axisTripIds, axisRouteIds, mergeA
           segmentProgress: r,
           nowSec,
           stopsCount: seq.length,
-          currentDelaySec: profileA?.delaySec ?? 0
+          currentDelaySec: profileA?.delaySec ?? 0,
+          source,
+          numberList,
+          delayNumberKeys
         });
         break;
       }
     }
-    return items;
+    return mergeCrossBorderTrains(items);
+  }
+
+  function approxDistanceKm(lat1, lon1, lat2, lon2){
+    if (!Number.isFinite(lat1) || !Number.isFinite(lon1) || !Number.isFinite(lat2) || !Number.isFinite(lon2)) return Infinity;
+    const toRad = (deg)=>deg * (Math.PI/180);
+    const dLat = toRad(lat2 - lat1);
+    const dLon = toRad(lon2 - lon1);
+    const a = Math.sin(dLat/2) * Math.sin(dLat/2)
+      + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon/2) * Math.sin(dLon/2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    return 6371 * c;
+  }
+
+  function computeTrainMergeMeta(train){
+    if (!train) return null;
+    const seq = stopTimesByTrip.get(train.id);
+    if (!seq || seq.length < 2) return null;
+    const normalizedStops = [];
+    for (const st of seq){
+      const stopMeta = stopsById.get(st.stop_id);
+      const name = stopMeta?.name || stopMeta?.stop_name || stopMeta?.stop_desc || null;
+      if (!name) continue;
+      const norm = normalizeStationName(name);
+      if (!norm) continue;
+      normalizedStops.push(norm);
+      if (normalizedStops.length >= 5) break;
+    }
+    if (normalizedStops.length < 2) return null;
+    const firstStop = seq[0];
+    const startTime = firstStop?.departure ?? firstStop?.arrival ?? train.scheduledStartSec ?? train.startSec ?? null;
+    if (startTime == null) return null;
+    const bucket = Math.round(startTime / 300);
+    const keyStops = normalizedStops.slice(0, 3);
+    while (keyStops.length < 3) keyStops.push('');
+    const signature = `${keyStops[0]}|${keyStops[1]}|${keyStops[2]}|${bucket}`;
+    return {
+      signature,
+      keyStops,
+      normalizedStops,
+      bucket,
+      startTime
+    };
+  }
+
+  function selectPrimaryTrainForMerge(group){
+    let best = group[0];
+    let bestScore = Infinity;
+    for (const train of group){
+      let score = 0;
+      const source = (train?.source || '').toUpperCase();
+      if (source === 'CFL') score += 2;
+      if (source === 'SNCF') score -= 2;
+      if (train?.stopsCount != null) score -= Math.min(Number(train.stopsCount) || 0, 12) * 0.1;
+      if (train?.branding?.category === 'tgv-roi') score -= 0.2;
+      if (score < bestScore){
+        bestScore = score;
+        best = train;
+      }
+    }
+    return best;
+  }
+
+  function buildMergedTrain(group){
+    if (!group || !group.length) return null;
+    const ordered = group.slice();
+    const primary = ordered[0];
+    const merged = { ...primary };
+    merged.branding = { ...(primary.branding || {}) };
+    merged.mergedTripIds = ordered.map(t => t.id);
+    merged.mergedSources = Array.from(new Set(ordered.map(t => (t.source || 'SNCF'))));
+    if (merged.mergedSources.includes('SNCF')){
+      merged.source = 'SNCF';
+    } else if (merged.mergedSources.length){
+      merged.source = merged.mergedSources[0];
+    }
+
+    const displayNumbers = [];
+    const pushDisplay = (value)=>{
+      if (!value) return;
+      const str = String(value).trim();
+      if (!str) return;
+      if (!displayNumbers.includes(str)) displayNumbers.push(str);
+    };
+
+    const delayKeySet = new Set();
+    const delayKeyOrder = [];
+    const pushDelayKey = (value)=>{
+      if (value == null) return;
+      if (Array.isArray(value)){
+        for (const v of value) pushDelayKey(v);
+        return;
+      }
+      const candidate = extractTrainNumberCandidate(value) ?? value;
+      const normalized = normalizeTrainNumberKey(candidate);
+      if (!normalized && normalized !== 0) return;
+      const keyStr = String(normalized);
+      if (!keyStr || delayKeySet.has(keyStr)) return;
+      delayKeySet.add(keyStr);
+      delayKeyOrder.push(keyStr);
+    };
+
+    for (const train of ordered){
+      if (Array.isArray(train.numberList) && train.numberList.length){
+        for (const entry of train.numberList) pushDisplay(entry);
+      } else {
+        pushDisplay(train.branding?.displayNumber || train.number || train.numberRaw);
+      }
+      pushDelayKey(train.delayNumberKeys);
+      pushDelayKey(train.numberKey);
+      pushDelayKey(train.numberDigits);
+      pushDelayKey(train.number);
+      pushDelayKey(train.numberRaw);
+      pushDelayKey(train.branding?.digits);
+    }
+
+    const combinedDisplay = displayNumbers.join(' / ');
+    merged.numberList = displayNumbers;
+    if (combinedDisplay){
+      merged.number = combinedDisplay;
+      merged.numberRaw = combinedDisplay;
+      merged.branding.displayNumber = combinedDisplay;
+      merged.branding.panelTitle = combinedDisplay;
+    }
+
+    if (delayKeyOrder.length === 1){
+      merged.numberDigits = delayKeyOrder[0];
+      merged.branding.digits = delayKeyOrder[0];
+    } else {
+      if ('numberDigits' in merged) delete merged.numberDigits;
+      if ('digits' in merged.branding) delete merged.branding.digits;
+    }
+
+    merged.delayNumberKeys = delayKeyOrder;
+    if (delayKeyOrder.length){
+      merged.numberKey = delayKeyOrder[0];
+    }
+
+    const priorityForDelay = (train)=>{
+      const source = (train?.source || '').toUpperCase();
+      if (source === 'SNCF') return 0;
+      if (source === 'CFL') return 2;
+      return 1;
+    };
+
+    const delaySource = ordered
+      .slice()
+      .sort((a,b)=> priorityForDelay(a) - priorityForDelay(b))
+      .find(t => t.currentDelaySec != null);
+    if (delaySource && delaySource.currentDelaySec != null){
+      merged.currentDelaySec = delaySource.currentDelaySec;
+    }
+
+    merged.relatedTrainIds = merged.mergedTripIds.slice();
+    return merged;
+  }
+
+  function mergeCrossBorderTrains(list){
+    if (!Array.isArray(list) || list.length < 2) return list;
+    const metaById = new Map();
+    const groups = new Map();
+    for (const train of list){
+      const meta = computeTrainMergeMeta(train);
+      if (!meta) continue;
+      metaById.set(train.id, meta);
+      if (!groups.has(meta.signature)) groups.set(meta.signature, []);
+      groups.get(meta.signature).push(train);
+    }
+
+    if (!groups.size) return list;
+
+    const consumed = new Set();
+    const result = [];
+
+    for (const train of list){
+      if (consumed.has(train.id)){ continue; }
+      const meta = metaById.get(train.id);
+      const group = meta ? groups.get(meta.signature) : null;
+      if (group && group.length > 1){
+        const available = group.filter(t => !consumed.has(t.id));
+        if (available.length > 1){
+          const sources = new Set(available.map(t => (t.source || 'SNCF').toUpperCase()));
+          if (sources.size > 1){
+            let maxDistance = 0;
+            for (let i=0;i<available.length;i++){
+              for (let j=i+1;j<available.length;j++){
+                const a = available[i];
+                const b = available[j];
+                const dist = approxDistanceKm(a.lat, a.lon, b.lat, b.lon);
+                if (Number.isFinite(dist)){
+                  if (dist > maxDistance) maxDistance = dist;
+                }
+              }
+            }
+            const distanceOk = maxDistance <= 15;
+            let progressMismatch = false;
+            const ref = available.find(t => t.progress != null && Number.isFinite(t.progress));
+            if (ref){
+              for (const other of available){
+                if (other === ref || other.progress == null || !Number.isFinite(other.progress)) continue;
+                if (Math.abs(other.progress - ref.progress) > 0.5){
+                  progressMismatch = true;
+                  break;
+                }
+              }
+            }
+
+            if (distanceOk && !progressMismatch){
+              const primary = selectPrimaryTrainForMerge(available);
+              const orderedGroup = [primary, ...available.filter(t => t !== primary)];
+              const merged = buildMergedTrain(orderedGroup);
+              if (merged){
+                result.push(merged);
+                for (const member of orderedGroup){
+                  consumed.add(member.id);
+                }
+                continue;
+              }
+            }
+          }
+        }
+      }
+      result.push(train);
+      consumed.add(train.id);
+    }
+
+    return result;
   }
 
   function renderTrains(list){
