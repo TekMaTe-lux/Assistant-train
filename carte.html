@@ -2267,6 +2267,32 @@ function setLayerGroupVisibility(group, visible){
   const stopNearestCache = new Map();   // stop_id -> { node, dist }
   const stopPathCache = new Map();      // "stopA|stopB" -> chemin pré-calculé
 
+  // pondérer les segments selon l'état publié par SNCF Réseau afin d'éviter
+  // que les trajets suivent des voies neutralisées ou fermées lorsqu'une
+  // alternative exploitée existe encore dans le graphe.
+  const NETWORK_STATUS_WEIGHTS = new Map([
+    ['exploitée', 1],
+    ['transférée en voie de service', 1.15],
+    ['neutralisée', 6],
+    ['neutralisée et conservée pour les besoins de la défense', 8],
+    ['déclassée non vendue', 8],
+    ['déclassée vendue', 18],
+    ['fermée', 10],
+    ['fermée avec maintien en place de la voie', 12],
+    ['fermée et déposée (plus utilisable)', 16],
+    ['fermée et mise à disposition de tiers', 14],
+    ['fermée non déposée (plus utilisable)', 12],
+    ['retranchée (plus utilisable)', 15]
+  ]);
+  const NETWORK_STATUS_DEFAULT_WEIGHT = 5;
+
+  function statusWeightFactor(status){
+    if (!status) return 1;
+    const key = status.trim().toLowerCase();
+    if (!key) return 1;
+    return NETWORK_STATUS_WEIGHTS.get(key) ?? NETWORK_STATUS_DEFAULT_WEIGHT;
+  }
+
   function coordKey(lat, lon){ return `${Math.round(lat*1e6)},${Math.round(lon*1e6)}`; }
 
   function ensureNetworkNode(lat, lon){
@@ -2278,10 +2304,13 @@ function setLayerGroupVisibility(group, visible){
     return networkGraph.get(key);
   }
 
-  function addNetworkEdge(latA, lonA, latB, lonB){
+  function addNetworkEdge(latA, lonA, latB, lonB, weightFactor = 1){
     const nodeA = ensureNetworkNode(latA, lonA);
     const nodeB = ensureNetworkNode(latB, lonB);
-    const d = distLL({lat:latA, lon:lonA}, {lat:latB, lon:lonB});
+    const base = distLL({lat:latA, lon:lonA}, {lat:latB, lon:lonB});
+    if (!isFinite(base) || base <= 0) return;
+    const factor = Number.isFinite(weightFactor) && weightFactor > 0 ? weightFactor : 1;
+    const d = base * factor;
     if (!isFinite(d) || d <= 0) return;
     if (!nodeA.neighbors.has(nodeB.key) || nodeA.neighbors.get(nodeB.key) > d){
       nodeA.neighbors.set(nodeB.key, d);
@@ -2298,21 +2327,22 @@ function setLayerGroupVisibility(group, visible){
       if (!feat || !feat.geometry) continue;
       const geom = feat.geometry;
       const type = geom.type;
+      const weightFactor = statusWeightFactor(feat?.properties?.libelle);
       if (type === 'LineString'){
-        processLineStringCoords(geom.coordinates);
+        processLineStringCoords(geom.coordinates, weightFactor);
       } else if (type === 'MultiLineString'){
-        for (const coords of geom.coordinates){ processLineStringCoords(coords); }
+        for (const coords of geom.coordinates){ processLineStringCoords(coords, weightFactor); }
       }
     }
   }
 
-  function processLineStringCoords(coords){
+  function processLineStringCoords(coords, weightFactor = 1){
     if (!Array.isArray(coords)) return;
     for (let i=1;i<coords.length;i++){
       const [lonA, latA] = coords[i-1];
       const [lonB, latB] = coords[i];
       if (!isFinite(latA) || !isFinite(lonA) || !isFinite(latB) || !isFinite(lonB)) continue;
-      addNetworkEdge(latA, lonA, latB, lonB);
+      addNetworkEdge(latA, lonA, latB, lonB, weightFactor);
     }
   }
 
@@ -2350,7 +2380,7 @@ function setLayerGroupVisibility(group, visible){
         const [latA, lonA] = prev;
         const [latB, lonB] = curr;
         if (!isFinite(latA) || !isFinite(lonA) || !isFinite(latB) || !isFinite(lonB)) continue;
-        addNetworkEdge(latA, lonA, latB, lonB);
+        addNetworkEdge(latA, lonA, latB, lonB, 1);
       }
     }
   }
