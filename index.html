@@ -8014,7 +8014,85 @@ if (!newStart) {
         displayStops = combinedStops;
       }
     }
+const stopHasSchedule = (result, stopName) => {
+      if (!result || result.error || !result.train || !Array.isArray(result.train.stop_times)) {
+        return false;
+      }
 
+      const stopTimes = result.train.stop_times;
+      let stop = stopTimes.find(s => s.stop_point?.name === stopName) || null;
+      let impactedEntry = null;
+
+      if (stop && stop.stop_point?.id && result.impacted) {
+        impactedEntry = result.impacted[stop.stop_point.id] || null;
+      }
+
+      if (!impactedEntry && result.impacted) {
+        impactedEntry = Object.values(result.impacted).find(imp => imp?.stop_point?.name === stopName) || null;
+      }
+
+      const amendedTime = impactedEntry?.amended_departure_time
+        || impactedEntry?.amended_arrival_time
+        || null;
+
+      const baseTime = impactedEntry?.base_departure_time
+        || impactedEntry?.base_arrival_time
+        || (stop ? (stop.departure_time || stop.arrival_time || null) : null);
+
+      const isAddedStop = Boolean(
+        impactedEntry && (
+          impactedEntry.stop_time_effect === 'added'
+          || impactedEntry.departure_status === 'added'
+          || impactedEntry.arrival_status === 'added'
+        )
+      );
+
+      if (isAddedStop) {
+        return Boolean(amendedTime);
+      }
+
+      if (!baseTime) {
+        return false;
+      }
+
+      const departureDeleted = impactedEntry && (
+        impactedEntry.departure_status === 'deleted'
+        || impactedEntry.stop_time_effect === 'deleted'
+      );
+      const arrivalDeleted = impactedEntry && (
+        impactedEntry.arrival_status === 'deleted'
+        || impactedEntry.stop_time_effect === 'deleted'
+      );
+      if (departureDeleted && arrivalDeleted) {
+        return false;
+      }
+
+      if (stop) {
+        const index = stopTimes.findIndex(s => s.stop_point?.id === stop.stop_point?.id);
+        if (index >= 0) {
+          const newStartIndex = result.newStart
+            ? stopTimes.findIndex(s => s.stop_point?.id === result.newStart)
+            : -1;
+          if (newStartIndex >= 0 && index < newStartIndex) {
+            return false;
+          }
+
+          const newEndIndex = result.newEnd
+            ? stopTimes.findIndex(s => s.stop_point?.id === result.newEnd)
+            : -1;
+          if (newEndIndex >= 0 && index > newEndIndex) {
+            return false;
+          }
+        }
+      }
+
+      return true;
+    };
+
+    displayStops = displayStops.filter(stopName =>
+      numbers.some(num => stopHasSchedule(results[num], stopName))
+    );
+      
     /* 4) Construction du tableau */
     let html = '<table><thead><tr><th>Gare</th>';
     numbers.forEach(num => {
