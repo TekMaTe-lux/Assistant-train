@@ -3412,6 +3412,8 @@ function renderRowsChunked(htmlRows, tbody, chunk=200){
           <button id="btnSoir"  class="mini-btn preset-btn" type="button" title="16:00–20:00">🌇 Soir</button>
         </div>
       </div>
+      
+      <div id="presetTables" class="preset-tables" aria-live="polite"></div>
     </div>
   </details>
 
@@ -6975,6 +6977,61 @@ async function proposerTrainsOD(eventOrOptions){
 const PRESET_AM = "88704,88706,88708,88710,88802,88712,88501,88804,88714,88503,88806,88716,88505,88718,88571,88722".split(',');
 const PRESET_PM = "88741,88743,88745,88747,88530,88749,88751,88753,88532,88755,88813,88759,88761,88815,88534,88763,88765,88767,88769".split(',');
 
+    function detectPresetMatch(list){
+  if (!Array.isArray(list) || list.length === 0) return null;
+  const sameNumbers = (a, b) => Array.isArray(a) && Array.isArray(b)
+    && a.length === b.length
+    && a.every((val, idx) => b[idx] === val);
+  if (sameNumbers(list, PRESET_AM)) return 'AM';
+  if (sameNumbers(list, PRESET_PM)) return 'PM';
+  return null;
+}
+
+function updatePresetHighlights(kind){
+  const container = document.getElementById('presetTables');
+  if (!container) return;
+  const active = kind || '';
+  container.querySelectorAll('[data-preset-kind]').forEach(section => {
+    section.classList.toggle('is-active', section.dataset.presetKind === active);
+  });
+}
+
+function renderPresetLists(){
+  const container = document.getElementById('presetTables');
+  if (!container) return;
+  const presets = [
+    { kind: 'AM', icon: '🌅', title: 'Pointe du matin', subtitle: 'Nancy → Luxembourg', numbers: PRESET_AM },
+    { kind: 'PM', icon: '🌇', title: 'Pointe du soir', subtitle: 'Luxembourg → Nancy', numbers: PRESET_PM }
+  ];
+
+  container.innerHTML = presets.map(preset => {
+    const chips = (preset.numbers || []).map(num => `
+      <span class="preset-chip">${escapeHtml(num)}</span>
+    `).join('');
+
+    return `
+      <section class="preset-card" data-preset-kind="${preset.kind}">
+        <div class="preset-card__title">${escapeHtml(preset.icon)} ${escapeHtml(preset.title)}
+          <span class="preset-card__subtitle">${escapeHtml(preset.subtitle)}</span>
+        </div>
+        <div class="preset-card__grid">${chips}</div>
+        <button type="button" class="mini-btn preset-btn preset-apply-btn" data-apply-preset="${preset.kind}">Utiliser cette sélection</button>
+      </section>
+    `;
+  }).join('');
+
+  container.querySelectorAll('[data-apply-preset]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const kind = btn.getAttribute('data-apply-preset');
+      if (!kind) return;
+      applyRapidPreset(kind, { trigger: btn, openModal: true });
+    });
+  });
+
+  const initial = detectPresetMatch(Array.from(selectedTrains || [])) || (lastRapidPreset?.kind ?? null);
+  updatePresetHighlights(initial);
+}
+
   const RAPID_PRESET_CONFIG = {
   AM: {
     label: 'Matin',
@@ -7208,6 +7265,10 @@ function chipsUpdateCount(){
 function updateSelectionUI(){
   const arr = Array.from(selectedTrains || []);
 
+  const matchedPreset = detectPresetMatch(arr);
+  if (arr.length === 0) updatePresetHighlights(null);
+  else if (matchedPreset) updatePresetHighlights(matchedPreset);
+
   // 1) compat input CSV
   const input = document.getElementById('trainNumbers');
   if (input) {
@@ -7240,6 +7301,7 @@ function updateSelectionUI(){
         const card = document.querySelector(`#propositions .chip[data-num="${num}"]`);
         if (card) card.classList.remove('is-selected');
         chipsUpdateCount?.();
+        updatePresetHighlights(null);
         updateSelectionUI();
       };
       tag.addEventListener('click', ()=>{
@@ -7401,6 +7463,7 @@ async function applyRapidPreset(kind, options = {}){
   usePresetEverywhere(numbers);
 
   lastRapidPreset = { kind };
+  updatePresetHighlights(kind);
 
   if (opts.openModal && typeof openSelectionModal === 'function'){
     openSelectionModal({
@@ -7458,6 +7521,7 @@ $(function () {
   $('#trainDate').val(formatDateInputValue(new Date()));
   buildGareDropdown();
   buildStationSelects();
+  renderPresetLists();
 
   attachStationSearch('#startStationSearch', '#startStation');
   attachStationSearch('#endStationSearch', '#endStation');
@@ -7619,6 +7683,7 @@ syncSelectionDateFromMain();
     // décocher visuellement les cartes si visibles
     document.querySelectorAll('#propositions .chip.is-selected').forEach(c=>c.classList.remove('is-selected'));
     if (typeof chipsUpdateCount === 'function') chipsUpdateCount();
+    updatePresetHighlights(null);
     updateSelectionUI(); // -> masque la zone et les boutons
   });
 
@@ -7635,6 +7700,7 @@ syncSelectionDateFromMain();
     c.classList.toggle('is-selected', selectedTrains.has(c.dataset.num));
   });
   if (typeof chipsUpdateCount === 'function') chipsUpdateCount();
+  updatePresetHighlights(null);  
   updateSelectionUI();
 });
 function addManualTrain(){
@@ -7645,8 +7711,9 @@ function addManualTrain(){
     $inp.addClass('input-error'); setTimeout(()=> $inp.removeClass('input-error'), 400);
     return;
   }
-  const wasEmpty = selectedTrains.size === 0; 
+  const wasEmpty = selectedTrains.size === 0;
   selectedTrains.add(num);
+  updatePresetHighlights(null);
   updateSelectionUI();
   const card = document.querySelector(`#propositions .chip[data-num="${num}"]`);
   if (card) card.classList.add('is-selected');
