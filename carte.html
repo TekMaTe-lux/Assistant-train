@@ -2390,21 +2390,38 @@ function setLayerGroupVisibility(group, visible){
       [49.45545408934669, 6.129087542114585]
     ]
   ];
-const MANUAL_PATH_OVERRIDE_POINTS = (()=>{
-    const map = new Map();
-    const keyFor = (a, b)=>`${a}|${b}`;
-    const pushOverride = (from, to, waypoints)=>{
-      if (!from || !to || !Array.isArray(waypoints)) return;
-      const filtered = waypoints
-        .map(([lat, lon])=>[Number(lat), Number(lon)])
-        .filter(([lat, lon])=>Number.isFinite(lat) && Number.isFinite(lon));
-      if (!filtered.length) return;
-      const directKey = keyFor(from, to);
-      const reverseKey = keyFor(to, from);
-      map.set(directKey, filtered);
-      map.set(reverseKey, filtered.slice().reverse());
-    };
+const MANUAL_PATH_OVERRIDE_POINTS = new Map();
 
+  function setManualPathOverride(normA, normB, waypoints){
+    if (!normA || !normB || normA === normB) return;
+    if (!Array.isArray(waypoints) || !waypoints.length) return;
+    const filtered = [];
+    for (const point of waypoints){
+      if (!Array.isArray(point) || point.length < 2) continue;
+      const lat = Number(point[0]);
+      const lon = Number(point[1]);
+      if (!Number.isFinite(lat) || !Number.isFinite(lon)) continue;
+      if (filtered.length){
+        const [prevLat, prevLon] = filtered[filtered.length-1];
+        if (Math.abs(prevLat - lat) < 1e-6 && Math.abs(prevLon - lon) < 1e-6) continue;
+      }
+      filtered.push([lat, lon]);
+    }
+    if (!filtered.length) return;
+    const directKey = `${normA}|${normB}`;
+    const reverseKey = `${normB}|${normA}`;
+    MANUAL_PATH_OVERRIDE_POINTS.set(directKey, filtered);
+    MANUAL_PATH_OVERRIDE_POINTS.set(reverseKey, filtered.slice().reverse());
+  }
+
+  function setManualOverrideByNames(fromName, toName, waypoints){
+    const fromNorm = normalizeStationName(fromName);
+    const toNorm = normalizeStationName(toName);
+    if (!fromNorm || !toNorm) return;
+    setManualPathOverride(fromNorm, toNorm, waypoints);
+  }
+
+  function seedStaticManualOverrides(){
     const normalizeAll = (names)=>{
       if (!Array.isArray(names)) return [];
       return names
@@ -2475,16 +2492,9 @@ const MANUAL_PATH_OVERRIDE_POINTS = (()=>{
         const a = stationNames[i];
         const b = stationNames[j];
         const coords = pointsBetween(a, b);
-        if (coords.length) pushOverride(a, b, coords);
+        if (coords.length) setManualPathOverride(a, b, coords);
       }
     }
-
-    const registerManual = (fromName, toName, coords)=>{
-      const fromNorm = normalizeStationName(fromName);
-      const toNorm = normalizeStationName(toName);
-      if (!fromNorm || !toNorm || !coords || !coords.length) return;
-      pushOverride(fromNorm, toNorm, coords);
-    };
 
     const nancyBranch = [
       [48.720000, 6.180000],
@@ -2493,8 +2503,8 @@ const MANUAL_PATH_OVERRIDE_POINTS = (()=>{
       [48.910000, 6.178000]
     ];
 
-    registerManual('Nancy', 'Metz', nancyBranch);
-    registerManual('Nancy', 'Lorraine TGV', nancyBranch);
+    setManualOverrideByNames('Nancy', 'Metz', nancyBranch);
+    setManualOverrideByNames('Nancy', 'Lorraine TGV', nancyBranch);
 
     const lorraineNorm = normalizeStationName('Lorraine TGV');
     const parisNorm = normalizeStationName('Paris Est');
@@ -2503,24 +2513,116 @@ const MANUAL_PATH_OVERRIDE_POINTS = (()=>{
 
     const nancyToMeuse = [...nancyBranch, ...pointsBetween(lorraineNorm, meuseNorm)];
     if (nancyToMeuse.length > nancyBranch.length){
-      registerManual('Nancy', 'Meuse TGV', nancyToMeuse);
+      setManualOverrideByNames('Nancy', 'Meuse TGV', nancyToMeuse);
     }
 
     const nancyToChampagne = [...nancyBranch, ...pointsBetween(lorraineNorm, champagneNorm)];
     if (nancyToChampagne.length > nancyBranch.length){
-      registerManual('Nancy', 'Champagne-Ardenne TGV', nancyToChampagne);
+      setManualOverrideByNames('Nancy', 'Champagne-Ardenne TGV', nancyToChampagne);
     }
 
     const lorraineToParis = pointsBetween(lorraineNorm, parisNorm);
     if (lorraineToParis.length){
-      registerManual('Nancy', 'Paris Est', [
+      setManualOverrideByNames('Nancy', 'Paris Est', [
         ...nancyBranch,
         ...lorraineToParis
       ]);
     }
+  }
+    
+   seedStaticManualOverrides();
 
-    return map;
-  })();
+  function rebuildTgvManualOverridesFromGtfs(){
+    const corridorDefs = [
+      { id:'luxembourg', names:['Luxembourg'], lat:49.599722, lon:6.134722 },
+      { id:'bettembourg', names:['Bettembourg'], lat:49.516389, lon:6.102222 },
+      { id:'thionville', names:['Thionville'], lat:49.353965, lon:6.168582 },
+      { id:'metz', names:['Metz'], lat:49.109466, lon:6.177052 },
+      { id:'lorraine-tgv', names:['Lorraine TGV'], lat:48.947713, lon:6.169778 },
+      { id:'meuse-tgv', names:['Meuse TGV'], lat:48.978583, lon:5.271024 },
+      { id:'champagne-tgv', names:['Champagne-Ardenne TGV'], lat:49.214769, lon:3.994523 },
+      { id:'reims', names:['Reims'], lat:49.259602, lon:4.02392 },
+      { id:'paris-est', names:['Paris Est'], lat:48.876742, lon:2.358424 }
+    ];
+
+    const resolved = [];
+    for (const def of corridorDefs){
+      const nameList = Array.isArray(def.names) ? def.names : [];
+      const normCandidates = nameList.map(name=>normalizeStationName(name)).filter(Boolean);
+      let best = null;
+      if (normCandidates.length){
+        for (const stop of stopsById.values()){
+          const candidates = getStopNameCandidates(stop);
+          let matchedNorm = null;
+          for (const label of candidates){
+            const norm = normalizeStationName(label);
+            if (normCandidates.includes(norm)){ matchedNorm = norm; break; }
+          }
+          if (!matchedNorm) continue;
+          const score = (stop.location_type === 0 ? 2 : 0) + (/TGV|INOUI/i.test(stop.stop_id || '') ? 1 : 0);
+          if (!best || score > best.score){
+            best = { stop, norm: matchedNorm, score };
+          }
+        }
+      }
+      if (best){
+        resolved.push({ norm: best.norm, stop: best.stop });
+        continue;
+      }
+      if (!Number.isFinite(def.lat) || !Number.isFinite(def.lon)) continue;
+      const label = nameList[0] || def.id || `node-${resolved.length}`;
+      const norm = normCandidates[0] || normalizeStationName(label);
+      if (!norm) continue;
+      const pseudoId = `__manual_${norm.replace(/[^a-z0-9]+/g, '_')}__`;
+      resolved.push({
+        norm,
+        stop: {
+          stop_id: pseudoId,
+          name: label,
+          lat: Number(def.lat),
+          lon: Number(def.lon),
+          location_type: 0
+        }
+      });
+    }
+
+    if (resolved.length < 2) return;
+
+    const coordsBetween = (startIdx, endIdx)=>{
+      const merged = [];
+      for (let idx = startIdx; idx < endIdx; idx++){
+        const current = resolved[idx];
+        const next = resolved[idx + 1];
+        if (!current || !next) return null;
+        const path = computeStopPath(current.stop, next.stop, { allowManual:false });
+        const segment = path?.coords && path.coords.length ? path.coords : [[current.stop.lat, current.stop.lon],[next.stop.lat, next.stop.lon]];
+        for (const point of segment){
+          if (!Array.isArray(point) || point.length < 2) continue;
+          const lat = Number(point[0]);
+          const lon = Number(point[1]);
+          if (!Number.isFinite(lat) || !Number.isFinite(lon)) continue;
+          if (merged.length){
+            const [prevLat, prevLon] = merged[merged.length-1];
+            if (Math.abs(prevLat - lat) < 1e-6 && Math.abs(prevLon - lon) < 1e-6) continue;
+          }
+          merged.push([lat, lon]);
+        }
+      }
+      return merged;
+    };
+
+    for (let i=0;i<resolved.length;i++){
+      for (let j=i+1;j<resolved.length;j++){
+        const combined = coordsBetween(i, j);
+        if (!combined || combined.length < 2) continue;
+        const midpoints = combined.slice(1, combined.length - 1);
+        if (!midpoints.length) continue;
+        setManualPathOverride(resolved[i].norm, resolved[j].norm, midpoints);
+      }
+    }
+
+    stopPathCache.clear();
+  }
     
   function applyManualConnectors(){
     for (const segment of MANUAL_CONNECTOR_SEGMENTS){
@@ -2666,10 +2768,12 @@ const MANUAL_PATH_OVERRIDE_POINTS = (()=>{
     return makePath(coords, false);
   }
 
-  function computeStopPath(stopA, stopB){
-    const manual = manualPathOverrideForStops(stopA, stopB);
-    if (manual) return manual;
+  function computeStopPath(stopA, stopB, { allowManual = true } = {}){
     const direct = directPathBetweenStops(stopA, stopB);
+    if (allowManual){
+      const manual = manualPathOverrideForStops(stopA, stopB);
+      if (manual) return manual;
+    }
     if (!networkNodes.length) return direct;
     const anchorA = nearestNetworkNode(stopA);
     const anchorB = nearestNetworkNode(stopB);
@@ -2728,7 +2832,7 @@ const MANUAL_PATH_OVERRIDE_POINTS = (()=>{
   } 
 
   // zones d'intérêt (filtre "sillon" simple)
-  const AXIS_STOP_KEYWORDS = ['nancy','pont-','metz','hagondange','thionville','bettembourg','luxembourg'];
+  const AXIS_STOP_KEYWORDS = ['nancy','pont-','metz','hagondange','thionville','bettembourg','luxembourg','lorraine','meuse','champagne','reims','paris est'];
 
   // ---------- Chargement réseaux ----------
   async function loadNetworks(){
@@ -2903,6 +3007,12 @@ const MANUAL_PATH_OVERRIDE_POINTS = (()=>{
       rebuildStaticMergeData();
       prepareStationMetadata();
       renderAxisStations();
+
+      try {
+        rebuildTgvManualOverridesFromGtfs();
+      } catch (err){
+        console.warn('[TGV] recalage manuel impossible', err);
+      }
 
       let statusMsg = 'GTFS chargé — ' + stopsById.size + ' gares, ' + stopTimesByTrip.size + ' trips';
       if (cflStopsAdded || cflTripsAdded){
