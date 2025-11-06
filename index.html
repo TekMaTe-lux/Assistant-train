@@ -7474,6 +7474,27 @@ function initSelectionSortable(){
     
 /* ====================== DOC READY ====================== */
 $(function () {
+  
+// === PROXY SNCF (VPS) ===
+const VPS_BASE = 'https://vps.labetaillere.fr';
+
+// Accepte "YYYY-MM-DD" ou "YYYYMMDD"
+function vpsVehicleJourneyUrl(date, num) {
+  const d = /^\d{8}$/.test(date)
+    ? date.replace(/(\d{4})(\d{2})(\d{2})/, '$1-$2-$3')
+    : date;
+  return `${VPS_BASE}/sncf/vehicle_journey/${d}/${num}`;
+}
+
+// Fetch JSON + lecture du header X-Cache (HIT/MISS/REFRESH) pour debug
+async function fetchJSON(url) {
+  const r = await fetch(url, { credentials: 'omit' });
+  const data = await r.json().catch(() => null);
+  const cache = r.headers.get('x-cache');
+  if (cache) console.debug('[SNCF]', cache, url);
+  return { ok: r.ok, status: r.status, data, cache };
+}
+  
   // Date par défaut + menus
   $('#trainDate').val(formatDateInputValue(new Date()));
   buildGareDropdown();
@@ -7760,32 +7781,22 @@ function addManualTrain(){
 
       /* 1) Récupération des données API pour chaque train */
     for (const num of sncfNumbers) {
-      const url = `https://api.sncf.com/v1/coverage/sncf/vehicle_journeys/vehicle_journey:SNCF:${date}:${num}:1187:Train`;
-      try {
-        let res;
-        if (window.SncfApiManager && typeof window.SncfApiManager.fetchVehicleJourney === 'function') {
-          const response = await window.SncfApiManager.fetchVehicleJourney({
-            url,
-            trainNumber: num,
-            isoDate: date,
-            ymdDate
-          });
-          res = response?.data || null;
-        } else {
-          res = await $.ajax({
-            url,
-            beforeSend: function (xhr) {
-              if (typeof getSncfAuthHeader === 'function') {
-                xhr.setRequestHeader('Authorization', getSncfAuthHeader());
-              }
-            }
-          });
-        }
-        const train = res?.vehicle_journeys?.[0];
-        if (!train) {
-          results[num] = { error: 'Non prévu' };
-          continue;
-        }
+      const url = vpsVehicleJourneyUrl(date, num);
+try {
+  const response = await fetchJSON(url);
+  if (!response.ok) {
+    if (response.status === 429) {
+      console.warn('[Proxy SNCF] Quota atteint – données non rafraîchies (cache requis).');
+    }
+    throw new Error('sncf_proxy_error_' + response.status);
+  }
+  const res = response.data;
+
+  const train = res?.vehicle_journeys?.[0];
+  if (!train) {
+    results[num] = { error: 'Non prévu' };
+    continue;
+  }
 
         const disruptions = res?.disruptions || [];
         const impacted = {};
