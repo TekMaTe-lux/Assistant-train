@@ -1,4 +1,4 @@
- import requests
+import requests
 import json
 import re
 import csv
@@ -73,7 +73,7 @@ def compute_status(trip_sr_name, stops_out):
         return "DELAYED"
     return "ON_TIME"
 
-# Sortie: un seul JSON avec tous les arrêts connus (delay>0 => valeur; sinon null)
+# Sortie
 trains_out = {}
 
 for entity in feed.entity:
@@ -113,7 +113,6 @@ for entity in feed.entity:
             "schedule_relationship": stu_sr_name
         })
 
-    # Inclusion (identique à ta logique): touche région OU trip annulé sans STU
     include = False
     if stops_out:
         include = touches_region
@@ -124,7 +123,7 @@ for entity in feed.entity:
 
     status = compute_status(trip_sr_name, stops_out)
 
-    # Construire mapping des arrêts: tous les noms, retard>0 sinon null
+    # Tous les arrêts : retard >0 en minutes, sinon null
     stops_map = {}
     for s in stops_out:
         best = max(s.get("arr_delay_min", 0), s.get("dep_delay_min", 0))
@@ -137,13 +136,11 @@ for entity in feed.entity:
         "stops": stops_map
     }
 
-# Écriture
 os.makedirs("Assistant-train", exist_ok=True)
 output_path = "Assistant-train/retards_nancymetzlux.json"
 with open(output_path, "w", encoding="utf-8") as f:
     json.dump(trains_out, f, ensure_ascii=False, indent=2)
 
-# Stats console
 counts = {"CANCELED":0, "PARTIAL_CANCELLATION":0, "DELAYED":0, "ON_TIME":0}
 for v in trains_out.values():
     counts[v["status"]] = counts.get(v["status"], 0) + 1
