@@ -9,15 +9,16 @@ import os
 
 # --- Télécharger stops.txt depuis GitHub ---
 stops_url = "https://raw.githubusercontent.com/TekMaTe-lux/Assistant-train/main/stops.txt"
-stops_response = requests.get(stops_url)
-stops_text = stops_response.content.decode("utf-8")
+stops_response = requests.get(stops_url, timeout=20)
+stops_response.raise_for_status()
+stops_text = stops_response.content.decode("utf-8", errors="replace")
 
 # Lire stops.txt dans un dictionnaire basé sur l’ID numérique (ex: 87192039)
 stop_id_to_name = {}
 reader = csv.DictReader(io.StringIO(stops_text))
 for row in reader:
-    stop_id_raw = row["stop_id"].strip()
-    stop_name = row["stop_name"].strip()
+    stop_id_raw = (row.get("stop_id") or "").strip()
+    stop_name = (row.get("stop_name") or "").strip()
     match = re.search(r"(\d{8})", stop_id_raw)
     if match:
         id_num = match.group(1)
@@ -26,80 +27,132 @@ for row in reader:
 
 # Fonction pour extraire le vrai stop_id à 8 chiffres
 def nettoyer_stop_id(stop_id):
-    match = re.search(r"(\d{8})", stop_id)
-    return match.group(1) if match else stop_id.strip()
+    match = re.search(r"(\d{8})", stop_id or "")
+    return match.group(1) if match else (stop_id or "").strip()
 
-# Liste des gares d'intérêt
+# Liste des gares d'intérêt (Nancy / Metz / Luxembourg / Paris-Est)
 gares_nancy_metz_lux = {"87141002", "87192039", "87191007", "82001000"}
 
-# Charger le GTFS-RT
+# Charger le GTFS-RT Trip Updates
 url = "https://proxy.transport.data.gouv.fr/resource/sncf-all-gtfs-rt-trip-updates"
-response = requests.get(url)
+response = requests.get(url, timeout=20)
+response.raise_for_status()
 
 feed = gtfs_realtime_pb2.FeedMessage()
 feed.ParseFromString(response.content)
 
-# Structure des trains filtrés
-trains_filtrés_groupés = defaultdict(lambda: {
-    "train_id": "",
-    "train_number": "",
-    "stops": []
-})
+# Enums lisibles
+TripSchRel = gtfs_realtime_pb2.TripDescriptor.ScheduleRelationship
+StopSchRel = gtfs_realtime_pb2.TripUpdate.StopTimeUpdate.ScheduleRelationship
+TRIP_SR = {
+    TripSchRel.SCHEDULED: "SCHEDULED",
+    TripSchRel.ADDED: "ADDED",
+    TripSchRel.UNSCHEDULED: "UNSCHEDULED",
+    TripSchRel.CANCELED: "CANCELED",
+    TripSchRel.REPLACEMENT: "REPLACEMENT",
+    TripSchRel.DUPLICATED: "DUPLICATED",
+    TripSchRel.MODIFIED: "MODIFIED",
+}
+STOP_SR = {
+    StopSchRel.SCHEDULED: "SCHEDULED",
+    StopSchRel.SKIPPED: "SKIPPED",
+    StopSchRel.NO_DATA: "NO_DATA",
+    StopSchRel.UNSCHEDULED: "UNSCHEDULED",
+}
 
-prefixes_autorisés = ("885", "887", "888")
+prefixes_autorises = ("885", "887", "888")
 
+# Dictionnaire principal : un seul fichier final
+trains_sortie = {}
+
+def compute_status(trip_sr_name, stops_out):
+    if trip_sr_name == "CANCELED":
+        return "CANCELED"
+    if any(s.get("schedule_relationship") == "SKIPPED" for s in stops_out):
+        return "PARTIAL_CANCELLATION"
+    if any(((s.get("arrival_delay_minutes") or 0) > 0) or ((s.get("departure_delay_minutes") or 0) > 0) for s in stops_out):
+        return "DELAYED"
+    return "ON_TIME"
+
+# Parcours du flux GTFS-RT
 for entity in feed.entity:
-    if entity.HasField("trip_update"):
-        trip_id_complet = entity.trip_update.trip.trip_id
-        match = re.search(r"(\d{5})", trip_id_complet)
-        train_number = match.group(1) if match else "?????"
+    if not entity.HasField("trip_update"):
+        continue
 
-        if not train_number.startswith(prefixes_autorisés):
-            continue
+    tu = entity.trip_update
+    trip = tu.trip
 
-        retard_trip = []
-        contient_gare_region = False
+    trip_id_complet = trip.trip_id or ""
+    match = re.search(r"(\d{5})", trip_id_complet)
+    train_number = match.group(1) if match else "?????"
 
-        for stu in entity.trip_update.stop_time_update:
-            raw_stop_id = stu.stop_id
-            stop_id_clean = nettoyer_stop_id(raw_stop_id)
-            stop_name = stop_id_to_name.get(stop_id_clean, f"StopPoint {stop_id_clean}")
+    if not train_number.startswith(prefixes_autorises):
+        continue
 
-            data = {
-                "stop_id": stop_id_clean,
-                "stop_name": stop_name
-            }
+    trip_sr_name = TRIP_SR.get(trip.schedule_relationship, "SCHEDULED")
 
-            if stu.HasField("arrival") and stu.arrival.HasField("delay"):
-                data["arrival_delay_minutes"] = stu.arrival.delay // 60
-            if stu.HasField("departure") and stu.departure.HasField("delay"):
-                data["departure_delay_minutes"] = stu.departure.delay // 60
+    stops_out = []
+    touches_region = False
+    for stu in tu.stop_time_update:
+        stop_id_clean = nettoyer_stop_id(stu.stop_id)
+        stop_name = stop_id_to_name.get(stop_id_clean, f"StopPoint {stop_id_clean}")
 
-            if "arrival_delay_minutes" in data or "departure_delay_minutes" in data:
-                retard_trip.append(data)
-                if stop_id_clean in gares_nancy_metz_lux:
-                    contient_gare_region = True
+        if stop_id_clean in gares_nancy_metz_lux:
+            touches_region = True
 
-        if contient_gare_region and retard_trip:
-            trains_filtrés_groupés[train_number]["train_id"] = trip_id_complet
-            trains_filtrés_groupés[train_number]["train_number"] = train_number
-            trains_filtrés_groupés[train_number]["stops"].extend(retard_trip)
+        arrival_delay_minutes = stu.arrival.delay // 60 if (stu.HasField("arrival") and stu.arrival.HasField("delay")) else 0
+        departure_delay_minutes = stu.departure.delay // 60 if (stu.HasField("departure") and stu.departure.HasField("delay")) else 0
 
-# --- Préparation JSON simplifié pour tableau HTML ---
-retards_simplifie = {}
+        stu_sr_name = STOP_SR.get(stu.schedule_relationship, "SCHEDULED")
 
-for train in trains_filtrés_groupés.values():
-    numero = train["train_number"]
-    retards_simplifie[numero] = {}
+        stops_out.append({
+            "stop_id": stop_id_clean,
+            "stop_name": stop_name,
+            "arrival_delay_minutes": arrival_delay_minutes,
+            "departure_delay_minutes": departure_delay_minutes,
+            "schedule_relationship": stu_sr_name
+        })
 
-    for stop in train["stops"]:
-        nom = stop["stop_name"]
-        delay = stop.get("arrival_delay_minutes", stop.get("departure_delay_minutes", 0))
-        retards_simplifie[numero][nom] = delay
+    include_train = False
+    if stops_out:
+        include_train = touches_region
+    else:
+        include_train = (trip_sr_name == "CANCELED")
 
-# --- Enregistrement du fichier simplifié ---
+    if not include_train:
+        continue
+
+    # Déterminer le statut global
+    status = compute_status(trip_sr_name, stops_out)
+
+    # Préparer sous-structure des retards
+    stops_delays = {}
+    for s in stops_out:
+        delay = max(s.get("arrival_delay_minutes", 0), s.get("departure_delay_minutes", 0))
+        if delay > 0 and s["stop_id"] in gares_nancy_metz_lux:
+            stops_delays[s["stop_name"]] = delay
+
+    # Ajout à la sortie
+    trains_sortie[train_number] = {
+        "status": status,
+        "touches_region": touches_region,
+        "stops": stops_delays
+    }
+
+# Enregistrement
 os.makedirs("Assistant-train", exist_ok=True)
-with open("Assistant-train/retards_nancymetzlux.json", "w", encoding="utf-8") as f:
-    json.dump(retards_simplifie, f, ensure_ascii=False, indent=2)
+output_path = "Assistant-train/retards_nancymetzlux.json"
+with open(output_path, "w", encoding="utf-8") as f:
+    json.dump(trains_sortie, f, ensure_ascii=False, indent=2)
 
-print(f"{len(retards_simplifie)} trains enregistrés dans retards_nancymetzlux.json (format simplifié)")
+# Récap console
+counts = {"CANCELED":0, "PARTIAL_CANCELLATION":0, "DELAYED":0, "ON_TIME":0}
+for v in trains_sortie.values():
+    counts[v["status"]] = counts.get(v["status"], 0) + 1
+
+print(f"{len(trains_sortie)} trains inclus (préfixes {prefixes_autorises})")
+print(" - CANCELED:", counts.get("CANCELED", 0))
+print(" - PARTIAL_CANCELLATION:", counts.get("PARTIAL_CANCELLATION", 0))
+print(" - DELAYED:", counts.get("DELAYED", 0))
+print(" - ON_TIME:", counts.get("ON_TIME", 0))
+print(f"Fichier complet exporté dans {output_path}") 
