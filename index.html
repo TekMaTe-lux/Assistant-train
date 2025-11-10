@@ -3987,11 +3987,22 @@ function buildGareDropdown() {
   select.appendChild(opt2);
 }
 function normalizeStationName(str) {
-  return (str || '')
+  const base = (str || '')
     .toString()
     .normalize('NFD')
     .replace(/\p{Diacritic}/gu, '')
+    .replace(/[\u2018\u2019\u201B]/g, "'")
     .toLowerCase()
+    .replace(/[\s\u00a0]+/g, ' ')
+    .trim();
+  if (!base) return '';
+  return base
+    .replace(/&/g, ' et ')
+    .replace(/[-–—]/g, ' ')
+    .replace(/['’`´]/g, '')
+    .replace(/[()]/g, ' ')
+    .replace(/[^a-z0-9 ]+/g, ' ')
+    .replace(/\s+/g, ' ')
     .trim();
 }
 
@@ -8537,6 +8548,31 @@ const GTFS_RT_CANDIDATES = [
   'https://cdn.jsdelivr.net/gh/TekMaTe-lux/Assistant-train@main/Assistant-train/retards_nancymetzlux.json'
 ];
 
+    const GTFS_NORMALIZED_STATION_MAP_KEY = '__gtfsNormalizedStationMap';
+
+function getOrInitGtfsNormalizedMap(bucket) {
+  let map = bucket[GTFS_NORMALIZED_STATION_MAP_KEY];
+  if (!(map instanceof Map)) {
+    map = new Map();
+    Object.defineProperty(bucket, GTFS_NORMALIZED_STATION_MAP_KEY, {
+      value: map,
+      enumerable: false,
+      configurable: true,
+      writable: false
+    });
+  }
+  return map;
+}
+
+function storeGtfsDelay(bucket, stopName, delay) {
+  bucket[stopName] = delay;
+  if (typeof normalizeStationName !== 'function') return;
+  const norm = normalizeStationName(stopName);
+  if (!norm) return;
+  const map = getOrInitGtfsNormalizedMap(bucket);
+  map.set(norm, delay);
+}
+
 function parseGtfsDelayValue(raw) {
   if (raw == null) return null;
   if (typeof raw === 'number') {
@@ -8571,23 +8607,25 @@ function normalizeGtfsStops(trainNumber, stops, out) {
   };
 
   if (Array.isArray(stops)) {
+    const bucket = ensureTrainBucket(trainNumber);
     stops.forEach(entry => {
       if (!entry || typeof entry !== 'object') return;
       const name = entry.stop || entry.stop_name || entry.name || entry.station || entry.gare || entry.label;
       if (!name) return;
       const delay = parseGtfsDelayValue(entry.delay ?? entry.delayMinutes ?? entry.delay_minutes ?? entry.retard ?? entry.minutes ?? entry.value ?? entry.min ?? entry.delta ?? entry);
       if (delay == null) return;
-      ensureTrainBucket(trainNumber)[name] = delay;
+      storeGtfsDelay(bucket, name, delay);
     });
     return;
   }
 
   if (typeof stops === 'object') {
+    const bucket = ensureTrainBucket(trainNumber);
     Object.entries(stops).forEach(([stopName, rawDelay]) => {
       if (!stopName) return;
       const delay = parseGtfsDelayValue(rawDelay);
       if (delay == null) return;
-      ensureTrainBucket(trainNumber)[stopName] = delay;
+      storeGtfsDelay(bucket, stopName, delay);
     });
   }
 }
@@ -8868,10 +8906,19 @@ function resetGtfsRetards(scope) {
       if (retardMinutesValue == null && typeof normalizeStationName === 'function') {
         const targetNorm = normalizeStationName(gare);
         if (targetNorm) {
-          for (const [stopName, value] of Object.entries(perTrain)) {
-            if (normalizeStationName(stopName) === targetNorm) {
-              retardMinutesValue = value;
-              break;
+          const normalizedLookup = perTrain[GTFS_NORMALIZED_STATION_MAP_KEY];
+          if (normalizedLookup instanceof Map && normalizedLookup.has(targetNorm)) {
+            retardMinutesValue = normalizedLookup.get(targetNorm);
+          }
+          if (retardMinutesValue == null) {
+            for (const [stopName, value] of Object.entries(perTrain)) {
+              if (normalizeStationName(stopName) === targetNorm) {
+                retardMinutesValue = value;
+                if (normalizedLookup instanceof Map) {
+                  normalizedLookup.set(targetNorm, value);
+                }
+                break;
+              }
             }
           }
         }
