@@ -654,7 +654,20 @@ function escapeHTML(str){
   const GTFS_RT_DELAY_SECOND_KEYS = [
     'delay_seconds','delaySeconds','seconds','secondes','sec','secs','delay_sec','delaySec'
   ];
+const GTFS_RT_STOP_META_KEYS = new Set([
+    'train_id','trainid','train_number','trainnumber','trip_id','tripid','trip',
+    'status','state','current_status','currentstatus','source','count','counts','counters',
+    'generated_at','generatedat','updated_at','updatedat','last_updated','lastupdated','timestamp'
+  ]);
 
+  function parseGtfsRtTimestamp(value){
+    if (!value && value !== 0) return null;
+    const str = String(value).trim();
+    if (!str) return null;
+    const parsed = Date.parse(str);
+    return Number.isNaN(parsed) ? null : parsed;
+  }
+    
   function normalizeStatusToken(status){
     if (status == null) return '';
     return String(status)
@@ -736,10 +749,26 @@ function escapeHTML(str){
     if (!data || typeof data !== 'object') return;
     realtimeRawData.gtfs = data;
     const perTrain = new Map();
-    for (const [trainKey, payload] of Object.entries(data)){
+    const trainEntries = [];
+    if (data.trains && typeof data.trains === 'object' && !Array.isArray(data.trains)){
+      for (const [trainKey, payload] of Object.entries(data.trains)){
+        trainEntries.push([trainKey, payload]);
+      }
+    }
+    if (!trainEntries.length){
+      for (const [trainKey, payload] of Object.entries(data)){
+        if (trainKey === 'trains') continue;
+        if (GTFS_RT_STOP_META_KEYS.has(String(trainKey).toLowerCase())) continue;
+        trainEntries.push([trainKey, payload]);
+      }
+    }
+
+    for (const [trainKey, payload] of trainEntries){
       if (payload == null) continue;
       const hasStopsContainer = typeof payload === 'object' && payload != null && !Array.isArray(payload);
-      const trainStatus = hasStopsContainer ? (payload.status || payload.state || payload.train_status || payload.current_status) : null;
+      const trainStatus = hasStopsContainer
+        ? (payload.status || payload.state || payload.train_status || payload.current_status)
+        : null;
       const stopsData = hasStopsContainer && payload.stops && typeof payload.stops === 'object' && !Array.isArray(payload.stops)
         ? payload.stops
         : payload;
@@ -749,23 +778,38 @@ function escapeHTML(str){
       for (const [stationName, rawValue] of Object.entries(stopsData)){
         const norm = normalizeStationName(stationName);
         if (!norm) continue;
+        if (GTFS_RT_STOP_META_KEYS.has(norm) || GTFS_RT_STOP_META_KEYS.has(stationName.toLowerCase())) continue;
         const value = coerceGtfsRtDelayValue(rawValue, { trainStatus });
         if (value === undefined) continue;
         perStation.set(norm, { original: stationName, value, source: 'GTFS-RT' });
       }
       if (perStation.size){
-        const rawNumber = hasStopsContainer && payload.train_number != null
-          ? payload.train_number
-          : (hasStopsContainer && payload.trainNumber != null ? payload.trainNumber : trainKey);
-        const rawKey = String(rawNumber ?? trainKey);
+        const rawNumberCandidates = [
+          hasStopsContainer ? payload.train_number : null,
+          hasStopsContainer ? payload.trainNumber : null,
+          hasStopsContainer ? payload.number : null,
+          hasStopsContainer ? payload.trip_id : null,
+          hasStopsContainer ? payload.tripId : null,
+          trainKey
+        ];
+        let rawKey = trainKey;
+        for (const candidate of rawNumberCandidates){
+          if (candidate == null) continue;
+          rawKey = String(candidate);
+          break;
+        }
         const normalizedKey = normalizeTrainNumberKey(rawKey) || rawKey;
         perTrain.set(normalizedKey, perStation);
       }
     }
+    
     const originLabel = describeRealtimeSource(source);
+    const generatedAtTs = parseGtfsRtTimestamp(
+      data.generated_at || data.generatedAt || data.updated_at || data.updatedAt || data.last_updated || data.timestamp
+    );
     realtimeSources.gtfs.origin = originLabel || realtimeSources.gtfs.origin;
     realtimeSources.gtfs.map = perTrain;
-    realtimeSources.gtfs.lastUpdated = Date.now();
+    realtimeSources.gtfs.lastUpdated = generatedAtTs || Date.now();
     realtimeSources.gtfs.rawSource = source || '';
     realtimeSources.gtfs.error = null;
     rebuildRealtimeDelayIndex();
