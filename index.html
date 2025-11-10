@@ -3848,6 +3848,7 @@ function extractTrainNumber(s){
     
 /* ---------- DONNÉES COMPO + GTFS-RT (unifiée) ---------- */
 if (typeof window.retardsGTFS === 'undefined') window.retardsGTFS = null;
+if (typeof window.retardsGTFS_RAW === 'undefined') window.retardsGTFS_RAW = null;    
 if (typeof window.retardsGTFS_SOURCE === 'undefined') window.retardsGTFS_SOURCE = null;
 if (typeof window.compoData === 'undefined') window.compoData = {};
 
@@ -8536,7 +8537,102 @@ const GTFS_RT_CANDIDATES = [
   'https://cdn.jsdelivr.net/gh/TekMaTe-lux/Assistant-train@main/Assistant-train/retards_nancymetzlux.json'
 ];
 
-if (typeof window.retardsGTFS === 'undefined') window.retardsGTFS = null;
+function parseGtfsDelayValue(raw) {
+  if (raw == null) return null;
+  if (typeof raw === 'number') {
+    return Number.isFinite(raw) ? raw : null;
+  }
+  if (typeof raw === 'string') {
+    const trimmed = raw.trim();
+    if (!trimmed) return null;
+    const normalized = trimmed.replace(',', '.');
+    if (!/^[-+]?\d+(?:\.\d+)?$/.test(normalized)) return null;
+    const maybeNumber = Number(normalized);
+    return Number.isFinite(maybeNumber) ? maybeNumber : null;
+  }
+  if (typeof raw === 'object') {
+    const candidateKeys = ['delay', 'delay_minutes', 'minutes', 'value', 'retard', 'min', 'delta', 'delayMin', 'rt_delay'];
+    for (const key of candidateKeys) {
+      if (key in raw) {
+        const nested = parseGtfsDelayValue(raw[key]);
+        if (nested != null) return nested;
+      }
+    }
+  }
+  return null;
+}
+
+function normalizeGtfsStops(trainNumber, stops, out) {
+  if (!stops) return;
+
+  const ensureTrainBucket = (num) => {
+    if (!out[num]) out[num] = {};
+    return out[num];
+  };
+
+  if (Array.isArray(stops)) {
+    stops.forEach(entry => {
+      if (!entry || typeof entry !== 'object') return;
+      const name = entry.stop || entry.stop_name || entry.name || entry.station || entry.gare || entry.label;
+      if (!name) return;
+      const delay = parseGtfsDelayValue(entry.delay ?? entry.delayMinutes ?? entry.delay_minutes ?? entry.retard ?? entry.minutes ?? entry.value ?? entry.min ?? entry.delta ?? entry);
+      if (delay == null) return;
+      ensureTrainBucket(trainNumber)[name] = delay;
+    });
+    return;
+  }
+
+  if (typeof stops === 'object') {
+    Object.entries(stops).forEach(([stopName, rawDelay]) => {
+      if (!stopName) return;
+      const delay = parseGtfsDelayValue(rawDelay);
+      if (delay == null) return;
+      ensureTrainBucket(trainNumber)[stopName] = delay;
+    });
+  }
+}
+
+function normalizeGtfsRetardsPayload(raw) {
+  const normalized = {};
+  if (!raw) return normalized;
+
+  const ingestTrain = (trainKey, payload) => {
+    if (!payload) return;
+    const trainNum = String(payload.train_number || payload.train || payload.number || trainKey || '').trim();
+    if (!trainNum) return;
+
+    const candidates = [];
+    if (payload.stops !== undefined) candidates.push(payload.stops);
+    if (payload.delays !== undefined) candidates.push(payload.delays);
+    if (payload.data !== undefined) candidates.push(payload.data);
+    if (payload.points !== undefined) candidates.push(payload.points);
+
+    if (candidates.length === 0) {
+      candidates.push(payload);
+    }
+
+    candidates.forEach(candidate => normalizeGtfsStops(trainNum, candidate, normalized));
+  };
+
+  if (Array.isArray(raw)) {
+    raw.forEach((entry, idx) => ingestTrain(idx, entry || {}));
+    return normalized;
+  }
+
+  if (typeof raw === 'object') {
+    Object.entries(raw).forEach(([trainKey, payload]) => {
+      if (payload && typeof payload === 'object' && !Array.isArray(payload)) {
+        ingestTrain(trainKey, payload);
+      } else {
+        const num = String(trainKey || '').trim();
+        if (!num) return;
+        normalizeGtfsStops(num, payload, normalized);
+      }
+    });
+  }
+
+  return normalized;
+}
 
 async function fetchWithTimeoutNoHeaders(url, ms = 8000) {
   const ctrl = new AbortController();
@@ -8599,9 +8695,14 @@ async function loadGtfsRetards({ forceFresh = false } = {}) {
         data = JSON.parse(txt);
       }
 
-      window.retardsGTFS = data;
+      const normalized = normalizeGtfsRetardsPayload(data);
+      window.retardsGTFS_RAW = data;
+      window.retardsGTFS = normalized;
       window.retardsGTFS_SOURCE = base;
-window.dispatchEvent(new CustomEvent('gtfsrt:loaded', { detail: { source: base, data } }));
+      if (normalized && Object.keys(normalized).length === 0) {
+        console.warn('[GTFS-RT] Aucun arrêt exploitable trouvé dans les données chargées.');
+      }
+window.dispatchEvent(new CustomEvent('gtfsrt:loaded', { detail: { source: base, data, normalized } }));
       console.log('✅ GTFS-RT chargé via', base, 'à', new Date().toISOString());
       tryApplyGtfsToCurrentTable();
       return;
@@ -8614,9 +8715,14 @@ window.dispatchEvent(new CustomEvent('gtfsrt:loaded', { detail: { source: base, 
   // 2) Fallback via API GitHub (CORS OK)
   try {
     const data = await fetchFromGitHubAPI();
-    window.retardsGTFS = data;
+    const normalized = normalizeGtfsRetardsPayload(data);
+    window.retardsGTFS_RAW = data;
+    window.retardsGTFS = normalized;
     window.retardsGTFS_SOURCE = 'GitHub API';
-window.dispatchEvent(new CustomEvent('gtfsrt:loaded', { detail: { source: 'GitHub API', data } }));
+    if (normalized && Object.keys(normalized).length === 0) {
+      console.warn('[GTFS-RT] Aucun arrêt exploitable trouvé dans les données GitHub.');
+    }
+window.dispatchEvent(new CustomEvent('gtfsrt:loaded', { detail: { source: 'GitHub API', data, normalized } }));
     console.log('✅ GTFS-RT chargé via GitHub API à', new Date().toISOString());
     tryApplyGtfsToCurrentTable();
     return;
@@ -8758,7 +8864,19 @@ function resetGtfsRetards(scope) {
         continue;
       }
 
-      const retardMinutesValue = perTrain[gare];
+      let retardMinutesValue = perTrain[gare];
+      if (retardMinutesValue == null && typeof normalizeStationName === 'function') {
+        const targetNorm = normalizeStationName(gare);
+        if (targetNorm) {
+          for (const [stopName, value] of Object.entries(perTrain)) {
+            if (normalizeStationName(stopName) === targetNorm) {
+              retardMinutesValue = value;
+              break;
+            }
+          }
+        }
+      }
+
       const retardMinutes = retardMinutesValue == null ? null : Number(retardMinutesValue);
 
       // Pas d'affichage GTFS si suppression/strike déjà visible (API SNCF)
