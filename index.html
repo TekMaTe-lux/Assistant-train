@@ -8634,6 +8634,14 @@ function normalizeGtfsRetardsPayload(raw) {
   const normalized = {};
   if (!raw) return normalized;
 
+  const AGGREGATOR_KEYS = new Set(['trains', 'services', 'entries', 'results', 'data', 'payload']);
+  const TRAIN_PAYLOAD_KEYS = ['train_number', 'train', 'number', 'stops', 'delays', 'points', 'data'];
+
+  const looksLikeTrainPayload = (value) => {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+    return TRAIN_PAYLOAD_KEYS.some(key => key in value);
+  };
+
   const ingestTrain = (trainKey, payload) => {
     if (!payload) return;
     const trainNum = String(payload.train_number || payload.train || payload.number || trainKey || '').trim();
@@ -8652,23 +8660,53 @@ function normalizeGtfsRetardsPayload(raw) {
     candidates.forEach(candidate => normalizeGtfsStops(trainNum, candidate, normalized));
   };
 
-  if (Array.isArray(raw)) {
-    raw.forEach((entry, idx) => ingestTrain(idx, entry || {}));
-    return normalized;
-  }
+  const ingestNested = (value, keyHint) => {
+    if (!value) return;
 
-  if (typeof raw === 'object') {
-    Object.entries(raw).forEach(([trainKey, payload]) => {
-      if (payload && typeof payload === 'object' && !Array.isArray(payload)) {
-        ingestTrain(trainKey, payload);
-      } else {
-        const num = String(trainKey || '').trim();
-        if (!num) return;
-        normalizeGtfsStops(num, payload, normalized);
+  if (Array.isArray(value)) {
+      value.forEach((entry, idx) => {
+        if (looksLikeTrainPayload(entry)) {
+          ingestTrain(idx, entry);
+        } else {
+          ingestNested(entry, null);
+        }
+      });
+      return;
+    }
+
+    if (typeof value === 'object') {
+      if (keyHint && AGGREGATOR_KEYS.has(String(keyHint))) {
+        Object.entries(value).forEach(([innerKey, innerPayload]) => {
+          if (looksLikeTrainPayload(innerPayload)) {
+            ingestTrain(innerKey, innerPayload);
+          } else {
+            const num = String(innerKey || '').trim();
+            if (!num) return;
+            normalizeGtfsStops(num, innerPayload, normalized);
+          }
+        });
+        return;
       }
-    });
-  }
 
+Object.entries(value).forEach(([trainKey, payload]) => {
+        if (AGGREGATOR_KEYS.has(trainKey)) {
+          ingestNested(payload, trainKey);
+          return;
+        }
+
+        if (looksLikeTrainPayload(payload)) {
+          ingestTrain(trainKey, payload);
+        } else {
+          const num = String(trainKey || '').trim();
+          if (!num) return;
+          normalizeGtfsStops(num, payload, normalized);
+        }
+      });
+    }
+  };
+
+  ingestNested(raw, null);
+  
   return normalized;
 }
 
