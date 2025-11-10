@@ -646,26 +646,118 @@ function escapeHTML(str){
     }
   }
 
+    const GTFS_RT_DELAY_MINUTE_KEYS = [
+    'delay_minutes','delayMinutes','delay_minute','delay_min','delayMin','delay',
+    'minutes','minute','mins','min','retard','retard_minutes','retardMinutes',
+    'value','arrival_delay','departure_delay','arrDelay','depDelay','delayMin'
+  ];
+  const GTFS_RT_DELAY_SECOND_KEYS = [
+    'delay_seconds','delaySeconds','seconds','secondes','sec','secs','delay_sec','delaySec'
+  ];
+
+  function normalizeStatusToken(status){
+    if (status == null) return '';
+    return String(status)
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .trim()
+      .toUpperCase();
+  }
+
+  function isCancelledStatus(status){
+    const token = normalizeStatusToken(status);
+    if (!token) return false;
+    if (token === 'CANCELLED' || token === 'CANCELED' || token === 'DELETED' || token === 'REMOVED') return true;
+    if (token.startsWith('SUPPRIM') || token.startsWith('SUPPRESS')) return true;
+    return false;
+  }
+
+  function coerceGtfsRtDelayValue(rawValue, { trainStatus } = {}){
+    if (isCancelledStatus(trainStatus)) return null;
+    if (rawValue == null) return null;
+
+    if (typeof rawValue === 'number'){ return Number.isFinite(rawValue) ? rawValue : undefined; }
+
+    if (typeof rawValue === 'string'){
+      if (isCancelledStatus(rawValue)) return null;
+      const normalized = Number(rawValue.replace(',', '.'));
+      if (Number.isFinite(normalized)) return normalized;
+      const match = rawValue.match(/-?\d+(?:[.,]\d+)?/);
+      if (match){
+        const num = Number(match[0].replace(',', '.'));
+        if (Number.isFinite(num)) return num;
+      }
+      return undefined;
+    }
+
+    if (typeof rawValue === 'boolean') return undefined;
+
+    if (Array.isArray(rawValue)){
+      for (const entry of rawValue){
+        const val = coerceGtfsRtDelayValue(entry, { trainStatus });
+        if (val !== undefined) return val;
+      }
+      return undefined;
+    }
+
+    if (typeof rawValue === 'object'){
+      if (rawValue.cancelled === true || rawValue.canceled === true || rawValue.suppressed === true) return null;
+      if (isCancelledStatus(rawValue.status || rawValue.state)) return null;
+
+      for (const key of GTFS_RT_DELAY_MINUTE_KEYS){
+        if (rawValue[key] != null){
+          const num = Number(String(rawValue[key]).replace(',', '.'));
+          if (Number.isFinite(num)) return num;
+        }
+      }
+
+      for (const key of GTFS_RT_DELAY_SECOND_KEYS){
+        if (rawValue[key] != null){
+          const num = Number(String(rawValue[key]).replace(',', '.'));
+          if (Number.isFinite(num)) return Math.round((num / 60) * 10) / 10;
+        }
+      }
+
+      const nestedKeys = ['departure','arrival','dep','arr','outbound','inbound'];
+      for (const key of nestedKeys){
+        if (rawValue[key] != null && rawValue[key] !== rawValue){
+          const nested = coerceGtfsRtDelayValue(rawValue[key], { trainStatus });
+          if (nested !== undefined) return nested;
+        }
+      }
+
+      return undefined;
+    }
+
+    return undefined;
+  }
+
   function registerGtfsRetards(data, source){
     if (!data || typeof data !== 'object') return;
     realtimeRawData.gtfs = data;
     const perTrain = new Map();
-    for (const [trainNum, stations] of Object.entries(data)){
-      if (!stations || typeof stations !== 'object') continue;
+    for (const [trainKey, payload] of Object.entries(data)){
+      if (payload == null) continue;
+      const hasStopsContainer = typeof payload === 'object' && payload != null && !Array.isArray(payload);
+      const trainStatus = hasStopsContainer ? (payload.status || payload.state || payload.train_status || payload.current_status) : null;
+      const stopsData = hasStopsContainer && payload.stops && typeof payload.stops === 'object' && !Array.isArray(payload.stops)
+        ? payload.stops
+        : payload;
+      if (!stopsData || typeof stopsData !== 'object') continue;
+      
       const perStation = new Map();
-      for (const [stationName, value] of Object.entries(stations)){
+      for (const [stationName, rawValue] of Object.entries(stopsData)){
         const norm = normalizeStationName(stationName);
         if (!norm) continue;
-        if (value == null){
-          perStation.set(norm, { original: stationName, value: null, source: 'GTFS-RT' });
-        } else {
-          const num = Number(value);
-          if (!Number.isFinite(num)) continue;
-          perStation.set(norm, { original: stationName, value: num, source: 'GTFS-RT' });
-        }
+        const value = coerceGtfsRtDelayValue(rawValue, { trainStatus });
+        if (value === undefined) continue;
+        perStation.set(norm, { original: stationName, value, source: 'GTFS-RT' });
       }
       if (perStation.size){
-         const rawKey = String(trainNum);
+        const rawNumber = hasStopsContainer && payload.train_number != null
+          ? payload.train_number
+          : (hasStopsContainer && payload.trainNumber != null ? payload.trainNumber : trainKey);
+        const rawKey = String(rawNumber ?? trainKey);
         const normalizedKey = normalizeTrainNumberKey(rawKey) || rawKey;
         perTrain.set(normalizedKey, perStation);
       }
