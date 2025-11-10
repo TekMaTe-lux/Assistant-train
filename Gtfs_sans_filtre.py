@@ -33,7 +33,7 @@ def nettoyer_stop_id(stop_id):
 gares_nancy_metz_lux = {"87141002", "87192039", "87191007", "82001000"}
 
 # Charger GTFS-RT Trip Updates
-url = "https://proxy.transport.data.gouv.fr/resource/sncf-all-gtfs-rt-trip-updates"
+url = "https://proxy.transport.data.gouv.fr/resource/sncf-gtfs-rt-trip-updates"
 response = requests.get(url, timeout=20)
 response.raise_for_status()
 
@@ -123,11 +123,11 @@ for entity in feed.entity:
 
     status = compute_status(trip_sr_name, stops_out)
 
-    # Tous les arrêts : retard >0 en minutes, sinon null
+    # Tous les arrêts : retard >0 en minutes, sinon 0
     stops_map = {}
     for s in stops_out:
         best = max(s.get("arr_delay_min", 0), s.get("dep_delay_min", 0))
-        stops_map[s["stop_name"]] = (best if best > 0 else None)
+        stops_map[s["stop_name"]] = (best if best > 0 else 0)
 
     trains_out[train_number] = {
         "train_id": trip_id,
