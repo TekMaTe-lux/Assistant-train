@@ -193,8 +193,9 @@
   <script src="https://unpkg.com/papaparse@5.4.1/papaparse.min.js"></script>
 
   <script>
-  // ---------- Bases: 1) local /data/ , 2) GitHub RAW ----------
+  // ---------- Bases: 1) VPS GTFS static, 2) local /data/, 3) GitHub RAW ----------
   const BASES = [
+    'https://vps.labetaillere.fr/gtfs/static/',
     location.origin + '/data/',
     'https://raw.githubusercontent.com/TekMaTe-lux/Assistant-train/main/data/'
   ];
@@ -3199,6 +3200,12 @@ function setLayerGroupVisibility(group, visible){
   // zones d'intérêt (filtre "sillon" simple)
   const AXIS_STOP_KEYWORDS = ['nancy','pont-','metz','hagondange','thionville','bettembourg','luxembourg'];
   const CORE_TGV_STOP_KEYWORDS = ['metz','nancy','thionville','luxembourg'];
+  const CORE_TGV_STOP_CODES = new Set([
+    '87141002', // Nancy
+    '87192039', // Metz-Ville
+    '87191007', // Thionville
+    '82001000'  // Luxembourg
+  ]);
 
   // ---------- Chargement réseaux ----------
   async function loadNetworks(){
@@ -3586,6 +3593,43 @@ function sequenceMatchesKeywords(seq, keywords, lookup = stopsById){
     return false;
   }
 
+   function stopMetaMatchesStationCodes(meta, codes, lookup = stopsById){
+    if (!meta || !codes?.size) return false;
+    const digits = new Set();
+    const pushDigitsFrom = (raw)=>{
+      if (!raw) return;
+      const matches = String(raw).match(/\d{4,}/g);
+      if (!matches) return;
+      for (const match of matches){
+        digits.add(match);
+      }
+    };
+    pushDigitsFrom(meta.stop_id);
+    pushDigitsFrom(meta.parent_station);
+    const parentId = meta.parent_station;
+    if (parentId && lookup.has(parentId)){
+      const parentMeta = lookup.get(parentId);
+      if (parentMeta){
+        pushDigitsFrom(parentMeta.stop_id ?? parentMeta.stopId ?? null);
+      }
+    }
+    if (!digits.size) return false;
+    for (const digit of digits){
+      if (codes.has(digit)) return true;
+    }
+    return false;
+  }
+
+  function sequenceMatchesStationCodes(seq, codes, lookup = stopsById){
+    if (!Array.isArray(seq) || !seq.length || !codes?.size) return false;
+    for (const stop of seq){
+      const meta = lookup.get(stop.stop_id);
+      if (!meta) continue;
+      if (stopMetaMatchesStationCodes(meta, codes, lookup)) return true;
+    }
+    return false;
+  }  
+
   function isTripLikelyTgv(tripId){
     const trip = tripsById.get(tripId);
     if (!trip) return false;
@@ -3599,7 +3643,7 @@ function sequenceMatchesKeywords(seq, keywords, lookup = stopsById){
     let removed = 0;
     for (const [tripId, seq] of Array.from(stopTimesByTrip.entries())){
       if (!isTripLikelyTgv(tripId)) continue;
-      if (sequenceMatchesKeywords(seq, CORE_TGV_STOP_KEYWORDS)) continue;
+      if (sequenceMatchesStationCodes(seq, CORE_TGV_STOP_CODES) || sequenceMatchesKeywords(seq, CORE_TGV_STOP_KEYWORDS)) continue;
       stopTimesByTrip.delete(tripId);
       tripsById.delete(tripId);
       realtimeStopDataByTrip.delete(tripId);
