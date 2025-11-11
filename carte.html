@@ -3721,6 +3721,35 @@ function stationNameMatchesKeywords(name, keywords){
       const numberDisplay = branding.displayNumber || rawNumber || (numberKey != null ? String(numberKey) : (numberKeyRaw != null ? String(numberKeyRaw) : null));
       const realtimeProfile = computeRealtimeStopData(trip_id, seq, numberKey);
 
+      const firstStop = seq[0] || null;
+      const firstStopMeta = firstStop ? stopsById.get(firstStop.stop_id) : null;
+      const originStationName = firstStopMeta?.name || firstStopMeta?.stop_name || null;
+      const originStationNormalized = originStationName ? normalizeStationName(originStationName) : null;
+      const scheduledOriginDeparture = firstStop ? (firstStop.departure ?? firstStop.arrival ?? null) : null;
+
+      let axisDepartureNormalized = null;
+      let axisDepartureSec = null;
+      for (const entry of seq){
+        const entryMeta = stopsById.get(entry.stop_id);
+        const entryName = entryMeta?.name || entryMeta?.stop_name || null;
+        if (!entryName) continue;
+        if (!stationNameMatchesKeywords(entryName, AXIS_STOP_KEYWORDS)) continue;
+        axisDepartureNormalized = normalizeStationName(entryName);
+        axisDepartureSec = entry.departure ?? entry.arrival ?? null;
+        if (axisDepartureSec == null){
+          axisDepartureSec = entry.arrival ?? entry.departure ?? null;
+        }
+        if (axisDepartureNormalized){
+          break;
+        }
+      }
+      if (!axisDepartureNormalized && originStationNormalized){
+        axisDepartureNormalized = originStationNormalized;
+      }
+      if (axisDepartureSec == null){
+        axisDepartureSec = scheduledOriginDeparture;
+      }
+
       const startPlanned = seq[0].departure ?? seq[0].arrival;
       const lastStop = seq[seq.length - 1];
       const endPlanned = lastStop?.arrival ?? lastStop?.departure;
@@ -3810,6 +3839,10 @@ function stationNameMatchesKeywords(name, keywords){
           stopsCount: seq.length,
           currentDelaySec: profileStop?.delaySec ?? 0,
           source,
+          originStationNormalized,
+          originDepartureSec: scheduledOriginDeparture,
+          axisDepartureNormalized,
+          axisDepartureSec,
           numberList,
           delayNumberKeys
         });
@@ -3896,6 +3929,10 @@ function stationNameMatchesKeywords(name, keywords){
           stopsCount: seq.length,
           currentDelaySec: profileA?.delaySec ?? 0,
           source,
+          originStationNormalized,
+          originDepartureSec: scheduledOriginDeparture,
+          axisDepartureNormalized,
+          axisDepartureSec,
           numberList,
           delayNumberKeys
         });
@@ -4053,6 +4090,31 @@ function stationNameMatchesKeywords(name, keywords){
     merged.branding = { ...(primary.branding || {}) };
     merged.mergedTripIds = ordered.map(t => t.id);
     merged.mergedSources = Array.from(new Set(ordered.map(t => (t.source || 'SNCF'))));
+    if (primary.originStationNormalized){
+      merged.originStationNormalized = primary.originStationNormalized;
+    }
+    if (primary.originDepartureSec != null){
+      merged.originDepartureSec = primary.originDepartureSec;
+    }
+    if (primary.axisDepartureNormalized){
+      merged.axisDepartureNormalized = primary.axisDepartureNormalized;
+    }
+    if (primary.axisDepartureSec != null){
+      merged.axisDepartureSec = primary.axisDepartureSec;
+    }
+    const fillFallbackField = (field, selector)=>{
+      if (merged[field] != null && merged[field] !== '') return;
+      for (const candidate of ordered){
+        const value = selector(candidate);
+        if (value == null || value === '') continue;
+        merged[field] = value;
+        break;
+      }
+    };
+    fillFallbackField('originStationNormalized', t => t.originStationNormalized);
+    fillFallbackField('originDepartureSec', t => t.originDepartureSec);
+    fillFallbackField('axisDepartureNormalized', t => t.axisDepartureNormalized);
+    fillFallbackField('axisDepartureSec', t => t.axisDepartureSec);
     if (merged.mergedSources.includes('SNCF')){
       merged.source = 'SNCF';
     } else if (merged.mergedSources.length){
@@ -4208,9 +4270,9 @@ function stationNameMatchesKeywords(name, keywords){
 
     const priorityForDelay = (train)=>{
       const source = (train?.source || '').toUpperCase();
-      if (source === 'SNCF') return 0;
-      if (source === 'CFL') return 2;
-      return 1;
+      if (source === 'CFL') return 0;
+      if (source === 'SNCF') return 1;
+      return 2;
     };
 
     const delaySource = ordered
@@ -4225,19 +4287,83 @@ function stationNameMatchesKeywords(name, keywords){
     return merged;
   }
 
+  function axisDepartureKeyForTrain(train){
+    if (!train) return null;
+    const normalized = train.axisDepartureNormalized || train.originStationNormalized || null;
+    const secRaw = train.axisDepartureSec ?? train.originDepartureSec ?? null;
+    if (!normalized || secRaw == null) return null;
+    const secNum = Number(secRaw);
+    if (!Number.isFinite(secNum)) return null;
+    const bucket = Math.round(secNum / 60);
+    if (!Number.isFinite(bucket)) return null;
+    return `${normalized}#${bucket}`;
+  }  
+
   function mergeCrossBorderTrains(list){
     if (!Array.isArray(list) || list.length < 2) return list;
     const metaById = new Map();
     const groups = new Map();
+    const axisGroups = new Map();
+
+    const getAxisDepartureSec = (train)=>{
+      if (!train) return null;
+      const value = train.axisDepartureSec ?? train.originDepartureSec ?? null;
+      if (value == null) return null;
+      const num = Number(value);
+      return Number.isFinite(num) ? num : null;
+    };
+
+    const computeMergeMetrics = (available, maxDistanceKm = 15)=>{
+      let maxDistance = 0;
+      for (let i=0;i<available.length;i++){
+        for (let j=i+1;j<available.length;j++){
+          const a = available[i];
+          const b = available[j];
+          const dist = approxDistanceKm(a.lat, a.lon, b.lat, b.lon);
+          if (Number.isFinite(dist) && dist > maxDistance){
+            maxDistance = dist;
+          }
+        }
+      }
+      const distanceOk = maxDistance <= maxDistanceKm;
+      let progressMismatch = false;
+      const ref = available.find(t => t.progress != null && Number.isFinite(t.progress));
+      if (ref){
+        for (const other of available){
+          if (other === ref || other.progress == null || !Number.isFinite(other.progress)) continue;
+          if (Math.abs(other.progress - ref.progress) > 0.5){
+            progressMismatch = true;
+            break;
+          }
+        }
+      }
+      return { distanceOk, progressMismatch };
+    };
+
+    const tryMergeGroup = (available)=>{
+      if (!available || available.length < 2) return null;
+      const sources = new Set(available.map(t => (t.source || 'SNCF').toUpperCase()));
+      if (sources.size < 2) return null;
+      const primary = selectPrimaryTrainForMerge(available);
+      const orderedGroup = [primary, ...available.filter(t => t !== primary)];
+      return buildMergedTrain(orderedGroup);
+    };
+
     for (const train of list){
       const meta = computeTrainMergeMeta(train);
-      if (!meta) continue;
-      metaById.set(train.id, meta);
-      if (!groups.has(meta.signature)) groups.set(meta.signature, []);
-      groups.get(meta.signature).push(train);
+       if (meta){
+        metaById.set(train.id, meta);
+        if (!groups.has(meta.signature)) groups.set(meta.signature, []);
+        groups.get(meta.signature).push(train);
+      }
+      const axisKey = axisDepartureKeyForTrain(train);
+      if (axisKey){
+        if (!axisGroups.has(axisKey)) axisGroups.set(axisKey, []);
+        axisGroups.get(axisKey).push(train);
+      }
     }
 
-    if (!groups.size) return list;
+    if (!groups.size && !axisGroups.size) return list;
 
     const consumed = new Set();
     const result = [];
@@ -4249,53 +4375,68 @@ function stationNameMatchesKeywords(name, keywords){
       if (group && group.length > 1){
         const available = group.filter(t => !consumed.has(t.id));
         if (available.length > 1){
-          const sources = new Set(available.map(t => (t.source || 'SNCF').toUpperCase()));
-          if (sources.size > 1){
-            let maxDistance = 0;
-            for (let i=0;i<available.length;i++){
-              for (let j=i+1;j<available.length;j++){
-                const a = available[i];
-                const b = available[j];
-                const dist = approxDistanceKm(a.lat, a.lon, b.lat, b.lon);
-                if (Number.isFinite(dist)){
-                  if (dist > maxDistance) maxDistance = dist;
-                }
+          const { distanceOk, progressMismatch } = computeMergeMetrics(available, 15);
+          const staticKey = meta?.signature || null;
+          const staticAlignment = staticKey && available.every(t => {
+            const otherMeta = metaById.get(t.id);
+            return otherMeta && otherMeta.signature === staticKey;
+          });
+
+          if ((distanceOk && !progressMismatch) || staticAlignment){
+            const merged = tryMergeGroup(available);
+            if (merged){
+              result.push(merged);
+              for (const member of merged.mergedTripIds || []){
+                consumed.add(member);
               }
+              for (const member of available){
+                consumed.add(member.id);
+              }
+             continue; 
             }
-            const distanceOk = maxDistance <= 15;
-            let progressMismatch = false;
-            const ref = available.find(t => t.progress != null && Number.isFinite(t.progress));
-            if (ref){
+            }
+        }
+      }
+
+      const axisKey = axisDepartureKeyForTrain(train);
+      if (axisKey){
+        const axisGroup = axisGroups.get(axisKey);
+        if (axisGroup && axisGroup.length > 1){
+          const available = axisGroup.filter(t => !consumed.has(t.id));
+          if (available.length > 1){
+            const baseSec = getAxisDepartureSec(train);
+            let timesAligned = baseSec != null;
+            if (timesAligned){
               for (const other of available){
-                if (other === ref || other.progress == null || !Number.isFinite(other.progress)) continue;
-                if (Math.abs(other.progress - ref.progress) > 0.5){
-                  progressMismatch = true;
+                if (other === train) continue;
+                const otherSec = getAxisDepartureSec(other);
+                if (otherSec == null || Math.abs(otherSec - baseSec) > 90){
+                  timesAligned = false;
                   break;
                 }
               }
             }
 
-            const staticKey = meta?.signature || null;
-            const staticAlignment = staticKey && available.every(t => {
-              const otherMeta = metaById.get(t.id);
-              return otherMeta && otherMeta.signature === staticKey;
-            });
-
-            if ((distanceOk && !progressMismatch) || staticAlignment){
-              const primary = selectPrimaryTrainForMerge(available);
-              const orderedGroup = [primary, ...available.filter(t => t !== primary)];
-              const merged = buildMergedTrain(orderedGroup);
-              if (merged){
-                result.push(merged);
-                for (const member of orderedGroup){
-                  consumed.add(member.id);
+           if (timesAligned){
+              const { distanceOk, progressMismatch } = computeMergeMetrics(available, 20);
+              if (distanceOk && !progressMismatch){
+                const merged = tryMergeGroup(available);
+                if (merged){
+                  result.push(merged);
+                  for (const member of merged.mergedTripIds || []){
+                    consumed.add(member);
+                  }
+                  for (const member of available){
+                    consumed.add(member.id);
+                  }
+                  continue;
                 }
-                continue;
               }
             }
           }
         }
       }
+      
       result.push(train);
       consumed.add(train.id);
     }
