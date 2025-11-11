@@ -3695,54 +3695,46 @@ function stationNameMatchesKeywords(name, keywords){
     return false;
   }
 
-  function serviceAllowed(trip_id, numberKey){
+  function serviceAllowed(trip_id){
     if (!activeServiceIds) return true;
     const trip = tripsById.get(trip_id);
-    if (trip?.service_id && activeServiceIds.has(trip.service_id)) return true;
-
-    const normalizedKey = numberKey != null ? normalizeTrainNumberKey(numberKey) : null;
-    if (normalizedKey != null && trainDelaysByNumber.has(String(normalizedKey))) return true;
-
-    const fallbackCandidate = extractTrainNumberCandidate(trip_id);
-    const fallbackKey = fallbackCandidate != null ? normalizeTrainNumberKey(fallbackCandidate) : null;
-    if (fallbackKey != null && trainDelaysByNumber.has(String(fallbackKey))) return true;
-
-    return false;
+    if (!trip || !trip.service_id) return false;
+    return activeServiceIds.has(trip.service_id);
   }
 
   // ---------- Calcul positions (interpolation arrêt→arrêt) ----------
   function trainsAt(nowSec){
     const items=[];
     for (const [trip_id, seq] of stopTimesByTrip.entries()){
-       if (seq.length<2) continue;
-        if (!tripPassesAxis(seq)) continue;
+      if (seq.length<2) continue;
+      if (!tripPassesAxis(seq)) continue;
+      if (!serviceAllowed(trip_id)) continue;
 
-        const trip = tripsById.get(trip_id) || {};
-        const route = routesById.get(trip.route_id) || {};
-        const rawNumber = trainNumberForTrip(trip, route, trip_id);
-        const numberCandidate = extractTrainNumberCandidate(rawNumber);
-        const fallbackNumberCandidate = numberCandidate || extractTrainNumberCandidate(trip_id) || null;
-        const numberKeyRaw = fallbackNumberCandidate != null ? String(fallbackNumberCandidate) : null;
-        const numberKey = numberKeyRaw ? normalizeTrainNumberKey(numberKeyRaw) : null;
-        if (!serviceAllowed(trip_id, numberKey)) continue;
-        const branding = computeTrainBranding(trip_id, trip, route, rawNumber, numberCandidate || fallbackNumberCandidate);
-        const numberDisplay = branding.displayNumber || rawNumber || (numberKey != null ? String(numberKey) : (numberKeyRaw != null ? String(numberKeyRaw) : null));
-        const realtimeProfile = computeRealtimeStopData(trip_id, seq, numberKey);
+      const trip = tripsById.get(trip_id) || {};
+      const route = routesById.get(trip.route_id) || {};
+      const rawNumber = trainNumberForTrip(trip, route, trip_id);
+      const numberCandidate = extractTrainNumberCandidate(rawNumber);
+      const fallbackNumberCandidate = numberCandidate || extractTrainNumberCandidate(trip_id) || null;
+      const numberKeyRaw = fallbackNumberCandidate != null ? String(fallbackNumberCandidate) : null;
+      const numberKey = numberKeyRaw ? normalizeTrainNumberKey(numberKeyRaw) : null;
+      const branding = computeTrainBranding(trip_id, trip, route, rawNumber, numberCandidate || fallbackNumberCandidate);
+      const numberDisplay = branding.displayNumber || rawNumber || (numberKey != null ? String(numberKey) : (numberKeyRaw != null ? String(numberKeyRaw) : null));
+      const realtimeProfile = computeRealtimeStopData(trip_id, seq, numberKey);
 
-        const startPlanned = seq[0].departure ?? seq[0].arrival;
-        const lastStop = seq[seq.length - 1];
-        const endPlanned = lastStop?.arrival ?? lastStop?.departure;
-        const startEffective = realtimeProfile?.startRealtime ?? startPlanned;
-        const endEffective = realtimeProfile?.endRealtime ?? endPlanned;
-        if (startEffective==null || endEffective==null || nowSec<startEffective || nowSec>endEffective) continue;
-        const totalSpan = endEffective - startEffective;
-        const tripProgress = totalSpan > 0 ? (nowSec - startEffective) / totalSpan : null;
-        const headsign = (()=>{
-          if (trip.headsign && trip.headsign !== numberDisplay) return trip.headsign;
-          if (route.long && route.long !== numberDisplay) return route.long;
-          if (route.short && route.short !== numberDisplay) return route.short;
-          return '';
-        })();
+      const startPlanned = seq[0].departure ?? seq[0].arrival;
+      const lastStop = seq[seq.length - 1];
+      const endPlanned = lastStop?.arrival ?? lastStop?.departure;
+      const startEffective = realtimeProfile?.startRealtime ?? startPlanned;
+      const endEffective = realtimeProfile?.endRealtime ?? endPlanned;
+      if (startEffective==null || endEffective==null || nowSec<startEffective || nowSec>endEffective) continue;
+      const totalSpan = endEffective - startEffective;
+      const tripProgress = totalSpan > 0 ? (nowSec - startEffective) / totalSpan : null;
+      const headsign = (()=>{
+        if (trip.headsign && trip.headsign !== numberDisplay) return trip.headsign;
+        if (route.long && route.long !== numberDisplay) return route.long;
+        if (route.short && route.short !== numberDisplay) return route.short;
+        return '';
+      })();
 
       let positioned = false;
 
