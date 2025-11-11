@@ -447,6 +447,18 @@ function escapeHTML(str){
   ];
   const GTFS_RT_REFRESH_INTERVAL_MS = 60000;
 
+    const HAFAS_PROXY_SAME_ORIGIN = (()=>{
+    const base = location.origin + location.pathname.replace(/\/[^\/]*$/, '/');
+    return base + 'retards_cfl.json';
+  })();
+
+  const HAFAS_PROXY_CANDIDATES = [
+    'https://vps.labetaillere.fr/gtfs/retards_cfl.json',
+    HAFAS_PROXY_SAME_ORIGIN,
+    'https://raw.githubusercontent.com/TekMaTe-lux/Assistant-train/main/Assistant-train/retards_cfl.json',
+    'https://cdn.jsdelivr.net/gh/TekMaTe-lux/Assistant-train@main/Assistant-train/retards_cfl.json'
+  ];
+
   const HAFAS_BASE_URL = 'https://cdt.hafas.de/opendata/apiserver/departureBoard';
   const HAFAS_ACCESS_ID = '58ef9a71-6837-4405-bd5d-23beaf92864c';
   const HAFAS_LOOKAHEAD_MINUTES = 120;
@@ -865,6 +877,198 @@ const GTFS_RT_STOP_META_KEYS = new Set([
     rebuildRealtimeDelayIndex();
   }
 
+    function parseHafasProxyTimestamp(value){
+    if (value == null) return null;
+    if (typeof value === 'number' && Number.isFinite(value)){
+      if (value > 1e12) return Math.round(value);
+      if (value > 1e5) return Math.round(value * 1000);
+      return Math.round(value * 1000);
+    }
+    const str = String(value).trim();
+    if (!str) return null;
+    let parsed = Date.parse(str);
+    if (!Number.isNaN(parsed)) return parsed;
+    parsed = Date.parse(`${str}Z`);
+    if (!Number.isNaN(parsed)) return parsed;
+    return null;
+  }
+
+  function parseHafasProxyDelayValue(raw){
+    if (raw == null) return { cancellation:true, minutes:null, hasMinutes:false };
+    if (typeof raw === 'number'){
+      if (Number.isFinite(raw)) return { cancellation:false, minutes: raw, hasMinutes:true };
+      return { cancellation:false, minutes:null, hasMinutes:false };
+    }
+    if (typeof raw === 'string'){
+      const trimmed = raw.trim();
+      if (!trimmed) return { cancellation:false, minutes:null, hasMinutes:false };
+      const cancellation = /cancel|suppr|delete|annul/i.test(trimmed);
+      const numeric = Number(trimmed.replace(',', '.'));
+      if (!Number.isNaN(numeric)){
+        return { cancellation, minutes:numeric, hasMinutes:true };
+      }
+      return { cancellation, minutes:null, hasMinutes:false };
+    }
+    if (Array.isArray(raw)){
+      let cancellation = false;
+      let minutes = null;
+      let hasMinutes = false;
+      if (raw.length === 2 && typeof raw[0] === 'string'){
+        const nested = parseHafasProxyDelayValue(raw[1]);
+        const cancellationHint = /cancel|suppr|delete|annul/i.test(raw[0]);
+        return {
+          cancellation: nested.cancellation || cancellationHint,
+          minutes: nested.minutes,
+          hasMinutes: nested.hasMinutes
+        };
+      }
+      for (const item of raw){
+        const nested = parseHafasProxyDelayValue(item);
+        if (nested.cancellation) cancellation = true;
+        if (nested.hasMinutes && (!hasMinutes || Math.abs(nested.minutes) > Math.abs(minutes ?? 0))){
+          minutes = nested.minutes;
+          hasMinutes = true;
+        }
+      }
+      return { cancellation, minutes, hasMinutes };
+    }
+    if (typeof raw === 'object'){
+      let cancellation = false;
+      let minutes = null;
+      let hasMinutes = false;
+      if (raw.cancelled != null) cancellation = cancellation || Boolean(raw.cancelled);
+      const status = raw.status || raw.state || raw.rtStatus || raw.rtState || raw.note;
+      if (status && /cancel|suppr|delete|annul/i.test(String(status))) cancellation = true;
+      const keys = ['delay','minutes','value','rtDelay','delayMinutes','min','rt','realtime','rtMinutes'];
+      for (const key of keys){
+        if (raw[key] == null) continue;
+        const nested = parseHafasProxyDelayValue(raw[key]);
+        if (nested.cancellation) cancellation = true;
+        if (nested.hasMinutes && (!hasMinutes || Math.abs(nested.minutes) > Math.abs(minutes ?? 0))){
+          minutes = nested.minutes;
+          hasMinutes = true;
+        }
+      }
+      return { cancellation, minutes, hasMinutes };
+    }
+    return { cancellation:false, minutes:null, hasMinutes:false };
+  }
+
+  function appendHafasProxyStationEntry(map, stationName, rawValue){
+    if (!stationName) return;
+    const norm = normalizeStationName(stationName);
+    if (!norm) return;
+    const { cancellation, minutes, hasMinutes } = parseHafasProxyDelayValue(rawValue);
+    if (cancellation){
+      map.set(norm, { original: stationName, value: null });
+      return;
+    }
+    if (!hasMinutes) return;
+    const value = Number(minutes);
+    if (!Number.isFinite(value)) return;
+    const existing = map.get(norm);
+    if (existing && existing.value != null){
+      const existingVal = Number(existing.value);
+      if (Number.isFinite(existingVal) && Math.abs(existingVal) >= Math.abs(value)) return;
+    }
+    map.set(norm, { original: stationName, value });
+  }
+
+  function buildHafasProxyStationMap(raw){
+    const perStation = new Map();
+    if (!raw) return perStation;
+    if (Array.isArray(raw)){
+      for (const entry of raw){
+        if (entry == null) continue;
+        if (Array.isArray(entry)){
+          if (!entry.length) continue;
+          const stationName = entry[0];
+          const value = entry.length > 1 ? entry[1] : null;
+          appendHafasProxyStationEntry(perStation, stationName, value);
+          continue;
+        }
+        if (typeof entry === 'object'){
+          const stationName = entry.station || entry.stop || entry.name || entry.label;
+          if (stationName){
+            const value = entry.delay ?? entry.minutes ?? entry.value ?? entry.rtDelay ?? entry.delayMinutes ?? entry.min ?? entry.rt ?? entry.realtime;
+            appendHafasProxyStationEntry(perStation, stationName, value ?? entry);
+            continue;
+          }
+          const keys = Object.keys(entry);
+          if (keys.length === 1){
+            const key = keys[0];
+            appendHafasProxyStationEntry(perStation, key, entry[key]);
+          }
+          continue;
+        }
+      }
+      return perStation;
+    }
+    if (typeof raw === 'object'){
+      for (const [stationName, value] of Object.entries(raw)){
+        appendHafasProxyStationEntry(perStation, stationName, value);
+      }
+    }
+    return perStation;
+  }
+
+  function parseHafasProxyData(data){
+    const perTrain = new Map();
+    if (!data || typeof data !== 'object'){
+      return { perTrain, updatedAt: null };
+    }
+    let container = null;
+    for (const candidate of [data.data, data.trains, data.journeys, data]){
+      if (candidate && typeof candidate === 'object' && !Array.isArray(candidate)){
+        container = candidate;
+        break;
+      }
+    }
+    if (container){
+      for (const [trainKey, raw] of Object.entries(container)){
+        if (!trainKey) continue;
+        const stationMap = buildHafasProxyStationMap(raw);
+        if (!stationMap.size) continue;
+        const candidate = extractTrainNumberCandidate(trainKey);
+        const rawKey = candidate != null ? String(candidate) : String(trainKey);
+        const normalizedKey = normalizeTrainNumberKey(rawKey) || rawKey;
+        perTrain.set(normalizedKey, stationMap);
+      }
+    }
+    const updatedAt = parseHafasProxyTimestamp(
+      data.updatedAt || data.updated_at || data.generatedAt || data.generated_at || data.lastUpdated || data.timestamp
+    );
+    return { perTrain, updatedAt };
+  }
+
+  async function fetchHafasProxySnapshot(){
+    const withBuster = (u)=> u + (u.includes('?') ? '&' : '?') + 't=' + Date.now();
+    let lastErr = null;
+    for (const candidate of HAFAS_PROXY_CANDIDATES){
+      if (!candidate) continue;
+      const url = withBuster(candidate);
+      try {
+        console.log('[HAFAS proxy] tentative:', url);
+        const res = await fetchWithTimeoutNoHeaders(url, 8000);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const ct = (res.headers.get('content-type') || '').toLowerCase();
+        let data;
+        if (ct.includes('application/json')){
+          data = await res.json();
+        } else {
+          data = JSON.parse(await res.text());
+        }
+        const parsed = parseHafasProxyData(data);
+        return { perTrain: parsed.perTrain, updatedAt: parsed.updatedAt, source: candidate };
+      } catch(err){
+        console.warn('[HAFAS proxy] échec sur', candidate, err);
+        lastErr = err;
+      }
+    }
+    if (lastErr) throw lastErr;
+    throw new Error('Proxy HAFAS indisponible');
+  }
+
   function registerHafasRetards(perTrainMap, { fetchedAt } = {}){
     const normalized = new Map();
     if (perTrainMap instanceof Map){
@@ -1004,68 +1208,21 @@ const GTFS_RT_STOP_META_KEYS = new Set([
   async function loadHafasDelays({ duration = HAFAS_LOOKAHEAD_MINUTES } = {}){
     if (pendingHafasPromise) return pendingHafasPromise;
     pendingHafasPromise = (async()=>{
-      const now = new Date();
-      const dateStr = formatLuxDateISO(now);
-      const timeStr = formatLuxTimeISO(now);
-      const perTrain = new Map();
-      const errors = [];
-
-      for (const station of HAFAS_STATIONS){
-        try {
-          const departures = await fetchHafasDeparturesForStation(station, { dateStr, timeStr, duration });
-          if (!Array.isArray(departures) || !departures.length) continue;
-          const names = Array.isArray(station.names) && station.names.length ? station.names : [station.label || station.axisId || station.hafasId];
-          for (const dep of departures){
-            const number = extractHafasTrainNumber(dep);
-            if (!number) continue;
-          const delay = computeHafasDelay(dep, station);
-            if (!delay) continue;
-            if (!delay.cancelled && delay.minutes == null) continue;
-            const value = delay.cancelled ? null : Number(delay.minutes ?? 0);
-            const keyRaw = String(number);
-            const key = normalizeTrainNumberKey(keyRaw) || keyRaw;
-            let perStation = perTrain.get(key);
-            if (!perStation){
-              perStation = new Map();
-              perTrain.set(key, perStation);
-            }
-            for (const displayName of names){
-              const norm = normalizeStationName(displayName);
-              if (!norm) continue;
-              const existing = perStation.get(norm);
-              if (existing){
-                if (existing.value == null) continue;
-                if (value == null){
-                  perStation.set(norm, { original: displayName, value });
-                  continue;
-                }
-                const existingVal = Number(existing.value);
-                if (Number.isFinite(existingVal) && Number.isFinite(value) && Math.abs(value) < Math.abs(existingVal)){
-                  continue;
-                }
-              }
-              perStation.set(norm, { original: displayName, value });
-            }
-          }
-        } catch(err){
-          errors.push({ station, error: err });
-          console.warn('[HAFAS] échec station', station?.label || station?.hafasId, err);
-        }
+    let snapshot = null;
+      try {
+        snapshot = await fetchHafasProxySnapshot();
+      } catch(err){
+        console.warn('[HAFAS] proxy indisponible', err);  
       }
-
-      const fetchedAt = Date.now();
-      registerHafasRetards(perTrain, { fetchedAt });
-
-      if (errors.length === HAFAS_STATIONS.length){
-        setRealtimeSourceError('hafas', 'indisponible');
-        const lastErr = errors[errors.length - 1]?.error || new Error('HAFAS indisponible');
-        throw lastErr;
-      }
-      if (errors.length){
-        setRealtimeSourceError('hafas', 'partiel');
-      } else {
+      if (snapshot){
+        realtimeSources.hafas.origin = 'Proxy CFL';
+        realtimeSources.hafas.rawSource = snapshot.source || '';
+        registerHafasRetards(snapshot.perTrain, { fetchedAt: snapshot.updatedAt || Date.now() });
         setRealtimeSourceError('hafas', null);
+        return;
       }
+
+      await loadHafasDelaysViaApi({ duration });
     })();
 
     try {
@@ -1075,6 +1232,73 @@ const GTFS_RT_STOP_META_KEYS = new Set([
     }
   }
 
+    async function loadHafasDelaysViaApi({ duration = HAFAS_LOOKAHEAD_MINUTES } = {}){
+    const now = new Date();
+    const dateStr = formatLuxDateISO(now);
+    const timeStr = formatLuxTimeISO(now);
+    const perTrain = new Map();
+    const errors = [];
+
+    for (const station of HAFAS_STATIONS){
+      try {
+        const departures = await fetchHafasDeparturesForStation(station, { dateStr, timeStr, duration });
+        if (!Array.isArray(departures) || !departures.length) continue;
+        const names = Array.isArray(station.names) && station.names.length ? station.names : [station.label || station.axisId || station.hafasId];
+        for (const dep of departures){
+          const number = extractHafasTrainNumber(dep);
+          if (!number) continue;
+          const delay = computeHafasDelay(dep, station);
+          if (!delay) continue;
+          if (!delay.cancelled && delay.minutes == null) continue;
+          const value = delay.cancelled ? null : Number(delay.minutes ?? 0);
+          const keyRaw = String(number);
+          const key = normalizeTrainNumberKey(keyRaw) || keyRaw;
+          let perStation = perTrain.get(key);
+          if (!perStation){
+            perStation = new Map();
+            perTrain.set(key, perStation);
+          }
+          for (const displayName of names){
+            const norm = normalizeStationName(displayName);
+            if (!norm) continue;
+            const existing = perStation.get(norm);
+            if (existing){
+              if (existing.value == null) continue;
+              if (value == null){
+                perStation.set(norm, { original: displayName, value });
+                continue;
+              }
+              const existingVal = Number(existing.value);
+              if (Number.isFinite(existingVal) && Number.isFinite(value) && Math.abs(value) < Math.abs(existingVal)){
+                continue;
+              }
+            }
+            perStation.set(norm, { original: displayName, value });
+          }
+        }
+      } catch(err){
+        errors.push({ station, error: err });
+        console.warn('[HAFAS] échec station', station?.label || station?.hafasId, err);
+      }
+    }
+
+    const fetchedAt = Date.now();
+    realtimeSources.hafas.origin = 'API HAFAS';
+    realtimeSources.hafas.rawSource = HAFAS_BASE_URL;
+    registerHafasRetards(perTrain, { fetchedAt });
+
+    if (errors.length === HAFAS_STATIONS.length){
+      setRealtimeSourceError('hafas', 'indisponible');
+      const lastErr = errors[errors.length - 1]?.error || new Error('HAFAS indisponible');
+      throw lastErr;
+    }
+    if (errors.length){
+      setRealtimeSourceError('hafas', 'partiel');
+    } else {
+      setRealtimeSourceError('hafas', null);
+    }
+  }
+    
   function shouldIgnoreCancellation(entry, train){
     if (!entry || entry.value !== null) return false;
     const source = (entry.source || '').toUpperCase();
