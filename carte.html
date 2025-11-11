@@ -214,11 +214,6 @@
     calendar_dates: 'calendar_dates.txt'// optionnel (exceptions jour)
   };
 
-   const STOP_TIMES_BASES = [
-    'https://vps.labetaillere.fr/gtfs/static/',
-    ...BASES
-  ];
-    
    const CFL_BASES = [
     location.origin + '/CFL/',
     'https://raw.githubusercontent.com/TekMaTe-lux/Assistant-train/main/CFL/'
@@ -3204,6 +3199,7 @@ function setLayerGroupVisibility(group, visible){
 
   // zones d'intérêt (filtre "sillon" simple)
   const AXIS_STOP_KEYWORDS = ['nancy','pont-','metz','hagondange','thionville','bettembourg','luxembourg'];
+  const CORE_TGV_STOP_KEYWORDS = ['metz','nancy','thionville','luxembourg'];
 
   // ---------- Chargement réseaux ----------
   async function loadNetworks(){
@@ -3256,6 +3252,7 @@ function setLayerGroupVisibility(group, visible){
       const axisStopIds = new Set();
       const axisTripIds = new Set();
       const axisRouteIds = new Set();
+      let filteredTgvCount = 0;
       let combinedActiveServiceIds = null;
       const mergeActiveServices = (set)=>{
         if (!set || !set.size) return;
@@ -3282,6 +3279,7 @@ function setLayerGroupVisibility(group, visible){
       // stop_times -> groupés par trip
       setStatus('Chargement GTFS — import des stop_times SNCF (proxy)…');
       const stop_times = await parseCSVAny(FILES.stop_times, STOP_TIMES_BASES);
+      const stop_times = await parseCSVAny(FILES.stop_times);
       for (const st of stop_times){
         const tid = st.trip_id; if(!tid) continue;
         if (!stopTimesByTrip.has(tid)) stopTimesByTrip.set(tid, []);
@@ -3347,6 +3345,8 @@ function setLayerGroupVisibility(group, visible){
         }
       } catch(_){ /* ok si absent */ }
 
+      filteredTgvCount = pruneTgvTripsWithoutCoreStops(axisTripIds);
+
       // routes (optionnel)
       try {
         const routes = await parseCSVAny(FILES.routes);
@@ -3383,6 +3383,7 @@ function setLayerGroupVisibility(group, visible){
       renderAxisStations();
 
       let statusMsg = 'GTFS chargé — ' + stopsById.size + ' gares, ' + stopTimesByTrip.size + ' trips';
+      if (filteredTgvCount) statusMsg += `, ${filteredTgvCount} TGV hors sillon exclus`;
       if (cflStopsAdded || cflTripsAdded){
         statusMsg += ` (CFL +${cflStopsAdded} gares, +${cflTripsAdded} trips)`;
       }
@@ -3574,7 +3575,44 @@ async function integrateCflGtfs({ axisStopIds, axisTripIds, axisRouteIds, mergeA
       return null;
     }
   }
-    
+
+function sequenceMatchesKeywords(seq, keywords, lookup = stopsById){
+    if (!Array.isArray(seq) || !seq.length || !keywords?.length) return false;
+    for (const stop of seq){
+      const meta = lookup.get(stop.stop_id);
+      if (!meta || !meta.name) continue;
+      const lower = meta.name.toLowerCase();
+      for (const keyword of keywords){
+        if (lower.includes(keyword)) return true;
+      }
+    }
+    return false;
+  }
+
+  function isTripLikelyTgv(tripId){
+    const trip = tripsById.get(tripId);
+    if (!trip) return false;
+    const route = trip.route_id ? routesById.get(trip.route_id) : null;
+    const probes = [trip.trip_short_name, trip.headsign, route?.short, route?.long];
+    return probes.some(value => value && /\bTGV\b/i.test(value));
+  }
+
+  function pruneTgvTripsWithoutCoreStops(axisTripIds){
+    if (!stopTimesByTrip.size) return 0;
+    let removed = 0;
+    for (const [tripId, seq] of Array.from(stopTimesByTrip.entries())){
+      if (!isTripLikelyTgv(tripId)) continue;
+      if (sequenceMatchesKeywords(seq, CORE_TGV_STOP_KEYWORDS)) continue;
+      stopTimesByTrip.delete(tripId);
+      tripsById.delete(tripId);
+      realtimeStopDataByTrip.delete(tripId);
+      staticRelatedNumbersByTrip.delete(tripId);
+      if (axisTripIds) axisTripIds.delete(tripId);
+      removed++;
+    }
+    return removed;
+  }
+
   // ---------- Filtre sillon & service du jour ----------
   function tripPassesAxis(seq, lookup = stopsById){
     const names = seq.map(s=> (lookup.get(s.stop_id)?.name || '').toLowerCase());
