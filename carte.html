@@ -3206,8 +3206,16 @@ function setLayerGroupVisibility(group, visible){
   } 
 
   // zones d'intérêt (filtre "sillon" simple)
-  const AXIS_STOP_KEYWORDS = ['nancy','pont-','metz','hagondange','thionville','bettembourg','luxembourg'];
-  const CORE_TGV_STOP_KEYWORDS = ['metz','nancy','thionville','luxembourg'];
+  const AXIS_STOP_KEYWORDS = [
+    'nancy',
+    'pont a mousson',
+    'metz',
+    'hagondange',
+    'thionville',
+    'bettembourg',
+    'luxembourg'
+  ].map(normalizeStationName);
+  const CORE_TGV_STOP_KEYWORDS = ['metz','nancy','thionville','luxembourg'].map(normalizeStationName);
   const CORE_TGV_STOP_CODES = new Set([
     '87141002', // Nancy
     '87192039', // Metz-Ville
@@ -3588,14 +3596,25 @@ async function integrateCflGtfs({ axisStopIds, axisTripIds, axisRouteIds, mergeA
     }
   }
 
-function sequenceMatchesKeywords(seq, keywords, lookup = stopsById){
+function stationNameMatchesKeywords(name, keywords){
+    if (!name || !Array.isArray(keywords) || !keywords.length) return false;
+    const normalized = normalizeStationName(name);
+    if (!normalized) return false;
+    const collapsed = normalized.replace(/[-'_]+/g, ' ').replace(/\s+/g, ' ').trim();
+    for (const keyword of keywords){
+      if (!keyword) continue;
+      if (normalized.includes(keyword)) return true;
+      if (collapsed.includes(keyword)) return true;
+    }
+    return false;
+  }
+
+  function sequenceMatchesKeywords(seq, keywords, lookup = stopsById){
     if (!Array.isArray(seq) || !seq.length || !keywords?.length) return false;
     for (const stop of seq){
       const meta = lookup.get(stop.stop_id);
       if (!meta || !meta.name) continue;
-      const lower = meta.name.toLowerCase();
-      for (const keyword of keywords){
-        if (lower.includes(keyword)) return true;
+      if (stationNameMatchesKeywords(meta.name, keywords)) return true;
       }
     }
     return false;
@@ -3664,9 +3683,17 @@ function sequenceMatchesKeywords(seq, keywords, lookup = stopsById){
 
   // ---------- Filtre sillon & service du jour ----------
   function tripPassesAxis(seq, lookup = stopsById){
-    const names = seq.map(s=> (lookup.get(s.stop_id)?.name || '').toLowerCase());
-    const hits = names.filter(n=> AXIS_STOP_KEYWORDS.some(k=> n.includes(k))).length;
-    return hits >= 2;
+    if (!Array.isArray(seq) || seq.length < 2) return false;
+    let hits = 0;
+    for (const stop of seq){
+      const meta = lookup.get(stop.stop_id);
+      if (!meta || !meta.name) continue;
+      if (stationNameMatchesKeywords(meta.name, AXIS_STOP_KEYWORDS)){
+        hits++;
+        if (hits >= 2) return true;
+      }
+    }
+    return false;
   }
 
   function serviceAllowed(trip_id){
