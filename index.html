@@ -4893,6 +4893,36 @@ function buildCflDisplayLabel(trainType, numero){
   const prefix = normalizeCflTrainType(trainType) || 'CFL';
   return `${prefix}${stripLeadingZerosForDisplay(numero)}`;
 }
+  function extractTrainNumberCandidate(value){
+  if (value == null) return null;
+  const raw = String(value).trim();
+  if (!raw) return null;
+  const probes = [raw.split(':')[0], raw];
+  for (const probe of probes){
+    if (!probe) continue;
+    const big = probe.match(/\d{4,}/);
+    if (big) return big[0];
+  }
+  for (const probe of probes){
+    if (!probe) continue;
+    const mid = probe.match(/\d{3,}/);
+    if (mid) return mid[0];
+  }
+  return null;
+}
+
+function normalizeTrainNumberKey(value){
+  if (value == null) return null;
+  const raw = String(value).trim();
+  if (!raw) return null;
+  const cleaned = raw.replace(/[^0-9A-Za-z]/g, '');
+  if (!cleaned) return null;
+  if (/^[0-9]+$/.test(cleaned)){
+    const trimmed = cleaned.replace(/^0+/, '');
+    return trimmed || '0';
+  }
+  return cleaned.toUpperCase();
+}
 const CFL_STATION_ALIASES = {
   'luxembourg': ['Luxembourg, Gare Centrale'],
   'luxembourg gare': ['Luxembourg, Gare Centrale'],
@@ -4959,6 +4989,23 @@ const CFL_BASES = [
 ];
 const CFL_HAFAS_CACHE = new Map();
     
+const HAFAS_PROXY_SAME_ORIGIN = (()=>{
+  const base = location.origin + location.pathname.replace(/\/[^\/]*$/, '/');
+  return base + 'retards_cfl.json';
+})();
+
+const HAFAS_PROXY_CANDIDATES = [
+  'https://vps.labetaillere.fr/gtfs/retards_cfl.json',
+  HAFAS_PROXY_SAME_ORIGIN,
+  'https://raw.githubusercontent.com/TekMaTe-lux/Assistant-train/main/Assistant-train/retards_cfl.json',
+  'https://cdn.jsdelivr.net/gh/TekMaTe-lux/Assistant-train@main/Assistant-train/retards_cfl.json'
+];
+
+const HAFAS_PROXY_TTL_MS = 110000;
+let HAFAS_PROXY_CACHE = { map:null, updatedAt:null, fetchedAt:0, source:null };
+let HAFAS_PROXY_PROMISE = null;
+    
+    
 let CFL_GTFS = {
   ready: false,
   routes: new Map(),
@@ -4970,6 +5017,309 @@ let CFL_GTFS = {
   tripsByNumber: new Map()
 };
 let CFL_LOADING_PROMISE = null;
+
+function parseHafasProxyTimestamp(value){
+  if (value == null) return null;
+  if (typeof value === 'number' && Number.isFinite(value)){
+    if (value > 1e12) return Math.round(value);
+    if (value > 1e5) return Math.round(value * 1000);
+    return Math.round(value * 1000);
+  }
+  const str = String(value).trim();
+  if (!str) return null;
+  let parsed = Date.parse(str);
+  if (!Number.isNaN(parsed)) return parsed;
+  parsed = Date.parse(`${str}Z`);
+  if (!Number.isNaN(parsed)) return parsed;
+  return null;
+}
+
+function parseHafasProxyDelayValue(raw){
+  if (raw == null) return { cancellation:true, minutes:null, hasMinutes:false };
+  if (typeof raw === 'number'){
+    if (Number.isFinite(raw)) return { cancellation:false, minutes: raw, hasMinutes:true };
+    return { cancellation:false, minutes:null, hasMinutes:false };
+  }
+  if (typeof raw === 'string'){
+    const trimmed = raw.trim();
+    if (!trimmed) return { cancellation:false, minutes:null, hasMinutes:false };
+    const cancellation = /cancel|suppr|delete|annul/i.test(trimmed);
+    const numeric = Number(trimmed.replace(',', '.'));
+    if (!Number.isNaN(numeric)){
+      return { cancellation, minutes:numeric, hasMinutes:true };
+    }
+    return { cancellation, minutes:null, hasMinutes:false };
+  }
+  if (Array.isArray(raw)){
+    if (!raw.length) return { cancellation:false, minutes:null, hasMinutes:false };
+    if (raw.length === 1) return parseHafasProxyDelayValue(raw[0]);
+    let cancellation = false;
+    let minutes = null;
+    let hasMinutes = false;
+    for (const item of raw){
+      const nested = parseHafasProxyDelayValue(item);
+      if (nested.cancellation) cancellation = true;
+      if (nested.hasMinutes && (!hasMinutes || Math.abs(nested.minutes) > Math.abs(minutes ?? 0))){
+        minutes = nested.minutes;
+        hasMinutes = true;
+      }
+    }
+    return { cancellation, minutes, hasMinutes };
+  }
+  if (typeof raw === 'object'){
+    let cancellation = false;
+    let minutes = null;
+    let hasMinutes = false;
+    if (raw.cancelled != null) cancellation = cancellation || Boolean(raw.cancelled);
+    const status = raw.status || raw.state || raw.rtStatus || raw.rtState || raw.note;
+    if (status && /cancel|suppr|delete|annul/i.test(String(status))) cancellation = true;
+    const keys = ['delay','minutes','value','rtDelay','delayMinutes','min','rt','realtime','rtMinutes'];
+    for (const key of keys){
+      if (raw[key] == null) continue;
+      const nested = parseHafasProxyDelayValue(raw[key]);
+      if (nested.cancellation) cancellation = true;
+      if (nested.hasMinutes && (!hasMinutes || Math.abs(nested.minutes) > Math.abs(minutes ?? 0))){
+        minutes = nested.minutes;
+        hasMinutes = true;
+      }
+    }
+    return { cancellation, minutes, hasMinutes };
+  }
+  return { cancellation:false, minutes:null, hasMinutes:false };
+}
+
+function appendHafasProxyStationEntry(map, stationName, rawValue){
+  if (!stationName) return;
+  const norm = normalizeStationName(stationName);
+  if (!norm) return;
+  const { cancellation, minutes, hasMinutes } = parseHafasProxyDelayValue(rawValue);
+  if (cancellation){
+    map.set(norm, { original: stationName, value: null });
+    return;
+  }
+  if (!hasMinutes) return;
+  const value = Number(minutes);
+  if (!Number.isFinite(value)) return;
+  const existing = map.get(norm);
+  if (existing && existing.value != null){
+    const existingVal = Number(existing.value);
+    if (Number.isFinite(existingVal) && Math.abs(existingVal) >= Math.abs(value)) return;
+  }
+  map.set(norm, { original: stationName, value });
+}
+
+function buildHafasProxyStationMap(raw){
+  const perStation = new Map();
+  if (!raw) return perStation;
+  if (Array.isArray(raw)){
+    for (const entry of raw){
+      if (entry == null) continue;
+      if (Array.isArray(entry)){
+        if (!entry.length) continue;
+        const stationName = entry[0];
+        const value = entry.length > 1 ? entry[1] : null;
+        appendHafasProxyStationEntry(perStation, stationName, value);
+        continue;
+      }
+      if (typeof entry === 'object'){
+        const stationName = entry.station || entry.stop || entry.name || entry.label;
+        if (stationName){
+          const value = entry.delay ?? entry.minutes ?? entry.value ?? entry.rtDelay ?? entry.delayMinutes ?? entry.min ?? entry.rt ?? entry.realtime;
+          appendHafasProxyStationEntry(perStation, stationName, value ?? entry);
+          continue;
+        }
+        const keys = Object.keys(entry);
+        if (keys.length === 1){
+          const key = keys[0];
+          appendHafasProxyStationEntry(perStation, key, entry[key]);
+        }
+        continue;
+      }
+    }
+    return perStation;
+  }
+  if (typeof raw === 'object'){
+    for (const [stationName, value] of Object.entries(raw)){
+      appendHafasProxyStationEntry(perStation, stationName, value);
+    }
+  }
+  return perStation;
+}
+
+function parseHafasProxyData(data){
+  const perTrain = new Map();
+  if (!data || typeof data !== 'object'){
+    return { perTrain, updatedAt: null };
+  }
+  let container = null;
+  for (const candidate of [data.data, data.trains, data.journeys, data]){
+    if (candidate && typeof candidate === 'object' && !Array.isArray(candidate)){
+      container = candidate;
+      break;
+    }
+  }
+  if (container){
+    Object.entries(container).forEach(([trainKey, raw]) => {
+      if (!trainKey) return;
+      const stationMap = buildHafasProxyStationMap(raw);
+      if (!stationMap.size) return;
+      const variants = new Set([
+        normalizeTrainNumberKey(trainKey),
+        normalizeTrainNumberKey(trainKey.replace(/\s+/g, '')),
+        normalizeTrainNumberKey(trainKey.replace(/[^0-9]/g, '')),
+        normalizeTrainNumberKey(extractTrainNumberCandidate(trainKey))
+      ]);
+      if (raw && typeof raw === 'object'){
+        ['train_number','trainNumber','number','id','trip_id','tripId','name'].forEach(key => {
+          if (raw[key] != null) variants.add(normalizeTrainNumberKey(raw[key]));
+        });
+      }
+      variants.forEach(variant => {
+        if (!variant) return;
+        if (!perTrain.has(variant)){
+          perTrain.set(variant, stationMap);
+        }
+      });
+    });
+  }
+  const updatedAt = parseHafasProxyTimestamp(
+    data.updatedAt || data.updated_at || data.generatedAt || data.generated_at || data.lastUpdated || data.timestamp
+  );
+  return { perTrain, updatedAt };
+}
+
+async function loadHafasProxyData({ forceFresh = false } = {}){
+  const now = Date.now();
+  if (!forceFresh && HAFAS_PROXY_CACHE.map instanceof Map){
+    if (!HAFAS_PROXY_CACHE.fetchedAt || (now - HAFAS_PROXY_CACHE.fetchedAt) < HAFAS_PROXY_TTL_MS){
+      return HAFAS_PROXY_CACHE;
+    }
+  }
+  if (HAFAS_PROXY_PROMISE) return HAFAS_PROXY_PROMISE;
+
+  HAFAS_PROXY_PROMISE = (async()=>{
+    let lastErr = null;
+    for (const candidate of HAFAS_PROXY_CANDIDATES){
+      if (!candidate) continue;
+      const url = candidate + (candidate.includes('?') ? '&' : '?') + 't=' + Date.now();
+      try {
+        console.log('[HAFAS proxy] tentative:', url);
+        const res = await fetchWithTimeoutNoHeaders(url, 8000);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const ct = (res.headers.get('content-type') || '').toLowerCase();
+        let data;
+        if (ct.includes('application/json')){
+          data = await res.json();
+        } else {
+          data = JSON.parse(await res.text());
+        }
+        const parsed = parseHafasProxyData(data);
+        HAFAS_PROXY_CACHE = {
+          map: parsed.perTrain,
+          updatedAt: parsed.updatedAt || Date.now(),
+          fetchedAt: Date.now(),
+          source: candidate
+        };
+        return HAFAS_PROXY_CACHE;
+      } catch (err){
+        lastErr = err;
+        console.warn('[HAFAS proxy] échec sur', candidate, err);
+      }
+    }
+    if (HAFAS_PROXY_CACHE.map instanceof Map && HAFAS_PROXY_CACHE.map.size){
+      return HAFAS_PROXY_CACHE;
+    }
+    if (lastErr) throw lastErr;
+    throw new Error('Proxy HAFAS indisponible');
+  })();
+
+  try {
+    return await HAFAS_PROXY_PROMISE;
+  } finally {
+    HAFAS_PROXY_PROMISE = null;
+  }
+}
+
+async function lookupHafasProxyDelay({ trainCandidates, stationNorm }){
+  if (!stationNorm) return null;
+  if (!Array.isArray(trainCandidates) || !trainCandidates.length) return null;
+  let snapshot;
+  try {
+    snapshot = await loadHafasProxyData();
+  } catch (err){
+    console.warn('[CFL][HAFAS] proxy indisponible', err);
+    return null;
+  }
+  const map = snapshot?.map;
+  if (!(map instanceof Map) || map.size === 0) return null;
+  const normalizedStation = stationNorm;
+  let fallbackEntry = null;
+  for (const candidate of trainCandidates){
+    const normalizedKey = normalizeTrainNumberKey(candidate);
+    if (!normalizedKey) continue;
+    const perStation = map.get(normalizedKey);
+    if (!(perStation instanceof Map) || perStation.size === 0) continue;
+    const direct = perStation.get(normalizedStation);
+    if (direct){
+      const delayMinutes = direct.value == null ? null : Number(direct.value);
+      return {
+        delayMinutes: Number.isFinite(delayMinutes) ? delayMinutes : null,
+        cancelled: direct.value == null,
+        stationOriginal: direct.original,
+        source: snapshot.source || '',
+        fetchedAt: snapshot.updatedAt || snapshot.fetchedAt || Date.now()
+      };
+    }
+    if (!fallbackEntry){
+      for (const entry of perStation.values()){
+        if (!entry) continue;
+        fallbackEntry = entry;
+        break;
+      }
+    }
+  }
+  if (fallbackEntry){
+    const delayMinutes = fallbackEntry.value == null ? null : Number(fallbackEntry.value);
+    return {
+      delayMinutes: Number.isFinite(delayMinutes) ? delayMinutes : null,
+      cancelled: fallbackEntry.value == null,
+      stationOriginal: fallbackEntry.original,
+      source: snapshot.source || '',
+      fetchedAt: snapshot.updatedAt || snapshot.fetchedAt || Date.now()
+    };
+  }
+  return null;
+}
+
+function buildHafasTrainKeyCandidates({ numeroRaw, canonicalNumero, effectiveNumero, normalizedType, selectionKey }){
+  const set = new Set();
+  const push = value => {
+    if (value == null) return;
+    const str = String(value).trim();
+    if (!str) return;
+    set.add(str);
+  };
+  push(numeroRaw);
+  push(canonicalNumero);
+  push(effectiveNumero);
+  if (selectionKey){
+    const trimmed = String(selectionKey).replace(/^CFL-/, '');
+    push(trimmed);
+  }
+  const digitsOnly = String(canonicalNumero || numeroRaw || '').replace(/[^0-9]/g, '');
+  push(digitsOnly);
+  const displayNumero = stripLeadingZerosForDisplay(canonicalNumero || numeroRaw);
+  push(displayNumero);
+  if (normalizedType){
+    push(`${normalizedType}${displayNumero}`);
+    push(`${normalizedType} ${displayNumero}`);
+    if (digitsOnly){
+      push(`${normalizedType}${digitsOnly}`);
+      push(`${normalizedType} ${digitsOnly}`);
+    }
+  }
+  return Array.from(set);
+}    
 
 function cflIsRealStation(name){
   if (!name) return false;
@@ -5670,133 +6020,188 @@ async function buildCflResult(selectionKey, { ymd } = {}){
   const disruptions = [];
   const disruptionCauses = [];
 
+  let hafasRealtime = null;
+
   if (ymdDate){
     const firstDeparture = stopSeq.find(s => Number.isFinite(s.dep));
     if (firstDeparture){
-      const hafasRecord = await fetchCflHafasDepartures({
-        stopId: firstDeparture.stop_id,
-        dateYmd: ymdDate,
-        baseTimeHHMM: minutesToRawHHMM(firstDeparture.dep)
-      });
-      const departures = hafasRecord?.departures || [];
-      const match = departures.find(dep => hafasMatchesCflNumber(dep, {
+    const baseDepartureRaw = minutesToRawHHMM(firstDeparture.dep);
+      const baseArrivalRaw = minutesToRawHHMM(firstDeparture.arr);
+      const stopMeta = CFL_GTFS.stopsById.get(firstDeparture.stop_id) || {};
+      const stopName = cflFormatStopDisplayName(stopMeta.name || '');
+      const stationNorm = normalizeStationName(stopName || stopMeta.name || '');
+      const trainKeyCandidates = buildHafasTrainKeyCandidates({  
         numeroRaw,
-        canonicalNumero: effectiveNumero,
-        trainType: normalizedType
-      }));
-      if (match){
-        const baseDepartureRaw = minutesToRawHHMM(firstDeparture.dep);
-        const baseArrivalRaw = minutesToRawHHMM(firstDeparture.arr);
-        const realtimeRaw = parseHafasRealtimeTime(match.rtTime || match.rtDepTime || match.rtDepartureTime);
-        let delayFromField = null;
-        if (typeof match.rtDelay !== 'undefined' && match.rtDelay !== null && match.rtDelay !== ''){
-          const parsed = Number(match.rtDelay);
-          if (Number.isFinite(parsed)) delayFromField = parsed;
-        }
-        if (Number.isFinite(delayFromField) && Math.abs(delayFromField) > 600){
-          delayFromField = Math.round(delayFromField / 60);
-        }
-        let delayFromRealtime = null;
-        if (realtimeRaw && baseDepartureRaw){
-          const diff = dl(baseDepartureRaw, realtimeRaw);
-         if (Number.isFinite(diff)) delayFromRealtime = diff;
-        }
-        let effectiveDelay = null;
-        if (Number.isFinite(delayFromRealtime)){
-          effectiveDelay = delayFromRealtime;
-        } else if (Number.isFinite(delayFromField)){
-          effectiveDelay = delayFromField;
-        }
-        if (Number.isFinite(effectiveDelay) && Math.abs(effectiveDelay) > 600){
-          effectiveDelay = Math.round(effectiveDelay / 60);
-        }
-        let amendedRaw = realtimeRaw && realtimeRaw.length >= 4 ? realtimeRaw.slice(0, 4) : null;
-        if (amendedRaw && baseDepartureRaw){
-          const diff = dl(baseDepartureRaw, amendedRaw);
-          if (!Number.isFinite(diff) || diff <= 0){
-            amendedRaw = null;
-          } else if (!Number.isFinite(effectiveDelay)){
-            effectiveDelay = diff;
-          }
-        }
-        if (!amendedRaw && Number.isFinite(effectiveDelay) && effectiveDelay > 0 && baseDepartureRaw){
-          const fallbackClock = computeRetardedTime(baseDepartureRaw, effectiveDelay);
-          if (fallbackClock) amendedRaw = fallbackClock.replace(':', '');
-        }
-        const hasPositiveDelay = Number.isFinite(effectiveDelay) && effectiveDelay > 0;
-        const status = String(match.status || '').toLowerCase();
-        const isCancelled = match.cancelled === true || status === 'cancelled' || status === 'canceled' || status === 'deleted';
-        const stopName = cflFormatStopDisplayName(CFL_GTFS.stopsById.get(firstDeparture.stop_id)?.name || '');
-        const impactedEntry = {
-          stop_point: { id: firstDeparture.stop_id, name: stopName },
-          base_departure_time: baseDepartureRaw,
-          base_arrival_time: baseArrivalRaw
-        };
-        if (isCancelled){
-          impactedEntry.departure_status = 'deleted';
-          impactedEntry.arrival_status = 'deleted';
-          impactedEntry.stop_time_effect = 'deleted';
-        } else if (hasPositiveDelay && amendedRaw){
-          impactedEntry.amended_departure_time = amendedRaw;
-          impactedEntry.delay_minutes = effectiveDelay;
-        } else if (hasPositiveDelay){
-          impactedEntry.delay_minutes = effectiveDelay;
-        }
-        impacted[firstDeparture.stop_id] = impactedEntry;
+      canonicalNumero,
+        effectiveNumero,
+        normalizedType,
+        selectionKey: canonicalKey
+      });
 
-        if (isCancelled || hasPositiveDelay){
-          const effectiveDelayMinutes = Number.isFinite(effectiveDelay) ? effectiveDelay : null;
-          for (const row of stopSeq){
-            const stopId = row.stop_id;
-            if (!stopId) continue;
-            const stopMeta = CFL_GTFS.stopsById.get(stopId) || {};
-            const displayName = cflFormatStopDisplayName(stopMeta.name || '');
-            const baseDepRawAll = minutesToRawHHMM(row.dep);
-            const baseArrRawAll = minutesToRawHHMM(row.arr);
-            const existing = impacted[stopId] || {};
-            if (!existing.stop_point){
-              existing.stop_point = { id: stopId, name: displayName };
+      if (stationNorm){
+        try {
+          const proxyInfo = await lookupHafasProxyDelay({ trainCandidates: trainKeyCandidates, stationNorm });
+          if (proxyInfo){
+            const delayMinutes = Number.isFinite(proxyInfo.delayMinutes) ? proxyInfo.delayMinutes : null;
+            let amendedRaw = null;
+            if (Number.isFinite(delayMinutes) && delayMinutes > 0 && baseDepartureRaw){
+              const fallbackClock = computeRetardedTime(baseDepartureRaw, delayMinutes);
+              if (fallbackClock) amendedRaw = fallbackClock.replace(':', '');
             }
-            if (!existing.base_departure_time && baseDepRawAll){
-              existing.base_departure_time = baseDepRawAll;
-            }
-            if (!existing.base_arrival_time && baseArrRawAll){
-              existing.base_arrival_time = baseArrRawAll;
-            }
-            if (isCancelled){
-              if (!existing.departure_status) existing.departure_status = 'deleted';
-              if (!existing.arrival_status) existing.arrival_status = 'deleted';
-              if (!existing.stop_time_effect) existing.stop_time_effect = 'deleted';
-            } else if (hasPositiveDelay && Number.isFinite(effectiveDelayMinutes) && effectiveDelayMinutes > 0){
-              existing.delay_minutes = effectiveDelayMinutes;
-              if (!existing.amended_departure_time && baseDepRawAll){
-                const amendedDep = computeRetardedTime(baseDepRawAll, effectiveDelayMinutes);
-                if (amendedDep) existing.amended_departure_time = amendedDep.replace(':', '');
-              }
-              if (!existing.amended_arrival_time && baseArrRawAll){
-                const amendedArr = computeRetardedTime(baseArrRawAll, effectiveDelayMinutes);
-                if (amendedArr) existing.amended_arrival_time = amendedArr.replace(':', '');
-              }
-            }
-            impacted[stopId] = existing;
+            hafasRealtime = {
+              source: 'proxy',
+              delayMinutes,
+              isCancelled: proxyInfo.cancelled === true,
+              amendedDepartureRaw: amendedRaw,
+              baseDepartureRaw,
+              baseArrivalRaw,
+              stopId: firstDeparture.stop_id,
+              stopName,
+              cause: null
+            }; 
           }
+         } catch (err){
+          console.warn('[CFL][HAFAS] proxy lookup', err); 
         }
+      }
 
-        const cause = extractHafasCause(match);
-        if (cause) disruptionCauses.push(cause);
-        if (isCancelled){
-          disruptions.push({
-            severity: { effect: 'NO_SERVICE' },
-            messages: cause ? [{ text: cause }] : []
-          });
-        } else if (hasPositiveDelay){
-          disruptions.push({
-            severity: { effect: 'SIGNIFICANT_DELAYS' },
-            messages: cause ? [{ text: cause }] : []
-          });
+      if (!hafasRealtime){
+        const hafasRecord = await fetchCflHafasDepartures({
+          stopId: firstDeparture.stop_id,
+          dateYmd: ymdDate,
+          baseTimeHHMM: minutesToRawHHMM(firstDeparture.dep)
+        });
+        const departures = hafasRecord?.departures || [];
+        const match = departures.find(dep => hafasMatchesCflNumber(dep, {
+          numeroRaw,
+          canonicalNumero: effectiveNumero,
+          trainType: normalizedType
+        }));
+        if (match){
+          const realtimeRaw = parseHafasRealtimeTime(match.rtTime || match.rtDepTime || match.rtDepartureTime);
+          let delayFromField = null;
+          if (typeof match.rtDelay !== 'undefined' && match.rtDelay !== null && match.rtDelay !== ''){
+            const parsed = Number(match.rtDelay);
+            if (Number.isFinite(parsed)) delayFromField = parsed;
+          }
+          if (Number.isFinite(delayFromField) && Math.abs(delayFromField) > 600){
+            delayFromField = Math.round(delayFromField / 60);
+          }
+          let delayFromRealtime = null;
+          if (realtimeRaw && baseDepartureRaw){
+            const diff = dl(baseDepartureRaw, realtimeRaw);
+            if (Number.isFinite(diff)) delayFromRealtime = diff;
+          }
+          let effectiveDelay = null;
+          if (Number.isFinite(delayFromRealtime)){
+            effectiveDelay = delayFromRealtime;
+          } else if (Number.isFinite(delayFromField)){
+            effectiveDelay = delayFromField;
+          }
+          if (Number.isFinite(effectiveDelay) && Math.abs(effectiveDelay) > 600){
+            effectiveDelay = Math.round(effectiveDelay / 60);
+          }
+          let amendedRaw = realtimeRaw && realtimeRaw.length >= 4 ? realtimeRaw.slice(0, 4) : null;
+          if (amendedRaw && baseDepartureRaw){
+            const diff = dl(baseDepartureRaw, amendedRaw);
+            if (!Number.isFinite(diff) || diff <= 0){
+              amendedRaw = null;
+            } else if (!Number.isFinite(effectiveDelay)){
+              effectiveDelay = diff;  
+            }
+          }
+          if (!amendedRaw && Number.isFinite(effectiveDelay) && effectiveDelay > 0 && baseDepartureRaw){
+            const fallbackClock = computeRetardedTime(baseDepartureRaw, effectiveDelay);
+            if (fallbackClock) amendedRaw = fallbackClock.replace(':', '');
+          }
+          const status = String(match.status || '').toLowerCase();
+          const isCancelled = match.cancelled === true || status === 'cancelled' || status === 'canceled' || status === 'deleted';
+          const cause = extractHafasCause(match);
+          hafasRealtime = {
+            source: 'api',
+            delayMinutes: Number.isFinite(effectiveDelay) ? effectiveDelay : null,
+            isCancelled,
+            amendedDepartureRaw: amendedRaw,
+            baseDepartureRaw,
+            baseArrivalRaw,
+            stopId: firstDeparture.stop_id,
+            stopName,
+            cause: cause || null
+          };
         }
       }
     }
+  }
+        if (hafasRealtime){
+    const delayMinutes = Number.isFinite(hafasRealtime.delayMinutes) ? hafasRealtime.delayMinutes : null;
+    const hasPositiveDelay = Number.isFinite(delayMinutes) && delayMinutes > 0;
+    const isCancelled = hafasRealtime.isCancelled === true;
+    const impactedEntry = {
+      stop_point: { id: hafasRealtime.stopId, name: hafasRealtime.stopName },
+      base_departure_time: hafasRealtime.baseDepartureRaw,
+      base_arrival_time: hafasRealtime.baseArrivalRaw
+    };
+    if (isCancelled){
+      impactedEntry.departure_status = 'deleted';
+      impactedEntry.arrival_status = 'deleted';
+      impactedEntry.stop_time_effect = 'deleted';
+    } else if (hasPositiveDelay && hafasRealtime.amendedDepartureRaw){
+      impactedEntry.amended_departure_time = hafasRealtime.amendedDepartureRaw;
+      impactedEntry.delay_minutes = delayMinutes;
+    } else if (hasPositiveDelay){
+      impactedEntry.delay_minutes = delayMinutes;
+    }
+    impacted[hafasRealtime.stopId] = impactedEntry;
+
+    if (isCancelled || hasPositiveDelay){
+      for (const row of stopSeq){
+        const stopId = row.stop_id;
+        if (!stopId) continue;
+        const stopMeta = CFL_GTFS.stopsById.get(stopId) || {};
+        const displayName = cflFormatStopDisplayName(stopMeta.name || '');
+        const baseDepRawAll = minutesToRawHHMM(row.dep);
+        const baseArrRawAll = minutesToRawHHMM(row.arr);
+        const existing = impacted[stopId] || {};
+        if (!existing.stop_point){
+          existing.stop_point = { id: stopId, name: displayName };
+        }
+        if (!existing.base_departure_time && baseDepRawAll){
+          existing.base_departure_time = baseDepRawAll;
+        }
+        if (!existing.base_arrival_time && baseArrRawAll){
+          existing.base_arrival_time = baseArrRawAll;
+        }
+        if (isCancelled){
+         if (!existing.departure_status) existing.departure_status = 'deleted';
+          if (!existing.arrival_status) existing.arrival_status = 'deleted';
+          if (!existing.stop_time_effect) existing.stop_time_effect = 'deleted';
+        } else if (hasPositiveDelay && Number.isFinite(delayMinutes) && delayMinutes > 0){
+          existing.delay_minutes = delayMinutes;
+          if (!existing.amended_departure_time && baseDepRawAll){
+            const amendedDep = computeRetardedTime(baseDepRawAll, delayMinutes);
+            if (amendedDep) existing.amended_departure_time = amendedDep.replace(':', '');
+          }
+          if (!existing.amended_arrival_time && baseArrRawAll){
+            const amendedArr = computeRetardedTime(baseArrRawAll, delayMinutes);
+            if (amendedArr) existing.amended_arrival_time = amendedArr.replace(':', '');
+          } 
+        }
+        impacted[stopId] = existing;
+      }
+    }
+     const cause = hafasRealtime.cause;
+    if (cause) disruptionCauses.push(cause);
+    if (isCancelled){
+      disruptions.push({
+        severity: { effect: 'NO_SERVICE' },
+        messages: cause ? [{ text: cause }] : []
+      });
+    } else if (hasPositiveDelay){
+      disruptions.push({
+        severity: { effect: 'SIGNIFICANT_DELAYS' },
+        messages: cause ? [{ text: cause }] : []
+      });
+    }      
   }
 
   return {
@@ -8535,13 +8940,14 @@ $('#refreshButton').off('click').on('click', async function () {
 
 /* ---------- GTFS-RT : loader centralisé + auto-apply ---------- */
 const SAME_ORIGIN_JSON = (()=>{
-  // /labetaillere.html -> /retards_nancymetzlux.json (si tu le seras un jour en local)
+  // /labetaillere.html -> /retards_cfl.json (si tu le seras un jour en local)
   const base = location.origin + location.pathname.replace(/\/[^\/]*$/, '/');
-  return base + 'retards_nancymetzlux.json';
+  return base + 'retards_cfl.json';
 })();
 
-// Ordre : même origine (si jamais tu le copies localement) -> RAW GitHub -> jsDelivr -> API GitHub
+// Ordre : proxy toutes les 2 min -> même origine (si jamais tu le copies localement) -> anciens miroirs -> RAW GitHub -> jsDelivr -> API GitHub
 const GTFS_RT_CANDIDATES = [
+  'https://vps.labetaillere.fr/gtfs/retards_cfl.json',
   'https://vps.labetaillere.fr/gtfs/retards_nancymetzlux.json',
   SAME_ORIGIN_JSON,
   'https://raw.githubusercontent.com/TekMaTe-lux/Assistant-train/main/Assistant-train/retards_nancymetzlux.json',
@@ -8756,23 +9162,27 @@ async function fetchWithTimeoutNoHeaders(url, ms = 8000) {
 
 async function fetchFromGitHubAPI() {
   // Dernier fallback : API GitHub Contents (CORS OK), on décode le Base64
-  const apiUrls = [
-    'https://api.github.com/repos/TekMaTe-lux/Assistant-train/contents/Assistant-train/retards_nancymetzlux.json',
-    'https://api.github.com/repos/TekMaTe-lux/Assistant-train/contents/retards_nancymetzlux.json'
+  const filenames = ['retards_cfl.json', 'retards_nancymetzlux.json'];
+  const bases = [
+    'https://api.github.com/repos/TekMaTe-lux/Assistant-train/contents/Assistant-train/',
+    'https://api.github.com/repos/TekMaTe-lux/Assistant-train/contents/'
   ];
-  for (const apiUrl of apiUrls) {
-    try {
-      const r = await fetch(apiUrl, {
-        cache: 'no-store',
-        headers: { 'Accept': 'application/vnd.github+json' }
-      });
-      if (!r.ok) continue;
-      const meta = await r.json();
-      if (meta && meta.content) {
-        const text = atob(String(meta.content).replace(/\n/g, ''));
-        return JSON.parse(text);
-      }
-    } catch {}
+  for (const filename of filenames) {
+    for (const base of bases) {
+      const apiUrl = base + filename;
+      try {
+        const r = await fetch(apiUrl, {
+          cache: 'no-store',
+          headers: { 'Accept': 'application/vnd.github+json' }
+        });
+        if (!r.ok) continue;
+        const meta = await r.json();
+        if (meta && meta.content) {
+          const text = atob(String(meta.content).replace(/\n/g, ''));
+          return JSON.parse(text);
+        }
+      } catch {}
+    }
   }
   throw new Error('GitHub API fallback indisponible.');
 }
