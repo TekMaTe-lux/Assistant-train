@@ -1555,22 +1555,27 @@ function adaptDelayEntryForStop(entry, stopMeta){
     return ref;
   }
 
-  function fillRealtimeDelays(seq, delays, refTimes){
+  function fillRealtimeDelays(seq, delays, refTimes, options = {}){
+    const rawEffectiveLength = options && Number.isFinite(options.effectiveLength)
+      ? Math.floor(options.effectiveLength)
+      : delays.length;
+    const effectiveLength = Math.max(0, Math.min(delays.length, rawEffectiveLength));
+    if (effectiveLength <= 0) return;
     const known = [];
-    for (let i=0;i<delays.length;i++){
+    for (let i=0;i<effectiveLength;i++){
       if (typeof delays[i] === 'number' && isFinite(delays[i])){
         delays[i] = Math.round(delays[i]);
         known.push(i);
       }
     }
     if (!known.length){
-      delays.fill(0);
+      for (let i=0;i<effectiveLength;i++) delays[i] = 0;
       return;
     }
     const firstIdx = known[0];
     for (let i=0;i<firstIdx;i++) delays[i] = delays[firstIdx];
     const lastIdx = known[known.length - 1];
-    for (let i=lastIdx+1;i<delays.length;i++) delays[i] = delays[lastIdx];
+    for (let i=lastIdx+1;i<effectiveLength;i++) delays[i] = delays[lastIdx];
     for (let j=0;j<known.length-1;j++){
       const startIdx = known[j];
       const endIdx = known[j+1];
@@ -1579,10 +1584,14 @@ function adaptDelayEntryForStop(entry, stopMeta){
       const timeStart = refTimes[startIdx];
       const timeEnd = refTimes[endIdx];
       if (!isFinite(timeStart) || !isFinite(timeEnd) || timeEnd <= timeStart){
-        for (let k=startIdx+1;k<endIdx;k++) delays[k] = delayStart;
+        for (let k=startIdx+1;k<endIdx;k++){
+          if (k >= effectiveLength) break;
+          delays[k] = delayStart;
+        }
         continue;
       }
       for (let k=startIdx+1;k<endIdx;k++){
+        if (k >= effectiveLength) break;
         const t = refTimes[k] ?? timeStart;
         const ratio = Math.max(0, Math.min(1, (t - timeStart)/(timeEnd - timeStart)));
         delays[k] = Math.round(delayStart + (delayEnd - delayStart) * ratio);
@@ -1627,33 +1636,63 @@ function adaptDelayEntryForStop(entry, stopMeta){
 
     const delays = new Array(seq.length).fill(null);
     const refTimes = computeReferenceTimesForSeq(seq);
-    let hasNumericDelay = false;
+    let cancellationStartIdx = null;
+    let cancellationSource = null;
 
     for (let i=0;i<seq.length;i++){
       const stopMeta = stopsById.get(seq[i].stop_id);
       const entry = findDelayEntryForStop(perStation, stopMeta);
       if (!entry) continue;
       if (entry.value == null){
+        const sourceLabel = entry.original || stopMeta?.name || null;
         stops[i].cancelled = true;
-        stops[i].delaySource = entry.original || stopMeta?.name || null;
+        stops[i].delaySource = sourceLabel;
+        if (cancellationStartIdx == null || i < cancellationStartIdx){
+          cancellationStartIdx = i;
+          cancellationSource = sourceLabel || stopMeta?.name || null;
+        }
         continue;
       }
       const delaySec = Math.round(Number(entry.value) * 60);
       if (!Number.isFinite(delaySec)) continue;
       delays[i] = delaySec;
-      hasNumericDelay = true;
       stops[i].delaySource = entry.original || stopMeta?.name || null;
     }
 
-    if (!hasNumericDelay){
-      for (let i=0;i<delays.length;i++) delays[i] = 0;
+    if (cancellationStartIdx != null){
+      const fallbackLabel = cancellationSource || stops[cancellationStartIdx]?.delaySource || stops[cancellationStartIdx]?.name || null;
+      for (let j=cancellationStartIdx;j<stops.length;j++){
+        stops[j].cancelled = true;
+        if (!stops[j].delaySource) stops[j].delaySource = fallbackLabel;
+      }
+    }
+
+    const activeLength = cancellationStartIdx != null ? Math.max(0, cancellationStartIdx) : delays.length;
+    let hasActiveNumeric = false;
+    for (let i=0;i<activeLength;i++){
+      if (Number.isFinite(delays[i])){ hasActiveNumeric = true; break; }
+    }
+    if (hasActiveNumeric){
+      fillRealtimeDelays(seq, delays, refTimes, { effectiveLength: activeLength });
     } else {
-      fillRealtimeDelays(seq, delays, refTimes);
+      for (let i=0;i<activeLength;i++) delays[i] = 0;
+    }
+    if (activeLength < delays.length){
+      for (let i=activeLength;i<delays.length;i++) delays[i] = null;
     }
 
     for (let i=0;i<seq.length;i++){
-      const delaySec = Number.isFinite(delays[i]) ? delays[i] : 0;
       const info = stops[i];
+      const isCancelled = Boolean(info.cancelled);
+      const delayValue = delays[i];
+      if (isCancelled){
+        info.delaySec = null;
+        info.delayMinutes = null;
+        info.arrivalRealtime = null;
+        info.departureRealtime = null;
+        continue;
+      }
+      const delaySec = Number.isFinite(delayValue) ? delayValue : 0;
       info.delaySec = delaySec;
       info.delayMinutes = delaySec / 60;
       if (info.arrivalPlanned != null){
@@ -1671,9 +1710,38 @@ function adaptDelayEntryForStop(entry, stopMeta){
     }
 
     const firstDelay = Number.isFinite(delays[0]) ? delays[0] : 0;
-    const lastDelay = Number.isFinite(delays[delays.length - 1]) ? delays[delays.length - 1] : firstDelay;
-    const startRealtime = startPlanned != null ? startPlanned + firstDelay : null;
-    const endRealtime = endPlanned != null ? endPlanned + lastDelay : null;
+    const lastActiveIdx = activeLength > 0 ? activeLength - 1 : -1;
+    let lastDelay = firstDelay;
+    if (lastActiveIdx >= 0){
+      const candidate = delays[lastActiveIdx];
+      if (Number.isFinite(candidate)) lastDelay = candidate;
+      else if (!Number.isFinite(lastDelay)) lastDelay = 0;
+    }
+    const startRealtime = (activeLength > 0 && startPlanned != null && Number.isFinite(delays[0]))
+      ? startPlanned + delays[0]
+      : null;
+    let endRealtime = null;
+    if (cancellationStartIdx == null){
+      if (endPlanned != null && Number.isFinite(lastDelay)){
+        endRealtime = endPlanned + lastDelay;
+      } else if (endPlanned != null){
+        endRealtime = endPlanned;
+      }
+    } else if (lastActiveIdx >= 0){
+      const refStop = seq[lastActiveIdx] || null;
+      const plannedActiveEnd = refStop?.arrival ?? refStop?.departure ?? null;
+      if (plannedActiveEnd != null && Number.isFinite(lastDelay)){
+        endRealtime = plannedActiveEnd + lastDelay;
+      } else if (plannedActiveEnd != null){
+        endRealtime = plannedActiveEnd;
+      }
+    }
+
+    const cancellationInfo = cancellationStartIdx != null ? {
+      index: cancellationStartIdx,
+      stopId: seq[cancellationStartIdx]?.stop_id || null,
+      station: stops[cancellationStartIdx]?.delaySource || stops[cancellationStartIdx]?.name || cancellationSource || null
+    } : null;
 
     const data = {
       stops,
@@ -1681,7 +1749,8 @@ function adaptDelayEntryForStop(entry, stopMeta){
       endPlanned,
       startRealtime,
       endRealtime,
-      hasRealtime: hasNumericDelay
+      hasRealtime: hasActiveNumeric,
+      cancellation: cancellationInfo
     };
     realtimeStopDataByTrip.set(tripId, data);
     return data;
@@ -2413,6 +2482,13 @@ const mapContainerEl = map.getContainer();
       const severityClass = `trip-panel-delay delay-${delayInfo.severity}`;
       const context = delayInfo.panelContext ? `<div class="trip-panel-delay-context">${escapeHTML(delayInfo.panelContext)}</div>` : '';
       summaryHtml += `<div class="${severityClass}">${escapeHTML(delayInfo.panelText)}${context}</div>`;
+    }
+    const cancellationInfo = realtimeProfile?.cancellation;
+    if (cancellationInfo && cancellationInfo.index != null && cancellationInfo.index < stops.length){
+      if (cancellationInfo.index > 0){
+        const stationLabel = cancellationInfo.station || stops[cancellationInfo.index]?.name || 'cet arrêt';
+        summaryHtml += `<div class="trip-panel-delay delay-cancelled">${escapeHTML(`Supprimé à partir de ${stationLabel}`)}</div>`;
+      }
     }
     if (Array.isArray(data.numberList) && data.numberList.length > 1){
       summaryHtml += `<div class="trip-panel-realtime"><strong>Numéros associés :</strong> ${escapeHTML(data.numberList.join(' / '))}</div>`;
