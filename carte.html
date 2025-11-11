@@ -304,6 +304,17 @@ function escapeHTML(str){
       '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;'
     })[c]);
   }
+function normalizeStopNameForSearch(value){
+    if (!value) return '';
+    let normalized = String(value).toLowerCase();
+    try {
+      normalized = normalized.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+    } catch(_){ /* ignore */ }
+    normalized = normalized.replace(/[\'’`]/g, '').replace(/-/g, ' ');
+    normalized = normalized.replace(/\s+/g, ' ').trim();
+    return normalized;
+  }
+    
   function extractTrainNumberCandidate(value){
     if (value == null) return null;
     const raw = String(value).trim();
@@ -321,7 +332,15 @@ function escapeHTML(str){
     }
     return null;
   }
- function normalizeTrainNumberKey(value){
+ function looksLikeTgvNumber(value){
+    if (value == null) return false;
+    const digits = String(value).replace(/\D+/g, '');
+    if (digits.length !== 4) return false;
+    const first = digits.charAt(0);
+    return first >= '5';
+  }
+
+  function normalizeTrainNumberKey(value){
     if (value == null) return null;
     const raw = String(value).trim();
     if (!raw) return null;
@@ -348,7 +367,7 @@ function escapeHTML(str){
     return tripId;
   }
 
- const CFL_ROUTE_PREFIXES = new Map([
+  const CFL_ROUTE_PREFIXES = new Map([
     ['RE', 'RE'],
     ['RB', 'RB'],
     ['IC', 'IC'],
@@ -362,11 +381,26 @@ function escapeHTML(str){
     const headsign = (trip?.headsign || '').trim();
     const normalizedShort = routeShort.toUpperCase();
     const shortMentionsTgv = /\bTGV\b/i.test(routeShort);
-    const isTgv = shortMentionsTgv || /\bTGV\b/i.test(routeLong) || /\bTGV\b/i.test(headsign);
+    const longMentionsTgv = /\bTGV\b/i.test(routeLong);
+    const headsignMentionsTgv = /\bTGV\b/i.test(headsign);
 
-    let category = 'sncf';
-    if (isCfl) category = 'cfl';
-    if (isTgv) category = 'tgv-roi';
+    let digitsSource = rawNumberKey != null ? String(rawNumberKey) : null;
+    if (!digitsSource && rawNumber){
+      const extracted = extractTrainNumberCandidate(rawNumber);
+      if (extracted) digitsSource = String(extracted);
+    }
+
+    const shouldBrandAsTgv = !isCfl && (
+      shortMentionsTgv ||
+      longMentionsTgv ||
+      headsignMentionsTgv ||
+      looksLikeTgvNumber(digitsSource) ||
+      looksLikeTgvNumber(trip?.trip_short_name) ||
+      looksLikeTgvNumber(trip?.headsign)
+    );
+
+    let category = isCfl ? 'cfl' : 'sncf';
+    if (shouldBrandAsTgv) category = 'tgv-roi';
 
     let prefix = null;
     if (category === 'tgv-roi'){
@@ -375,11 +409,14 @@ function escapeHTML(str){
       prefix = CFL_ROUTE_PREFIXES.get(normalizedShort);
     }
 
-    const rawDigits = rawNumberKey != null ? String(rawNumberKey) : null;
-    let digits = rawDigits;
-    if (digits && (isCfl || category === 'tgv-roi')){
-      const trimmed = digits.replace(/^0+/, '');
-      digits = trimmed || '0';
+    let digits = digitsSource ? digitsSource.replace(/\D+/g, '') : '';
+    if (digits){
+      if (category === 'tgv-roi' || category === 'cfl'){
+        digits = digits.replace(/^0+/, '');
+        if (!digits) digits = '0';
+      }
+    } else {
+      digits = null;
     }
 
     let displayNumber = null;
@@ -3198,7 +3235,15 @@ function setLayerGroupVisibility(group, visible){
   } 
 
   // zones d'intérêt (filtre "sillon" simple)
-  const AXIS_STOP_KEYWORDS = ['nancy','pont-','metz','hagondange','thionville','bettembourg','luxembourg'];
+  const AXIS_STOP_KEYWORDS = [
+    'nancy',
+    'pont a mousson',
+    'metz',
+    'hagondange',
+    'thionville',
+    'bettembourg',
+    'luxembourg'
+  ];
   const CORE_TGV_STOP_KEYWORDS = ['metz','nancy','thionville','luxembourg'];
   const CORE_TGV_STOP_CODES = new Set([
     '87141002', // Nancy
@@ -3585,9 +3630,10 @@ function sequenceMatchesKeywords(seq, keywords, lookup = stopsById){
     for (const stop of seq){
       const meta = lookup.get(stop.stop_id);
       if (!meta || !meta.name) continue;
-      const lower = meta.name.toLowerCase();
+      const normalized = normalizeStopNameForSearch(meta.name);
+      if (!normalized) continue;
       for (const keyword of keywords){
-        if (lower.includes(keyword)) return true;
+        if (normalized.includes(keyword)) return true;
       }
     }
     return false;
@@ -3635,7 +3681,10 @@ function sequenceMatchesKeywords(seq, keywords, lookup = stopsById){
     if (!trip) return false;
     const route = trip.route_id ? routesById.get(trip.route_id) : null;
     const probes = [trip.trip_short_name, trip.headsign, route?.short, route?.long];
-    return probes.some(value => value && /\bTGV\b/i.test(value));
+    if (probes.some(value => value && /\bTGV\b/i.test(value))) return true;
+    if (probes.some(value => looksLikeTgvNumber(value))) return true;
+    const rawNumber = trainNumberForTrip(trip, route, tripId);
+    return looksLikeTgvNumber(rawNumber);
   }
 
   function pruneTgvTripsWithoutCoreStops(axisTripIds){
@@ -3656,9 +3705,19 @@ function sequenceMatchesKeywords(seq, keywords, lookup = stopsById){
 
   // ---------- Filtre sillon & service du jour ----------
   function tripPassesAxis(seq, lookup = stopsById){
-    const names = seq.map(s=> (lookup.get(s.stop_id)?.name || '').toLowerCase());
-    const hits = names.filter(n=> AXIS_STOP_KEYWORDS.some(k=> n.includes(k))).length;
-    return hits >= 2;
+    if (!Array.isArray(seq) || !seq.length) return false;
+    let hits = 0;
+    for (const stop of seq){
+      const meta = lookup.get(stop.stop_id);
+      if (!meta?.name) continue;
+      const normalized = normalizeStopNameForSearch(meta.name);
+      if (!normalized) continue;
+      if (AXIS_STOP_KEYWORDS.some(keyword => normalized.includes(keyword))){
+        hits++;
+        if (hits >= 2) return true;
+      }
+    }
+    return false;
   }
 
   function serviceAllowed(trip_id){
