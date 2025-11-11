@@ -745,6 +745,28 @@ const GTFS_RT_STOP_META_KEYS = new Set([
     return undefined;
   }
 
+    function buildGtfsStopKeyVariants(name){
+    const variants = new Set();
+    const raw = name == null ? '' : String(name);
+    const push = (value)=>{
+      const norm = normalizeStationName(value);
+      if (norm) variants.add(norm);
+    };
+    push(raw);
+    if (raw){
+      const colonless = raw.replace(/[:_-]+/g, ' ');
+      if (colonless !== raw) push(colonless);
+      const digits = raw.match(/\d{4,}/g) || [];
+      for (const d of digits){
+        push(d);
+        push(`StopPoint ${d}`);
+        push(`StopArea ${d}`);
+        push(`Gare ${d}`);
+      }
+    }
+    return Array.from(variants);
+  }
+
   function registerGtfsRetards(data, source){
     if (!data || typeof data !== 'object') return;
     realtimeRawData.gtfs = data;
@@ -776,12 +798,19 @@ const GTFS_RT_STOP_META_KEYS = new Set([
       
       const perStation = new Map();
       for (const [stationName, rawValue] of Object.entries(stopsData)){
-        const norm = normalizeStationName(stationName);
-        if (!norm) continue;
-        if (GTFS_RT_STOP_META_KEYS.has(norm) || GTFS_RT_STOP_META_KEYS.has(stationName.toLowerCase())) continue;
         const value = coerceGtfsRtDelayValue(rawValue, { trainStatus });
         if (value === undefined) continue;
-        perStation.set(norm, { original: stationName, value, source: 'GTFS-RT' });
+        const variants = buildGtfsStopKeyVariants(stationName);
+        if (!variants.length) continue;
+        const metaKey = stationName && typeof stationName === 'string' ? stationName.toLowerCase() : '';
+        if (metaKey && GTFS_RT_STOP_META_KEYS.has(metaKey)) continue;
+        let stored = false;
+        for (const key of variants){
+          if (!key || GTFS_RT_STOP_META_KEYS.has(key)) continue;
+          perStation.set(key, { original: stationName, value, source: 'GTFS-RT' });
+          stored = true;
+        }
+        if (!stored) continue;
       }
       if (perStation.size){
         const rawNumberCandidates = [
@@ -1206,7 +1235,32 @@ const GTFS_RT_STOP_META_KEYS = new Set([
     if (key) stopNameCandidatesCache.set(key, arr);
     return arr;
   }
+function buildStopMetaKeyCandidates(stopMeta){
+    const variants = new Set();
+    const consider = (raw)=>{
+      if (!raw && raw !== 0) return;
+      const str = String(raw);
+      const push = (value)=>{
+        const norm = normalizeStationName(value);
+        if (norm) variants.add(norm);
+      };
+      push(str);
+      const stripped = str.replace(/[:_-]+/g, ' ');
+      if (stripped !== str) push(stripped);
+      const digits = str.match(/\d{4,}/g) || [];
+      for (const d of digits){
+        push(d);
+        push(`StopPoint ${d}`);
+        push(`StopArea ${d}`);
+        push(`Gare ${d}`);
+      }
+    };
+    consider(stopMeta?.stop_id);
+    consider(stopMeta?.parent_station);
+    return Array.from(variants);
+  }
 
+    
   function findDelayEntryForStop(perStation, stopMeta){
     if (!perStation || !perStation.size || !stopMeta) return null;
     const candidates = getStopNameCandidates(stopMeta);
@@ -1214,6 +1268,11 @@ const GTFS_RT_STOP_META_KEYS = new Set([
       const norm = normalizeStationName(name);
       if (!norm) continue;
       const entry = perStation.get(norm);
+      if (entry) return entry;
+    }
+    const metaKeys = buildStopMetaKeyCandidates(stopMeta);
+    for (const key of metaKeys){
+      const entry = perStation.get(key);
       if (entry) return entry;
     }
     return null;
