@@ -2083,60 +2083,26 @@ function sanitizeCflStationName(name){
   const trainMarkers = new Map();
   const trainCowById = new Map();
   const trainDataById = new Map();
-    // ---------- Remontée des trains visibles vers le VPS (carte/seen-tails) ----------
 
-  // Endpoint FastAPI sur ton VPS
+  // ---------- Remontée des trains visibles vers le VPS (carte/seen-tails) ----------
   const CARTE_SEEN_TAILS_ENDPOINT = 'https://vps.labetaillere.fr/carte/seen-tails';
 
-  // On limite les envois toutes les 5 minutes
-  const CARTE_SEEN_INTERVAL_MS = 5 * 60 * 1000;
+  const CARTE_SEEN_MIN_INTERVAL_MS = 10 * 1000;          // anti-spam lorsqu'on anime la carte
+  const CARTE_SEEN_FORCE_INTERVAL_MS = 5 * 60 * 1000;     // heartbeat max toutes les 5 minutes
   let lastCarteSeenPost = 0;
+  let lastCarteSeenPayloadKey = null;
+  let pendingCarteSeenPromise = null;
 
-  /**
-   * Construit le tail SNCF pour un train affiché sur la carte.
-   * On ne garde que les trains SNCF / TGV (pas les CFL purs).
-   */
-  function buildSncfTailForTrain(train) {
-    if (!train) return null;
-
-    // Catégorie calculée par computeTrainBranding: 'sncf', 'cfl', 'tgv-roi'
-    const category = train.branding?.category || 'sncf';
-    if (category !== 'sncf' && category !== 'tgv-roi') {
-      // On ignore les trains purement CFL pour ce mécanisme
-      return null;
-    }
-
-    // On essaie d’extraire un numéro exploitable
-    const rawNumber =
-      train.branding?.digits ||
-      train.branding?.rawDigits ||
-      train.number ||
-      train.tripNumber ||
-      train.numberKey ||
-      null;
-
-    const num = extractTrainNumberCandidate(rawNumber);
-    if (!num) return null;
-
-    // Date du jour (navigateur) au format YYYY-MM-DD
-    const todayStr = formatLuxDateISO(new Date());
-
-    // Tail complet pour l’API SNCF
-    // Exemple: vehicle_journey:SNCF:2025-11-13:88522:1187:Train
-    return `vehicle_journey:SNCF:${todayStr}:${num}:1187:Train`;
-  }
-
-  /**
-   * À partir d’une liste de trains, renvoie la liste de tails SNCF uniques.
-   */
   function computeVisibleTrainTails(trains) {
     if (!Array.isArray(trains) || !trains.length) return [];
-    const set = new Set();
+    const unique = new Set();
     for (const train of trains) {
-      const tail = buildSncfTailForTrain(train);
-      if (tail) set.add(tail);
+      if (!train) continue;
+      const raw = train.id != null ? String(train.id).trim() : '';
+      if (!raw) continue;
+      unique.add(raw);
     }
-    return Array.from(set);
+    return Array.from(unique).sort();
   }
 
   /**
@@ -2154,23 +2120,43 @@ function sanitizeCflStationName(name){
     return list;
   }
 
-  /**
-   * Envoie au VPS la liste de tails des trains actuellement visibles sur la carte.
-   */
-  async function sendVisibleTrainTails(trains) {
-    const tails = computeVisibleTrainTails(trains);
-    if (!tails.length) return;
-
+  async function sendVisibleTrainTails(tails) {
     try {
       await fetch(CARTE_SEEN_TAILS_ENDPOINT, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ tails })
       });
-      // console.log('[CARTE SNCF] Tails envoyés au VPS:', tails);
     } catch (e) {
       console.warn('[CARTE SNCF] Impossible d’envoyer les tails visibles', e);
+      throw e;      
     }
+  }
+
+  function maybePostCarteSeenTails() {
+    const visibleTrains = getVisibleTrainsForCarte();
+    const tails = computeVisibleTrainTails(visibleTrains);
+    const payloadKey = tails.join('|');
+    const now = Date.now();
+    const changed = payloadKey !== lastCarteSeenPayloadKey;
+    const heartbeatDue = now - lastCarteSeenPost >= CARTE_SEEN_FORCE_INTERVAL_MS;
+    if (!changed && !heartbeatDue) return;
+    if (!changed && now - lastCarteSeenPost < CARTE_SEEN_MIN_INTERVAL_MS) return;
+    if (pendingCarteSeenPromise) return;
+
+    const sendStartedAt = Date.now();
+    const promise = sendVisibleTrainTails(tails)
+      .then(() => {
+        lastCarteSeenPost = sendStartedAt;
+        lastCarteSeenPayloadKey = payloadKey;
+      })
+      .catch(() => {
+        // on laisse lastCarteSeenPayloadKey tel quel pour retenter au prochain passage
+      })
+      .finally(() => {
+        pendingCarteSeenPromise = null;
+      });
+    pendingCarteSeenPromise = promise;
   }
 
   const COW_EMOJIS = ['🐄','🐮','🐃','🐂','🐄'];
@@ -4459,13 +4445,7 @@ function stationNameMatchesKeywords(name, keywords){
     document.getElementById('counts').textContent = `${list.length} train(s) actifs`;
     document.getElementById('clock').textContent = 'Heure locale : ' + new Date().toLocaleTimeString();
 
-    // --- Remontée vers le VPS toutes les 5 minutes ---
-    const nowMs = Date.now();
-    if (nowMs - lastCarteSeenPost >= CARTE_SEEN_INTERVAL_MS) {
-      lastCarteSeenPost = nowMs;
-      const visibleTrains = getVisibleTrainsForCarte();
-      sendVisibleTrainTails(visibleTrains);
-    }
+    maybePostCarteSeenTails();
   }
 
   // ---------- Boucle ----------
