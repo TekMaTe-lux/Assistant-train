@@ -193,8 +193,9 @@
   <script src="https://unpkg.com/papaparse@5.4.1/papaparse.min.js"></script>
 
   <script>
-  // ---------- Bases: 1) local /data/ , 2) GitHub RAW ----------
+  // ---------- Bases: 1) VPS GTFS static, 2) local /data/, 3) GitHub RAW ----------
   const BASES = [
+    'https://vps.labetaillere.fr/gtfs/static/',
     location.origin + '/data/',
     'https://raw.githubusercontent.com/TekMaTe-lux/Assistant-train/main/data/'
   ];
@@ -359,8 +360,17 @@ function escapeHTML(str){
     const routeShort = (route?.short || '').trim();
     const routeLong = (route?.long || '').trim();
     const headsign = (trip?.headsign || '').trim();
+    const tripShortName = (trip?.trip_short_name || '').trim();
     const normalizedShort = routeShort.toUpperCase();
-    const isTgv = normalizedShort === 'TGV' || /\bTGV\b/i.test(routeLong) || /\bTGV\b/i.test(headsign);
+    const brandingTokens = [routeShort, routeLong, headsign, tripShortName].filter(Boolean);
+    const tripIdToken = (tripId || '').toUpperCase();
+
+    const tokenMatches = (regex) => brandingTokens.some(value => regex.test(value));
+    const mentionsTgv = tokenMatches(/\bTGV\b/i);
+    const mentionsInoui = tokenMatches(/\bINOU[IY]\b/i);
+    const mentionsOuigo = tokenMatches(/\bOUIGO\b/i);
+    const tripIdHintsTgv = /:(?:OUI|TGV|INOU[IY]|OUIGO):/i.test(tripIdToken);
+    const isTgv = mentionsTgv || mentionsInoui || mentionsOuigo || tripIdHintsTgv;
 
     let category = 'sncf';
     if (isCfl) category = 'cfl';
@@ -543,7 +553,6 @@ function escapeHTML(str){
     { axisId:'dudelange-usines', hafasId:'220301041', label:'Dudelange-Usines', names:['Dudelange-Usines','Dudelange (Usines), Gare'] },
     { axisId:'dudelange-ville', hafasId:'220301082', label:'Dudelange-Ville', names:['Dudelange-Ville','Dudelange (Ville), Gare'] },
     { axisId:'dudelange-centre', hafasId:'220301015', label:'Dudelange-Centre', names:['Dudelange-Centre','Dudelange (Centre), Gare'] },
-    { axisId:'dudelange-burange', hafasId:'220301022', label:'Dudelange-Burange', names:['Dudelange-Burange','Dudelange, Gare'] },
     { axisId:'lamadelaine', hafasId:'220901011', label:'Lamadelaine', names:['Lamadelaine','Lamadelaine, Gare'] },
     { axisId:'bascharage-sanem', hafasId:'190101027', label:'Bascharage-Sanem', names:['Bascharage-Sanem','Bascharage/Sanem','Bascharage/Sanem, Gare','Bascharage, Gare'] },
     { axisId:'kleinbettingen', hafasId:'191103004', label:'Kleinbettingen', names:['Kleinbettingen','Kleinbettingen, Gare'] },
@@ -3197,7 +3206,22 @@ function setLayerGroupVisibility(group, visible){
   } 
 
   // zones d'intérêt (filtre "sillon" simple)
-  const AXIS_STOP_KEYWORDS = ['nancy','pont-','metz','hagondange','thionville','bettembourg','luxembourg'];
+  const AXIS_STOP_KEYWORDS = [
+    'nancy',
+    'pont a mousson',
+    'metz',
+    'hagondange',
+    'thionville',
+    'bettembourg',
+    'luxembourg'
+  ].map(normalizeStationName);
+  const CORE_TGV_STOP_KEYWORDS = ['metz','nancy','thionville','luxembourg'].map(normalizeStationName);
+  const CORE_TGV_STOP_CODES = new Set([
+    '87141002', // Nancy
+    '87192039', // Metz-Ville
+    '87191007', // Thionville
+    '82001000'  // Luxembourg
+  ]);
 
   // ---------- Chargement réseaux ----------
   async function loadNetworks(){
@@ -3250,6 +3274,7 @@ function setLayerGroupVisibility(group, visible){
       const axisStopIds = new Set();
       const axisTripIds = new Set();
       const axisRouteIds = new Set();
+      let filteredTgvCount = 0;
       let combinedActiveServiceIds = null;
       const mergeActiveServices = (set)=>{
         if (!set || !set.size) return;
@@ -3340,6 +3365,8 @@ function setLayerGroupVisibility(group, visible){
         }
       } catch(_){ /* ok si absent */ }
 
+      filteredTgvCount = pruneTgvTripsWithoutCoreStops(axisTripIds);
+
       // routes (optionnel)
       try {
         const routes = await parseCSVAny(FILES.routes);
@@ -3376,6 +3403,7 @@ function setLayerGroupVisibility(group, visible){
       renderAxisStations();
 
       let statusMsg = 'GTFS chargé — ' + stopsById.size + ' gares, ' + stopTimesByTrip.size + ' trips';
+      if (filteredTgvCount) statusMsg += `, ${filteredTgvCount} TGV hors sillon exclus`;
       if (cflStopsAdded || cflTripsAdded){
         statusMsg += ` (CFL +${cflStopsAdded} gares, +${cflTripsAdded} trips)`;
       }
@@ -3567,12 +3595,104 @@ async function integrateCflGtfs({ axisStopIds, axisTripIds, axisRouteIds, mergeA
       return null;
     }
   }
-    
+
+function stationNameMatchesKeywords(name, keywords){
+    if (!name || !Array.isArray(keywords) || !keywords.length) return false;
+    const normalized = normalizeStationName(name);
+    if (!normalized) return false;
+    const collapsed = normalized.replace(/[-'_]+/g, ' ').replace(/\s+/g, ' ').trim();
+    for (const keyword of keywords){
+      if (!keyword) continue;
+      if (normalized.includes(keyword)) return true;
+      if (collapsed.includes(keyword)) return true;
+    }
+    return false;
+  }
+
+  function sequenceMatchesKeywords(seq, keywords, lookup = stopsById){
+    if (!Array.isArray(seq) || !seq.length || !keywords?.length) return false;
+    for (const stop of seq){
+      const meta = lookup.get(stop.stop_id);
+      if (!meta || !meta.name) continue;
+      if (stationNameMatchesKeywords(meta.name, keywords)) return true;
+    }
+    return false;
+  }
+
+   function stopMetaMatchesStationCodes(meta, codes, lookup = stopsById){
+    if (!meta || !codes?.size) return false;
+    const digits = new Set();
+    const pushDigitsFrom = (raw)=>{
+      if (!raw) return;
+      const matches = String(raw).match(/\d{4,}/g);
+      if (!matches) return;
+      for (const match of matches){
+        digits.add(match);
+      }
+    };
+    pushDigitsFrom(meta.stop_id);
+    pushDigitsFrom(meta.parent_station);
+    const parentId = meta.parent_station;
+    if (parentId && lookup.has(parentId)){
+      const parentMeta = lookup.get(parentId);
+      if (parentMeta){
+        pushDigitsFrom(parentMeta.stop_id ?? parentMeta.stopId ?? null);
+      }
+    }
+    if (!digits.size) return false;
+    for (const digit of digits){
+      if (codes.has(digit)) return true;
+    }
+    return false;
+  }
+
+  function sequenceMatchesStationCodes(seq, codes, lookup = stopsById){
+    if (!Array.isArray(seq) || !seq.length || !codes?.size) return false;
+    for (const stop of seq){
+      const meta = lookup.get(stop.stop_id);
+      if (!meta) continue;
+      if (stopMetaMatchesStationCodes(meta, codes, lookup)) return true;
+    }
+    return false;
+  }  
+
+  function isTripLikelyTgv(tripId){
+    const trip = tripsById.get(tripId);
+    if (!trip) return false;
+    const route = trip.route_id ? routesById.get(trip.route_id) : null;
+    const probes = [trip.trip_short_name, trip.headsign, route?.short, route?.long];
+    return probes.some(value => value && /\bTGV\b/i.test(value));
+  }
+
+  function pruneTgvTripsWithoutCoreStops(axisTripIds){
+    if (!stopTimesByTrip.size) return 0;
+    let removed = 0;
+    for (const [tripId, seq] of Array.from(stopTimesByTrip.entries())){
+      if (!isTripLikelyTgv(tripId)) continue;
+      if (sequenceMatchesStationCodes(seq, CORE_TGV_STOP_CODES) || sequenceMatchesKeywords(seq, CORE_TGV_STOP_KEYWORDS)) continue;
+      stopTimesByTrip.delete(tripId);
+      tripsById.delete(tripId);
+      realtimeStopDataByTrip.delete(tripId);
+      staticRelatedNumbersByTrip.delete(tripId);
+      if (axisTripIds) axisTripIds.delete(tripId);
+      removed++;
+    }
+    return removed;
+  }
+
   // ---------- Filtre sillon & service du jour ----------
   function tripPassesAxis(seq, lookup = stopsById){
-    const names = seq.map(s=> (lookup.get(s.stop_id)?.name || '').toLowerCase());
-    const hits = names.filter(n=> AXIS_STOP_KEYWORDS.some(k=> n.includes(k))).length;
-    return hits >= 2;
+    if (!Array.isArray(seq) || seq.length < 2) return false;
+    let hits = 0;
+    for (const stop of seq){
+      const meta = lookup.get(stop.stop_id);
+      if (!meta || !meta.name) continue;
+      if (stationNameMatchesKeywords(meta.name, AXIS_STOP_KEYWORDS)){
+        hits++;
+        if (hits >= 2) return true;
+      }
+    }
+    return false;
   }
 
   function serviceAllowed(trip_id){
