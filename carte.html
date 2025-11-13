@@ -2088,7 +2088,7 @@ function sanitizeCflStationName(name){
   const CARTE_SEEN_TAILS_ENDPOINT = 'https://vps.labetaillere.fr/carte/seen-tails';
 
   const CARTE_SEEN_MIN_INTERVAL_MS = 10 * 1000;          // anti-spam lorsqu'on anime la carte
-  const CARTE_SEEN_FORCE_INTERVAL_MS = 5 * 60 * 1000;     // heartbeat max toutes les 5 minutes
+  const CARTE_SEEN_FORCE_INTERVAL_MS = 60 * 1000;        // heartbeat max toutes les 60 secondes
   let lastCarteSeenPost = 0;
   let lastCarteSeenPayloadKey = null;
   let pendingCarteSeenPromise = null;
@@ -2126,33 +2126,46 @@ function sanitizeCflStationName(name){
       }
 
       const payload = JSON.stringify({ tails });
-      const headers = { 'Content-Type': 'application/json' };
 
-   // Le backend expose maintenant CORS ⇒ on tente un POST JSON standard.
-      try {
-        await fetch(CARTE_SEEN_TAILS_ENDPOINT, {
-          method: 'POST',
-          headers,
-          body: payload,
-          keepalive: true,
-          mode: 'cors',
-          credentials: 'omit'
-        });
-        return true;
-      } catch (fetchError) {
-        console.warn('[CARTE SNCF] POST /carte/seen-tails en échec, fallback sendBeacon', fetchError);
-      }
-
-      // Fallback : on repasse par sendBeacon, qui reste le plus tolérant côté navigateur.
+ // sendBeacon n'exige pas de CORS ⇒ priorité à ce transport.
       if (navigator?.sendBeacon) {
         try {
-          const blob = new Blob([payload], { type: headers['Content-Type'] });
+          const blob = new Blob([payload], { type: 'application/json' });
           if (navigator.sendBeacon(CARTE_SEEN_TAILS_ENDPOINT, blob)) {
             return true;
           }
         } catch (beaconError) {
-          console.warn('[CARTE SNCF] Fallback sendBeacon impossible', beaconError);
+          console.warn('[CARTE SNCF] sendBeacon impossible', beaconError);
         }
+      }
+
+      // Fallback simple POST text/plain (pas de préflight, mais la requête arrive côté VPS). 
+      try {
+        await fetch(CARTE_SEEN_TAILS_ENDPOINT, {
+          method: 'POST',
+          headers: { 'Content-Type': 'text/plain;charset=UTF-8' },
+          body: payload,
+          keepalive: true,
+          mode: 'no-cors',
+          credentials: 'omit'
+        });
+        return true;
+      } catch (plainError) {
+        console.warn('[CARTE SNCF] Fallback POST text/plain impossible', plainError);
+      }
+
+      // Dernier recours : POST opaque sans header (pour éviter les blocages navigateur extrêmes).
+      try {
+        await fetch(CARTE_SEEN_TAILS_ENDPOINT, {
+          method: 'POST',
+          body: payload,
+          keepalive: true,
+          mode: 'no-cors',
+          credentials: 'omit'
+        });
+        return true;
+      } catch (opaqueError) {
+        console.warn('[CARTE SNCF] Fallback POST opaque impossible', opaqueError);
       }
 
     return false;
