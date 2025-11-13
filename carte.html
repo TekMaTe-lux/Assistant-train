@@ -2121,38 +2121,42 @@ function sanitizeCflStationName(name){
   }
 
   async function sendVisibleTrainTails(tails) {
-   const payload = JSON.stringify({ tails });
-   const headers = { 'Content-Type': 'text/plain;charset=UTF-8' }; 
-
-    // Essayons d'abord avec sendBeacon : pas de CORS, fire-and-forget idéal pour ce cas.
-    if (navigator?.sendBeacon) {
-      try {
-        const blob = new Blob([payload], { type: headers['Content-Type'] });
-        if (navigator.sendBeacon(CARTE_SEEN_TAILS_ENDPOINT, blob)) {
-          return true;
-        }
-      } catch (beaconError) {
-        console.warn('[CARTE SNCF] Fallback sendBeacon impossible', beaconError);
+      if (!Array.isArray(tails) || tails.length === 0) {
+        return false;
       }
-    }
 
-    // En second choix, on force le mode "no-cors" pour laisser le POST passer
-    // même sans entête Access-Control-Allow-Origin côté VPS.
-    
-    try {
-      await fetch(CARTE_SEEN_TAILS_ENDPOINT, {
-        method: 'POST',
-        headers,
-        body: payload,
-        keepalive: true,
-        mode: 'no-cors'
-      });
-      return true;
-    } catch (e) {
-      console.warn('[CARTE SNCF] Impossible d’envoyer les tails visibles (fetch direct)', e);
-      throw e;      
+      const payload = JSON.stringify({ tails });
+      const headers = { 'Content-Type': 'application/json' };
+
+   // Le backend expose maintenant CORS ⇒ on tente un POST JSON standard.
+      try {
+        await fetch(CARTE_SEEN_TAILS_ENDPOINT, {
+          method: 'POST',
+          headers,
+          body: payload,
+          keepalive: true,
+          mode: 'cors',
+          credentials: 'omit'
+        });
+        return true;
+      } catch (fetchError) {
+        console.warn('[CARTE SNCF] POST /carte/seen-tails en échec, fallback sendBeacon', fetchError);
+      }
+
+      // Fallback : on repasse par sendBeacon, qui reste le plus tolérant côté navigateur.
+      if (navigator?.sendBeacon) {
+        try {
+          const blob = new Blob([payload], { type: headers['Content-Type'] });
+          if (navigator.sendBeacon(CARTE_SEEN_TAILS_ENDPOINT, blob)) {
+            return true;
+          }
+        } catch (beaconError) {
+          console.warn('[CARTE SNCF] Fallback sendBeacon impossible', beaconError);
+        }
+      }
+
+    return false;
     }
-  }
 
   function maybePostCarteSeenTails() {
     const visibleTrains = getVisibleTrainsForCarte();
@@ -2167,10 +2171,11 @@ function sanitizeCflStationName(name){
 
     const sendStartedAt = Date.now();
     const promise = sendVisibleTrainTails(tails)
-      .then(() => {
-        lastCarteSeenPost = sendStartedAt;
-        lastCarteSeenPayloadKey = payloadKey;
-      })
+        .then((success) => {
+          if (!success) return;
+          lastCarteSeenPost = sendStartedAt;
+          lastCarteSeenPayloadKey = payloadKey;
+        })
       .catch(() => {
         // on laisse lastCarteSeenPayloadKey tel quel pour retenter au prochain passage
       })
