@@ -8946,13 +8946,31 @@ const SAME_ORIGIN_JSON = (()=>{
 })();
 
 // Ordre : proxy toutes les 2 min -> même origine (si jamais tu le copies localement) -> anciens miroirs -> RAW GitHub -> jsDelivr -> API GitHub
-const GTFS_RT_CANDIDATES = [
-  'https://vps.labetaillere.fr/gtfs/retards_cfl.json',
-  'https://vps.labetaillere.fr/gtfs/retards_nancymetzlux.json',
-  SAME_ORIGIN_JSON,
-  'https://raw.githubusercontent.com/TekMaTe-lux/Assistant-train/main/Assistant-train/retards_nancymetzlux.json',
-  'https://cdn.jsdelivr.net/gh/TekMaTe-lux/Assistant-train@main/Assistant-train/retards_nancymetzlux.json'
+const GTFS_RT_DATASETS = [
+  {
+    id: 'sncf-nml',
+    label: 'GTFS-RT Nancy/Metz/Lux',
+    filename: 'retards_nancymetzlux.json',
+    sources: [
+      'https://vps.labetaillere.fr/gtfs/retards_nancymetzlux.json',
+      'https://raw.githubusercontent.com/TekMaTe-lux/Assistant-train/main/Assistant-train/retards_nancymetzlux.json',
+      'https://cdn.jsdelivr.net/gh/TekMaTe-lux/Assistant-train@main/Assistant-train/retards_nancymetzlux.json'
+    ]
+  },
+  {
+    id: 'cfl-hafas',
+    label: 'GTFS-RT CFL / HAFAS',
+    filename: 'retards_cfl.json',
+    sources: [
+      'https://vps.labetaillere.fr/gtfs/retards_cfl.json',
+      SAME_ORIGIN_JSON,
+      'https://raw.githubusercontent.com/TekMaTe-lux/Assistant-train/main/Assistant-train/retards_cfl.json',
+      'https://cdn.jsdelivr.net/gh/TekMaTe-lux/Assistant-train@main/Assistant-train/retards_cfl.json'
+    ]
+  }
 ];
+    const appendGtfsCacheBuster = (url, forceFresh) =>
+  url + (url.includes('?') ? '&' : '?') + 't=' + (forceFresh ? Date.now() : 'soft');
 
     const GTFS_NORMALIZED_STATION_MAP_KEY = '__gtfsNormalizedStationMap';
 
@@ -9006,6 +9024,25 @@ function storeGtfsDelay(bucket, stopName, delay) {
   
   const map = getOrInitGtfsNormalizedMap(bucket);
   map.set(norm, finalValue);
+}
+
+function mergeGtfsNormalizedPayloads(payloads) {
+  const merged = {};
+  if (!Array.isArray(payloads)) return merged;
+
+  payloads.forEach(payload => {
+    if (!payload || typeof payload !== 'object') return;
+    Object.entries(payload).forEach(([trainNumber, stops]) => {
+      if (!stops || typeof stops !== 'object') return;
+      if (!merged[trainNumber]) merged[trainNumber] = {};
+      Object.entries(stops).forEach(([stopName, delayValue]) => {
+        if (!stopName) return;
+        storeGtfsDelay(merged[trainNumber], stopName, delayValue);
+      });
+    });
+  });
+
+  return merged;
 }
 
 function parseGtfsDelayValue(raw) {
@@ -9160,47 +9197,43 @@ async function fetchWithTimeoutNoHeaders(url, ms = 8000) {
   }
 }
 
-async function fetchFromGitHubAPI() {
+async function fetchFromGitHubAPI(filename) {
+  if (!filename) throw new Error('GitHub API nécessite un nom de fichier.');
   // Dernier fallback : API GitHub Contents (CORS OK), on décode le Base64
-  const filenames = ['retards_cfl.json', 'retards_nancymetzlux.json'];
   const bases = [
     'https://api.github.com/repos/TekMaTe-lux/Assistant-train/contents/Assistant-train/',
     'https://api.github.com/repos/TekMaTe-lux/Assistant-train/contents/'
   ];
-  for (const filename of filenames) {
-    for (const base of bases) {
-      const apiUrl = base + filename;
-      try {
-        const r = await fetch(apiUrl, {
-          cache: 'no-store',
-          headers: { 'Accept': 'application/vnd.github+json' }
-        });
-        if (!r.ok) continue;
-        const meta = await r.json();
-        if (meta && meta.content) {
-          const text = atob(String(meta.content).replace(/\n/g, ''));
-          return JSON.parse(text);
-        }
-      } catch {}
-    }
+  for (const base of bases) {
+    const apiUrl = base + filename;
+    try {
+      const r = await fetch(apiUrl, {
+        cache: 'no-store',
+        headers: { 'Accept': 'application/vnd.github+json' }
+      });
+      if (!r.ok) continue;
+      const meta = await r.json();
+      if (meta && meta.content) {
+        const text = atob(String(meta.content).replace(/\n/g, ''));
+        return JSON.parse(text);
+      }
+    } catch {}
   }
-  throw new Error('GitHub API fallback indisponible.');
+  throw new Error(`GitHub API fallback indisponible pour ${filename}.`);
 }
 
-async function loadGtfsRetards({ forceFresh = false } = {}) {
-  const withBuster = (u) => u + (u.includes('?') ? '&' : '?') + 't=' + (forceFresh ? Date.now() : 'soft');
-
+async function fetchGtfsDataset(dataset, { forceFresh = false } = {}) {
+  if (!dataset) return null;
+  const { sources = [], filename, id, label } = dataset;
   let lastErr = null;
 
-  // 1) Essais directs (same-origin/raw/jsDelivr)
-  for (const base of GTFS_RT_CANDIDATES) {
-    const url = withBuster(base);
+for (const base of sources) {
+    const url = appendGtfsCacheBuster(base, forceFresh);
     try {
-      console.log('[GTFS-RT] tentative:', url);
+      console.log(`[GTFS-RT][${label}] tentative:`, url);
       const res = await fetchWithTimeoutNoHeaders(url, 8000);
       if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText}`);
 
-      // Certains CDN peuvent renvoyer text/plain : on lit le texte puis JSON.parse au besoin
       const ct = (res.headers.get('content-type') || '').toLowerCase();
       let data;
       if (ct.includes('application/json')) {
@@ -9211,42 +9244,77 @@ async function loadGtfsRetards({ forceFresh = false } = {}) {
       }
 
       const normalized = normalizeGtfsRetardsPayload(data);
-      window.retardsGTFS_RAW = data;
-      window.retardsGTFS = normalized;
-      window.retardsGTFS_SOURCE = base;
-      if (normalized && Object.keys(normalized).length === 0) {
-        console.warn('[GTFS-RT] Aucun arrêt exploitable trouvé dans les données chargées.');
-      }
-window.dispatchEvent(new CustomEvent('gtfsrt:loaded', { detail: { source: base, data, normalized } }));
-      console.log('✅ GTFS-RT chargé via', base, 'à', new Date().toISOString());
-      tryApplyGtfsToCurrentTable();
-      return;
-    } catch (e) {
-      console.warn('[GTFS-RT] échec sur', base, e);
-      lastErr = e;
+      return { id, label, source: base, raw: data, normalized };
+    } catch (err) {
+      lastErr = err;
+      console.warn(`[GTFS-RT][${label}] échec sur`, base, err);
     }
   }
 
-  // 2) Fallback via API GitHub (CORS OK)
-  try {
-    const data = await fetchFromGitHubAPI();
-    const normalized = normalizeGtfsRetardsPayload(data);
-    window.retardsGTFS_RAW = data;
-    window.retardsGTFS = normalized;
-    window.retardsGTFS_SOURCE = 'GitHub API';
-    if (normalized && Object.keys(normalized).length === 0) {
-      console.warn('[GTFS-RT] Aucun arrêt exploitable trouvé dans les données GitHub.');
+  if (filename) {
+    try {
+      const data = await fetchFromGitHubAPI(filename);
+      const normalized = normalizeGtfsRetardsPayload(data);
+      return { id, label, source: 'GitHub API', raw: data, normalized };
+    } catch (err) {
+      lastErr = err;
     }
-window.dispatchEvent(new CustomEvent('gtfsrt:loaded', { detail: { source: 'GitHub API', data, normalized } }));
-    console.log('✅ GTFS-RT chargé via GitHub API à', new Date().toISOString());
-    tryApplyGtfsToCurrentTable();
-    return;
-  } catch (e) {
-    lastErr = e;
+  }
+
+  throw lastErr || new Error(`[GTFS-RT] ${label || id || 'dataset'} indisponible.`);
+}
+
+async function loadGtfsRetards({ forceFresh = false } = {}) {
+  const datasetResults = [];
+  const rawByDataset = {};
+  let lastErr = null;
+
+  for (const dataset of GTFS_RT_DATASETS) {
+    try {
+      const result = await fetchGtfsDataset(dataset, { forceFresh });
+      if (result && result.normalized) {
+        datasetResults.push(result);
+        rawByDataset[dataset.id] = result.raw;
+      }
+} catch (err) {
+      lastErr = err;
+      console.warn(`[GTFS-RT] Source indisponible (${dataset.label}):`, err);
+    }
+  }
+
+  if (!datasetResults.length) {
+    window.retardsGTFS_RAW = null;
+    window.retardsGTFS = null;
+    window.retardsGTFS_SOURCE = null;
+    window.dispatchEvent(new CustomEvent('gtfsrt:error', { detail: { error: String(lastErr) } }));
+    throw lastErr || new Error('Impossible de charger GTFS-RT depuis les miroirs.');
   }
   
-window.dispatchEvent(new CustomEvent('gtfsrt:error', { detail: { error: String(lastErr) } }));
-  throw lastErr || new Error('Impossible de charger GTFS-RT depuis les miroirs.');
+const normalized = mergeGtfsNormalizedPayloads(datasetResults.map(r => r.normalized));
+  const rawPayload = datasetResults.length === 1 ? datasetResults[0].raw : rawByDataset;
+  const sourceLabel = datasetResults.length === 1
+    ? datasetResults[0].source
+    : datasetResults.map(r => `${r.id}:${r.source}`).join(', ');
+
+  window.retardsGTFS_RAW = rawPayload;
+  window.retardsGTFS = normalized;
+  window.retardsGTFS_SOURCE = sourceLabel;
+
+  if (normalized && Object.keys(normalized).length === 0) {
+    console.warn('[GTFS-RT] Données chargées mais aucun arrêt exploitable trouvé.');
+  }
+
+  window.dispatchEvent(new CustomEvent('gtfsrt:loaded', {
+    detail: {
+      source: window.retardsGTFS_SOURCE,
+      data: window.retardsGTFS_RAW,
+      normalized,
+      datasets: datasetResults,
+      rawByDataset
+    }
+  }));
+  console.log('✅ GTFS-RT chargés via', window.retardsGTFS_SOURCE, 'à', new Date().toISOString());
+  tryApplyGtfsToCurrentTable();
 }
 
 // 1er chargement au load (frais)
