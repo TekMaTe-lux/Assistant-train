@@ -1814,28 +1814,28 @@ function adaptDelayEntryForStop(entry, stopMeta){
 
     const delays = new Array(seq.length).fill(null);
     const refTimes = computeReferenceTimesForSeq(seq);
-    let cancellationStartIdx = null;
-    let cancellationSource = null;
-    const cancelledIndices = [];
+      let cancellationStartIdx = null;
+      let cancellationSource = null;
+      const cancelledIndices = [];
 
     for (let i=0;i<seq.length;i++){
-      const stopMeta = stopsById.get(seq[i].stop_id);
-      const entry = findDelayEntryForStop(perStation, stopMeta);
-      if (!entry) continue;
-      if (entry.value == null){
-        const sourceLabel = entry.original || stopMeta?.name || null;
-        stops[i].cancelled = true;
-        stops[i].delaySource = sourceLabel;
+        const stopMeta = stopsById.get(seq[i].stop_id);
+        const entry = findDelayEntryForStop(perStation, stopMeta);
+        if (!entry) continue;
+        if (entry.value == null){
+          const sourceLabel = entry.original || stopMeta?.name || null;
+          stops[i].cancelled = true;
+          stops[i].delaySource = sourceLabel;
+          stops[i].name = stopMeta?.name || null;
+          cancelledIndices.push(i);
+          continue;
+        }
+        const delaySec = Math.round(Number(entry.value) * 60);
+        if (!Number.isFinite(delaySec)) continue;
+        delays[i] = delaySec;
+        stops[i].delaySource = entry.original || stopMeta?.name || null;
         stops[i].name = stopMeta?.name || null;
-        cancelledIndices.push(i);
-        continue;
       }
-      const delaySec = Math.round(Number(entry.value) * 60);
-      if (!Number.isFinite(delaySec)) continue;
-      delays[i] = delaySec;
-      stops[i].delaySource = entry.original || stopMeta?.name || null;
-      stops[i].name = stopMeta?.name || null;
-    }
 
     if (cancelledIndices.length){
       const sorted = cancelledIndices.sort((a,b)=>a-b);
@@ -3991,23 +3991,34 @@ function stationNameMatchesKeywords(name, keywords){
         if (route.long && route.long !== numberDisplay) return route.long;
         if (route.short && route.short !== numberDisplay) return route.short;
         return '';
-      })();
+        })();
 
-      let positioned = false;
+        let positioned = false;
 
-      for (let i=0;i<seq.length;i++){
-        const stop = seq[i];
-        const profileStop = realtimeProfile?.stops?.[i];
-        const arr = profileStop?.arrivalRealtime ?? stop.arrival;
-        const dep = profileStop?.departureRealtime ?? stop.departure;
-        if (arr==null || dep==null || dep<=arr) continue;
-        if (nowSec < arr || nowSec > dep) continue;
+      const resolveRealtimeForStop = (stop, profile)=>{
+          if (!stop) return { arrival:null, departure:null, cancelled:false };
+          const cancelled = Boolean(profile?.cancelled);
+          if (cancelled) return { arrival:null, departure:null, cancelled:true };
+          const arrival = profile?.arrivalRealtime ?? stop.arrival ?? null;
+          const departure = profile?.departureRealtime ?? stop.departure ?? null;
+          return { arrival, departure, cancelled:false };
+        };
 
-        const stopMeta = stopsById.get(stop.stop_id);
-        if (!stopMeta) continue;
+        for (let i=0;i<seq.length;i++){
+          const stop = seq[i];
+          const profileStop = realtimeProfile?.stops?.[i];
+          const times = resolveRealtimeForStop(stop, profileStop);
+          if (times.cancelled) continue;
+          const arr = times.arrival;
+          const dep = times.departure;
+          if (arr==null || dep==null || dep<=arr) continue;
+          if (nowSec < arr || nowSec > dep) continue;
 
-        const nextStopMeta = seq[i+1] ? stopsById.get(seq[i+1].stop_id) : null;
-        const etaSec = Math.max(0, Math.round(dep - nowSec));
+          const stopMeta = stopsById.get(stop.stop_id);
+          if (!stopMeta) continue;
+
+          const nextStopMeta = seq[i+1] ? stopsById.get(seq[i+1].stop_id) : null;
+          const etaSec = Math.max(0, Math.round(dep - nowSec));
 
         const displayForList = branding.displayNumber || numberDisplay || rawNumber || null;
         const numberList = displayForList ? [displayForList] : [];
@@ -4076,12 +4087,15 @@ function stationNameMatchesKeywords(name, keywords){
 
       if (positioned) continue;
 
-      for (let i=0;i<seq.length-1;i++){
-        const A=seq[i], B=seq[i+1];
-        const profileA = realtimeProfile?.stops?.[i];
-        const profileB = realtimeProfile?.stops?.[i+1];
-        const tA = profileA?.departureRealtime ?? profileA?.arrivalRealtime ?? A.departure ?? A.arrival;
-        const tB = profileB?.arrivalRealtime ?? profileB?.departureRealtime ?? B.arrival ?? B.departure;
+        for (let i=0;i<seq.length-1;i++){
+          const A=seq[i], B=seq[i+1];
+          const profileA = realtimeProfile?.stops?.[i];
+          const profileB = realtimeProfile?.stops?.[i+1];
+          const timesA = resolveRealtimeForStop(A, profileA);
+          const timesB = resolveRealtimeForStop(B, profileB);
+          if (timesA.cancelled || timesB.cancelled) continue;
+          const tA = timesA.departure ?? timesA.arrival;
+          const tB = timesB.arrival ?? timesB.departure;
 
         const sA = stopsById.get(A.stop_id), sB = stopsById.get(B.stop_id);
         if (!sA || !sB) continue;
