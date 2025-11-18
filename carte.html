@@ -1582,7 +1582,7 @@ const GTFS_RT_STOP_META_KEYS = new Set([
     }
     return fallback;
   }
- function computeTrainDelayInfo(train){
+  function computeTrainDelayInfo(train){
     if (!train || !trainDelaysByNumber.size) return null;
     const candidateKeys = [];
     const pushKey = (value)=>{
@@ -1621,6 +1621,12 @@ const GTFS_RT_STOP_META_KEYS = new Set([
       return info;
     }
     return cancelledInfo;
+  }
+
+  function buildSegmentCancellationDelayInfo(train){
+    if (!train || !train.segmentCancelled) return null;
+    const entry = { value:null, original: train.cancellationStation || train.from || null };
+    return buildDelayInfo(entry, train);
   }   
     
  function getStopNameCandidates(stopMeta){
@@ -1809,6 +1815,60 @@ function adaptDelayEntryForStop(entry, stopMeta){
       realtimeStopDataByTrip.set(tripId, data);
       return data;
     }
+    function firstNonCancelledStopIndex(profile){
+    if (!profile || !Array.isArray(profile.stops)) return null;
+    for (let i=0;i<profile.stops.length;i++){
+      if (!profile.stops[i]?.cancelled) return i;
+    }
+    return null;
+  }
+
+  function stopReferenceTime(profile, seq, idx){
+    if (idx == null || idx < 0) return null;
+    const stop = profile?.stops?.[idx];
+    const seqStop = Array.isArray(seq) ? seq[idx] : null;
+    return stop?.departureRealtime ?? stop?.arrivalRealtime ?? seqStop?.departure ?? seqStop?.arrival ?? null;
+  }
+
+  function deriveCancellationStation(profile){
+    if (!profile) return null;
+    if (profile.cancellation?.station) return profile.cancellation.station;
+    if (Array.isArray(profile.stops)){
+      for (const st of profile.stops){
+        if (!st) continue;
+        if (st.delaySource) return st.delaySource;
+        if (st.cancelled && st.name) return st.name;
+      }
+    }
+    return null;
+  }
+
+  function isStopCancellationActive(profile, idx, seq, nowSec, firstActiveIdx){
+    if (!profile) return false;
+    const stop = profile?.stops?.[idx];
+    if (stop?.cancelled) return true;
+    const cancellationIdx = profile?.cancellation?.index;
+    if (Number.isInteger(cancellationIdx) && idx >= cancellationIdx) return true;
+    if (Number.isInteger(firstActiveIdx) && idx < firstActiveIdx){
+      const refTime = stopReferenceTime(profile, seq, firstActiveIdx);
+      if (refTime != null && nowSec <= refTime) return true;
+    }
+    return false;
+  }
+
+  function isSegmentCancellationActive(profile, idx, seq, nowSec, firstActiveIdx){
+    if (!profile) return false;
+    const stopA = profile?.stops?.[idx];
+    const stopB = profile?.stops?.[idx+1];
+    const cancellationIdx = profile?.cancellation?.index;
+    if (Number.isInteger(cancellationIdx) && (idx + 1) >= cancellationIdx) return true;
+    if (stopA?.cancelled && stopB?.cancelled) return true;
+    if (Number.isInteger(firstActiveIdx) && (idx + 1) < firstActiveIdx){
+      const refTime = stopReferenceTime(profile, seq, firstActiveIdx);
+      if (refTime != null && nowSec <= refTime) return true;
+    }
+    return false;
+  }
 
     const delays = new Array(seq.length).fill(null);
     const refTimes = computeReferenceTimesForSeq(seq);
@@ -3975,6 +4035,8 @@ function stationNameMatchesKeywords(name, keywords){
       const branding = computeTrainBranding(trip_id, trip, route, rawNumber, numberCandidate || fallbackNumberCandidate);
       const numberDisplay = branding.displayNumber || rawNumber || (numberKey != null ? String(numberKey) : (numberKeyRaw != null ? String(numberKeyRaw) : null));
       const realtimeProfile = computeRealtimeStopData(trip_id, seq, numberKey);
+      const firstActiveIdx = firstNonCancelledStopIndex(realtimeProfile);
+      const cancellationStation = deriveCancellationStation(realtimeProfile);
 
       const startPlanned = seq[0].departure ?? seq[0].arrival;
       const lastStop = seq[seq.length - 1];
@@ -4006,6 +4068,7 @@ function stationNameMatchesKeywords(name, keywords){
 
         const nextStopMeta = seq[i+1] ? stopsById.get(seq[i+1].stop_id) : null;
         const etaSec = Math.max(0, Math.round(dep - nowSec));
+        const segmentCancelled = isStopCancellationActive(realtimeProfile, i, seq, nowSec, firstActiveIdx);
 
         const displayForList = branding.displayNumber || numberDisplay || rawNumber || null;
         const numberList = displayForList ? [displayForList] : [];
@@ -4065,6 +4128,8 @@ function stationNameMatchesKeywords(name, keywords){
           stopsCount: seq.length,
           currentDelaySec: profileStop?.delaySec ?? 0,
           source,
+          segmentCancelled,
+          cancellationStation,
           numberList,
           delayNumberKeys
         });
@@ -4092,6 +4157,7 @@ function stationNameMatchesKeywords(name, keywords){
         const pos = positionAlongPath(path, r) || { lat: lerp(sA.lat, sB.lat, r), lon: lerp(sA.lon, sB.lon, r) };
         const { lat, lon } = pos;
         const etaSec = Math.max(0, Math.round(tB - nowSec));
+        const segmentCancelled = isSegmentCancellationActive(realtimeProfile, i, seq, nowSec, firstActiveIdx);
 
         const displayForList = branding.displayNumber || numberDisplay || rawNumber || null;
         const numberList = displayForList ? [displayForList] : [];
@@ -4151,6 +4217,8 @@ function stationNameMatchesKeywords(name, keywords){
           stopsCount: seq.length,
           currentDelaySec: profileA?.delaySec ?? 0,
           source,
+          segmentCancelled,
+          cancellationStation,
           numberList,
           delayNumberKeys
         });
@@ -4564,7 +4632,9 @@ function stationNameMatchesKeywords(name, keywords){
 
     for (const t of list){
       seen.add(t.id);
-      const delayInfo = computeTrainDelayInfo(t);
+      const baseDelayInfo = computeTrainDelayInfo(t);
+      const cancellationDelayInfo = buildSegmentCancellationDelayInfo(t);
+      const delayInfo = cancellationDelayInfo || baseDelayInfo;
       t.delayInfo = delayInfo;
       const labelWithTrain = formatTrainLabel(t, { includeTrainWord:true, fallbackId:t.id });
       const displayName = t.headsign ? `${t.headsign} — ${labelWithTrain}` : labelWithTrain;
