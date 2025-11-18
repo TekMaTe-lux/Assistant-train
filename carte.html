@@ -2564,7 +2564,13 @@ const mapContainerEl = map.getContainer();
     tripStopsEl.classList.remove('station-mode');
     const delayInfo = data.delayInfo || computeTrainDelayInfo(data);
     if (delayInfo && data.delayInfo !== delayInfo) data.delayInfo = delayInfo;
-    const isTrainCancelled = delayInfo?.severity === 'cancelled';
+    
+    const seq = stopTimesByTrip.get(activeTripId);
+    const realtimeProfile = seq && seq.length ? (realtimeStopDataByTrip.get(activeTripId)
+      || computeRealtimeStopData(activeTripId, seq, data.numberKey || extractTrainNumberCandidate(data.number) || extractTrainNumberCandidate(activeTripId))) : null;
+    const cancellationInfo = realtimeProfile?.cancellation;
+    const isTrainCancelled = cancellationInfo ? cancellationInfo.index === 0 : delayInfo?.severity === 'cancelled';
+    
     tripPanelEl.classList.toggle('cancelled', Boolean(isTrainCancelled));
     tripPanelIconEl.textContent = glyphForTrain(data, delayInfo);
 
@@ -2582,7 +2588,6 @@ const mapContainerEl = map.getContainer();
       tripPanelTrainEl.textContent = data.id || 'Sélectionnez une bétaillère';
     }
 
-    const seq = stopTimesByTrip.get(activeTripId);
     if (!seq || !seq.length){
       tripPanelSummaryEl.textContent = 'Données de trajet indisponibles pour ce service.';
       tripProgressWrapEl.classList.add('hidden');
@@ -2590,9 +2595,6 @@ const mapContainerEl = map.getContainer();
       tripStopsEl.innerHTML = '';
       return;
     }
-
-    const realtimeProfile = realtimeStopDataByTrip.get(activeTripId)
-      || computeRealtimeStopData(activeTripId, seq, data.numberKey || extractTrainNumberCandidate(data.number) || extractTrainNumberCandidate(activeTripId));
 
     const buildTimePart = (type, plannedSec, realtimeSec)=>{
       if (plannedSec == null && realtimeSec == null) return null;
@@ -2677,12 +2679,15 @@ const mapContainerEl = map.getContainer();
     const summaryStartTime = plannedStartSec!=null ? fmtHHMM(plannedStartSec) : (stops[0]?.label ?? '—');
     const summaryEndTime = plannedEndSec!=null ? fmtHHMM(plannedEndSec) : (stops[stops.length - 1]?.label ?? '—');
     let summaryHtml = `${escapeHTML(startName)} <strong>${escapeHTML(summaryStartTime)}</strong> → ${escapeHTML(endName)} <strong>${escapeHTML(summaryEndTime)}</strong>`;
-    if (delayInfo){
-      const severityClass = `trip-panel-delay delay-${delayInfo.severity}`;
-      const context = delayInfo.panelContext ? `<div class="trip-panel-delay-context">${escapeHTML(delayInfo.panelContext)}</div>` : '';
-      summaryHtml += `<div class="${severityClass}">${escapeHTML(delayInfo.panelText)}${context}</div>`;
+    let renderedDelayInfo = delayInfo;
+    if (renderedDelayInfo?.severity === 'cancelled' && cancellationInfo && cancellationInfo.index > 0){
+      renderedDelayInfo = null;
     }
-    const cancellationInfo = realtimeProfile?.cancellation;
+    if (renderedDelayInfo){
+      const severityClass = `trip-panel-delay delay-${renderedDelayInfo.severity}`;
+      const context = renderedDelayInfo.panelContext ? `<div class="trip-panel-delay-context">${escapeHTML(renderedDelayInfo.panelContext)}</div>` : '';
+      summaryHtml += `<div class="${severityClass}">${escapeHTML(renderedDelayInfo.panelText)}${context}</div>`;
+    }
     if (cancellationInfo && cancellationInfo.index != null && cancellationInfo.index < stops.length){
       if (cancellationInfo.index > 0){
         const stationLabel = cancellationInfo.station || stops[cancellationInfo.index]?.name || 'cet arrêt';
