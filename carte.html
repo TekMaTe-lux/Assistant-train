@@ -1542,7 +1542,7 @@ const GTFS_RT_STOP_META_KEYS = new Set([
       sourceLabel: trainDelaySourceLabel
     };
   }
-    
+
   function computeDelayInfoFromPerStation(perStation, train){
     if (!perStation || !perStation.size) return null;
 
@@ -1795,8 +1795,28 @@ function adaptDelayEntryForStop(entry, stopMeta){
       realtimeStopDataByTrip.delete(tripId);
       return null;
     }
-    const normalizedKey = normalizeTrainNumberKey(numberKey);
-    const perStation = normalizedKey ? trainDelaysByNumber.get(String(normalizedKey)) : null;
+    const delayKeyCandidates = [];
+    const pushDelayKey = (value)=>{
+      if (value == null) return;
+      const candidate = extractTrainNumberCandidate(value) ?? value;
+      const normalized = normalizeTrainNumberKey(candidate);
+      if (!normalized && normalized !== 0) return;
+      const keyStr = String(normalized);
+      if (!keyStr || delayKeyCandidates.includes(keyStr)) return;
+      delayKeyCandidates.push(keyStr);
+    };
+
+    pushDelayKey(numberKey);
+    const staticHint = staticRelatedNumbersByTrip.get(tripId);
+    if (staticHint && Array.isArray(staticHint.related)){
+      for (const rel of staticHint.related){
+        pushDelayKey(rel.normalizedKey);
+        pushDelayKey(rel.numberCandidate);
+        pushDelayKey(rel.rawNumber);
+        pushDelayKey(rel.displayNumber);
+      }
+    }
+    const perStation = delayKeyCandidates.map(key => trainDelaysByNumber.get(String(key))).find(Boolean) || null;
     const startPlanned = seq[0]?.departure ?? seq[0]?.arrival ?? null;
     const lastStop = seq[seq.length - 1] || null;
     const endPlanned = lastStop?.arrival ?? lastStop?.departure ?? null;
@@ -4017,7 +4037,7 @@ function stationNameMatchesKeywords(name, keywords){
 
       let positioned = false;
 
-     const buildNumberLists = ()=>{
+      const buildNumberLists = ()=>{
         const displayForList = branding.displayNumber || numberDisplay || rawNumber || null;
         const numberList = displayForList ? [displayForList] : [];
         const delayNumberKeys = [];
@@ -4049,7 +4069,7 @@ function stationNameMatchesKeywords(name, keywords){
             }
           }
         }
-       return { numberList, delayNumberKeys };
+        return { numberList, delayNumberKeys };
       };
 
       for (let i=0;i<seq.length;i++){
@@ -4277,10 +4297,65 @@ function stationNameMatchesKeywords(name, keywords){
     };
   }
 
+  function computeTripAnchors(tripId, seq){
+    if (!tripId || !Array.isArray(seq) || seq.length < 2) return [];
+    const anchors = [];
+    const candidates = [seq[0], seq[seq.length - 1]];
+    for (let i=0;i<candidates.length;i++){
+      const st = candidates[i];
+      if (!st) continue;
+      const meta = stopsById.get(st.stop_id);
+      const name = meta?.name || meta?.stop_name || meta?.stop_desc || st.stop_id;
+      const norm = normalizeStationName(name);
+      if (!norm) continue;
+      const time = st.departure ?? st.arrival ?? null;
+      if (time == null) continue;
+      anchors.push({
+        station: norm,
+        bucket: Math.round(time / 300),
+        time,
+        type: i === 0 ? 'start' : 'end'
+      });
+    }
+    return anchors;
+  }
+
+  function buildStaticMergeEntry(tripId){
+    const trip = tripsById.get(tripId) || {};
+    const route = trip?.route_id ? routesById.get(trip.route_id) : null;
+    const rawNumber = trainNumberForTrip(trip, route, tripId);
+    const numberCandidate = extractTrainNumberCandidate(rawNumber) || extractTrainNumberCandidate(tripId) || null;
+    const branding = computeTrainBranding(tripId, trip, route, rawNumber, numberCandidate || null);
+    const displayNumber = branding.displayNumber || rawNumber || (numberCandidate != null ? String(numberCandidate) : null);
+    const normalizedKey = numberCandidate != null ? normalizeTrainNumberKey(numberCandidate) : null;
+    return {
+      tripId,
+      source: determineTripSource(tripId),
+      displayNumber,
+      numberCandidate,
+      normalizedKey,
+      rawNumber,
+      digits: branding.digits || null
+    };
+  }
+
+  function registerStaticRelations(baseEntry, relatedEntries, signature){
+    if (!baseEntry || !relatedEntries || !relatedEntries.length) return;
+    const existing = staticRelatedNumbersByTrip.get(baseEntry.tripId) || { signature:null, related:[] };
+    const combined = Array.isArray(existing.related) ? existing.related.slice() : [];
+    for (const rel of relatedEntries){
+      if (!rel || rel.tripId === baseEntry.tripId) continue;
+      if (combined.some(r => r.tripId === rel.tripId)) continue;
+      combined.push(rel);
+    }
+    staticRelatedNumbersByTrip.set(baseEntry.tripId, { signature: existing.signature || signature || null, related: combined });
+  }
+
   function rebuildStaticMergeData(){
     tripMergeSignatureCache.clear();
     staticRelatedNumbersByTrip.clear();
     const groups = new Map();
+    const departureGroups = new Map();
     for (const [tripId, seq] of stopTimesByTrip.entries()){
       const meta = buildTripMergeSignature(tripId, seq);
       if (!meta) continue;
@@ -4291,24 +4366,7 @@ function stationNameMatchesKeywords(name, keywords){
 
     for (const [signature, entries] of groups.entries()){
       if (!entries || entries.length < 2) continue;
-      const enriched = entries.map(({ tripId }) => {
-        const trip = tripsById.get(tripId) || {};
-        const route = trip?.route_id ? routesById.get(trip.route_id) : null;
-        const rawNumber = trainNumberForTrip(trip, route, tripId);
-        const numberCandidate = extractTrainNumberCandidate(rawNumber) || extractTrainNumberCandidate(tripId) || null;
-        const branding = computeTrainBranding(tripId, trip, route, rawNumber, numberCandidate || null);
-        const displayNumber = branding.displayNumber || rawNumber || (numberCandidate != null ? String(numberCandidate) : null);
-        const normalizedKey = numberCandidate != null ? normalizeTrainNumberKey(numberCandidate) : null;
-        return {
-          tripId,
-          source: determineTripSource(tripId),
-          displayNumber,
-          numberCandidate,
-          normalizedKey,
-          rawNumber,
-          digits: branding.digits || null
-        };
-      });
+      const enriched = entries.map(({ tripId }) => buildStaticMergeEntry(tripId)).filter(Boolean);
       const sourcesPresent = new Set(enriched.map(e => e.source));
       if (sourcesPresent.size < 2) continue;
       for (const entry of enriched){
@@ -4323,9 +4381,76 @@ function stationNameMatchesKeywords(name, keywords){
             rawNumber: e.rawNumber,
             digits: e.digits
           }));
-        if (related.length){
-          staticRelatedNumbersByTrip.set(entry.tripId, { signature, related });
+        registerStaticRelations(entry, related, signature);
+      }
+    }
+
+    const anchorGroups = new Map();
+    for (const [tripId, seq] of stopTimesByTrip.entries()){
+      const anchors = computeTripAnchors(tripId, seq);
+      if (!anchors.length) continue;
+      const entry = buildStaticMergeEntry(tripId);
+      if (!entry) continue;
+      for (const anchor of anchors){
+        const key = `${anchor.station}#${anchor.bucket ?? '?'}`;
+        if (!anchorGroups.has(key)) anchorGroups.set(key, []);
+        anchorGroups.get(key).push({ anchor, entry });
+      }
+
+      const first = seq[0] || null;
+      const depTime = first?.departure ?? first?.arrival ?? null;
+      if (depTime != null){
+        const meta = stopsById.get(first.stop_id);
+        const name = meta?.name || meta?.stop_name || meta?.stop_desc || first.stop_id;
+        const norm = normalizeStationName(name);
+        if (norm){
+          if (!departureGroups.has(norm)) departureGroups.set(norm, []);
+          departureGroups.get(norm).push({ time: depTime, entry });
         }
+      }
+    }
+
+    const ANCHOR_TOLERANCE_SEC = 300;
+    for (const [anchorKey, entries] of anchorGroups.entries()){
+      if (!entries || entries.length < 2) continue;
+      const sources = new Set(entries.map(e => e.entry?.source));
+      if (sources.size < 2) continue;
+      for (const { entry: baseEntry, anchor } of entries){
+        const related = entries
+          .filter(e => e.entry.tripId !== baseEntry.tripId)
+          .filter(e => Math.abs((e.anchor?.time ?? 0) - (anchor?.time ?? 0)) <= ANCHOR_TOLERANCE_SEC)
+          .map(e => ({
+            tripId: e.entry.tripId,
+            source: e.entry.source,
+            displayNumber: e.entry.displayNumber,
+            numberCandidate: e.entry.numberCandidate,
+            normalizedKey: e.entry.normalizedKey,
+            rawNumber: e.entry.rawNumber,
+            digits: e.entry.digits
+          }));
+        registerStaticRelations(baseEntry, related, `anchor:${anchorKey}`);
+      }
+    }
+
+    const DEPARTURE_TOLERANCE_SEC = 120;
+    for (const [station, entries] of departureGroups.entries()){
+      if (!entries || entries.length < 2) continue;
+      const sources = new Set(entries.map(e => e.entry?.source));
+      if (sources.size < 2) continue;
+      for (const { entry: baseEntry, time } of entries){
+        const related = entries
+          .filter(e => e.entry.tripId !== baseEntry.tripId)
+          .filter(e => Math.abs((e.time ?? 0) - (time ?? 0)) <= DEPARTURE_TOLERANCE_SEC)
+          .map(e => ({
+            tripId: e.entry.tripId,
+            source: e.entry.source,
+            displayNumber: e.entry.displayNumber,
+            numberCandidate: e.entry.numberCandidate,
+            normalizedKey: e.entry.normalizedKey,
+            rawNumber: e.entry.rawNumber,
+            digits: e.entry.digits
+          }));
+        registerStaticRelations(baseEntry, related, `depart:${station}`);
       }
     }
   }
