@@ -322,13 +322,42 @@ function escapeHTML(str){
     return null;
   }
  function normalizeTrainNumberKey(value){
-    if (value == null) return null;
-    const raw = String(value).trim();
-    if (!raw) return null;
-    const trimmed = raw.replace(/^0+/, '');
-    if (trimmed.length) return trimmed;
-    return raw.length ? '0' : null;
-  } 
+  if (value == null) return null;
+  const raw = String(value).trim();
+  if (!raw) return null;
+  const trimmed = raw.replace(/^0+/, '');
+  if (trimmed.length) return trimmed;
+  return raw.length ? '0' : null;
+}
+
+  const TRAIN_NUMBER_EQUIVALENCE_GROUPS = [
+    ['2870','2871']
+  ];
+
+  const TRAIN_NUMBER_EQUIVALENTS = (()=>{
+    const map = new Map();
+    for (const group of TRAIN_NUMBER_EQUIVALENCE_GROUPS){
+      if (!Array.isArray(group) || group.length < 2) continue;
+      const normalized = Array.from(new Set(
+        group
+          .map(v => normalizeTrainNumberKey(v))
+          .filter(v => v != null)
+          .map(v => String(v))
+      ));
+      if (normalized.length < 2) continue;
+      for (const key of normalized){
+        map.set(key, normalized);
+      }
+    }
+    return map;
+  })();
+
+  function equivalentTrainNumbers(key){
+    const norm = normalizeTrainNumberKey(key);
+    if (norm == null) return [];
+    const group = TRAIN_NUMBER_EQUIVALENTS.get(String(norm));
+    return Array.isArray(group) ? group : [];
+  }
     
   function trainNumberForTrip(trip, route, tripId){
     const candidates = [
@@ -645,19 +674,43 @@ function escapeHTML(str){
     const tooltipParts = [];
     let newest = null;
 
+    const mergeEntry = (combined, norm, entry)=>{
+      if (!combined || !norm) return;
+      const existing = combined.get(norm);
+      const incomingCancelled = entry?.value == null;
+      const existingCancelled = existing?.value == null;
+      if (existing){
+        if (existingCancelled && !incomingCancelled){
+          combined.set(norm, entry);
+          return;
+        }
+        if (!existingCancelled && incomingCancelled){
+          return;
+        }
+      }
+      combined.set(norm, entry);
+    };
+
     for (const key of ['gtfs','hafas']){
       const src = realtimeSources[key];
       if (!src) continue;
       let hadData = false;
       if (src.map && src.map.size){
-        for (const [trainNum, perStation] of src.map.entries()){
-          let combined = trainDelaysByNumber.get(trainNum);
-          if (!combined){
-            combined = new Map();
-            trainDelaysByNumber.set(trainNum, combined);
+        for (const [trainNumRaw, perStation] of src.map.entries()){
+          const normalizedKey = normalizeTrainNumberKey(trainNumRaw) ?? trainNumRaw;
+          const targets = new Set([String(trainNumRaw), String(normalizedKey)]);
+          for (const alt of equivalentTrainNumbers(normalizedKey)){
+            targets.add(String(alt));
           }
-          for (const [norm, entry] of perStation.entries()){
-            combined.set(norm, entry);
+          for (const trainNum of targets){
+            let combined = trainDelaysByNumber.get(trainNum);
+            if (!combined){
+              combined = new Map();
+              trainDelaysByNumber.set(trainNum, combined);
+            }
+            for (const [norm, entry] of perStation.entries()){
+              mergeEntry(combined, norm, entry);
+            }
           }
         }
         hadData = true;
@@ -720,7 +773,8 @@ function escapeHTML(str){
 const GTFS_RT_STOP_META_KEYS = new Set([
     'train_id','trainid','train_number','trainnumber','trip_id','tripid','trip',
     'status','state','current_status','currentstatus','source','count','counts','counters',
-    'generated_at','generatedat','updated_at','updatedat','last_updated','lastupdated','timestamp'
+    'generated_at','generatedat','updated_at','updatedat','last_updated','lastupdated','timestamp',
+    'cancelled_stops','cancelledstops','canceled_stops','canceledstops','suppressed_stops','deleted_stops'
   ]);
 
   function parseGtfsRtTimestamp(value){
@@ -848,6 +902,46 @@ const GTFS_RT_STOP_META_KEYS = new Set([
       }
     }
 
+    function collectGtfsCancellationStops(payload){
+      if (!payload || typeof payload !== 'object') return [];
+      const names = new Set();
+      const candidateKeys = [
+        'cancelled_stops','canceled_stops','cancelledStops','canceledStops','suppressed_stops','deleted_stops'
+      ];
+      const pushName = (name)=>{
+        if (!name) return;
+        const trimmed = String(name).trim();
+        if (trimmed) names.add(trimmed);
+      };
+      for (const key of candidateKeys){
+        if (!(key in payload)) continue;
+        const value = payload[key];
+        if (value == null) continue;
+        if (Array.isArray(value)){
+          for (const entry of value){
+            if (entry == null) continue;
+            if (typeof entry === 'string'){ pushName(entry); continue; }
+            if (typeof entry === 'object'){
+              const label = entry.station || entry.stop || entry.name || entry.label;
+              if (label){ pushName(label); continue; }
+              const keys = Object.keys(entry);
+              if (keys.length === 1) pushName(keys[0]);
+            }
+          }
+          continue;
+        }
+        if (typeof value === 'object'){
+          for (const [stationName, flag] of Object.entries(value)){
+            if (flag === false) continue;
+            pushName(stationName);
+          }
+          continue;
+        }
+        if (typeof value === 'string') pushName(value);
+      }
+      return Array.from(names);
+    }
+
     for (const [trainKey, payload] of trainEntries){
       if (payload == null) continue;
       const hasStopsContainer = typeof payload === 'object' && payload != null && !Array.isArray(payload);
@@ -860,9 +954,9 @@ const GTFS_RT_STOP_META_KEYS = new Set([
       if (!stopsData || typeof stopsData !== 'object') continue;
       
       const perStation = new Map();
-      for (const [stationName, rawValue] of Object.entries(stopsData)){
-        const value = coerceGtfsRtDelayValue(rawValue, { trainStatus });
-        if (value === undefined) continue;
+      const registerStationEntry = (stationName, value)=>{
+        const metaKey = stationName && typeof stationName === 'string' ? stationName.toLowerCase() : '';
+        if (metaKey && GTFS_RT_STOP_META_KEYS.has(metaKey)) return false;
         const resolved = resolveRealtimeStationReference(stationName);
         const displayName = resolved.label || stationName;
         const stationId = resolved.stopId || null;
@@ -874,16 +968,25 @@ const GTFS_RT_STOP_META_KEYS = new Set([
           for (const variant of buildGtfsStopKeyVariants(displayName)) variantSet.add(variant);
         }
         const variants = Array.from(variantSet);
-        if (!variants.length) continue;
-        const metaKey = stationName && typeof stationName === 'string' ? stationName.toLowerCase() : '';
-        if (metaKey && GTFS_RT_STOP_META_KEYS.has(metaKey)) continue;
+        if (!variants.length) return false;
         let stored = false;
         for (const key of variants){
           if (!key || GTFS_RT_STOP_META_KEYS.has(key)) continue;
           perStation.set(key, { original: displayName, value, source: 'GTFS-RT', raw: stationName, stationId });
           stored = true;
         }
-        if (!stored) continue;
+        return stored;
+      };
+
+      for (const [stationName, rawValue] of Object.entries(stopsData)){
+        const value = coerceGtfsRtDelayValue(rawValue, { trainStatus });
+        if (value === undefined) continue;
+        registerStationEntry(stationName, value);
+      }
+
+      const cancelledStops = collectGtfsCancellationStops(payload);
+      for (const stationName of cancelledStops){
+        registerStationEntry(stationName, null);
       }
       if (perStation.size){
         const rawNumberCandidates = [
@@ -1350,6 +1453,35 @@ const GTFS_RT_STOP_META_KEYS = new Set([
     return String(train.source || '').toUpperCase() === 'SNCF';
   }
 
+  function resolveRealtimeNumberKey(train){
+    if (!train) return null;
+    const candidates = [
+      train.numberKey,
+      extractTrainNumberCandidate(train.number),
+      extractTrainNumberCandidate(train.id)
+    ];
+    for (const candidate of candidates){
+      const norm = normalizeTrainNumberKey(candidate);
+      if (norm || norm === 0) return norm;
+    }
+    return null;
+  }
+
+  function isTrainFullyCancelled(train){
+    if (!train) return null;
+    const seq = stopTimesByTrip.get(train.id);
+    if (!seq || !seq.length) return null;
+    const numberKey = resolveRealtimeNumberKey(train);
+    const profile = realtimeStopDataByTrip.get(train.id)
+      || computeRealtimeStopData(train.id, seq, numberKey ?? train.id);
+    if (!profile || !profile.stops || !profile.stops.length) return null;
+    const cancellation = profile.cancellation;
+    if (cancellation && cancellation.index === 0) return true;
+    const allCancelled = profile.stops.every(st => st?.cancelled);
+    if (allCancelled) return true;
+    return false;
+  }
+
   function buildDelayInfo(entry, train){
     if (!entry) return null;
     if (entry.value == null){
@@ -1399,6 +1531,8 @@ const GTFS_RT_STOP_META_KEYS = new Set([
   function computeDelayInfoFromPerStation(perStation, train){
     if (!perStation || !perStation.size) return null;
 
+    const fullyCancelled = isTrainFullyCancelled(train);
+
     const candidateOrder = [];
     const seen = new Set();
     const pushCandidate = (name)=>{
@@ -1422,6 +1556,7 @@ const GTFS_RT_STOP_META_KEYS = new Set([
       const entry = perStation.get(candidate.norm);
       if (!entry) continue;
       if (entry.value == null){
+        if (fullyCancelled === false) continue;
         const info = buildDelayInfo(entry, train);
         if (info) return info;
         continue;
@@ -1434,6 +1569,7 @@ const GTFS_RT_STOP_META_KEYS = new Set([
     for (const entry of perStation.values()){
       if (fallback && fallback.severity === 'cancelled') break;
       if (entry.value == null){
+        if (fullyCancelled === false) continue;
         const info = buildDelayInfo(entry, train);
         if (info) fallback = info;
         continue;
@@ -1678,6 +1814,7 @@ function adaptDelayEntryForStop(entry, stopMeta){
     const refTimes = computeReferenceTimesForSeq(seq);
     let cancellationStartIdx = null;
     let cancellationSource = null;
+    const cancelledIndices = [];
 
     for (let i=0;i<seq.length;i++){
       const stopMeta = stopsById.get(seq[i].stop_id);
@@ -1687,23 +1824,33 @@ function adaptDelayEntryForStop(entry, stopMeta){
         const sourceLabel = entry.original || stopMeta?.name || null;
         stops[i].cancelled = true;
         stops[i].delaySource = sourceLabel;
-        if (cancellationStartIdx == null || i < cancellationStartIdx){
-          cancellationStartIdx = i;
-          cancellationSource = sourceLabel || stopMeta?.name || null;
-        }
+        stops[i].name = stopMeta?.name || null;
+        cancelledIndices.push(i);
         continue;
       }
       const delaySec = Math.round(Number(entry.value) * 60);
       if (!Number.isFinite(delaySec)) continue;
       delays[i] = delaySec;
       stops[i].delaySource = entry.original || stopMeta?.name || null;
+      stops[i].name = stopMeta?.name || null;
     }
 
-    if (cancellationStartIdx != null){
-      const fallbackLabel = cancellationSource || stops[cancellationStartIdx]?.delaySource || stops[cancellationStartIdx]?.name || null;
-      for (let j=cancellationStartIdx;j<stops.length;j++){
-        stops[j].cancelled = true;
-        if (!stops[j].delaySource) stops[j].delaySource = fallbackLabel;
+    if (cancelledIndices.length){
+      const sorted = cancelledIndices.sort((a,b)=>a-b);
+      for (const idx of sorted){
+        let tailCancelled = true;
+        for (let j=idx;j<stops.length;j++){
+          if (!stops[j].cancelled){ tailCancelled = false; break; }
+        }
+        if (tailCancelled){
+          cancellationStartIdx = idx;
+          cancellationSource = stops[idx]?.delaySource || stops[idx]?.name || null;
+          const fallbackLabel = cancellationSource || stops[idx]?.delaySource || stops[idx]?.name || null;
+          for (let j=idx;j<stops.length;j++){
+            if (!stops[j].delaySource) stops[j].delaySource = fallbackLabel;
+          }
+          break;
+        }
       }
     }
 
@@ -2503,7 +2650,18 @@ const mapContainerEl = map.getContainer();
     tripStopsEl.classList.remove('station-mode');
     const delayInfo = data.delayInfo || computeTrainDelayInfo(data);
     if (delayInfo && data.delayInfo !== delayInfo) data.delayInfo = delayInfo;
-    const isTrainCancelled = delayInfo?.severity === 'cancelled';
+    
+    const seq = stopTimesByTrip.get(activeTripId);
+    const realtimeProfile = seq && seq.length ? (realtimeStopDataByTrip.get(activeTripId)
+      || computeRealtimeStopData(activeTripId, seq, data.numberKey || extractTrainNumberCandidate(data.number) || extractTrainNumberCandidate(activeTripId))) : null;
+    const cancellationInfo = realtimeProfile?.cancellation;
+    const hasRealtimeStops = Array.isArray(realtimeProfile?.stops);
+    const allRealtimeStopsCancelled = hasRealtimeStops && realtimeProfile.stops.length > 0
+      ? realtimeProfile.stops.every(st => st?.cancelled)
+      : false;
+    const isTrainCancelled = cancellationInfo ? cancellationInfo.index === 0 : delayInfo?.severity === 'cancelled';
+    const propagateTrainCancellation = isTrainCancelled && (!hasRealtimeStops || allRealtimeStopsCancelled);
+    
     tripPanelEl.classList.toggle('cancelled', Boolean(isTrainCancelled));
     tripPanelIconEl.textContent = glyphForTrain(data, delayInfo);
 
@@ -2521,7 +2679,6 @@ const mapContainerEl = map.getContainer();
       tripPanelTrainEl.textContent = data.id || 'Sélectionnez une bétaillère';
     }
 
-    const seq = stopTimesByTrip.get(activeTripId);
     if (!seq || !seq.length){
       tripPanelSummaryEl.textContent = 'Données de trajet indisponibles pour ce service.';
       tripProgressWrapEl.classList.add('hidden');
@@ -2529,9 +2686,6 @@ const mapContainerEl = map.getContainer();
       tripStopsEl.innerHTML = '';
       return;
     }
-
-    const realtimeProfile = realtimeStopDataByTrip.get(activeTripId)
-      || computeRealtimeStopData(activeTripId, seq, data.numberKey || extractTrainNumberCandidate(data.number) || extractTrainNumberCandidate(activeTripId));
 
     const buildTimePart = (type, plannedSec, realtimeSec)=>{
       if (plannedSec == null && realtimeSec == null) return null;
@@ -2562,7 +2716,7 @@ const mapContainerEl = map.getContainer();
       const isFirst = idx === 0;
       const isLast = idx === seq.length - 1;
       const isStopCancelled = Boolean(profileStop?.cancelled);
-      const stopCancelled = isTrainCancelled || isStopCancelled;
+      const stopCancelled = Boolean(isStopCancelled || propagateTrainCancellation);
       const timeParts = [];
       const pushPart = (type, plannedSec, realtimeSec)=>{
         const part = buildTimePart(type, plannedSec, realtimeSec);
@@ -2616,12 +2770,15 @@ const mapContainerEl = map.getContainer();
     const summaryStartTime = plannedStartSec!=null ? fmtHHMM(plannedStartSec) : (stops[0]?.label ?? '—');
     const summaryEndTime = plannedEndSec!=null ? fmtHHMM(plannedEndSec) : (stops[stops.length - 1]?.label ?? '—');
     let summaryHtml = `${escapeHTML(startName)} <strong>${escapeHTML(summaryStartTime)}</strong> → ${escapeHTML(endName)} <strong>${escapeHTML(summaryEndTime)}</strong>`;
-    if (delayInfo){
-      const severityClass = `trip-panel-delay delay-${delayInfo.severity}`;
-      const context = delayInfo.panelContext ? `<div class="trip-panel-delay-context">${escapeHTML(delayInfo.panelContext)}</div>` : '';
-      summaryHtml += `<div class="${severityClass}">${escapeHTML(delayInfo.panelText)}${context}</div>`;
+    let renderedDelayInfo = delayInfo;
+    if (renderedDelayInfo?.severity === 'cancelled' && cancellationInfo && cancellationInfo.index > 0){
+      renderedDelayInfo = null;
     }
-    const cancellationInfo = realtimeProfile?.cancellation;
+    if (renderedDelayInfo){
+      const severityClass = `trip-panel-delay delay-${renderedDelayInfo.severity}`;
+      const context = renderedDelayInfo.panelContext ? `<div class="trip-panel-delay-context">${escapeHTML(renderedDelayInfo.panelContext)}</div>` : '';
+      summaryHtml += `<div class="${severityClass}">${escapeHTML(renderedDelayInfo.panelText)}${context}</div>`;
+    }
     if (cancellationInfo && cancellationInfo.index != null && cancellationInfo.index < stops.length){
       if (cancellationInfo.index > 0){
         const stationLabel = cancellationInfo.station || stops[cancellationInfo.index]?.name || 'cet arrêt';
