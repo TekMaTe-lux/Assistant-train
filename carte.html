@@ -322,42 +322,13 @@ function escapeHTML(str){
     return null;
   }
  function normalizeTrainNumberKey(value){
-  if (value == null) return null;
-  const raw = String(value).trim();
-  if (!raw) return null;
-  const trimmed = raw.replace(/^0+/, '');
-  if (trimmed.length) return trimmed;
-  return raw.length ? '0' : null;
-}
-
-  const TRAIN_NUMBER_EQUIVALENCE_GROUPS = [
-    ['2870','2871']
-  ];
-
-  const TRAIN_NUMBER_EQUIVALENTS = (()=>{
-    const map = new Map();
-    for (const group of TRAIN_NUMBER_EQUIVALENCE_GROUPS){
-      if (!Array.isArray(group) || group.length < 2) continue;
-      const normalized = Array.from(new Set(
-        group
-          .map(v => normalizeTrainNumberKey(v))
-          .filter(v => v != null)
-          .map(v => String(v))
-      ));
-      if (normalized.length < 2) continue;
-      for (const key of normalized){
-        map.set(key, normalized);
-      }
-    }
-    return map;
-  })();
-
-  function equivalentTrainNumbers(key){
-    const norm = normalizeTrainNumberKey(key);
-    if (norm == null) return [];
-    const group = TRAIN_NUMBER_EQUIVALENTS.get(String(norm));
-    return Array.isArray(group) ? group : [];
-  }
+    if (value == null) return null;
+    const raw = String(value).trim();
+    if (!raw) return null;
+    const trimmed = raw.replace(/^0+/, '');
+    if (trimmed.length) return trimmed;
+    return raw.length ? '0' : null;
+  } 
     
   function trainNumberForTrip(trip, route, tripId){
     const candidates = [
@@ -534,6 +505,10 @@ function escapeHTML(str){
   const HAFAS_LOOKAHEAD_MINUTES = 120;
   const HAFAS_REFRESH_INTERVAL_MS = 120000;
   const HAFAS_MAX_JOURNEYS = 20;
+
+  const SNCF_PROXY_BASE_URL = 'https://vps.labetaillere.fr/sncf';
+  const SNCF_CACHE_TTL_MS = 120000;
+  const SNCF_MAX_FETCH_PER_PASS = 5;
   const HAFAS_STATIONS = [
     { axisId:'rodange', hafasId:'220903011', label:'Rodange', names:['Rodange','Rodange, Gare'] },
     { axisId:'petange', hafasId:'220902007', label:'Pétange', names:['Pétange','Petange','Pétange, Gare'] },
@@ -633,7 +608,9 @@ function escapeHTML(str){
   }
 
   const realtimeRawData = { gtfs:null, hafas:null };
+  const REALTIME_SOURCE_KEYS = ['gtfs','hafas','sncf'];
   const realtimeSources = {
+    sncf: { key:'sncf', displayName:'API SNCF', origin:'Proxy SNCF', map:new Map(), lastUpdated:null, rawSource:SNCF_PROXY_BASE_URL, error:null },
     gtfs: { key:'gtfs', displayName:'GTFS-RT', origin:'', map:new Map(), lastUpdated:null, rawSource:'', error:null },
     hafas: { key:'hafas', displayName:'HAFAS', origin:'API HAFAS', map:new Map(), lastUpdated:null, rawSource:'', error:null }
   };
@@ -674,43 +651,19 @@ function escapeHTML(str){
     const tooltipParts = [];
     let newest = null;
 
-    const mergeEntry = (combined, norm, entry)=>{
-      if (!combined || !norm) return;
-      const existing = combined.get(norm);
-      const incomingCancelled = entry?.value == null;
-      const existingCancelled = existing?.value == null;
-      if (existing){
-        if (existingCancelled && !incomingCancelled){
-          combined.set(norm, entry);
-          return;
-        }
-        if (!existingCancelled && incomingCancelled){
-          return;
-        }
-      }
-      combined.set(norm, entry);
-    };
-
-    for (const key of ['gtfs','hafas']){
+    for (const key of REALTIME_SOURCE_KEYS){
       const src = realtimeSources[key];
       if (!src) continue;
       let hadData = false;
       if (src.map && src.map.size){
-        for (const [trainNumRaw, perStation] of src.map.entries()){
-          const normalizedKey = normalizeTrainNumberKey(trainNumRaw) ?? trainNumRaw;
-          const targets = new Set([String(trainNumRaw), String(normalizedKey)]);
-          for (const alt of equivalentTrainNumbers(normalizedKey)){
-            targets.add(String(alt));
+        for (const [trainNum, perStation] of src.map.entries()){
+          let combined = trainDelaysByNumber.get(trainNum);
+          if (!combined){
+            combined = new Map();
+            trainDelaysByNumber.set(trainNum, combined);
           }
-          for (const trainNum of targets){
-            let combined = trainDelaysByNumber.get(trainNum);
-            if (!combined){
-              combined = new Map();
-              trainDelaysByNumber.set(trainNum, combined);
-            }
-            for (const [norm, entry] of perStation.entries()){
-              mergeEntry(combined, norm, entry);
-            }
+          for (const [norm, entry] of perStation.entries()){
+            combined.set(norm, entry);
           }
         }
         hadData = true;
@@ -746,7 +699,7 @@ function escapeHTML(str){
     } else if (trainDelayLastUpdated){
       parts.push(`MAJ ${formatLuxTime(new Date(trainDelayLastUpdated))}`);
       const errorParts = [];
-    for (const key of ['gtfs','hafas']){
+    for (const key of REALTIME_SOURCE_KEYS){
       const src = realtimeSources[key];
       if (src?.error){
         const label = src.displayName || src.key.toUpperCase();
@@ -773,8 +726,7 @@ function escapeHTML(str){
 const GTFS_RT_STOP_META_KEYS = new Set([
     'train_id','trainid','train_number','trainnumber','trip_id','tripid','trip',
     'status','state','current_status','currentstatus','source','count','counts','counters',
-    'generated_at','generatedat','updated_at','updatedat','last_updated','lastupdated','timestamp',
-    'cancelled_stops','cancelledstops','canceled_stops','canceledstops','suppressed_stops','deleted_stops'
+    'generated_at','generatedat','updated_at','updatedat','last_updated','lastupdated','timestamp'
   ]);
 
   function parseGtfsRtTimestamp(value){
@@ -902,46 +854,6 @@ const GTFS_RT_STOP_META_KEYS = new Set([
       }
     }
 
-    function collectGtfsCancellationStops(payload){
-      if (!payload || typeof payload !== 'object') return [];
-      const names = new Set();
-      const candidateKeys = [
-        'cancelled_stops','canceled_stops','cancelledStops','canceledStops','suppressed_stops','deleted_stops'
-      ];
-      const pushName = (name)=>{
-        if (!name) return;
-        const trimmed = String(name).trim();
-        if (trimmed) names.add(trimmed);
-      };
-      for (const key of candidateKeys){
-        if (!(key in payload)) continue;
-        const value = payload[key];
-        if (value == null) continue;
-        if (Array.isArray(value)){
-          for (const entry of value){
-            if (entry == null) continue;
-            if (typeof entry === 'string'){ pushName(entry); continue; }
-            if (typeof entry === 'object'){
-              const label = entry.station || entry.stop || entry.name || entry.label;
-              if (label){ pushName(label); continue; }
-              const keys = Object.keys(entry);
-              if (keys.length === 1) pushName(keys[0]);
-            }
-          }
-          continue;
-        }
-        if (typeof value === 'object'){
-          for (const [stationName, flag] of Object.entries(value)){
-            if (flag === false) continue;
-            pushName(stationName);
-          }
-          continue;
-        }
-        if (typeof value === 'string') pushName(value);
-      }
-      return Array.from(names);
-    }
-
     for (const [trainKey, payload] of trainEntries){
       if (payload == null) continue;
       const hasStopsContainer = typeof payload === 'object' && payload != null && !Array.isArray(payload);
@@ -954,9 +866,9 @@ const GTFS_RT_STOP_META_KEYS = new Set([
       if (!stopsData || typeof stopsData !== 'object') continue;
       
       const perStation = new Map();
-      const registerStationEntry = (stationName, value)=>{
-        const metaKey = stationName && typeof stationName === 'string' ? stationName.toLowerCase() : '';
-        if (metaKey && GTFS_RT_STOP_META_KEYS.has(metaKey)) return false;
+      for (const [stationName, rawValue] of Object.entries(stopsData)){
+        const value = coerceGtfsRtDelayValue(rawValue, { trainStatus });
+        if (value === undefined) continue;
         const resolved = resolveRealtimeStationReference(stationName);
         const displayName = resolved.label || stationName;
         const stationId = resolved.stopId || null;
@@ -968,25 +880,16 @@ const GTFS_RT_STOP_META_KEYS = new Set([
           for (const variant of buildGtfsStopKeyVariants(displayName)) variantSet.add(variant);
         }
         const variants = Array.from(variantSet);
-        if (!variants.length) return false;
+        if (!variants.length) continue;
+        const metaKey = stationName && typeof stationName === 'string' ? stationName.toLowerCase() : '';
+        if (metaKey && GTFS_RT_STOP_META_KEYS.has(metaKey)) continue;
         let stored = false;
         for (const key of variants){
           if (!key || GTFS_RT_STOP_META_KEYS.has(key)) continue;
           perStation.set(key, { original: displayName, value, source: 'GTFS-RT', raw: stationName, stationId });
           stored = true;
         }
-        return stored;
-      };
-
-      for (const [stationName, rawValue] of Object.entries(stopsData)){
-        const value = coerceGtfsRtDelayValue(rawValue, { trainStatus });
-        if (value === undefined) continue;
-        registerStationEntry(stationName, value);
-      }
-
-      const cancelledStops = collectGtfsCancellationStops(payload);
-      for (const stationName of cancelledStops){
-        registerStationEntry(stationName, null);
+        if (!stored) continue;
       }
       if (perStation.size){
         const rawNumberCandidates = [
@@ -1375,7 +1278,7 @@ const GTFS_RT_STOP_META_KEYS = new Set([
     }
   }
 
-    async function loadHafasDelaysViaApi({ duration = HAFAS_LOOKAHEAD_MINUTES } = {}){
+  async function loadHafasDelaysViaApi({ duration = HAFAS_LOOKAHEAD_MINUTES } = {}){
     const now = new Date();
     const dateStr = formatLuxDateISO(now);
     const timeStr = formatLuxTimeISO(now);
@@ -1441,7 +1344,271 @@ const GTFS_RT_STOP_META_KEYS = new Set([
       setRealtimeSourceError('hafas', null);
     }
   }
-    
+
+  const sncfDelayCache = new Map();
+  let sncfFetchPromise = Promise.resolve();
+
+  function sncfNormalizeTrainNumber(value){
+    if (value == null && value !== 0) return null;
+    const candidate = extractTrainNumberCandidate(value) ?? value;
+    const normalized = normalizeTrainNumberKey(candidate);
+    if (normalized == null && normalized !== 0) return null;
+    const str = String(normalized);
+    return str ? str : null;
+  }
+
+  function sncfTrainNumberKeyForTrain(train){
+    if (!train) return null;
+    const probes = [];
+    if (train.numberKey != null) probes.push(train.numberKey);
+    if (Array.isArray(train.delayNumberKeys)) probes.push(...train.delayNumberKeys);
+    if (train.numberDigits) probes.push(train.numberDigits);
+    if (train.numberRaw) probes.push(train.numberRaw);
+    if (train.number) probes.push(train.number);
+    probes.push(train.id);
+    for (const probe of probes){
+      const key = sncfNormalizeTrainNumber(probe);
+      if (key) return key;
+    }
+    return null;
+  }
+
+  function parseSncfTime(raw){
+    if (!raw && raw !== 0) return null;
+    const digits = String(raw).replace(/[^0-9]/g, '');
+    if (digits.length < 4) return null;
+    const hours = Number.parseInt(digits.slice(0,2), 10);
+    const minutes = Number.parseInt(digits.slice(2,4), 10);
+    if (!Number.isFinite(hours) || !Number.isFinite(minutes)) return null;
+    return (hours * 60) + minutes;
+  }
+
+  function diffSncfTimes(base, amended){
+    const baseMin = parseSncfTime(base);
+    const amendedMin = parseSncfTime(amended);
+    if (baseMin == null || amendedMin == null) return null;
+    let diff = amendedMin - baseMin;
+    if (diff < -720) diff += 1440;
+    else if (diff > 720) diff -= 1440;
+    return diff;
+  }
+
+  function coerceSncfDelayValue(raw){
+    if (raw == null && raw !== 0) return null;
+    if (typeof raw === 'number' && Number.isFinite(raw)) return raw;
+    const str = String(raw).trim();
+    if (!str) return null;
+    const match = str.match(/-?\d+/);
+    if (!match) return null;
+    const num = Number(match[0]);
+    return Number.isFinite(num) ? num : null;
+  }
+
+  function computeSncfDelayValue(stop, impact){
+    if (!impact) return null;
+    const candidates = [
+      impact.delay_minutes,
+      impact.delay_minute,
+      impact.delay_min,
+      impact.delay,
+      impact.departure_delay,
+      impact.arrival_delay
+    ];
+    for (const candidate of candidates){
+      const parsed = coerceSncfDelayValue(candidate);
+      if (parsed != null) return parsed;
+    }
+    const base = impact.base_departure_time
+      || impact.base_arrival_time
+      || stop?.departure_time
+      || stop?.arrival_time
+      || null;
+    const amended = impact.amended_departure_time || impact.amended_arrival_time || null;
+    if (base && amended){
+      const diff = diffSncfTimes(base, amended);
+      if (Number.isFinite(diff)) return diff;
+    }
+    return null;
+  }
+
+  function isSncfStopDeleted(impact){
+    if (!impact) return false;
+    const effect = String(impact.stop_time_effect || '').toLowerCase();
+    if (effect === 'deleted' || effect === 'remove_stop') return true;
+    const dep = String(impact.departure_status || '').toLowerCase();
+    const arr = String(impact.arrival_status || '').toLowerCase();
+    return dep === 'deleted' && arr === 'deleted';
+  }
+
+  function buildSncfStationEntry({ stop, impact }){
+    const point = impact?.stop_point || stop?.stop_point || null;
+    const name = point?.name || null;
+    if (!name) return null;
+    const norm = normalizeStationName(name);
+    if (!norm) return null;
+    if (isSncfStopDeleted(impact)){
+      return { norm, data:{ original:name, value:null, source:'SNCF' } };
+    }
+    const delay = computeSncfDelayValue(stop, impact);
+    if (delay != null && Number.isFinite(delay) && delay > 0){
+      return { norm, data:{ original:name, value: delay, source:'SNCF' } };
+    }
+    return null;
+  }
+
+  function buildSncfDelayMap(train, disruptions){
+    const perStation = new Map();
+    if (!train) return perStation;
+    const impactedByKey = new Map();
+    const impactedList = [];
+    const disruptionList = Array.isArray(disruptions) ? disruptions : [];
+    for (const disruption of disruptionList){
+      const objects = Array.isArray(disruption?.impacted_objects) ? disruption.impacted_objects : [];
+      for (const obj of objects){
+        const stops = Array.isArray(obj?.impacted_stops) ? obj.impacted_stops : [];
+        for (const stop of stops){
+          if (!stop) continue;
+          const stopId = stop.stop_point?.id || stop.stop_point?.resource_id || stop.stop_point?.name || null;
+          if (!stopId) continue;
+          if (!impactedByKey.has(stopId)) impactedByKey.set(stopId, stop);
+          impactedList.push(stop);
+        }
+      }
+    }
+
+    const baseStops = Array.isArray(train.stop_times) ? train.stop_times : [];
+    for (const stop of baseStops){
+      const point = stop?.stop_point;
+      if (!point?.name) continue;
+      const idKey = point.id || point.resource_id || point.name;
+      const impact = idKey ? (impactedByKey.get(idKey) || impactedByKey.get(point.name)) : null;
+      const entry = buildSncfStationEntry({ stop, impact });
+      if (!entry) continue;
+      perStation.set(entry.norm, entry.data);
+    }
+
+    for (const impact of impactedList){
+      const entry = buildSncfStationEntry({ stop:null, impact });
+      if (!entry) continue;
+      if (!perStation.has(entry.norm)){
+        perStation.set(entry.norm, entry.data);
+        continue;
+      }
+      const existing = perStation.get(entry.norm);
+      if (!existing) {
+        perStation.set(entry.norm, entry.data);
+        continue;
+      }
+      if (entry.data.value == null){
+        perStation.set(entry.norm, entry.data);
+        continue;
+      }
+      if (existing.value == null) continue;
+      const newVal = Number(entry.data.value);
+      const existingVal = Number(existing.value);
+      if (Number.isFinite(newVal) && Number.isFinite(existingVal) && Math.abs(newVal) > Math.abs(existingVal)){
+        perStation.set(entry.norm, entry.data);
+      }
+    }
+
+    const hasCancellation = Array.from(perStation.values()).some(entry => entry?.value == null);
+    const fullyCancelled = disruptionList.some(disruption => {
+      const effect = String(disruption?.severity?.effect || '').toUpperCase();
+      return effect === 'NO_SERVICE' || effect === 'CANCELLATION';
+    });
+    if (fullyCancelled && !hasCancellation){
+      const fallback = baseStops[0]?.stop_point?.name || train?.name || null;
+      if (fallback){
+        const norm = normalizeStationName(fallback);
+        if (norm) perStation.set(norm, { original:fallback, value:null, source:'SNCF' });
+      }
+    }
+
+    return perStation;
+  }
+
+  async function fetchSncfVehicleJourney(number, { dateStr } = {}){
+    const date = dateStr || formatLuxDateISO(new Date());
+    const url = `${SNCF_PROXY_BASE_URL}/vehicle_journey/${date}/${number}`;
+    const res = await fetchWithTimeoutNoHeaders(url, 12000);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const ct = (res.headers.get('content-type') || '').toLowerCase();
+    let data;
+    if (ct.includes('application/json')){
+      data = await res.json();
+    } else {
+      data = JSON.parse(await res.text());
+    }
+    const train = data?.vehicle_journeys?.[0] || null;
+    const disruptions = data?.disruptions || [];
+    return {
+      perStation: buildSncfDelayMap(train, disruptions),
+      fetchedAt: Date.now()
+    };
+  }
+
+  function rebuildSncfRealtimeSource(){
+    const perTrain = new Map();
+    let newest = null;
+    for (const [number, entry] of sncfDelayCache.entries()){
+      if (!entry || !(entry.perStation instanceof Map)) continue;
+      if (!entry.perStation.size) continue;
+      perTrain.set(number, entry.perStation);
+      if (!newest || entry.fetchedAt > newest) newest = entry.fetchedAt;
+    }
+    realtimeSources.sncf.map = perTrain;
+    realtimeSources.sncf.lastUpdated = newest || null;
+    realtimeSources.sncf.origin = 'Proxy SNCF';
+    realtimeSources.sncf.rawSource = SNCF_PROXY_BASE_URL;
+    rebuildRealtimeDelayIndex();
+  }
+
+  async function fetchSncfBatch(numbers){
+    if (!numbers.length) return;
+    const dateStr = formatLuxDateISO(new Date());
+    const failures = [];
+    for (const number of numbers){
+      try {
+        const entry = await fetchSncfVehicleJourney(number, { dateStr });
+        sncfDelayCache.set(number, entry);
+      } catch(err){
+        failures.push(number);
+        console.warn('[SNCF] échec', number, err);
+      }
+    }
+    rebuildSncfRealtimeSource();
+    if (failures.length === numbers.length){
+      setRealtimeSourceError('sncf', 'indisponible');
+    } else if (failures.length){
+      setRealtimeSourceError('sncf', 'partiel');
+    } else {
+      setRealtimeSourceError('sncf', null);
+    }
+  }
+
+  function ensureSncfDelaysForTrains(trains){
+    if (!Array.isArray(trains) || !trains.length) return;
+    const now = Date.now();
+    const needed = [];
+    for (const train of trains){
+      if (!train) continue;
+      if (String(train.source || '').toUpperCase() === 'CFL') continue;
+      const key = sncfTrainNumberKeyForTrain(train);
+      if (!key) continue;
+      const cached = sncfDelayCache.get(key);
+      if (cached && (now - cached.fetchedAt) < SNCF_CACHE_TTL_MS) continue;
+      if (!needed.includes(key)) needed.push(key);
+    }
+    if (!needed.length) return;
+    const slice = needed.slice(0, SNCF_MAX_FETCH_PER_PASS);
+    sncfFetchPromise = sncfFetchPromise
+      .then(()=> fetchSncfBatch(slice))
+      .catch(err => {
+        console.warn('[SNCF] rafraîchissement en échec', err);
+        setRealtimeSourceError('sncf', 'rafraîchissement en échec');
+      });
+  }
+  
   function shouldIgnoreCancellation(entry, train){
     if (!entry || entry.value !== null) return false;
     const source = (entry.source || '').toUpperCase();
@@ -1451,35 +1618,6 @@ const GTFS_RT_STOP_META_KEYS = new Set([
       return train.mergedSources.some(src => String(src).toUpperCase() === 'SNCF');
     }
     return String(train.source || '').toUpperCase() === 'SNCF';
-  }
-
-  function resolveRealtimeNumberKey(train){
-    if (!train) return null;
-    const candidates = [
-      train.numberKey,
-      extractTrainNumberCandidate(train.number),
-      extractTrainNumberCandidate(train.id)
-    ];
-    for (const candidate of candidates){
-      const norm = normalizeTrainNumberKey(candidate);
-      if (norm || norm === 0) return norm;
-    }
-    return null;
-  }
-
-  function isTrainFullyCancelled(train){
-    if (!train) return null;
-    const seq = stopTimesByTrip.get(train.id);
-    if (!seq || !seq.length) return null;
-    const numberKey = resolveRealtimeNumberKey(train);
-    const profile = realtimeStopDataByTrip.get(train.id)
-      || computeRealtimeStopData(train.id, seq, numberKey ?? train.id);
-    if (!profile || !profile.stops || !profile.stops.length) return null;
-    const cancellation = profile.cancellation;
-    if (cancellation && cancellation.index === 0) return true;
-    const allCancelled = profile.stops.every(st => st?.cancelled);
-    if (allCancelled) return true;
-    return false;
   }
 
   function buildDelayInfo(entry, train){
@@ -1528,25 +1666,8 @@ const GTFS_RT_STOP_META_KEYS = new Set([
     };
   }
 
-  function buildCancelledDelayInfo(station){
-    const title = station ? `Train supprimé à ${station}` : 'Train supprimé';
-    return {
-      label:'Supprimé',
-      minutes:null,
-      station,
-      severity:'cancelled',
-      badgeClass:'train-delay-badge train-delay-badge--cancelled',
-      title,
-      panelText:title,
-      panelContext: trainDelayTooltipSuffix ? `Source temps réel — ${trainDelayTooltipSuffix}` : '',
-      sourceLabel: trainDelaySourceLabel
-    };
-  }
-
   function computeDelayInfoFromPerStation(perStation, train){
     if (!perStation || !perStation.size) return null;
-
-    const fullyCancelled = isTrainFullyCancelled(train);
 
     const candidateOrder = [];
     const seen = new Set();
@@ -1571,7 +1692,6 @@ const GTFS_RT_STOP_META_KEYS = new Set([
       const entry = perStation.get(candidate.norm);
       if (!entry) continue;
       if (entry.value == null){
-        if (fullyCancelled === false) continue;
         const info = buildDelayInfo(entry, train);
         if (info) return info;
         continue;
@@ -1584,7 +1704,6 @@ const GTFS_RT_STOP_META_KEYS = new Set([
     for (const entry of perStation.values()){
       if (fallback && fallback.severity === 'cancelled') break;
       if (entry.value == null){
-        if (fullyCancelled === false) continue;
         const info = buildDelayInfo(entry, train);
         if (info) fallback = info;
         continue;
@@ -1795,28 +1914,8 @@ function adaptDelayEntryForStop(entry, stopMeta){
       realtimeStopDataByTrip.delete(tripId);
       return null;
     }
-    const delayKeyCandidates = [];
-    const pushDelayKey = (value)=>{
-      if (value == null) return;
-      const candidate = extractTrainNumberCandidate(value) ?? value;
-      const normalized = normalizeTrainNumberKey(candidate);
-      if (!normalized && normalized !== 0) return;
-      const keyStr = String(normalized);
-      if (!keyStr || delayKeyCandidates.includes(keyStr)) return;
-      delayKeyCandidates.push(keyStr);
-    };
-
-    pushDelayKey(numberKey);
-    const staticHint = staticRelatedNumbersByTrip.get(tripId);
-    if (staticHint && Array.isArray(staticHint.related)){
-      for (const rel of staticHint.related){
-        pushDelayKey(rel.normalizedKey);
-        pushDelayKey(rel.numberCandidate);
-        pushDelayKey(rel.rawNumber);
-        pushDelayKey(rel.displayNumber);
-      }
-    }
-    const perStation = delayKeyCandidates.map(key => trainDelaysByNumber.get(String(key))).find(Boolean) || null;
+    const normalizedKey = normalizeTrainNumberKey(numberKey);
+    const perStation = normalizedKey ? trainDelaysByNumber.get(String(normalizedKey)) : null;
     const startPlanned = seq[0]?.departure ?? seq[0]?.arrival ?? null;
     const lastStop = seq[seq.length - 1] || null;
     const endPlanned = lastStop?.arrival ?? lastStop?.departure ?? null;
@@ -1849,7 +1948,6 @@ function adaptDelayEntryForStop(entry, stopMeta){
     const refTimes = computeReferenceTimesForSeq(seq);
     let cancellationStartIdx = null;
     let cancellationSource = null;
-    const cancelledIndices = [];
 
     for (let i=0;i<seq.length;i++){
       const stopMeta = stopsById.get(seq[i].stop_id);
@@ -1859,33 +1957,23 @@ function adaptDelayEntryForStop(entry, stopMeta){
         const sourceLabel = entry.original || stopMeta?.name || null;
         stops[i].cancelled = true;
         stops[i].delaySource = sourceLabel;
-        stops[i].name = stopMeta?.name || null;
-        cancelledIndices.push(i);
+        if (cancellationStartIdx == null || i < cancellationStartIdx){
+          cancellationStartIdx = i;
+          cancellationSource = sourceLabel || stopMeta?.name || null;
+        }
         continue;
       }
       const delaySec = Math.round(Number(entry.value) * 60);
       if (!Number.isFinite(delaySec)) continue;
       delays[i] = delaySec;
       stops[i].delaySource = entry.original || stopMeta?.name || null;
-      stops[i].name = stopMeta?.name || null;
     }
 
-    if (cancelledIndices.length){
-      const sorted = cancelledIndices.sort((a,b)=>a-b);
-      for (const idx of sorted){
-        let tailCancelled = true;
-        for (let j=idx;j<stops.length;j++){
-          if (!stops[j].cancelled){ tailCancelled = false; break; }
-        }
-        if (tailCancelled){
-          cancellationStartIdx = idx;
-          cancellationSource = stops[idx]?.delaySource || stops[idx]?.name || null;
-          const fallbackLabel = cancellationSource || stops[idx]?.delaySource || stops[idx]?.name || null;
-          for (let j=idx;j<stops.length;j++){
-            if (!stops[j].delaySource) stops[j].delaySource = fallbackLabel;
-          }
-          break;
-        }
+    if (cancellationStartIdx != null){
+      const fallbackLabel = cancellationSource || stops[cancellationStartIdx]?.delaySource || stops[cancellationStartIdx]?.name || null;
+      for (let j=cancellationStartIdx;j<stops.length;j++){
+        stops[j].cancelled = true;
+        if (!stops[j].delaySource) stops[j].delaySource = fallbackLabel;
       }
     }
 
@@ -2191,14 +2279,6 @@ function sanitizeCflStationName(name){
     return `<div>${escapeHTML(label)} : ${body || '—'}</div>`;
   }
 
-      // Date locale (navigateur) au format YYYY-MM-DD
-  function formatLuxDateISO(d){
-    const year = d.getFullYear();
-    const month = String(d.getMonth() + 1).padStart(2, '0');
-    const day = String(d.getDate()).padStart(2, '0');
-    return `${year}-${month}-${day}`;
-  }
-
   function numericMetaPriority(meta){
     if (!meta) return 3;
     const type = Number(meta.location_type ?? meta.locationType ?? 0) || 0;
@@ -2265,96 +2345,6 @@ function sanitizeCflStationName(name){
   const trainMarkers = new Map();
   const trainCowById = new Map();
   const trainDataById = new Map();
-    // ---------- Remontée des trains visibles vers le VPS (carte/seen-tails) ----------
-
-  // Endpoint FastAPI sur ton VPS
-  const CARTE_SEEN_TAILS_ENDPOINT = 'https://vps.labetaillere.fr/carte/seen-tails';
-
-  // On limite les envois toutes les 5 minutes
-  const CARTE_SEEN_INTERVAL_MS = 5 * 60 * 1000;
-  let lastCarteSeenPost = 0;
-
-  /**
-   * Construit le tail SNCF pour un train affiché sur la carte.
-   * On ne garde que les trains SNCF / TGV (pas les CFL purs).
-   */
-  function buildSncfTailForTrain(train) {
-    if (!train) return null;
-
-    // Catégorie calculée par computeTrainBranding: 'sncf', 'cfl', 'tgv-roi'
-    const category = train.branding?.category || 'sncf';
-    if (category !== 'sncf' && category !== 'tgv-roi') {
-      // On ignore les trains purement CFL pour ce mécanisme
-      return null;
-    }
-
-    // On essaie d’extraire un numéro exploitable
-    const rawNumber =
-      train.branding?.digits ||
-      train.branding?.rawDigits ||
-      train.number ||
-      train.tripNumber ||
-      train.numberKey ||
-      null;
-
-    const num = extractTrainNumberCandidate(rawNumber);
-    if (!num) return null;
-
-    // Date du jour (navigateur) au format YYYY-MM-DD
-    const todayStr = formatLuxDateISO(new Date());
-
-    // Tail complet pour l’API SNCF
-    // Exemple: vehicle_journey:SNCF:2025-11-13:88522:1187:Train
-    return `vehicle_journey:SNCF:${todayStr}:${num}:1187:Train`;
-  }
-
-  /**
-   * À partir d’une liste de trains, renvoie la liste de tails SNCF uniques.
-   */
-  function computeVisibleTrainTails(trains) {
-    if (!Array.isArray(trains) || !trains.length) return [];
-    const set = new Set();
-    for (const train of trains) {
-      const tail = buildSncfTailForTrain(train);
-      if (tail) set.add(tail);
-    }
-    return Array.from(set);
-  }
-
-  /**
-   * Retourne une liste des trains “visibles” pour la carte,
-   * filtrés pour ne garder que SNCF / TGV côté suivi.
-   */
-  function getVisibleTrainsForCarte() {
-    const list = [];
-    for (const train of trainDataById.values()) {
-      const category = train.branding?.category || 'sncf';
-      if (category === 'sncf' || category === 'tgv-roi') {
-        list.push(train);
-      }
-    }
-    return list;
-  }
-
-  /**
-   * Envoie au VPS la liste de tails des trains actuellement visibles sur la carte.
-   */
-  async function sendVisibleTrainTails(trains) {
-    const tails = computeVisibleTrainTails(trains);
-    if (!tails.length) return;
-
-    try {
-      await fetch(CARTE_SEEN_TAILS_ENDPOINT, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ tails })
-      });
-      // console.log('[CARTE SNCF] Tails envoyés au VPS:', tails);
-    } catch (e) {
-      console.warn('[CARTE SNCF] Impossible d’envoyer les tails visibles', e);
-    }
-  }
-
   const COW_EMOJIS = ['🐄','🐮','🐃','🐂','🐄'];
   const stopChildrenByParent = new Map();
   const axisStationByStopId = new Map();
@@ -2685,18 +2675,7 @@ const mapContainerEl = map.getContainer();
     tripStopsEl.classList.remove('station-mode');
     const delayInfo = data.delayInfo || computeTrainDelayInfo(data);
     if (delayInfo && data.delayInfo !== delayInfo) data.delayInfo = delayInfo;
-    
-    const seq = stopTimesByTrip.get(activeTripId);
-    const realtimeProfile = seq && seq.length ? (realtimeStopDataByTrip.get(activeTripId)
-      || computeRealtimeStopData(activeTripId, seq, data.numberKey || extractTrainNumberCandidate(data.number) || extractTrainNumberCandidate(activeTripId))) : null;
-    const cancellationInfo = realtimeProfile?.cancellation;
-    const hasRealtimeStops = Array.isArray(realtimeProfile?.stops);
-    const allRealtimeStopsCancelled = hasRealtimeStops && realtimeProfile.stops.length > 0
-      ? realtimeProfile.stops.every(st => st?.cancelled)
-      : false;
-    const isTrainCancelled = cancellationInfo ? cancellationInfo.index === 0 : delayInfo?.severity === 'cancelled';
-    const propagateTrainCancellation = isTrainCancelled && (!hasRealtimeStops || allRealtimeStopsCancelled);
-    
+    const isTrainCancelled = delayInfo?.severity === 'cancelled';
     tripPanelEl.classList.toggle('cancelled', Boolean(isTrainCancelled));
     tripPanelIconEl.textContent = glyphForTrain(data, delayInfo);
 
@@ -2714,6 +2693,7 @@ const mapContainerEl = map.getContainer();
       tripPanelTrainEl.textContent = data.id || 'Sélectionnez une bétaillère';
     }
 
+    const seq = stopTimesByTrip.get(activeTripId);
     if (!seq || !seq.length){
       tripPanelSummaryEl.textContent = 'Données de trajet indisponibles pour ce service.';
       tripProgressWrapEl.classList.add('hidden');
@@ -2721,6 +2701,9 @@ const mapContainerEl = map.getContainer();
       tripStopsEl.innerHTML = '';
       return;
     }
+
+    const realtimeProfile = realtimeStopDataByTrip.get(activeTripId)
+      || computeRealtimeStopData(activeTripId, seq, data.numberKey || extractTrainNumberCandidate(data.number) || extractTrainNumberCandidate(activeTripId));
 
     const buildTimePart = (type, plannedSec, realtimeSec)=>{
       if (plannedSec == null && realtimeSec == null) return null;
@@ -2751,7 +2734,7 @@ const mapContainerEl = map.getContainer();
       const isFirst = idx === 0;
       const isLast = idx === seq.length - 1;
       const isStopCancelled = Boolean(profileStop?.cancelled);
-      const stopCancelled = Boolean(isStopCancelled || propagateTrainCancellation);
+      const stopCancelled = isTrainCancelled || isStopCancelled;
       const timeParts = [];
       const pushPart = (type, plannedSec, realtimeSec)=>{
         const part = buildTimePart(type, plannedSec, realtimeSec);
@@ -2805,15 +2788,12 @@ const mapContainerEl = map.getContainer();
     const summaryStartTime = plannedStartSec!=null ? fmtHHMM(plannedStartSec) : (stops[0]?.label ?? '—');
     const summaryEndTime = plannedEndSec!=null ? fmtHHMM(plannedEndSec) : (stops[stops.length - 1]?.label ?? '—');
     let summaryHtml = `${escapeHTML(startName)} <strong>${escapeHTML(summaryStartTime)}</strong> → ${escapeHTML(endName)} <strong>${escapeHTML(summaryEndTime)}</strong>`;
-    let renderedDelayInfo = delayInfo;
-    if (renderedDelayInfo?.severity === 'cancelled' && cancellationInfo && cancellationInfo.index > 0){
-      renderedDelayInfo = null;
+    if (delayInfo){
+      const severityClass = `trip-panel-delay delay-${delayInfo.severity}`;
+      const context = delayInfo.panelContext ? `<div class="trip-panel-delay-context">${escapeHTML(delayInfo.panelContext)}</div>` : '';
+      summaryHtml += `<div class="${severityClass}">${escapeHTML(delayInfo.panelText)}${context}</div>`;
     }
-    if (renderedDelayInfo){
-      const severityClass = `trip-panel-delay delay-${renderedDelayInfo.severity}`;
-      const context = renderedDelayInfo.panelContext ? `<div class="trip-panel-delay-context">${escapeHTML(renderedDelayInfo.panelContext)}</div>` : '';
-      summaryHtml += `<div class="${severityClass}">${escapeHTML(renderedDelayInfo.panelText)}${context}</div>`;
-    }
+    const cancellationInfo = realtimeProfile?.cancellation;
     if (cancellationInfo && cancellationInfo.index != null && cancellationInfo.index < stops.length){
       if (cancellationInfo.index > 0){
         const stationLabel = cancellationInfo.station || stops[cancellationInfo.index]?.name || 'cet arrêt';
@@ -4016,16 +3996,7 @@ function stationNameMatchesKeywords(name, keywords){
       const endPlanned = lastStop?.arrival ?? lastStop?.departure;
       const startEffective = realtimeProfile?.startRealtime ?? startPlanned;
       const endEffective = realtimeProfile?.endRealtime ?? endPlanned;
-      const cancellationInfo = realtimeProfile?.cancellation;
-      const cancellationStartPlanned = (cancellationInfo && cancellationInfo.index != null && cancellationInfo.index < seq.length)
-        ? (seq[cancellationInfo.index]?.departure ?? seq[cancellationInfo.index]?.arrival ?? null)
-        : null;
-      const cancellationEndPlanned = cancellationStartPlanned != null ? endPlanned : null;
-      const insideCancelledWindow = cancellationStartPlanned != null
-        && cancellationEndPlanned != null
-        && nowSec >= cancellationStartPlanned
-        && nowSec <= cancellationEndPlanned;
-      if (startEffective==null || endEffective==null || nowSec<startEffective || (nowSec>endEffective && !insideCancelledWindow)) continue;
+      if (startEffective==null || endEffective==null || nowSec<startEffective || nowSec>endEffective) continue;
       const totalSpan = endEffective - startEffective;
       const tripProgress = totalSpan > 0 ? (nowSec - startEffective) / totalSpan : null;
       const headsign = (()=>{
@@ -4037,7 +4008,20 @@ function stationNameMatchesKeywords(name, keywords){
 
       let positioned = false;
 
-      const buildNumberLists = ()=>{
+      for (let i=0;i<seq.length;i++){
+        const stop = seq[i];
+        const profileStop = realtimeProfile?.stops?.[i];
+        const arr = profileStop?.arrivalRealtime ?? stop.arrival;
+        const dep = profileStop?.departureRealtime ?? stop.departure;
+        if (arr==null || dep==null || dep<=arr) continue;
+        if (nowSec < arr || nowSec > dep) continue;
+
+        const stopMeta = stopsById.get(stop.stop_id);
+        if (!stopMeta) continue;
+
+        const nextStopMeta = seq[i+1] ? stopsById.get(seq[i+1].stop_id) : null;
+        const etaSec = Math.max(0, Math.round(dep - nowSec));
+
         const displayForList = branding.displayNumber || numberDisplay || rawNumber || null;
         const numberList = displayForList ? [displayForList] : [];
         const delayNumberKeys = [];
@@ -4069,24 +4053,6 @@ function stationNameMatchesKeywords(name, keywords){
             }
           }
         }
-        return { numberList, delayNumberKeys };
-      };
-
-      for (let i=0;i<seq.length;i++){
-        const stop = seq[i];
-        const profileStop = realtimeProfile?.stops?.[i];
-        const arr = profileStop?.arrivalRealtime ?? stop.arrival;
-        const dep = profileStop?.departureRealtime ?? stop.departure;
-        if (arr==null || dep==null || dep<=arr) continue;
-        if (nowSec < arr || nowSec > dep) continue;
-
-        const stopMeta = stopsById.get(stop.stop_id);
-        if (!stopMeta) continue;
-
-        const nextStopMeta = seq[i+1] ? stopsById.get(seq[i+1].stop_id) : null;
-        const etaSec = Math.max(0, Math.round(dep - nowSec));
-
-        const { numberList, delayNumberKeys } = buildNumberLists();
         const source = trip?.source === 'CFL' ? 'CFL' : 'SNCF';
 
         items.push({
@@ -4142,7 +4108,37 @@ function stationNameMatchesKeywords(name, keywords){
         const { lat, lon } = pos;
         const etaSec = Math.max(0, Math.round(tB - nowSec));
 
-        const { numberList, delayNumberKeys } = buildNumberLists();
+        const displayForList = branding.displayNumber || numberDisplay || rawNumber || null;
+        const numberList = displayForList ? [displayForList] : [];
+        const delayNumberKeys = [];
+        if (numberKey != null) delayNumberKeys.push(String(numberKey));
+        const staticHint = staticRelatedNumbersByTrip.get(trip_id);
+        if (staticHint && Array.isArray(staticHint.related)){
+          for (const rel of staticHint.related){
+            const candidateDisplay = rel.displayNumber || rel.rawNumber || null;
+            if (!candidateDisplay) continue;
+            const str = String(candidateDisplay).trim();
+            if (!str) continue;
+            if (!numberList.includes(str)) numberList.push(str);
+            const normalized = rel.normalizedKey != null ? String(rel.normalizedKey) : null;
+            if (normalized && !delayNumberKeys.includes(normalized)){
+              delayNumberKeys.push(normalized);
+              continue;
+            }
+            const relCandidate = rel.numberCandidate != null ? normalizeTrainNumberKey(rel.numberCandidate) : null;
+            if (relCandidate != null){
+              const keyStr = String(relCandidate);
+              if (keyStr && !delayNumberKeys.includes(keyStr)) delayNumberKeys.push(keyStr);
+              continue;
+            }
+            const fallbackCandidate = extractTrainNumberCandidate(str);
+            const fallbackKey = fallbackCandidate != null ? normalizeTrainNumberKey(fallbackCandidate) : null;
+            if (fallbackKey != null){
+              const keyStr = String(fallbackKey);
+              if (keyStr && !delayNumberKeys.includes(keyStr)) delayNumberKeys.push(keyStr);
+            }
+          }
+        }
         const source = trip?.source === 'CFL' ? 'CFL' : 'SNCF';
 
         items.push({
@@ -4174,64 +4170,6 @@ function stationNameMatchesKeywords(name, keywords){
           delayNumberKeys
         });
         break;
-      }
-
-      if (!positioned && insideCancelledWindow && cancellationInfo && cancellationInfo.index != null && cancellationInfo.index < seq.length){
-        const cancelStartIdx = Math.max(0, cancellationInfo.index);
-        const cancelDelayInfo = buildCancelledDelayInfo(cancellationInfo.station);
-        const cancelStartTime = cancellationStartPlanned ?? startPlanned;
-        const cancelEndTime = cancellationEndPlanned ?? endPlanned;
-        const cancelSpan = (cancelEndTime != null && cancelStartTime != null && cancelEndTime > cancelStartTime)
-          ? (cancelEndTime - cancelStartTime)
-          : null;
-        const cancelProgress = cancelSpan ? (nowSec - cancelStartTime) / cancelSpan : null;
-        for (let i=cancelStartIdx;i<seq.length-1;i++){
-          const A = seq[i], B = seq[i+1];
-          const tA = A.departure ?? A.arrival ?? null;
-          const tB = B.arrival ?? B.departure ?? null;
-          if (tA == null || tB == null || tB <= tA) continue;
-          if (nowSec < tA || nowSec > tB) continue;
-          const sA = stopsById.get(A.stop_id), sB = stopsById.get(B.stop_id);
-          if (!sA || !sB) continue;
-          const r = (nowSec - tA)/(tB - tA);
-          const path = pathBetweenStops(sA, sB);
-          const pos = positionAlongPath(path, r) || { lat: lerp(sA.lat, sB.lat, r), lon: lerp(sA.lon, sB.lon, r) };
-          const { lat, lon } = pos;
-          const etaSec = Math.max(0, Math.round(tB - nowSec));
-          const { numberList, delayNumberKeys } = buildNumberLists();
-          const source = trip?.source === 'CFL' ? 'CFL' : 'SNCF';
-
-          items.push({
-            id: trip_id,
-            headsign,
-            from: sA.name || A.stop_id,
-            to: sB.name || B.stop_id,
-            etaSec,
-            lat,
-            lon,
-            route_id: trip.route_id,
-            number: numberDisplay,
-            numberRaw: rawNumber || null,
-            numberDigits: branding.digits || null,
-            numberKey,
-            branding,
-            startSec: cancelStartTime,
-            endSec: cancelEndTime,
-            scheduledStartSec: startPlanned,
-            scheduledEndSec: endPlanned,
-            progress: cancelProgress,
-            segmentIndex: i,
-            segmentProgress: r,
-            nowSec,
-            stopsCount: seq.length,
-            currentDelaySec: null,
-            source,
-            numberList,
-            delayNumberKeys,
-            delayInfo: cancelDelayInfo
-          });
-          break;
-        }
       }
     }
     return mergeCrossBorderTrains(items);
@@ -4297,65 +4235,10 @@ function stationNameMatchesKeywords(name, keywords){
     };
   }
 
-  function computeTripAnchors(tripId, seq){
-    if (!tripId || !Array.isArray(seq) || seq.length < 2) return [];
-    const anchors = [];
-    const candidates = [seq[0], seq[seq.length - 1]];
-    for (let i=0;i<candidates.length;i++){
-      const st = candidates[i];
-      if (!st) continue;
-      const meta = stopsById.get(st.stop_id);
-      const name = meta?.name || meta?.stop_name || meta?.stop_desc || st.stop_id;
-      const norm = normalizeStationName(name);
-      if (!norm) continue;
-      const time = st.departure ?? st.arrival ?? null;
-      if (time == null) continue;
-      anchors.push({
-        station: norm,
-        bucket: Math.round(time / 300),
-        time,
-        type: i === 0 ? 'start' : 'end'
-      });
-    }
-    return anchors;
-  }
-
-  function buildStaticMergeEntry(tripId){
-    const trip = tripsById.get(tripId) || {};
-    const route = trip?.route_id ? routesById.get(trip.route_id) : null;
-    const rawNumber = trainNumberForTrip(trip, route, tripId);
-    const numberCandidate = extractTrainNumberCandidate(rawNumber) || extractTrainNumberCandidate(tripId) || null;
-    const branding = computeTrainBranding(tripId, trip, route, rawNumber, numberCandidate || null);
-    const displayNumber = branding.displayNumber || rawNumber || (numberCandidate != null ? String(numberCandidate) : null);
-    const normalizedKey = numberCandidate != null ? normalizeTrainNumberKey(numberCandidate) : null;
-    return {
-      tripId,
-      source: determineTripSource(tripId),
-      displayNumber,
-      numberCandidate,
-      normalizedKey,
-      rawNumber,
-      digits: branding.digits || null
-    };
-  }
-
-  function registerStaticRelations(baseEntry, relatedEntries, signature){
-    if (!baseEntry || !relatedEntries || !relatedEntries.length) return;
-    const existing = staticRelatedNumbersByTrip.get(baseEntry.tripId) || { signature:null, related:[] };
-    const combined = Array.isArray(existing.related) ? existing.related.slice() : [];
-    for (const rel of relatedEntries){
-      if (!rel || rel.tripId === baseEntry.tripId) continue;
-      if (combined.some(r => r.tripId === rel.tripId)) continue;
-      combined.push(rel);
-    }
-    staticRelatedNumbersByTrip.set(baseEntry.tripId, { signature: existing.signature || signature || null, related: combined });
-  }
-
   function rebuildStaticMergeData(){
     tripMergeSignatureCache.clear();
     staticRelatedNumbersByTrip.clear();
     const groups = new Map();
-    const departureGroups = new Map();
     for (const [tripId, seq] of stopTimesByTrip.entries()){
       const meta = buildTripMergeSignature(tripId, seq);
       if (!meta) continue;
@@ -4366,7 +4249,24 @@ function stationNameMatchesKeywords(name, keywords){
 
     for (const [signature, entries] of groups.entries()){
       if (!entries || entries.length < 2) continue;
-      const enriched = entries.map(({ tripId }) => buildStaticMergeEntry(tripId)).filter(Boolean);
+      const enriched = entries.map(({ tripId }) => {
+        const trip = tripsById.get(tripId) || {};
+        const route = trip?.route_id ? routesById.get(trip.route_id) : null;
+        const rawNumber = trainNumberForTrip(trip, route, tripId);
+        const numberCandidate = extractTrainNumberCandidate(rawNumber) || extractTrainNumberCandidate(tripId) || null;
+        const branding = computeTrainBranding(tripId, trip, route, rawNumber, numberCandidate || null);
+        const displayNumber = branding.displayNumber || rawNumber || (numberCandidate != null ? String(numberCandidate) : null);
+        const normalizedKey = numberCandidate != null ? normalizeTrainNumberKey(numberCandidate) : null;
+        return {
+          tripId,
+          source: determineTripSource(tripId),
+          displayNumber,
+          numberCandidate,
+          normalizedKey,
+          rawNumber,
+          digits: branding.digits || null
+        };
+      });
       const sourcesPresent = new Set(enriched.map(e => e.source));
       if (sourcesPresent.size < 2) continue;
       for (const entry of enriched){
@@ -4381,76 +4281,9 @@ function stationNameMatchesKeywords(name, keywords){
             rawNumber: e.rawNumber,
             digits: e.digits
           }));
-        registerStaticRelations(entry, related, signature);
-      }
-    }
-
-    const anchorGroups = new Map();
-    for (const [tripId, seq] of stopTimesByTrip.entries()){
-      const anchors = computeTripAnchors(tripId, seq);
-      if (!anchors.length) continue;
-      const entry = buildStaticMergeEntry(tripId);
-      if (!entry) continue;
-      for (const anchor of anchors){
-        const key = `${anchor.station}#${anchor.bucket ?? '?'}`;
-        if (!anchorGroups.has(key)) anchorGroups.set(key, []);
-        anchorGroups.get(key).push({ anchor, entry });
-      }
-
-      const first = seq[0] || null;
-      const depTime = first?.departure ?? first?.arrival ?? null;
-      if (depTime != null){
-        const meta = stopsById.get(first.stop_id);
-        const name = meta?.name || meta?.stop_name || meta?.stop_desc || first.stop_id;
-        const norm = normalizeStationName(name);
-        if (norm){
-          if (!departureGroups.has(norm)) departureGroups.set(norm, []);
-          departureGroups.get(norm).push({ time: depTime, entry });
+        if (related.length){
+          staticRelatedNumbersByTrip.set(entry.tripId, { signature, related });
         }
-      }
-    }
-
-    const ANCHOR_TOLERANCE_SEC = 300;
-    for (const [anchorKey, entries] of anchorGroups.entries()){
-      if (!entries || entries.length < 2) continue;
-      const sources = new Set(entries.map(e => e.entry?.source));
-      if (sources.size < 2) continue;
-      for (const { entry: baseEntry, anchor } of entries){
-        const related = entries
-          .filter(e => e.entry.tripId !== baseEntry.tripId)
-          .filter(e => Math.abs((e.anchor?.time ?? 0) - (anchor?.time ?? 0)) <= ANCHOR_TOLERANCE_SEC)
-          .map(e => ({
-            tripId: e.entry.tripId,
-            source: e.entry.source,
-            displayNumber: e.entry.displayNumber,
-            numberCandidate: e.entry.numberCandidate,
-            normalizedKey: e.entry.normalizedKey,
-            rawNumber: e.entry.rawNumber,
-            digits: e.entry.digits
-          }));
-        registerStaticRelations(baseEntry, related, `anchor:${anchorKey}`);
-      }
-    }
-
-    const DEPARTURE_TOLERANCE_SEC = 120;
-    for (const [station, entries] of departureGroups.entries()){
-      if (!entries || entries.length < 2) continue;
-      const sources = new Set(entries.map(e => e.entry?.source));
-      if (sources.size < 2) continue;
-      for (const { entry: baseEntry, time } of entries){
-        const related = entries
-          .filter(e => e.entry.tripId !== baseEntry.tripId)
-          .filter(e => Math.abs((e.time ?? 0) - (time ?? 0)) <= DEPARTURE_TOLERANCE_SEC)
-          .map(e => ({
-            tripId: e.entry.tripId,
-            source: e.entry.source,
-            displayNumber: e.entry.displayNumber,
-            numberCandidate: e.entry.numberCandidate,
-            normalizedKey: e.entry.normalizedKey,
-            rawNumber: e.entry.rawNumber,
-            digits: e.entry.digits
-          }));
-        registerStaticRelations(baseEntry, related, `depart:${station}`);
       }
     }
   }
@@ -4746,7 +4579,7 @@ function stationNameMatchesKeywords(name, keywords){
 
     for (const t of list){
       seen.add(t.id);
-      const delayInfo = t.delayInfo || computeTrainDelayInfo(t);
+      const delayInfo = computeTrainDelayInfo(t);
       t.delayInfo = delayInfo;
       const labelWithTrain = formatTrainLabel(t, { includeTrainWord:true, fallbackId:t.id });
       const displayName = t.headsign ? `${t.headsign} — ${labelWithTrain}` : labelWithTrain;
@@ -4797,14 +4630,6 @@ function stationNameMatchesKeywords(name, keywords){
     }
     document.getElementById('counts').textContent = `${list.length} train(s) actifs`;
     document.getElementById('clock').textContent = 'Heure locale : ' + new Date().toLocaleTimeString();
-
-    // --- Remontée vers le VPS toutes les 5 minutes ---
-    const nowMs = Date.now();
-    if (nowMs - lastCarteSeenPost >= CARTE_SEEN_INTERVAL_MS) {
-      lastCarteSeenPost = nowMs;
-      const visibleTrains = getVisibleTrainsForCarte();
-      sendVisibleTrainTails(visibleTrains);
-    }
   }
 
   // ---------- Boucle ----------
@@ -4812,7 +4637,11 @@ function stationNameMatchesKeywords(name, keywords){
   const periodEl = document.getElementById('period'), hzEl=document.getElementById('hz'), smoothEl=document.getElementById('smooth');
   periodEl.addEventListener('input', ()=>{ hzEl.textContent=periodEl.value; periodMs=Number(periodEl.value)*1000; nextTick=performance.now(); });
 
-  function tick(){ renderTrains(trainsAt(nowSecLocal())); }
+  function tick(){
+    const active = trainsAt(nowSecLocal());
+    renderTrains(active);
+    ensureSncfDelaysForTrains(active);
+  }
   function loop(ts){
     if (ts >= nextTick){ tick(); nextTick = ts + periodMs; }
     if (smoothEl.checked) tick();
