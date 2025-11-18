@@ -720,7 +720,8 @@ function escapeHTML(str){
 const GTFS_RT_STOP_META_KEYS = new Set([
     'train_id','trainid','train_number','trainnumber','trip_id','tripid','trip',
     'status','state','current_status','currentstatus','source','count','counts','counters',
-    'generated_at','generatedat','updated_at','updatedat','last_updated','lastupdated','timestamp'
+    'generated_at','generatedat','updated_at','updatedat','last_updated','lastupdated','timestamp',
+    'cancelled_stops','cancelledstops','canceled_stops','canceledstops','suppressed_stops','deleted_stops'
   ]);
 
   function parseGtfsRtTimestamp(value){
@@ -848,6 +849,46 @@ const GTFS_RT_STOP_META_KEYS = new Set([
       }
     }
 
+    function collectGtfsCancellationStops(payload){
+      if (!payload || typeof payload !== 'object') return [];
+      const names = new Set();
+      const candidateKeys = [
+        'cancelled_stops','canceled_stops','cancelledStops','canceledStops','suppressed_stops','deleted_stops'
+      ];
+      const pushName = (name)=>{
+        if (!name) return;
+        const trimmed = String(name).trim();
+        if (trimmed) names.add(trimmed);
+      };
+      for (const key of candidateKeys){
+        if (!(key in payload)) continue;
+        const value = payload[key];
+        if (value == null) continue;
+        if (Array.isArray(value)){
+          for (const entry of value){
+            if (entry == null) continue;
+            if (typeof entry === 'string'){ pushName(entry); continue; }
+            if (typeof entry === 'object'){
+              const label = entry.station || entry.stop || entry.name || entry.label;
+              if (label){ pushName(label); continue; }
+              const keys = Object.keys(entry);
+              if (keys.length === 1) pushName(keys[0]);
+            }
+          }
+          continue;
+        }
+        if (typeof value === 'object'){
+          for (const [stationName, flag] of Object.entries(value)){
+            if (flag === false) continue;
+            pushName(stationName);
+          }
+          continue;
+        }
+        if (typeof value === 'string') pushName(value);
+      }
+      return Array.from(names);
+    }
+
     for (const [trainKey, payload] of trainEntries){
       if (payload == null) continue;
       const hasStopsContainer = typeof payload === 'object' && payload != null && !Array.isArray(payload);
@@ -860,9 +901,9 @@ const GTFS_RT_STOP_META_KEYS = new Set([
       if (!stopsData || typeof stopsData !== 'object') continue;
       
       const perStation = new Map();
-      for (const [stationName, rawValue] of Object.entries(stopsData)){
-        const value = coerceGtfsRtDelayValue(rawValue, { trainStatus });
-        if (value === undefined) continue;
+      const registerStationEntry = (stationName, value)=>{
+        const metaKey = stationName && typeof stationName === 'string' ? stationName.toLowerCase() : '';
+        if (metaKey && GTFS_RT_STOP_META_KEYS.has(metaKey)) return false;
         const resolved = resolveRealtimeStationReference(stationName);
         const displayName = resolved.label || stationName;
         const stationId = resolved.stopId || null;
@@ -874,16 +915,25 @@ const GTFS_RT_STOP_META_KEYS = new Set([
           for (const variant of buildGtfsStopKeyVariants(displayName)) variantSet.add(variant);
         }
         const variants = Array.from(variantSet);
-        if (!variants.length) continue;
-        const metaKey = stationName && typeof stationName === 'string' ? stationName.toLowerCase() : '';
-        if (metaKey && GTFS_RT_STOP_META_KEYS.has(metaKey)) continue;
+        if (!variants.length) return false;
         let stored = false;
         for (const key of variants){
           if (!key || GTFS_RT_STOP_META_KEYS.has(key)) continue;
           perStation.set(key, { original: displayName, value, source: 'GTFS-RT', raw: stationName, stationId });
           stored = true;
         }
-        if (!stored) continue;
+        return stored;
+      };
+
+      for (const [stationName, rawValue] of Object.entries(stopsData)){
+        const value = coerceGtfsRtDelayValue(rawValue, { trainStatus });
+        if (value === undefined) continue;
+        registerStationEntry(stationName, value);
+      }
+
+      const cancelledStops = collectGtfsCancellationStops(payload);
+      for (const stationName of cancelledStops){
+        registerStationEntry(stationName, null);
       }
       if (perStation.size){
         const rawNumberCandidates = [
