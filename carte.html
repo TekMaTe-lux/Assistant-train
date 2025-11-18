@@ -1447,8 +1447,6 @@ const GTFS_RT_STOP_META_KEYS = new Set([
     const source = (entry.source || '').toUpperCase();
     if (source !== 'HAFAS') return false;
     if (!train) return false;
-    const brandingCategory = String(train.branding?.category || '').toLowerCase();
-    if (brandingCategory === 'tgv-roi') return true;
     if (Array.isArray(train.mergedSources)){
       return train.mergedSources.some(src => String(src).toUpperCase() === 'SNCF');
     }
@@ -1814,28 +1812,28 @@ function adaptDelayEntryForStop(entry, stopMeta){
 
     const delays = new Array(seq.length).fill(null);
     const refTimes = computeReferenceTimesForSeq(seq);
-      let cancellationStartIdx = null;
-      let cancellationSource = null;
-      const cancelledIndices = [];
+    let cancellationStartIdx = null;
+    let cancellationSource = null;
+    const cancelledIndices = [];
 
     for (let i=0;i<seq.length;i++){
-        const stopMeta = stopsById.get(seq[i].stop_id);
-        const entry = findDelayEntryForStop(perStation, stopMeta);
-        if (!entry) continue;
-        if (entry.value == null){
-          const sourceLabel = entry.original || stopMeta?.name || null;
-          stops[i].cancelled = true;
-          stops[i].delaySource = sourceLabel;
-          stops[i].name = stopMeta?.name || null;
-          cancelledIndices.push(i);
-          continue;
-        }
-        const delaySec = Math.round(Number(entry.value) * 60);
-        if (!Number.isFinite(delaySec)) continue;
-        delays[i] = delaySec;
-        stops[i].delaySource = entry.original || stopMeta?.name || null;
+      const stopMeta = stopsById.get(seq[i].stop_id);
+      const entry = findDelayEntryForStop(perStation, stopMeta);
+      if (!entry) continue;
+      if (entry.value == null){
+        const sourceLabel = entry.original || stopMeta?.name || null;
+        stops[i].cancelled = true;
+        stops[i].delaySource = sourceLabel;
         stops[i].name = stopMeta?.name || null;
+        cancelledIndices.push(i);
+        continue;
       }
+      const delaySec = Math.round(Number(entry.value) * 60);
+      if (!Number.isFinite(delaySec)) continue;
+      delays[i] = delaySec;
+      stops[i].delaySource = entry.original || stopMeta?.name || null;
+      stops[i].name = stopMeta?.name || null;
+    }
 
     if (cancelledIndices.length){
       const sorted = cancelledIndices.sort((a,b)=>a-b);
@@ -3978,7 +3976,37 @@ function stationNameMatchesKeywords(name, keywords){
       const numberDisplay = branding.displayNumber || rawNumber || (numberKey != null ? String(numberKey) : (numberKeyRaw != null ? String(numberKeyRaw) : null));
       const realtimeProfile = computeRealtimeStopData(trip_id, seq, numberKey);
 
-      const buildNumberMeta = ()=>{
+      const startPlanned = seq[0].departure ?? seq[0].arrival;
+      const lastStop = seq[seq.length - 1];
+      const endPlanned = lastStop?.arrival ?? lastStop?.departure;
+      const startEffective = realtimeProfile?.startRealtime ?? startPlanned;
+      const endEffective = realtimeProfile?.endRealtime ?? endPlanned;
+      if (startEffective==null || endEffective==null || nowSec<startEffective || nowSec>endEffective) continue;
+      const totalSpan = endEffective - startEffective;
+      const tripProgress = totalSpan > 0 ? (nowSec - startEffective) / totalSpan : null;
+      const headsign = (()=>{
+        if (trip.headsign && trip.headsign !== numberDisplay) return trip.headsign;
+        if (route.long && route.long !== numberDisplay) return route.long;
+        if (route.short && route.short !== numberDisplay) return route.short;
+        return '';
+      })();
+
+      let positioned = false;
+
+      for (let i=0;i<seq.length;i++){
+        const stop = seq[i];
+        const profileStop = realtimeProfile?.stops?.[i];
+        const arr = profileStop?.arrivalRealtime ?? stop.arrival;
+        const dep = profileStop?.departureRealtime ?? stop.departure;
+        if (arr==null || dep==null || dep<=arr) continue;
+        if (nowSec < arr || nowSec > dep) continue;
+
+        const stopMeta = stopsById.get(stop.stop_id);
+        if (!stopMeta) continue;
+
+        const nextStopMeta = seq[i+1] ? stopsById.get(seq[i+1].stop_id) : null;
+        const etaSec = Math.max(0, Math.round(dep - nowSec));
+
         const displayForList = branding.displayNumber || numberDisplay || rawNumber || null;
         const numberList = displayForList ? [displayForList] : [];
         const delayNumberKeys = [];
@@ -4010,58 +4038,6 @@ function stationNameMatchesKeywords(name, keywords){
             }
           }
         }
-        return { numberList, delayNumberKeys };
-      };
-
-      const { numberList: primaryNumberList, delayNumberKeys: primaryDelayKeys } = buildNumberMeta();
-
-      const startPlanned = seq[0].departure ?? seq[0].arrival;
-      const lastStop = seq[seq.length - 1];
-      const endPlanned = lastStop?.arrival ?? lastStop?.departure;
-      const startEffective = realtimeProfile?.startRealtime ?? startPlanned;
-      const endEffective = realtimeProfile?.endRealtime ?? endPlanned;
-      const allRealtimeStopsCancelled = realtimeProfile?.stops?.length
-        ? realtimeProfile.stops.every(st => st?.cancelled)
-        : false;
-      const realtimeCancellationIndex = realtimeProfile?.cancellation?.index ?? null;
-      const trainFullyCancelled = realtimeCancellationIndex === 0 || allRealtimeStopsCancelled;
-      if (startEffective==null || endEffective==null || nowSec<startEffective || nowSec>endEffective) continue;
-      const totalSpan = endEffective - startEffective;
-      const tripProgress = totalSpan > 0 ? (nowSec - startEffective) / totalSpan : null;
-      const headsign = (()=>{
-        if (trip.headsign && trip.headsign !== numberDisplay) return trip.headsign;
-        if (route.long && route.long !== numberDisplay) return route.long;
-        if (route.short && route.short !== numberDisplay) return route.short;
-        return '';
-        })();
-
-        let positioned = false;
-
-      const resolveRealtimeForStop = (stop, profile)=>{
-          if (!stop) return { arrival:null, departure:null, cancelled:false };
-          const cancelled = Boolean(profile?.cancelled);
-          if (cancelled) return { arrival:null, departure:null, cancelled:true };
-          const arrival = profile?.arrivalRealtime ?? stop.arrival ?? null;
-          const departure = profile?.departureRealtime ?? stop.departure ?? null;
-          return { arrival, departure, cancelled:false };
-        };
-
-        for (let i=0;i<seq.length;i++){
-          const stop = seq[i];
-          const profileStop = realtimeProfile?.stops?.[i];
-          const times = resolveRealtimeForStop(stop, profileStop);
-          if (times.cancelled) continue;
-          const arr = times.arrival;
-          const dep = times.departure;
-          if (arr==null || dep==null || dep<=arr) continue;
-          if (nowSec < arr || nowSec > dep) continue;
-
-          const stopMeta = stopsById.get(stop.stop_id);
-          if (!stopMeta) continue;
-
-          const nextStopMeta = seq[i+1] ? stopsById.get(seq[i+1].stop_id) : null;
-          const etaSec = Math.max(0, Math.round(dep - nowSec));
-
         const source = trip?.source === 'CFL' ? 'CFL' : 'SNCF';
 
         items.push({
@@ -4089,8 +4065,8 @@ function stationNameMatchesKeywords(name, keywords){
           stopsCount: seq.length,
           currentDelaySec: profileStop?.delaySec ?? 0,
           source,
-          numberList: primaryNumberList,
-          delayNumberKeys: primaryDelayKeys
+          numberList,
+          delayNumberKeys
         });
         positioned = true;
         break;
@@ -4098,15 +4074,12 @@ function stationNameMatchesKeywords(name, keywords){
 
       if (positioned) continue;
 
-        for (let i=0;i<seq.length-1;i++){
-          const A=seq[i], B=seq[i+1];
-          const profileA = realtimeProfile?.stops?.[i];
-          const profileB = realtimeProfile?.stops?.[i+1];
-          const timesA = resolveRealtimeForStop(A, profileA);
-          const timesB = resolveRealtimeForStop(B, profileB);
-          if (timesA.cancelled || timesB.cancelled) continue;
-          const tA = timesA.departure ?? timesA.arrival;
-          const tB = timesB.arrival ?? timesB.departure;
+      for (let i=0;i<seq.length-1;i++){
+        const A=seq[i], B=seq[i+1];
+        const profileA = realtimeProfile?.stops?.[i];
+        const profileB = realtimeProfile?.stops?.[i+1];
+        const tA = profileA?.departureRealtime ?? profileA?.arrivalRealtime ?? A.departure ?? A.arrival;
+        const tB = profileB?.arrivalRealtime ?? profileB?.departureRealtime ?? B.arrival ?? B.departure;
 
         const sA = stopsById.get(A.stop_id), sB = stopsById.get(B.stop_id);
         if (!sA || !sB) continue;
@@ -4120,6 +4093,37 @@ function stationNameMatchesKeywords(name, keywords){
         const { lat, lon } = pos;
         const etaSec = Math.max(0, Math.round(tB - nowSec));
 
+        const displayForList = branding.displayNumber || numberDisplay || rawNumber || null;
+        const numberList = displayForList ? [displayForList] : [];
+        const delayNumberKeys = [];
+        if (numberKey != null) delayNumberKeys.push(String(numberKey));
+        const staticHint = staticRelatedNumbersByTrip.get(trip_id);
+        if (staticHint && Array.isArray(staticHint.related)){
+          for (const rel of staticHint.related){
+            const candidateDisplay = rel.displayNumber || rel.rawNumber || null;
+            if (!candidateDisplay) continue;
+            const str = String(candidateDisplay).trim();
+            if (!str) continue;
+            if (!numberList.includes(str)) numberList.push(str);
+            const normalized = rel.normalizedKey != null ? String(rel.normalizedKey) : null;
+            if (normalized && !delayNumberKeys.includes(normalized)){
+              delayNumberKeys.push(normalized);
+              continue;
+            }
+            const relCandidate = rel.numberCandidate != null ? normalizeTrainNumberKey(rel.numberCandidate) : null;
+            if (relCandidate != null){
+              const keyStr = String(relCandidate);
+              if (keyStr && !delayNumberKeys.includes(keyStr)) delayNumberKeys.push(keyStr);
+              continue;
+            }
+            const fallbackCandidate = extractTrainNumberCandidate(str);
+            const fallbackKey = fallbackCandidate != null ? normalizeTrainNumberKey(fallbackCandidate) : null;
+            if (fallbackKey != null){
+              const keyStr = String(fallbackKey);
+              if (keyStr && !delayNumberKeys.includes(keyStr)) delayNumberKeys.push(keyStr);
+            }
+          }
+        }
         const source = trip?.source === 'CFL' ? 'CFL' : 'SNCF';
 
         items.push({
@@ -4147,48 +4151,11 @@ function stationNameMatchesKeywords(name, keywords){
           stopsCount: seq.length,
           currentDelaySec: profileA?.delaySec ?? 0,
           source,
-          numberList: primaryNumberList,
-          delayNumberKeys: primaryDelayKeys
+          numberList,
+          delayNumberKeys
         });
         break;
       }
-
-      if (!positioned && trainFullyCancelled){
-        const firstStopMeta = stopsById.get(seq[0].stop_id);
-        const lastStopMeta = stopsById.get(seq[seq.length - 1].stop_id) || firstStopMeta;
-        if (firstStopMeta){
-          const etaSec = Math.max(0, Math.round((endEffective ?? startEffective ?? nowSec) - nowSec));
-          const source = trip?.source === 'CFL' ? 'CFL' : 'SNCF';
-          items.push({
-            id: trip_id,
-            headsign,
-            from: firstStopMeta.name || seq[0].stop_id,
-            to: lastStopMeta?.name || seq[seq.length - 1].stop_id,
-            etaSec,
-            lat: firstStopMeta.lat,
-            lon: firstStopMeta.lon,
-            route_id: trip.route_id,
-            number: numberDisplay,
-            numberRaw: rawNumber || null,
-            numberDigits: branding.digits || null,
-            numberKey,
-            branding,
-            startSec: startEffective,
-            endSec: endEffective,
-            scheduledStartSec: startPlanned,
-            scheduledEndSec: endPlanned,
-            progress: 0,
-            segmentIndex: 0,
-            segmentProgress: 0,
-            nowSec,
-            stopsCount: seq.length,
-            currentDelaySec: 0,
-            source,
-            numberList: primaryNumberList,
-            delayNumberKeys: primaryDelayKeys
-          });
-        }
-      }      
     }
     return mergeCrossBorderTrains(items);
   }
