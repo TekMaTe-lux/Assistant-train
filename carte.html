@@ -1728,6 +1728,7 @@ function adaptDelayEntryForStop(entry, stopMeta){
     const refTimes = computeReferenceTimesForSeq(seq);
     let cancellationStartIdx = null;
     let cancellationSource = null;
+    const cancelledIndices = [];
 
     for (let i=0;i<seq.length;i++){
       const stopMeta = stopsById.get(seq[i].stop_id);
@@ -1737,23 +1738,33 @@ function adaptDelayEntryForStop(entry, stopMeta){
         const sourceLabel = entry.original || stopMeta?.name || null;
         stops[i].cancelled = true;
         stops[i].delaySource = sourceLabel;
-        if (cancellationStartIdx == null || i < cancellationStartIdx){
-          cancellationStartIdx = i;
-          cancellationSource = sourceLabel || stopMeta?.name || null;
-        }
+        stops[i].name = stopMeta?.name || null;
+        cancelledIndices.push(i);
         continue;
       }
       const delaySec = Math.round(Number(entry.value) * 60);
       if (!Number.isFinite(delaySec)) continue;
       delays[i] = delaySec;
       stops[i].delaySource = entry.original || stopMeta?.name || null;
+      stops[i].name = stopMeta?.name || null;
     }
 
-    if (cancellationStartIdx != null){
-      const fallbackLabel = cancellationSource || stops[cancellationStartIdx]?.delaySource || stops[cancellationStartIdx]?.name || null;
-      for (let j=cancellationStartIdx;j<stops.length;j++){
-        stops[j].cancelled = true;
-        if (!stops[j].delaySource) stops[j].delaySource = fallbackLabel;
+    if (cancelledIndices.length){
+      const sorted = cancelledIndices.sort((a,b)=>a-b);
+      for (const idx of sorted){
+        let tailCancelled = true;
+        for (let j=idx;j<stops.length;j++){
+          if (!stops[j].cancelled){ tailCancelled = false; break; }
+        }
+        if (tailCancelled){
+          cancellationStartIdx = idx;
+          cancellationSource = stops[idx]?.delaySource || stops[idx]?.name || null;
+          const fallbackLabel = cancellationSource || stops[idx]?.delaySource || stops[idx]?.name || null;
+          for (let j=idx;j<stops.length;j++){
+            if (!stops[j].delaySource) stops[j].delaySource = fallbackLabel;
+          }
+          break;
+        }
       }
     }
 
