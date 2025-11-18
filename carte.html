@@ -1453,6 +1453,35 @@ const GTFS_RT_STOP_META_KEYS = new Set([
     return String(train.source || '').toUpperCase() === 'SNCF';
   }
 
+  function resolveRealtimeNumberKey(train){
+    if (!train) return null;
+    const candidates = [
+      train.numberKey,
+      extractTrainNumberCandidate(train.number),
+      extractTrainNumberCandidate(train.id)
+    ];
+    for (const candidate of candidates){
+      const norm = normalizeTrainNumberKey(candidate);
+      if (norm || norm === 0) return norm;
+    }
+    return null;
+  }
+
+  function isTrainFullyCancelled(train){
+    if (!train) return null;
+    const seq = stopTimesByTrip.get(train.id);
+    if (!seq || !seq.length) return null;
+    const numberKey = resolveRealtimeNumberKey(train);
+    const profile = realtimeStopDataByTrip.get(train.id)
+      || computeRealtimeStopData(train.id, seq, numberKey ?? train.id);
+    if (!profile || !profile.stops || !profile.stops.length) return null;
+    const cancellation = profile.cancellation;
+    if (cancellation && cancellation.index === 0) return true;
+    const allCancelled = profile.stops.every(st => st?.cancelled);
+    if (allCancelled) return true;
+    return false;
+  }
+
   function buildDelayInfo(entry, train){
     if (!entry) return null;
     if (entry.value == null){
@@ -1502,6 +1531,8 @@ const GTFS_RT_STOP_META_KEYS = new Set([
   function computeDelayInfoFromPerStation(perStation, train){
     if (!perStation || !perStation.size) return null;
 
+    const fullyCancelled = isTrainFullyCancelled(train);
+
     const candidateOrder = [];
     const seen = new Set();
     const pushCandidate = (name)=>{
@@ -1525,6 +1556,7 @@ const GTFS_RT_STOP_META_KEYS = new Set([
       const entry = perStation.get(candidate.norm);
       if (!entry) continue;
       if (entry.value == null){
+        if (fullyCancelled === false) continue;
         const info = buildDelayInfo(entry, train);
         if (info) return info;
         continue;
@@ -1537,6 +1569,7 @@ const GTFS_RT_STOP_META_KEYS = new Set([
     for (const entry of perStation.values()){
       if (fallback && fallback.severity === 'cancelled') break;
       if (entry.value == null){
+        if (fullyCancelled === false) continue;
         const info = buildDelayInfo(entry, train);
         if (info) fallback = info;
         continue;
