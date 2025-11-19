@@ -335,29 +335,54 @@ function escapeHTML(str){
     ['88500','88501']
   ];
 
-  const TRAIN_NUMBER_EQUIVALENTS = (()=>{
+  function registerTrainNumberEquivalenceGroup(targetMap, values){
+    if (!(targetMap instanceof Map) || !Array.isArray(values) || values.length < 2) return;
+    const normalized = Array.from(new Set(
+      values
+        .map(v => normalizeTrainNumberKey(v))
+        .filter(v => v != null)
+        .map(v => String(v))
+        .filter(Boolean)
+    ));
+    if (normalized.length < 2) return;
+    for (const key of normalized){
+      targetMap.set(key, normalized);
+    }
+  }
+
+  function buildTrainNumberEquivalenceIndex(groups){
     const map = new Map();
-    for (const group of TRAIN_NUMBER_EQUIVALENCE_GROUPS){
-      if (!Array.isArray(group) || group.length < 2) continue;
-      const normalized = Array.from(new Set(
-        group
-          .map(v => normalizeTrainNumberKey(v))
-          .filter(v => v != null)
-          .map(v => String(v))
-      ));
-      if (normalized.length < 2) continue;
-      for (const key of normalized){
-        map.set(key, normalized);
-      }
+    if (!Array.isArray(groups)) return map;
+    for (const group of groups){
+      registerTrainNumberEquivalenceGroup(map, Array.isArray(group) ? group : []);
     }
     return map;
-  })();
+  }
+
+  const TRAIN_NUMBER_EQUIVALENTS = buildTrainNumberEquivalenceIndex(TRAIN_NUMBER_EQUIVALENCE_GROUPS);
+  const dynamicTrainNumberEquivalents = new Map();
 
   function equivalentTrainNumbers(key){
     const norm = normalizeTrainNumberKey(key);
     if (norm == null) return [];
-    const group = TRAIN_NUMBER_EQUIVALENTS.get(String(norm));
-    return Array.isArray(group) ? group : [];
+    const keyStr = String(norm);
+    if (!keyStr) return [];
+    const seen = new Set();
+    const result = [];
+    const collect = (map)=>{
+      if (!(map instanceof Map)) return;
+      const group = map.get(keyStr);
+      if (!Array.isArray(group) || group.length < 2) return;
+      for (const value of group){
+        const str = value == null ? '' : String(value);
+        if (!str || seen.has(str)) continue;
+        seen.add(str);
+        result.push(str);
+      }
+    };
+    collect(TRAIN_NUMBER_EQUIVALENTS);
+    collect(dynamicTrainNumberEquivalents);
+    return result;
   }
 
   const DEFAULT_REALTIME_SOURCE_ORDER = ['sncf','gtfs','hafas'];
@@ -4509,9 +4534,100 @@ function stationNameMatchesKeywords(name, keywords){
     };
   }
 
+  function deriveDirectionKeyFromMeta(meta){
+    if (!meta || !Array.isArray(meta.normalizedStops) || meta.normalizedStops.length < 2) return null;
+    const first = meta.normalizedStops[0];
+    const last = meta.normalizedStops[meta.normalizedStops.length - 1];
+    if (!first || !last) return null;
+    return `${first}->${last}`;
+  }
+
+  function appendStaticRelatedNumbers(tripId, signature, relatedEntries){
+    if (!tripId || !Array.isArray(relatedEntries) || !relatedEntries.length) return;
+    const existing = staticRelatedNumbersByTrip.get(tripId);
+    const merged = new Map();
+    const seed = existing?.related;
+    if (Array.isArray(seed)){
+      for (const rel of seed){
+        if (!rel) continue;
+        const key = rel.tripId ? `trip:${rel.tripId}` : `${rel.source || ''}:${rel.displayNumber || rel.normalizedKey || rel.rawNumber || ''}`;
+        if (!key) continue;
+        merged.set(key, rel);
+      }
+    }
+    for (const rel of relatedEntries){
+      if (!rel) continue;
+      const key = rel.tripId ? `trip:${rel.tripId}` : `${rel.source || ''}:${rel.displayNumber || rel.normalizedKey || rel.rawNumber || ''}`;
+      if (!key) continue;
+      merged.set(key, rel);
+    }
+    const finalRelated = Array.from(merged.values()).filter(Boolean);
+    if (!finalRelated.length) return;
+    staticRelatedNumbersByTrip.set(tripId, { signature: existing?.signature || signature, related: finalRelated });
+  }
+
+  function registerRelatedNumbersForEntries(entries, signature){
+    if (!Array.isArray(entries) || entries.length < 2) return;
+    for (const entry of entries){
+      if (!entry?.tripId) continue;
+      const related = entries
+        .filter(e => e !== entry)
+        .map(e => ({
+          tripId: e.tripId,
+          source: e.source,
+          displayNumber: e.displayNumber,
+          numberCandidate: e.numberCandidate,
+          normalizedKey: e.normalizedKey,
+          rawNumber: e.rawNumber,
+          digits: e.digits
+        }));
+      appendStaticRelatedNumbers(entry.tripId, signature, related);
+    }
+  }
+
+  function detectSncfDoubleNumberGroups(entries){
+    if (!Array.isArray(entries) || entries.length < 2) return [];
+    const buckets = new Map();
+    for (const entry of entries){
+      if (!entry || entry.source !== 'SNCF') continue;
+      if (entry.category !== 'sncf' && entry.category !== 'tgv-roi') continue;
+      const key = entry.normalizedKey != null ? String(entry.normalizedKey) : '';
+      if (!key) continue;
+      const directionKey = entry.directionKey || deriveDirectionKeyFromMeta(entry.meta);
+      if (!directionKey) continue;
+      const bucketKey = entry.meta?.bucket != null ? String(entry.meta.bucket) : '?';
+      const composite = `${entry.category}|${directionKey}|${bucketKey}`;
+      if (!buckets.has(composite)) buckets.set(composite, []);
+      buckets.get(composite).push(entry);
+    }
+
+    const result = [];
+    for (const group of buckets.values()){
+      if (!Array.isArray(group) || group.length < 2) continue;
+      const numbers = Array.from(new Set(group
+        .map(e => (e.normalizedKey != null ? String(e.normalizedKey) : ''))
+        .filter(Boolean)));
+      if (numbers.length < 2) continue;
+      const startTimes = group
+        .map(e => (typeof e.meta?.startTime === 'number' ? e.meta.startTime : null))
+        .filter(v => v != null);
+      let aligned = true;
+      if (startTimes.length >= 2){
+        const min = Math.min(...startTimes);
+        const max = Math.max(...startTimes);
+        aligned = Number.isFinite(min) && Number.isFinite(max) ? (max - min) <= 240 : true;
+      }
+      if (!aligned) continue;
+      registerTrainNumberEquivalenceGroup(dynamicTrainNumberEquivalents, numbers);
+      result.push(group);
+    }
+    return result;
+  }
+
   function rebuildStaticMergeData(){
     tripMergeSignatureCache.clear();
     staticRelatedNumbersByTrip.clear();
+    dynamicTrainNumberEquivalents.clear();
     const groups = new Map();
     for (const [tripId, seq] of stopTimesByTrip.entries()){
       const meta = buildTripMergeSignature(tripId, seq);
@@ -4523,7 +4639,7 @@ function stationNameMatchesKeywords(name, keywords){
 
     for (const [signature, entries] of groups.entries()){
       if (!entries || entries.length < 2) continue;
-      const enriched = entries.map(({ tripId }) => {
+      const enriched = entries.map(({ tripId, meta }) => {
         const trip = tripsById.get(tripId) || {};
         const route = trip?.route_id ? routesById.get(trip.route_id) : null;
         const rawNumber = trainNumberForTrip(trip, route, tripId);
@@ -4533,31 +4649,30 @@ function stationNameMatchesKeywords(name, keywords){
         const normalizedKey = numberCandidate != null ? normalizeTrainNumberKey(numberCandidate) : null;
         return {
           tripId,
+          meta,
           source: determineTripSource(tripId),
           displayNumber,
           numberCandidate,
           normalizedKey,
           rawNumber,
-          digits: branding.digits || null
+          digits: branding.digits || null,
+          category: branding.category || 'sncf',
+          directionKey: deriveDirectionKeyFromMeta(meta)
         };
       });
+      const linkGroups = [];
       const sourcesPresent = new Set(enriched.map(e => e.source));
-      if (sourcesPresent.size < 2) continue;
-      for (const entry of enriched){
-        const related = enriched
-          .filter(e => e.tripId !== entry.tripId)
-          .map(e => ({
-            tripId: e.tripId,
-            source: e.source,
-            displayNumber: e.displayNumber,
-            numberCandidate: e.numberCandidate,
-            normalizedKey: e.normalizedKey,
-            rawNumber: e.rawNumber,
-            digits: e.digits
-          }));
-        if (related.length){
-          staticRelatedNumbersByTrip.set(entry.tripId, { signature, related });
+      if (sourcesPresent.size >= 2){
+        linkGroups.push(enriched);
+      }
+      const doubleGroups = detectSncfDoubleNumberGroups(enriched);
+      if (doubleGroups.length){
+        for (const group of doubleGroups){
+          linkGroups.push(group);
         }
+      }
+      for (const group of linkGroups){
+        registerRelatedNumbersForEntries(group, signature);
       }
     }
   }
