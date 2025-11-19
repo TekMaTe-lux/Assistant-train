@@ -84,6 +84,8 @@
     .stop-name{ font-weight:600; font-size:14px; color:#e0f0ff; }
     .stop-note{ font-size:11px; color:#7f92b1; text-transform:uppercase; letter-spacing:.04em; }
     .stop-note strong{ color:#a0ff00; font-weight:600; }
+    .stop-source{ font-size:10px; color:#7fb2ff; text-transform:uppercase; letter-spacing:.08em; opacity:0.9; }
+    .trip-stop.cancelled .stop-source{ color:#ffb4b4; }
     .trip-panel-delay{ display:inline-flex; flex-direction:column; gap:2px; margin-top:8px; padding:6px 10px; border-radius:10px; border:1px solid rgba(255,200,120,0.55); background:rgba(46,32,12,0.55); color:#ffd8a0; font-size:12px; box-shadow:0 0 8px rgba(0,0,0,0.2); }
     .trip-panel-delay.delay-moderate{ border-color:rgba(255,210,150,0.65); background:rgba(128,76,12,0.55); color:#ffddb0; }
     .trip-panel-delay.delay-major{ border-color:rgba(255,170,120,0.7); background:rgba(128,52,12,0.55); color:#ffc7aa; }
@@ -388,10 +390,30 @@ function escapeHTML(str){
   const DEFAULT_REALTIME_SOURCE_ORDER = ['sncf','gtfs','hafas'];
   const CFL_REALTIME_SOURCE_ORDER = ['hafas','sncf','gtfs'];
   const REALTIME_STATUS_DISPLAY_ORDER = ['sncf','hafas','gtfs'];
+  const REALTIME_SOURCE_ALIASES = new Map([
+    ['sncf api','sncf'],
+    ['api sncf','sncf'],
+    ['sncf-api','sncf'],
+    ['api-sncf','sncf'],
+    ['sncf realtime','sncf'],
+    ['sncf real-time','sncf'],
+    ['gtfs-rt','gtfs'],
+    ['gtfs rt','gtfs'],
+    ['gtfs_rt','gtfs'],
+    ['sncf gtfs','gtfs'],
+    ['gtfs sncf','gtfs'],
+    ['hafas api','hafas'],
+    ['api hafas','hafas'],
+    ['cfl hafas','hafas'],
+    ['api cfl','hafas'],
+    ['cfl api','hafas']
+  ]);  
 
   function normalizeRealtimeSourceKey(value){
     if (!value && value !== 0) return '';
-    return String(value).trim().toLowerCase();
+    const raw = String(value).trim().toLowerCase();
+    if (!raw) return '';
+    return REALTIME_SOURCE_ALIASES.get(raw) || raw;
   }
 
   function resolvePreferredRealtimeSourceOrder(target){
@@ -733,6 +755,11 @@ function escapeHTML(str){
     gtfs: { key:'gtfs', displayName:'GTFS-RT', origin:'', map:new Map(), lastUpdated:null, rawSource:'', error:null },
     hafas: { key:'hafas', displayName:'HAFAS', origin:'API HAFAS', map:new Map(), lastUpdated:null, rawSource:'', error:null }
   };
+  const REALTIME_SOURCE_DISPLAY_OVERRIDES = {
+    sncf:'API SNCF',
+    gtfs:'GTFS-RT SNCF',
+    hafas:'API CFL HAFAS'
+  };
   let trainDelaysByNumber = new Map();
   let trainDelaySourceLabel = '';
   let trainDelayLastUpdated = null;
@@ -759,6 +786,17 @@ function escapeHTML(str){
     }
   }
 
+  function formatRealtimeSourceLabel(value){
+    const normalized = normalizeRealtimeSourceKey(value);
+    if (!normalized) return '';
+    if (REALTIME_SOURCE_DISPLAY_OVERRIDES[normalized]) return REALTIME_SOURCE_DISPLAY_OVERRIDES[normalized];
+    const src = realtimeSources[normalized];
+    if (src?.displayName) return src.displayName;
+    if (value == null) return '';
+    const label = String(value).trim();
+    return label || normalized.toUpperCase();
+  } 
+    
   function setRealtimeSourceError(key, message){
     const src = realtimeSources[key];
     if (!src) return;
@@ -1779,11 +1817,18 @@ const GTFS_RT_STOP_META_KEYS = new Set([
 
   function buildDelayInfo(entry, train){
     if (!entry) return null;
+    const entrySourceLabel = formatRealtimeSourceLabel(entry.source);
+    const tooltipParts = [];
+    if (entrySourceLabel) tooltipParts.push(entrySourceLabel);
+    if (trainDelayTooltipSuffix) tooltipParts.push(trainDelayTooltipSuffix);
+    const tooltipSuffix = tooltipParts.length ? ` — ${tooltipParts.join(' · ')}` : '';
+    const panelContext = tooltipParts.length ? `Source temps réel — ${tooltipParts.join(' · ')}` : '';
+    const infoSourceLabel = entrySourceLabel || trainDelaySourceLabel;
     if (entry.value == null){
       if (shouldIgnoreCancellation(entry, train)) return null;
       const station = entry.original || null;
       let title = station ? `Train supprimé à ${station}` : 'Train supprimé';
-      if (trainDelayTooltipSuffix) title += ` — ${trainDelayTooltipSuffix}`;
+      if (tooltipSuffix) title += tooltipSuffix;
       const panelText = station ? `Train supprimé à ${station}` : 'Train supprimé (temps réel)';
       return {
         label:'Supprimé',
@@ -1793,8 +1838,8 @@ const GTFS_RT_STOP_META_KEYS = new Set([
         badgeClass:'train-delay-badge train-delay-badge--cancelled',
         title,
         panelText,
-        panelContext: trainDelayTooltipSuffix ? `Source temps réel — ${trainDelayTooltipSuffix}` : '',
-        sourceLabel: trainDelaySourceLabel
+        panelContext,
+        sourceLabel: infoSourceLabel
       };
     }
     const minutes = Number(entry.value);
@@ -1807,7 +1852,7 @@ const GTFS_RT_STOP_META_KEYS = new Set([
     const label = `+${rounded} min`;
     const where = station ? ` à ${station}` : '';
     let title = `Retard estimé ${label}${where}`;
-    if (trainDelayTooltipSuffix) title += ` — ${trainDelayTooltipSuffix}`;
+    if (tooltipSuffix) title += tooltipSuffix;
     const panelText = `Retard ${label}${where}`;
     return {
       label,
@@ -1818,8 +1863,8 @@ const GTFS_RT_STOP_META_KEYS = new Set([
       badgeClass:`train-delay-badge train-delay-badge--${severity}`,
       title,
       panelText,
-      panelContext: trainDelayTooltipSuffix ? `Source temps réel — ${trainDelayTooltipSuffix}` : '',
-      sourceLabel: trainDelaySourceLabel
+      panelContext,
+      sourceLabel: infoSourceLabel
     };
   }
 
@@ -2111,6 +2156,7 @@ function adaptDelayEntryForStop(entry, stopMeta){
     const startPlanned = seq[0]?.departure ?? seq[0]?.arrival ?? null;
     const lastStop = seq[seq.length - 1] || null;
     const endPlanned = lastStop?.arrival ?? lastStop?.departure ?? null;
+    const sourceKeys = new Array(seq.length).fill(null);
     const stops = seq.map(st=>({
       stop_id: st.stop_id,
       arrivalPlanned: st.arrival ?? null,
@@ -2120,7 +2166,8 @@ function adaptDelayEntryForStop(entry, stopMeta){
       delaySec: 0,
       delayMinutes: 0,
       delaySource: null,
-      cancelled: false
+      cancelled: false,
+      realtimeSourceLabel: null
     }));
 
     if (!perSourceMaps.size && !combinedFallback){
@@ -2146,6 +2193,7 @@ function adaptDelayEntryForStop(entry, stopMeta){
       const stopMeta = stopsById.get(seq[i].stop_id);
       const stopOrder = resolveStopRealtimeSourceOrder(stopMeta, preferredSources);
       let entry = null;
+      let selectedSourceKey = null;
       if (Array.isArray(stopOrder) && stopOrder.length){
         for (const rawSource of stopOrder){
           const normalizedSource = normalizeRealtimeSourceKey(rawSource);
@@ -2153,6 +2201,7 @@ function adaptDelayEntryForStop(entry, stopMeta){
           const sourceMap = perSourceMaps.get(normalizedSource);
           if (!sourceMap) continue;
           entry = findDelayEntryForStop(sourceMap, stopMeta);
+          selectedSourceKey = normalizedSource;
           if (entry){
             break;
           }
@@ -2162,6 +2211,12 @@ function adaptDelayEntryForStop(entry, stopMeta){
         entry = findDelayEntryForStop(combinedFallback, stopMeta);
       }
       if (!entry) continue;
+      const entrySourceKey = normalizeRealtimeSourceKey(entry.source) || selectedSourceKey || null;
+      const entrySourceLabel = formatRealtimeSourceLabel(entry.source || entrySourceKey);
+      if (entrySourceKey){
+        sourceKeys[i] = entrySourceKey;
+      }
+      if (entrySourceLabel) stops[i].realtimeSourceLabel = entrySourceLabel;
       if (entry.value == null){
         const sourceLabel = entry.original || stopMeta?.name || null;
         stops[i].cancelled = true;
@@ -2188,8 +2243,13 @@ function adaptDelayEntryForStop(entry, stopMeta){
           cancellationStartIdx = idx;
           cancellationSource = stops[idx]?.delaySource || stops[idx]?.name || null;
           const fallbackLabel = cancellationSource || stops[idx]?.delaySource || stops[idx]?.name || null;
+          const fallbackSourceKey = sourceKeys[idx] || null;
+          const fallbackSourceLabel = stops[idx]?.realtimeSourceLabel
+            || (fallbackSourceKey ? formatRealtimeSourceLabel(fallbackSourceKey) : null);
           for (let j=idx;j<stops.length;j++){
             if (!stops[j].delaySource) stops[j].delaySource = fallbackLabel;
+            if (fallbackSourceLabel && !stops[j].realtimeSourceLabel) stops[j].realtimeSourceLabel = fallbackSourceLabel;
+            if (fallbackSourceKey && !sourceKeys[j]) sourceKeys[j] = fallbackSourceKey;
           }
           break;
         }
@@ -2210,6 +2270,25 @@ function adaptDelayEntryForStop(entry, stopMeta){
       for (let i=activeLength;i<delays.length;i++) delays[i] = null;
     }
 
+    if (activeLength > 0){
+      let lastKey = null;
+      for (let i=0;i<activeLength;i++){
+        if (sourceKeys[i]){
+          lastKey = sourceKeys[i];
+        } else if (lastKey){
+          sourceKeys[i] = lastKey;
+        }
+      }
+      lastKey = null;
+      for (let i=activeLength-1;i>=0;i--){
+        if (sourceKeys[i]){
+          lastKey = sourceKeys[i];
+        } else if (lastKey){
+          sourceKeys[i] = lastKey;
+        }
+      }
+    }
+    
     for (let i=0;i<seq.length;i++){
       const info = stops[i];
       const isCancelled = Boolean(info.cancelled);
@@ -2236,6 +2315,12 @@ function adaptDelayEntryForStop(entry, stopMeta){
       if (info.departureRealtime == null && info.arrivalRealtime != null){
         info.departureRealtime = info.arrivalRealtime;
       }
+    }
+
+    for (let i=0;i<seq.length;i++){
+      if (stops[i].realtimeSourceLabel || !sourceKeys[i]) continue;
+      const label = formatRealtimeSourceLabel(sourceKeys[i]);
+      if (label) stops[i].realtimeSourceLabel = label;
     }
 
     const firstDelay = Number.isFinite(delays[0]) ? delays[0] : 0;
@@ -3106,6 +3191,7 @@ const mapContainerEl = map.getContainer();
         isLast,
         cancelled: stopCancelled,
         label,
+        realtimeSource: profileStop?.realtimeSourceLabel || null,
         timeParts
       };
     });
@@ -3134,6 +3220,26 @@ const mapContainerEl = map.getContainer();
     }
     if (Array.isArray(data.numberList) && data.numberList.length > 1){
       summaryHtml += `<div class="trip-panel-realtime"><strong>Numéros associés :</strong> ${escapeHTML(data.numberList.join(' / '))}</div>`;
+    }
+    const realtimeSourceList = (()=>{
+      const labels = [];
+      const seen = new Set();
+      if (Array.isArray(realtimeProfile?.stops)){
+        for (const stopInfo of realtimeProfile.stops){
+          const label = stopInfo?.realtimeSourceLabel;
+          if (!label) continue;
+          if (seen.has(label)) continue;
+          seen.add(label);
+          labels.push(label);
+        }
+      }
+      if (!labels.length && delayInfo?.sourceLabel){
+        labels.push(delayInfo.sourceLabel);
+      }
+      return labels;
+    })();
+    if (realtimeSourceList.length){
+      summaryHtml += `<div class="trip-panel-realtime"><strong>Source temps réel :</strong> ${escapeHTML(realtimeSourceList.join(' · '))}</div>`;
     }
     const realtimeStartSec = realtimeProfile?.startRealtime ?? data.startSec ?? plannedStartSec;
     const realtimeEndSec = realtimeProfile?.endRealtime ?? data.endSec ?? plannedEndSec;
@@ -3230,6 +3336,9 @@ const mapContainerEl = map.getContainer();
       }
       if (info.cancelled) noteParts.push('SUPPRIMÉ');
       const note = noteParts.length ? `<div class="stop-note"><strong>${escapeHTML(noteParts.join(' · '))}</strong></div>` : '';
+      const sourceNote = info.realtimeSource
+        ? `<div class="stop-source" title="Données temps réel via ${escapeHTML(info.realtimeSource)}">${escapeHTML(info.realtimeSource)}</div>`
+        : '';
       const timesHtml = info.timeParts.map(part=>{
         const cls = part.type === 'arr' ? 'time-arr' : part.type === 'dep' ? 'time-dep' : 'time-neutral';
         const pieces = [];
@@ -3259,7 +3368,7 @@ const mapContainerEl = map.getContainer();
       if (info.cancelled) classes.push('cancelled');
       const className = classes.filter(Boolean).join(' ');
       const styleAttr = connectorProgress > 0 && !info.isLast ? ` style="--connector-progress:${connectorProgress.toFixed(3)}"` : '';
-      return `<div class="trip-stop ${className}"${styleAttr}><div class="stop-time">${timesHtml}</div><div class="stop-main"><div class="stop-name">${escapeHTML(info.name)}</div>${note}</div></div>`;
+      return `<div class="trip-stop ${className}"${styleAttr}><div class="stop-time">${timesHtml}</div><div class="stop-main"><div class="stop-name">${escapeHTML(info.name)}</div>${note}${sourceNote}</div></div>`; 
     }).join('');
 
     tripStopsEl.innerHTML = stopsHtml || '<div class="trip-stop"><div class="stop-main"><div class="stop-name">Aucun arrêt disponible</div></div></div>';
