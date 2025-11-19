@@ -331,7 +331,8 @@ function escapeHTML(str){
 }
 
   const TRAIN_NUMBER_EQUIVALENCE_GROUPS = [
-    ['2870','2871']
+    ['2870','2871'],
+    ['88500','88501']
   ];
 
   const TRAIN_NUMBER_EQUIVALENTS = (()=>{
@@ -357,6 +358,54 @@ function escapeHTML(str){
     if (norm == null) return [];
     const group = TRAIN_NUMBER_EQUIVALENTS.get(String(norm));
     return Array.isArray(group) ? group : [];
+  }
+
+  const DEFAULT_REALTIME_SOURCE_ORDER = ['sncf','gtfs','hafas'];
+  const CFL_REALTIME_SOURCE_ORDER = ['hafas','sncf','gtfs'];
+  const REALTIME_STATUS_DISPLAY_ORDER = ['sncf','hafas','gtfs'];
+
+  function normalizeRealtimeSourceKey(value){
+    if (!value && value !== 0) return '';
+    return String(value).trim().toLowerCase();
+  }
+
+  function resolvePreferredRealtimeSourceOrder(target){
+    if (Array.isArray(target)){
+      return target.filter(Boolean).map(normalizeRealtimeSourceKey).filter(Boolean);
+    }
+    const sourceRaw = target && typeof target === 'object'
+      ? (target.branding?.category === 'cfl' ? 'cfl' : target.source)
+      : target;
+    const normalized = normalizeRealtimeSourceKey(sourceRaw);
+    const isCfl = normalized === 'cfl';
+    const order = isCfl ? CFL_REALTIME_SOURCE_ORDER : DEFAULT_REALTIME_SOURCE_ORDER;
+    return order.map(normalizeRealtimeSourceKey);
+  }
+
+  function realtimeOptionsForTrain(train){
+    return { preferredSources: resolvePreferredRealtimeSourceOrder(train) };
+  }
+
+  function getRealtimePerStationMaps(normalizedKey, preferredOrder){
+    const keyStr = normalizedKey == null ? null : String(normalizedKey);
+    if (!keyStr) return [];
+    const order = Array.isArray(preferredOrder) && preferredOrder.length
+      ? preferredOrder
+      : DEFAULT_REALTIME_SOURCE_ORDER;
+    const result = [];
+    const seen = new Set();
+    for (const sourceKey of order){
+      const normalizedSource = normalizeRealtimeSourceKey(sourceKey);
+      if (!normalizedSource || seen.has(normalizedSource)) continue;
+      seen.add(normalizedSource);
+      const src = realtimeSources[normalizedSource];
+      if (!src || !(src.map instanceof Map) || !src.map.size) continue;
+      const perStation = src.map.get(keyStr);
+      if (perStation instanceof Map && perStation.size){
+        result.push({ sourceKey: normalizedSource, perStation });
+      }
+    }
+    return result;
   }
     
   function trainNumberForTrip(trip, route, tripId){
@@ -516,6 +565,8 @@ function escapeHTML(str){
     'https://cdn.jsdelivr.net/gh/TekMaTe-lux/Assistant-train@main/Assistant-train/retards_nancymetzlux.json'
   ];
   const GTFS_RT_REFRESH_INTERVAL_MS = 60000;
+  const SNCF_RT_CACHE_URL = 'https://vps.labetaillere.fr/gtfs/retards_carte.json';
+  const SNCF_RT_REFRESH_INTERVAL_MS = 5 * 60 * 1000;
 
     const HAFAS_PROXY_SAME_ORIGIN = (()=>{
     const base = location.origin + location.pathname.replace(/\/[^\/]*$/, '/');
@@ -632,8 +683,9 @@ function escapeHTML(str){
     return false;
   }
 
-  const realtimeRawData = { gtfs:null, hafas:null };
+  const realtimeRawData = { sncf:null, gtfs:null, hafas:null };
   const realtimeSources = {
+    sncf: { key:'sncf', displayName:'API SNCF', origin:'', map:new Map(), lastUpdated:null, rawSource:'', error:null },
     gtfs: { key:'gtfs', displayName:'GTFS-RT', origin:'', map:new Map(), lastUpdated:null, rawSource:'', error:null },
     hafas: { key:'hafas', displayName:'HAFAS', origin:'API HAFAS', map:new Map(), lastUpdated:null, rawSource:'', error:null }
   };
@@ -643,8 +695,10 @@ function escapeHTML(str){
   let trainDelayTooltipSuffix = '';
   let gtfsRtRefreshTimer = null;
   let hafasRefreshTimer = null;
+  let sncfRefreshTimer = null;
   let pendingGtfsRtPromise = null;
   let pendingHafasPromise = null;
+  let pendingSncfPromise = null;
 
   function describeRealtimeSource(src){
     if (!src) return '';
@@ -691,7 +745,7 @@ function escapeHTML(str){
       combined.set(norm, entry);
     };
 
-    for (const key of ['gtfs','hafas']){
+    for (const key of REALTIME_STATUS_DISPLAY_ORDER){
       const src = realtimeSources[key];
       if (!src) continue;
       let hadData = false;
@@ -745,8 +799,8 @@ function escapeHTML(str){
       parts.push(trainDelayTooltipSuffix);
     } else if (trainDelayLastUpdated){
       parts.push(`MAJ ${formatLuxTime(new Date(trainDelayLastUpdated))}`);
-      const errorParts = [];
-    for (const key of ['gtfs','hafas']){
+    const errorParts = [];
+    for (const key of REALTIME_STATUS_DISPLAY_ORDER){
       const src = realtimeSources[key];
       if (src?.error){
         const label = src.displayName || src.key.toUpperCase();
@@ -1018,6 +1072,202 @@ const GTFS_RT_STOP_META_KEYS = new Set([
     realtimeSources.gtfs.rawSource = source || '';
     realtimeSources.gtfs.error = null;
     rebuildRealtimeDelayIndex();
+  }
+
+  function parseNavitiaDateTime(value){
+    if (!value && value !== 0) return null;
+    const str = String(value).trim();
+    if (!str) return null;
+    if (/^\d{8}T\d{6}$/i.test(str)){
+      const year = Number(str.slice(0,4));
+      const month = Number(str.slice(4,6)) - 1;
+      const day = Number(str.slice(6,8));
+      const hour = Number(str.slice(9,11));
+      const minute = Number(str.slice(11,13));
+      const second = Number(str.slice(13,15));
+      return Date.UTC(year, month, day, hour, minute, second);
+    }
+    if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2})?$/.test(str)){
+      const normalized = str.length === 16 ? `${str}:00` : str;
+      const parsed = Date.parse(normalized.endsWith('Z') ? normalized : `${normalized}Z`);
+      return Number.isNaN(parsed) ? null : parsed;
+    }
+    let parsed = Date.parse(str);
+    if (!Number.isNaN(parsed)) return parsed;
+    parsed = Date.parse(`${str}Z`);
+    return Number.isNaN(parsed) ? null : parsed;
+  }
+
+  function diffNavitiaMinutes(real, base){
+    const realTs = parseNavitiaDateTime(real);
+    const baseTs = parseNavitiaDateTime(base);
+    if (realTs == null || baseTs == null) return null;
+    const diff = (realTs - baseTs) / 60000;
+    return Number.isFinite(diff) ? diff : null;
+  }
+
+  function computeSncfStopDelay(stopTime){
+    if (!stopTime) return null;
+    const tokens = [
+      stopTime.stop_time_status,
+      stopTime.stop_time_state,
+      stopTime.status,
+      stopTime.state,
+      stopTime.stop_point?.status,
+      stopTime.stop_point?.state,
+      stopTime.stop_point?.stop_area?.status,
+      stopTime.stop_point?.stop_area?.state
+    ];
+    if (Array.isArray(stopTime.properties)){
+      for (const prop of stopTime.properties){
+        if (!prop) continue;
+        if (prop.value != null) tokens.push(prop.value);
+        if (prop.text != null) tokens.push(prop.text);
+      }
+    }
+    const cancelled = tokens.some(token => isCancelledStatus(token));
+    const arrivalDelay = diffNavitiaMinutes(
+      stopTime.arrival_date_time || stopTime.arrival_time,
+      stopTime.base_arrival_date_time || stopTime.base_arrival_time
+    );
+    const departureDelay = diffNavitiaMinutes(
+      stopTime.departure_date_time || stopTime.departure_time,
+      stopTime.base_departure_date_time || stopTime.base_departure_time
+    );
+    const minutes = arrivalDelay ?? departureDelay;
+    if (minutes == null && !cancelled) return null;
+    return { cancelled, minutes };
+  }
+
+  function registerSncfStationEntry(perStation, stationName, { stopPointId, stopAreaId } = {}, value){
+    const resolved = resolveRealtimeStationReference(stationName || stopAreaId || stopPointId || '');
+    const displayName = resolved.label || stationName || stopAreaId || stopPointId || '';
+    const stationId = resolved.stopId || null;
+    const variants = new Set();
+    const pushVariants = (raw)=>{
+      if (!raw) return;
+      for (const variant of buildGtfsStopKeyVariants(raw)){
+        if (variant) variants.add(variant);
+      }
+    };
+    pushVariants(stationName);
+    pushVariants(stopPointId);
+    pushVariants(stopAreaId);
+    if (displayName && displayName !== stationName) pushVariants(displayName);
+    if (stationId) pushVariants(stationId);
+    if (!variants.size) return false;
+    for (const key of variants){
+      if (!key || GTFS_RT_STOP_META_KEYS.has(key)) continue;
+      perStation.set(key, { original: displayName || stationName, value, source: 'SNCF API', stationId, raw: stationName });
+    }
+    return true;
+  }
+
+  function buildSncfJourneyEntry(journey){
+    if (!journey || typeof journey !== 'object') return null;
+    const stopTimes = Array.isArray(journey.stop_times) ? journey.stop_times : [];
+    if (!stopTimes.length) return null;
+    const numberCandidates = [
+      journey.name,
+      journey.vehicle_journey_name,
+      journey.headsign,
+      journey.id,
+      journey.trip?.name,
+      journey.trip?.id
+    ];
+    let keyCandidate = null;
+    for (const candidate of numberCandidates){
+      const extracted = extractTrainNumberCandidate(candidate);
+      if (extracted){
+        keyCandidate = extracted;
+        break;
+      }
+    }
+    if (keyCandidate == null && journey.id){
+      keyCandidate = journey.id;
+    }
+    const normalizedKey = normalizeTrainNumberKey(keyCandidate);
+    if (normalizedKey == null && normalizedKey !== 0) return null;
+    const perStation = new Map();
+    for (const stopTime of stopTimes){
+      const stopPoint = stopTime?.stop_point || {};
+      const stopArea = stopPoint.stop_area || {};
+      const stationName = stopArea.name || stopArea.label || stopPoint.name || stopPoint.label || stopArea.id || stopPoint.id;
+      if (!stationName) continue;
+      const delay = computeSncfStopDelay(stopTime);
+      if (!delay) continue;
+      const value = delay.cancelled ? null : delay.minutes;
+      registerSncfStationEntry(perStation, stationName, { stopPointId: stopPoint.id, stopAreaId: stopArea.id }, value);
+    }
+    if (!perStation.size) return null;
+    return { key: String(normalizedKey), perStation };
+  }
+
+  function parseSncfRealtimeData(raw){
+    if (!raw || typeof raw !== 'object') return { perTrain:new Map(), updatedAt:null };
+    const payload = raw.data && typeof raw.data === 'object' && !Array.isArray(raw.data)
+      ? raw.data
+      : raw;
+    const journeys = Array.isArray(payload.vehicle_journeys) ? payload.vehicle_journeys : [];
+    const perTrain = new Map();
+    for (const journey of journeys){
+      const entry = buildSncfJourneyEntry(journey);
+      if (entry){
+        perTrain.set(entry.key, entry.perStation);
+      }
+    }
+    const updatedAt = parseNavitiaDateTime(
+      payload.context?.current_datetime
+      || raw.context?.current_datetime
+      || raw.generated_at
+      || raw.updated_at
+      || raw.timestamp
+    ) || Date.now();
+    return { perTrain, updatedAt };
+  }
+
+  function registerSncfVehicleJourneys(perTrainMap, { fetchedAt } = {}){
+    const normalized = new Map();
+    if (perTrainMap instanceof Map){
+      for (const [key, perStation] of perTrainMap.entries()){
+        if (!(perStation instanceof Map) || !perStation.size) continue;
+        normalized.set(String(key), perStation);
+      }
+    }
+    realtimeRawData.sncf = perTrainMap instanceof Map ? perTrainMap : new Map();
+    realtimeSources.sncf.map = normalized;
+    realtimeSources.sncf.lastUpdated = fetchedAt || Date.now();
+    realtimeSources.sncf.error = null;
+    rebuildRealtimeDelayIndex();
+  }
+
+  async function loadSncfRealtime({ forceFresh = false } = {}){
+    if (pendingSncfPromise) return pendingSncfPromise;
+    pendingSncfPromise = (async()=>{
+      const withBuster = (u)=> u + (u.includes('?') ? '&' : '?') + 't=' + (forceFresh ? Date.now() : 'soft');
+      const url = withBuster(SNCF_RT_CACHE_URL);
+      console.log('[SNCF] tentative:', url);
+      const res = await fetchWithTimeoutNoHeaders(url, 10000);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const ct = (res.headers.get('content-type') || '').toLowerCase();
+      const data = ct.includes('application/json') ? await res.json() : JSON.parse(await res.text());
+      const parsed = parseSncfRealtimeData(data);
+      realtimeSources.sncf.origin = 'cache VPS';
+      realtimeSources.sncf.rawSource = SNCF_RT_CACHE_URL;
+      registerSncfVehicleJourneys(parsed.perTrain, { fetchedAt: parsed.updatedAt });
+      setRealtimeSourceError('sncf', null);
+    })();
+
+    try {
+      await pendingSncfPromise;
+    } catch(err){
+      console.error('[SNCF] ❌ retards indisponibles', err);
+      const hadData = realtimeSources.sncf.lastUpdated != null;
+      setRealtimeSourceError('sncf', hadData ? 'rafraîchissement en échec' : 'indisponibles');
+      throw err;
+    } finally {
+      pendingSncfPromise = null;
+    }
   }
 
     function parseHafasProxyTimestamp(value){
@@ -1473,7 +1723,7 @@ const GTFS_RT_STOP_META_KEYS = new Set([
     if (!seq || !seq.length) return null;
     const numberKey = resolveRealtimeNumberKey(train);
     const profile = realtimeStopDataByTrip.get(train.id)
-      || computeRealtimeStopData(train.id, seq, numberKey ?? train.id);
+      || computeRealtimeStopData(train.id, seq, numberKey ?? train.id, realtimeOptionsForTrain(train));
     if (!profile || !profile.stops || !profile.stops.length) return null;
     const cancellation = profile.cancellation;
     if (cancellation && cancellation.index === 0) return true;
@@ -1609,7 +1859,18 @@ const GTFS_RT_STOP_META_KEYS = new Set([
     if (!candidateKeys.length) return null;
 
     let cancelledInfo = null;
+    const preferredOrder = resolvePreferredRealtimeSourceOrder(train);
     for (const key of candidateKeys){
+      const sourceMaps = getRealtimePerStationMaps(key, preferredOrder);
+      for (const { perStation } of sourceMaps){
+        const info = computeDelayInfoFromPerStation(perStation, train);
+        if (!info) continue;
+        if (info.severity === 'cancelled'){
+          if (!cancelledInfo) cancelledInfo = info;
+          continue;
+        }
+        return info;
+      }
       const perStation = trainDelaysByNumber.get(String(key));
       if (!perStation) continue;
       const info = computeDelayInfoFromPerStation(perStation, train);
@@ -1621,7 +1882,7 @@ const GTFS_RT_STOP_META_KEYS = new Set([
       return info;
     }
     return cancelledInfo;
-  }   
+  }
     
  function getStopNameCandidates(stopMeta){
     if (!stopMeta) return [];
@@ -1775,13 +2036,24 @@ function adaptDelayEntryForStop(entry, stopMeta){
     }
   }
 
-  function computeRealtimeStopData(tripId, seq, numberKey){
+  function computeRealtimeStopData(tripId, seq, numberKey, options = {}){
     if (!seq || !seq.length){
       realtimeStopDataByTrip.delete(tripId);
       return null;
     }
     const normalizedKey = normalizeTrainNumberKey(numberKey);
-    const perStation = normalizedKey ? trainDelaysByNumber.get(String(normalizedKey)) : null;
+    const preferredSources = Array.isArray(options.preferredSources) && options.preferredSources.length
+      ? options.preferredSources
+      : resolvePreferredRealtimeSourceOrder(null);
+    let perStation = null;
+    if (normalizedKey != null){
+      const matches = getRealtimePerStationMaps(String(normalizedKey), preferredSources);
+      if (matches.length){
+        perStation = matches[0].perStation;
+      } else {
+        perStation = trainDelaysByNumber.get(String(normalizedKey)) || null;
+      }
+    }
     const startPlanned = seq[0]?.departure ?? seq[0]?.arrival ?? null;
     const lastStop = seq[seq.length - 1] || null;
     const endPlanned = lastStop?.arrival ?? lastStop?.departure ?? null;
@@ -2653,7 +2925,12 @@ const mapContainerEl = map.getContainer();
     
     const seq = stopTimesByTrip.get(activeTripId);
     const realtimeProfile = seq && seq.length ? (realtimeStopDataByTrip.get(activeTripId)
-      || computeRealtimeStopData(activeTripId, seq, data.numberKey || extractTrainNumberCandidate(data.number) || extractTrainNumberCandidate(activeTripId))) : null;
+      || computeRealtimeStopData(
+        activeTripId,
+        seq,
+        data.numberKey || extractTrainNumberCandidate(data.number) || extractTrainNumberCandidate(activeTripId),
+        realtimeOptionsForTrain(data)
+      )) : null;
     const cancellationInfo = realtimeProfile?.cancellation;
     const hasRealtimeStops = Array.isArray(realtimeProfile?.stops);
     const allRealtimeStopsCancelled = hasRealtimeStops && realtimeProfile.stops.length > 0
@@ -2999,7 +3276,12 @@ const mapContainerEl = map.getContainer();
       if (!target) continue;
 
       const realtimeProfile = realtimeStopDataByTrip.get(tripId)
-        || computeRealtimeStopData(tripId, seq, train.numberKey || extractTrainNumberCandidate(train.number) || extractTrainNumberCandidate(tripId));
+        || computeRealtimeStopData(
+          tripId,
+          seq,
+          train.numberKey || extractTrainNumberCandidate(train.number) || extractTrainNumberCandidate(tripId),
+          realtimeOptionsForTrain(train)
+        );
       const profileStop = targetIdx >= 0 ? realtimeProfile?.stops?.[targetIdx] : null;
 
       const arrPlanned = target.arrival ?? null;
@@ -3974,7 +4256,13 @@ function stationNameMatchesKeywords(name, keywords){
       const numberKey = numberKeyRaw ? normalizeTrainNumberKey(numberKeyRaw) : null;
       const branding = computeTrainBranding(trip_id, trip, route, rawNumber, numberCandidate || fallbackNumberCandidate);
       const numberDisplay = branding.displayNumber || rawNumber || (numberKey != null ? String(numberKey) : (numberKeyRaw != null ? String(numberKeyRaw) : null));
-      const realtimeProfile = computeRealtimeStopData(trip_id, seq, numberKey);
+      const tripSource = trip?.source === 'CFL' ? 'CFL' : 'SNCF';
+      const realtimeProfile = computeRealtimeStopData(
+        trip_id,
+        seq,
+        numberKey,
+        realtimeOptionsForTrain({ source: tripSource })
+      );
 
       const startPlanned = seq[0].departure ?? seq[0].arrival;
       const lastStop = seq[seq.length - 1];
@@ -4038,7 +4326,7 @@ function stationNameMatchesKeywords(name, keywords){
             }
           }
         }
-        const source = trip?.source === 'CFL' ? 'CFL' : 'SNCF';
+        const source = tripSource;
 
         items.push({
           id: trip_id,
@@ -4124,7 +4412,7 @@ function stationNameMatchesKeywords(name, keywords){
             }
           }
         }
-        const source = trip?.source === 'CFL' ? 'CFL' : 'SNCF';
+        const source = tripSource;
 
         items.push({
           id: trip_id,
@@ -4157,7 +4445,7 @@ function stationNameMatchesKeywords(name, keywords){
         break;
       }
     }
-    return mergeCrossBorderTrains(items);
+    return mergeTrainsByNumber(mergeCrossBorderTrains(items));
   }
 
   function approxDistanceKm(lat1, lon1, lat2, lon2){
@@ -4558,6 +4846,129 @@ function stationNameMatchesKeywords(name, keywords){
     return result;
   }
 
+  function collectTrainNumberKeyEntries(train){
+    if (!train) return [];
+    const entries = [];
+    const seen = new Set();
+    const pushKey = (value, viaEquivalence = false)=>{
+      if (value == null) return;
+      if (Array.isArray(value)){
+        for (const v of value) pushKey(v, viaEquivalence);
+        return;
+      }
+      const candidate = extractTrainNumberCandidate(value) ?? value;
+      const normalized = normalizeTrainNumberKey(candidate);
+      if (normalized == null && normalized !== 0) return;
+      const keyStr = String(normalized);
+      if (!keyStr) return;
+      const cacheKey = `${keyStr}:${viaEquivalence ? 'eq' : 'direct'}`;
+      if (seen.has(cacheKey)) return;
+      seen.add(cacheKey);
+      entries.push({ key:keyStr, viaEquivalence });
+      if (!viaEquivalence){
+        for (const alt of equivalentTrainNumbers(keyStr)){
+          const altStr = String(alt);
+          if (!altStr) continue;
+          const altCache = `${altStr}:eq`;
+          if (seen.has(altCache)) continue;
+          seen.add(altCache);
+          entries.push({ key:altStr, viaEquivalence:true });
+        }
+      }
+    };
+    pushKey(train.numberKey);
+    pushKey(train.delayNumberKeys);
+    pushKey(train.numberDigits);
+    pushKey(train.number);
+    pushKey(train.numberRaw);
+    pushKey(train.branding?.digits);
+    pushKey(train.id);
+    if (Array.isArray(train.numberList)){
+      for (const val of train.numberList) pushKey(val);
+    }
+    return entries;
+  }
+
+  function shouldMergeNumberGroup(group, allowSameSource){
+    if (!Array.isArray(group) || group.length < 2) return false;
+    const sources = new Set(group.map(t => (t.source || 'SNCF').toUpperCase()));
+    const hasMixedSources = sources.size > 1;
+    if (!hasMixedSources && !allowSameSource) return false;
+    let progressMismatch = false;
+    for (let i=0;i<group.length;i++){
+      for (let j=i+1;j<group.length;j++){
+        const a = group[i];
+        const b = group[j];
+        const dist = approxDistanceKm(a.lat, a.lon, b.lat, b.lon);
+        if (!Number.isFinite(dist) || dist > 20) return false;
+        if (a.progress != null && b.progress != null && Math.abs(a.progress - b.progress) > 0.5){
+          progressMismatch = true;
+        }
+      }
+    }
+    if (progressMismatch) return false;
+    return true;
+  }
+
+  function mergeTrainsByNumber(list){
+    if (!Array.isArray(list) || list.length < 2) return list;
+    const buckets = new Map();
+    const entriesById = new Map();
+    const getEntries = (train)=>{
+      if (entriesById.has(train.id)) return entriesById.get(train.id);
+      const entries = collectTrainNumberKeyEntries(train);
+      entriesById.set(train.id, entries);
+      return entries;
+    };
+
+    for (const train of list){
+      const entries = getEntries(train);
+      for (const entry of entries){
+        if (!entry?.key) continue;
+        if (!buckets.has(entry.key)) buckets.set(entry.key, { trains:new Set(), viaEquivalence:false });
+        const bucket = buckets.get(entry.key);
+        bucket.trains.add(train);
+        if (entry.viaEquivalence) bucket.viaEquivalence = true;
+      }
+    }
+
+    if (!buckets.size) return list;
+    const consumed = new Set();
+    const result = [];
+
+    for (const train of list){
+      if (consumed.has(train.id)) continue;
+      let mergedTrain = null;
+      const entries = getEntries(train);
+      for (const entry of entries){
+        const bucket = buckets.get(entry.key);
+        if (!bucket || !(bucket.trains instanceof Set) || bucket.trains.size < 2) continue;
+        const group = Array.from(bucket.trains).filter(t => !consumed.has(t.id));
+        if (group.length < 2) continue;
+        if (!shouldMergeNumberGroup(group, bucket.viaEquivalence)) continue;
+        const primary = selectPrimaryTrainForMerge(group);
+        const ordered = [primary, ...group.filter(t => t !== primary)];
+        const merged = buildMergedTrain(ordered);
+        if (merged){
+          mergedTrain = merged;
+          for (const member of group){
+            consumed.add(member.id);
+          }
+          bucket.trains = new Set();
+          break;
+        }
+      }
+      if (mergedTrain){
+        result.push(mergedTrain);
+      } else {
+        consumed.add(train.id);
+        result.push(train);
+      }
+    }
+
+    return result;
+  }
+
   function renderTrains(list){
   const layer = ensureTrainLayer();
     const seen = new Set();
@@ -4640,6 +5051,10 @@ function stationNameMatchesKeywords(name, keywords){
   // ---------- Boot ----------
   (async function boot(){
     setRealtimeStatus('Retards temps réel : chargement…');
+    const sncfPromise = loadSncfRealtime({ forceFresh: true }).catch(err => {
+      console.error('[SNCF] échec initial', err);
+      setRealtimeSourceError('sncf', 'indisponibles');
+    });
     const gtfsPromise = loadGtfsRetards({ forceFresh: true }).catch(err => {
       console.error('[GTFS-RT] échec initial', err);
       setRealtimeSourceError('gtfs', 'indisponibles');
@@ -4672,6 +5087,17 @@ function stationNameMatchesKeywords(name, keywords){
             setRealtimeSourceError('hafas', 'rafraîchissement en échec');
           });
         }, HAFAS_REFRESH_INTERVAL_MS);
+      }
+    });
+    sncfPromise.finally(()=>{
+      if (sncfRefreshTimer == null){
+        sncfRefreshTimer = setInterval(()=>{
+          loadSncfRealtime({ forceFresh: true }).catch(err => {
+            console.warn('[SNCF] rafraîchissement en échec', err);
+            const hadData = realtimeSources.sncf.lastUpdated != null;
+            setRealtimeSourceError('sncf', hadData ? 'rafraîchissement en échec' : 'indisponibles');
+          });
+        }, SNCF_RT_REFRESH_INTERVAL_MS);
       }
     });
   })().catch(e=> setStatus('Erreur initialisation: '+e.message, true));
