@@ -4686,12 +4686,15 @@ function stationNameMatchesKeywords(name, keywords){
     if (meta) tripMergeSignatureCache.set(train.id, meta);
     return meta;
   }
+  function normalizedTrainSource(train){
+    return (train?.source || 'SNCF').toUpperCase();
+  }
   function selectPrimaryTrainForMerge(group){
     let best = group[0];
     let bestScore = Infinity;
     for (const train of group){
       let score = 0;
-      const source = (train?.source || '').toUpperCase();
+      const source = normalizedTrainSource(train);
       if (source === 'CFL') score += 2;
       if (source === 'SNCF') score -= 2;
       if (train?.stopsCount != null) score -= Math.min(Number(train.stopsCount) || 0, 12) * 0.1;
@@ -5005,9 +5008,39 @@ function stationNameMatchesKeywords(name, keywords){
     return entries;
   }
 
+  function scheduledStartReference(train){
+    if (!train) return null;
+    const candidates = [train.scheduledStartSec, train.startSec];
+    for (const value of candidates){
+      if (typeof value === 'number' && Number.isFinite(value)) return value;
+    }
+    return null;
+  }
+
+  function canOverrideProgressMismatchWithSncfSchedule(group){
+    if (!Array.isArray(group) || group.length < 2) return false;
+    const sncfEntries = group
+      .map(train => ({ train, source: normalizedTrainSource(train), start: scheduledStartReference(train) }))
+      .filter(entry => entry.source === 'SNCF' && entry.start != null);
+    if (!sncfEntries.length) return false;
+    const reference = sncfEntries.reduce((best, entry) => {
+      if (!best) return entry;
+      return entry.start < best.start ? entry : best;
+    }, null);
+    if (!reference) return false;
+    const tolerance = 15 * 60; // 15 minutes pour les départs alignés
+    for (const train of group){
+      if (train === reference.train) continue;
+      const candidate = scheduledStartReference(train);
+      if (candidate == null) continue;
+      if (Math.abs(candidate - reference.start) > tolerance) return false;
+    }
+    return true;
+  }
+
   function shouldMergeNumberGroup(group, allowSameSource){
     if (!Array.isArray(group) || group.length < 2) return false;
-    const sources = new Set(group.map(t => (t.source || 'SNCF').toUpperCase()));
+    const sources = new Set(group.map(t => normalizedTrainSource(t)));
     const hasMixedSources = sources.size > 1;
     if (!hasMixedSources && !allowSameSource) return false;
     let progressMismatch = false;
@@ -5022,7 +5055,10 @@ function stationNameMatchesKeywords(name, keywords){
         }
       }
     }
-    if (progressMismatch) return false;
+    if (progressMismatch){
+      const canIgnoreMismatch = hasMixedSources && canOverrideProgressMismatchWithSncfSchedule(group);
+      if (!canIgnoreMismatch) return false;
+    }
     return true;
   }
 
