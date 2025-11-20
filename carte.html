@@ -3884,75 +3884,6 @@ function setLayerGroupVisibility(group, visible){
   }
 
   // ---------- Chargement GTFS (sans shapes) ----------
-  function buildAxisStopIdSet(rawStopsById, rawStopChildrenByParent){
-    const axisStopIds = new Set();
-    for (const meta of rawStopsById.values()){
-      if (!meta.name) continue;
-      if (!stationNameMatchesKeywords(meta.name, AXIS_STOP_KEYWORDS)) continue;
-      axisStopIds.add(meta.stop_id);
-      if (meta.parent_station) axisStopIds.add(meta.parent_station);
-      if (rawStopChildrenByParent.has(meta.stop_id)){
-        for (const child of rawStopChildrenByParent.get(meta.stop_id)){
-          axisStopIds.add(child.stop_id);
-        }
-      }
-      if (meta.parent_station && rawStopChildrenByParent.has(meta.parent_station)){
-        for (const child of rawStopChildrenByParent.get(meta.parent_station)){
-          axisStopIds.add(child.stop_id);
-        }
-      }
-    }
-    return axisStopIds;
-  }
-
-  function ingestStopTimesFast(stopTimesRows, rawStopsById, rawStopChildrenByParent){
-    const axisStopIds = buildAxisStopIdSet(rawStopsById, rawStopChildrenByParent);
-    const byTrip = new Map();
-
-    for (const st of stopTimesRows){
-      const tid = st.trip_id; if (!tid) continue;
-      const stopMeta = rawStopsById.get(st.stop_id);
-      if (!stopMeta) continue;
-      if (!byTrip.has(tid)) byTrip.set(tid, { seq: [], axisHits: 0 });
-      const bucket = byTrip.get(tid);
-      bucket.seq.push({
-        stop_id: st.stop_id,
-        arrival: gtfsTimeToSec(st.arrival_time),
-        departure: gtfsTimeToSec(st.departure_time),
-        seq: Number(st.stop_sequence)
-      });
-      if (axisStopIds.has(st.stop_id)) bucket.axisHits++;
-    }
-
-    for (const [tripId, data] of byTrip.entries()){
-      if (data.axisHits < 2){
-        byTrip.delete(tripId);
-        continue;
-      }
-      data.seq.sort((a,b)=>a.seq-b.seq);
-      stopTimesByTrip.set(tripId, data.seq);
-    }
-
-    const retainedAxisStopIds = new Set(axisStopIds);
-    for (const seq of stopTimesByTrip.values()){
-      for (const st of seq){
-        const meta = rawStopsById.get(st.stop_id);
-        if (!meta) continue;
-        retainedAxisStopIds.add(meta.stop_id);
-        if (meta.parent_station) retainedAxisStopIds.add(meta.parent_station);
-        if (rawStopChildrenByParent.has(meta.stop_id)){
-          for (const child of rawStopChildrenByParent.get(meta.stop_id)){
-            retainedAxisStopIds.add(child.stop_id);
-          }
-        }
-      }
-    }
-
-    return { axisStopIds: retainedAxisStopIds, axisTripIds: new Set(stopTimesByTrip.keys()) };
-  }
-
-  let gtfsFullReady = null;
-    
   async function loadGTFS(){
     try {
       stopNearestCache.clear();
@@ -3967,7 +3898,17 @@ function setLayerGroupVisibility(group, visible){
       realtimeStopDataByTrip.clear();
       tripMergeSignatureCache.clear();
       staticRelatedNumbersByTrip.clear();
-      activeServiceIds = null;
+
+      const axisStopIds = new Set();
+      const axisTripIds = new Set();
+      const axisRouteIds = new Set();
+      let filteredTgvCount = 0;
+      let combinedActiveServiceIds = null;
+      const mergeActiveServices = (set)=>{
+        if (!set || !set.size) return;
+        if (!combinedActiveServiceIds) combinedActiveServiceIds = new Set();
+        for (const id of set) combinedActiveServiceIds.add(id);
+      };
 
       const rawStopsById = new Map();
       const rawStopChildrenByParent = new Map();
@@ -3979,38 +3920,54 @@ function setLayerGroupVisibility(group, visible){
       for (const s of stops){
         const lat=parseFloat(s.stop_lat), lon=parseFloat(s.stop_lon);
         if (!isFinite(lat)||!isFinite(lon)) continue;
-        const id=String(s.stop_id);
-        const name=s.stop_name ? sanitizeStationName(s.stop_name) : '';
-        const parent=s.parent_station ? String(s.parent_station) : null;
-        const location_type=Number(s.location_type || 0) || 0;
-        const meta={
-          stop_id:id,
-          name,
-          stop_name:s.stop_name,
-          stop_desc: s.stop_desc,
-          lat, lon,
-          parent_station:parent,
-          location_type,
-          source:'SNCF'
-        };
-        rawStopsById.set(id, meta);
+        const parent = s.parent_station || null;
+        const locationType = Number(s.location_type ?? 0) || 0;
+        const entry = { stop_id:s.stop_id, name:s.stop_name, lat, lon, parent_station:parent, location_type:locationType };
+        rawStopsById.set(s.stop_id, entry);
         if (parent){
           if (!rawStopChildrenByParent.has(parent)) rawStopChildrenByParent.set(parent, []);
-          rawStopChildrenByParent.get(parent).push(meta);
-        }
-      }
-     const inferredParents = inferParentStations(rawStopsById);
-      
-      for (const [child, parent] of inferredParents.entries()){
-        const meta = rawStopsById.get(child);
-        if (meta){
-          meta.parent_station = parent;
-          if (!rawStopChildrenByParent.has(parent)) rawStopChildrenByParent.set(parent, []);
-          rawStopChildrenByParent.get(parent).push(meta);
+          rawStopChildrenByParent.get(parent).push(entry);
         }
       }
 
-      const { axisStopIds, axisTripIds } = ingestStopTimesFast(stopTimesRows, rawStopsById, rawStopChildrenByParent);
+      // stop_times -> groupés par trip
+      for (const st of stopTimesRows){
+        const tid = st.trip_id; if(!tid) continue;
+        if (!stopTimesByTrip.has(tid)) stopTimesByTrip.set(tid, []);
+        stopTimesByTrip.get(tid).push({
+          stop_id: st.stop_id,
+          arrival: gtfsTimeToSec(st.arrival_time),
+          departure: gtfsTimeToSec(st.departure_time),
+          seq: Number(st.stop_sequence)
+        });
+      }
+      for (const [k,v] of stopTimesByTrip) v.sort((a,b)=>a.seq-b.seq);
+
+      for (const [tripId, seq] of Array.from(stopTimesByTrip.entries())){
+        if (!tripPassesAxis(seq, rawStopsById)){
+          stopTimesByTrip.delete(tripId);
+          continue;
+        }
+        axisTripIds.add(tripId);
+        for (const st of seq){
+          const meta = rawStopsById.get(st.stop_id);
+          if (!meta) continue;
+          axisStopIds.add(meta.stop_id);
+          if (meta.parent_station){
+            axisStopIds.add(meta.parent_station);
+            if (rawStopChildrenByParent.has(meta.parent_station)){
+              for (const child of rawStopChildrenByParent.get(meta.parent_station)){
+                axisStopIds.add(child.stop_id);
+              }
+            }
+          }
+          if (rawStopChildrenByParent.has(meta.stop_id)){
+            for (const child of rawStopChildrenByParent.get(meta.stop_id)){
+              axisStopIds.add(child.stop_id);
+            }
+          }
+        }
+      }
 
       for (const id of axisStopIds){
         const meta = rawStopsById.get(id);
@@ -4029,78 +3986,61 @@ function setLayerGroupVisibility(group, visible){
       rawStopsById.clear();
       rawStopChildrenByParent.clear();
 
-      rebuildStaticMergeData();
-      prepareStationMetadata();
-      renderAxisStations();
-      setStatus('GTFS de base chargé — optimisation en arrière-plan…');
+      const tripsPromise = parseCSVAny(FILES.trips).catch(()=>null);
+      const routesPromise = parseCSVAny(FILES.routes).catch(()=>null);
+      const calendarPromise = parseCSVAny(FILES.calendar).catch(()=>null);
+      const calendarDatesPromise = parseCSVAny(FILES.calendar_dates).catch(()=>null);
 
-      gtfsFullReady = completeGtfsOptional(axisStopIds, axisTripIds);
-      gtfsFullReady.catch(err => setStatus('Erreur chargement GTFS complet: '+err.message, true));
-    } catch(e){
-      setStatus('Erreur chargement GTFS: '+e.message, true);
-    }
-  }
-
-  async function completeGtfsOptional(axisStopIds, axisTripIds){
-    const axisRouteIds = new Set();
-    let filteredTgvCount = 0;
-    let combinedActiveServiceIds = null;
-    const mergeActiveServices = (set)=>{
-      if (!set || !set.size) return;
-      if (!combinedActiveServiceIds) combinedActiveServiceIds = new Set();
-      for (const id of set) combinedActiveServiceIds.add(id);
-    };
-
-    const tripsPromise = parseCSVAny(FILES.trips).catch(()=>null);
-    const routesPromise = parseCSVAny(FILES.routes).catch(()=>null);
-    const calendarPromise = parseCSVAny(FILES.calendar).catch(()=>null);
-    const calendarDatesPromise = parseCSVAny(FILES.calendar_dates).catch(()=>null);
-
-    const trips = await tripsPromise;
-    if (Array.isArray(trips)){
-      for (const t of trips){
-        if (axisTripIds.size && !axisTripIds.has(t.trip_id)) continue;
-        tripsById.set(t.trip_id, { route_id:t.route_id, headsign:t.trip_headsign, service_id:t.service_id, trip_short_name:t.trip_short_name });
-        if (t.route_id) axisRouteIds.add(t.route_id);
+      // trips (optionnel)
+      const trips = await tripsPromise;
+      if (Array.isArray(trips)){
+        for (const t of trips){
+         if (axisTripIds.size && !axisTripIds.has(t.trip_id)) continue;
+          tripsById.set(t.trip_id, { route_id:t.route_id, headsign:t.trip_headsign, service_id:t.service_id, trip_short_name:t.trip_short_name });
+          if (t.route_id) axisRouteIds.add(t.route_id);
+        }
       }
-    }
 
       filteredTgvCount = pruneTgvTripsWithoutCoreStops(axisTripIds);
 
+      // routes (optionnel)
       const routes = await routesPromise;
-    if (Array.isArray(routes)){
-      for (const r of routes){
-        if (axisRouteIds.size && !axisRouteIds.has(r.route_id)) continue;
-        routesById.set(r.route_id, { short:r.route_short_name, long:r.route_long_name });
+      if (Array.isArray(routes)){
+        for (const r of routes){
+          if (axisRouteIds.size && !axisRouteIds.has(r.route_id)) continue;
+          routesById.set(r.route_id, { short:r.route_short_name, long:r.route_long_name });
+        }
       }
-    }
-    
+
+      // calendar + calendar_dates (optionnels)
       const calendarRows = await calendarPromise;
       const calendarDateRows = await calendarDatesPromise;
 
-    mergeActiveServices(computeActiveServiceSet(calendarRows, calendarDateRows));
+      mergeActiveServices(computeActiveServiceSet(calendarRows, calendarDateRows));
 
-    const stopsBeforeCfl = stopsById.size;
-    const tripsBeforeCfl = stopTimesByTrip.size;
-    await integrateCflGtfs({ axisStopIds, axisTripIds, axisRouteIds, mergeActiveServices });
-    const cflStopsAdded = Math.max(0, stopsById.size - stopsBeforeCfl);
-    const cflTripsAdded = Math.max(0, stopTimesByTrip.size - tripsBeforeCfl);
+      const stopsBeforeCfl = stopsById.size;
+      const tripsBeforeCfl = stopTimesByTrip.size;
+      await integrateCflGtfs({ axisStopIds, axisTripIds, axisRouteIds, mergeActiveServices });
+      const cflStopsAdded = Math.max(0, stopsById.size - stopsBeforeCfl);
+      const cflTripsAdded = Math.max(0, stopTimesByTrip.size - tripsBeforeCfl);
 
-    activeServiceIds = combinedActiveServiceIds && combinedActiveServiceIds.size ? combinedActiveServiceIds : null;
-    if (activeServiceIds && !tripsById.size) activeServiceIds = null;
+      activeServiceIds = combinedActiveServiceIds && combinedActiveServiceIds.size ? combinedActiveServiceIds : null;
+      if (activeServiceIds && !tripsById.size) activeServiceIds = null;
 
-    rebuildStaticMergeData();
-    prepareStationMetadata();
-    renderAxisStations();
-    renderTrains(trainsAt(nowSecLocal()));
+      rebuildStaticMergeData();
+      prepareStationMetadata();
+      renderAxisStations();
 
       let statusMsg = 'GTFS chargé — ' + stopsById.size + ' gares, ' + stopTimesByTrip.size + ' trips';
-    if (filteredTgvCount) statusMsg += `, ${filteredTgvCount} TGV hors sillon exclus`;
-    if (cflStopsAdded || cflTripsAdded){
-      statusMsg += ` (CFL +${cflStopsAdded} gares, +${cflTripsAdded} trips)`;
+      if (filteredTgvCount) statusMsg += `, ${filteredTgvCount} TGV hors sillon exclus`;
+      if (cflStopsAdded || cflTripsAdded){
+        statusMsg += ` (CFL +${cflStopsAdded} gares, +${cflTripsAdded} trips)`;
+      }
+      if (activeServiceIds) statusMsg += ', ' + activeServiceIds.size + ' services actifs aujourd\'hui';
+      setStatus(statusMsg + '.');
+    } catch(e){
+      setStatus('Erreur chargement GTFS: '+e.message, true);
     }
-    if (activeServiceIds) statusMsg += ', ' + activeServiceIds.size + ' services actifs aujourd\'hui';
-    setStatus(statusMsg + '.');
   }
 
 async function integrateCflGtfs({ axisStopIds, axisTripIds, axisRouteIds, mergeActiveServices } = {}){
