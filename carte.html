@@ -696,8 +696,6 @@ function escapeHTML(str){
     'https://cdn.jsdelivr.net/gh/TekMaTe-lux/Assistant-train@main/Assistant-train/retards_cfl.json'
   ];
 
-  const HAFAS_BASE_URL = 'https://cdt.hafas.de/opendata/apiserver/departureBoard';
-  const HAFAS_ACCESS_ID = '58ef9a71-6837-4405-bd5d-23beaf92864c';
   const HAFAS_LOOKAHEAD_MINUTES = 120;
   const HAFAS_REFRESH_INTERVAL_MS = 120000;
   const HAFAS_MAX_JOURNEYS = 20;
@@ -1683,31 +1681,6 @@ const GTFS_RT_STOP_META_KEYS = new Set([
     return { cancelled:false, minutes: 0 };
   }
 
-  async function fetchHafasDeparturesForStation(station, { dateStr, timeStr, duration }){
-    if (!station?.hafasId) return [];
-    const params = new URLSearchParams({
-      accessId: HAFAS_ACCESS_ID,
-      id: station.hafasId,
-      date: dateStr,
-      time: timeStr,
-      duration: String(duration ?? HAFAS_LOOKAHEAD_MINUTES),
-      maxJourneys: String(HAFAS_MAX_JOURNEYS),
-      format: 'json'
-    });
-    const url = `${HAFAS_BASE_URL}?${params.toString()}`;
-    const res = await fetchWithTimeoutNoHeaders(url, 10000);
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    let data;
-    const ct = (res.headers.get('content-type') || '').toLowerCase();
-    if (ct.includes('application/json')){
-      data = await res.json();
-    } else {
-      data = JSON.parse(await res.text());
-    }
-    const list = data?.Departure;
-    return Array.isArray(list) ? list : [];
-  }
-
   async function loadHafasDelays({ duration = HAFAS_LOOKAHEAD_MINUTES } = {}){
     if (pendingHafasPromise) return pendingHafasPromise;
     pendingHafasPromise = (async()=>{
@@ -1715,7 +1688,7 @@ const GTFS_RT_STOP_META_KEYS = new Set([
       try {
         snapshot = await fetchHafasProxySnapshot();
       } catch(err){
-        console.warn('[HAFAS] proxy indisponible', err);  
+        console.warn('[HAFAS] proxy indisponible', err);
       }
       if (snapshot){
         realtimeSources.hafas.origin = 'Proxy CFL';
@@ -1725,80 +1698,14 @@ const GTFS_RT_STOP_META_KEYS = new Set([
         return;
       }
 
-      await loadHafasDelaysViaApi({ duration });
+      setRealtimeSourceError('hafas', 'indisponibles');
+      throw new Error('Proxy HAFAS indisponible');
     })();
 
     try {
       await pendingHafasPromise;
     } finally {
       pendingHafasPromise = null;
-    }
-  }
-
-    async function loadHafasDelaysViaApi({ duration = HAFAS_LOOKAHEAD_MINUTES } = {}){
-    const now = new Date();
-    const dateStr = formatLuxDateISO(now);
-    const timeStr = formatLuxTimeISO(now);
-    const perTrain = new Map();
-    const errors = [];
-
-    for (const station of HAFAS_STATIONS){
-      try {
-        const departures = await fetchHafasDeparturesForStation(station, { dateStr, timeStr, duration });
-        if (!Array.isArray(departures) || !departures.length) continue;
-        const names = Array.isArray(station.names) && station.names.length ? station.names : [station.label || station.axisId || station.hafasId];
-        for (const dep of departures){
-          const number = extractHafasTrainNumber(dep);
-          if (!number) continue;
-          const delay = computeHafasDelay(dep, station);
-          if (!delay) continue;
-          if (!delay.cancelled && delay.minutes == null) continue;
-          const value = delay.cancelled ? null : Number(delay.minutes ?? 0);
-          const keyRaw = String(number);
-          const key = normalizeTrainNumberKey(keyRaw) || keyRaw;
-          let perStation = perTrain.get(key);
-          if (!perStation){
-            perStation = new Map();
-            perTrain.set(key, perStation);
-          }
-          for (const displayName of names){
-            const norm = normalizeStationName(displayName);
-            if (!norm) continue;
-            const existing = perStation.get(norm);
-            if (existing){
-              if (existing.value == null) continue;
-              if (value == null){
-                perStation.set(norm, { original: displayName, value });
-                continue;
-              }
-              const existingVal = Number(existing.value);
-              if (Number.isFinite(existingVal) && Number.isFinite(value) && Math.abs(value) < Math.abs(existingVal)){
-                continue;
-              }
-            }
-            perStation.set(norm, { original: displayName, value });
-          }
-        }
-      } catch(err){
-        errors.push({ station, error: err });
-        console.warn('[HAFAS] échec station', station?.label || station?.hafasId, err);
-      }
-    }
-
-    const fetchedAt = Date.now();
-    realtimeSources.hafas.origin = 'API HAFAS';
-    realtimeSources.hafas.rawSource = HAFAS_BASE_URL;
-    registerHafasRetards(perTrain, { fetchedAt });
-
-    if (errors.length === HAFAS_STATIONS.length){
-      setRealtimeSourceError('hafas', 'indisponible');
-      const lastErr = errors[errors.length - 1]?.error || new Error('HAFAS indisponible');
-      throw lastErr;
-    }
-    if (errors.length){
-      setRealtimeSourceError('hafas', 'partiel');
-    } else {
-      setRealtimeSourceError('hafas', null);
     }
   }
     
