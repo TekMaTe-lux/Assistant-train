@@ -94,6 +94,12 @@
     .trip-panel-realtime strong{ color:#ffd8a0; }
     .trip-panel-realtime-diff{ font-size:11px; color:#ffb066; font-weight:600; }
     .hidden{ display:none !important; }
+    .info-button{ border:1px solid #2a3b55; background:rgba(11,15,26,0.8); color:#e6f1ff; border-radius:8px; padding:6px 10px; cursor:pointer; font-size:12px; box-shadow:0 6px 14px rgba(0,0,0,0.25); }
+    .info-button:hover{ border-color:#5bd6ff; color:#a0ff00; }
+    .info-panel{ position:fixed; bottom:18px; left:18px; right:18px; max-width:380px; margin:0 auto; background:rgba(8,12,20,0.95); border:1px solid #20324b; border-radius:14px; padding:14px 16px; color:#d2e2ff; box-shadow:0 16px 32px rgba(0,0,0,0.35); z-index:3200; backdrop-filter:blur(8px); }
+    .info-panel.hidden{ display:none; }
+    .info-panel h3{ margin:0 0 8px; font-size:14px; color:#a0ff00; }
+    .info-panel ul{ margin:0; padding-left:16px; display:flex; flex-direction:column; gap:4px; font-size:12px; }
     .leaflet-marker-icon { pointer-events: auto !important; }
     .cow-marker, .cow-marker * { pointer-events: auto; cursor: pointer; }
     .station-event{ display:flex; gap:12px; align-items:flex-start; padding:10px 12px; border-radius:12px; border:1px solid #20324b; background:rgba(9,15,24,0.65); box-shadow:0 6px 18px rgba(0,0,0,0.22); }
@@ -165,10 +171,28 @@
       <label class="muted"><input id="toggle-major" type="checkbox" checked> gares prioritaires</label>
       <label class="muted"><input id="toggle-regular" type="checkbox" checked> gares secondaires</label>
       <label class="muted"><input id="toggle-trains" type="checkbox" checked> bétaillères</label>
-    </div> 
+    </div>
+    <div class="ctrl">
+      <span class="muted">Trains :</span>
+      <label class="muted"><input id="toggle-ter" type="checkbox" checked> TER</label>
+      <label class="muted"><input id="toggle-tgv" type="checkbox" checked> TGV</label>
+      <label class="muted"><input id="toggle-cfl" type="checkbox" checked> CFL (RE/IC/RB)</label>
+      <label class="muted"><input id="toggle-delays" type="checkbox" checked> afficher retards</label>
+    </div>
     <span id="clock" class="muted">—</span>
     <span id="counts" class="muted">—</span>
     <span id="status" class="muted"></span>
+    <button id="info-button" class="info-button" type="button">Infos</button>
+  </div>
+
+  <div id="info-panel" class="info-panel hidden" role="dialog" aria-modal="true" aria-label="Sources et explications">
+    <h3>Sources de données</h3>
+    <ul>
+      <li>Tracés et fonds de carte : OpenStreetMap.</li>
+      <li>Données statiques : jeux GTFS publiés sur le VPS labetaillere et miroir local.</li>
+      <li>Temps réel SNCF : API SNCF et flux GTFS-RT consolidés.</li>
+      <li>Temps réel CFL : proxy HAFAS pour les lignes RE, IC et RB.</li>
+    </ul>
   </div>
 
   <div id="trip-panel" class="trip-panel hidden" aria-live="polite">
@@ -837,11 +861,6 @@ function escapeHTML(str){
         labelParts.push(label);
         if (src.lastUpdated){
           newest = (!newest || src.lastUpdated > newest) ? src.lastUpdated : newest;
-          const originLabel = src.origin ? `${label} via ${src.origin}` : label;
-          tooltipParts.push(`${originLabel} MAJ ${formatLuxTime(new Date(src.lastUpdated))}`);
-        } else if (src.origin){
-          const labelName = src.displayName || src.key.toUpperCase();
-          tooltipParts.push(`${labelName} via ${src.origin}`);
         }
       }
     }
@@ -849,19 +868,18 @@ function escapeHTML(str){
     realtimeStopDataByTrip.clear();
     trainDelaySourceLabel = labelParts.join(' + ');
     trainDelayLastUpdated = newest;
-    trainDelayTooltipSuffix = tooltipParts.join(' · ');
+    trainDelayTooltipSuffix = '';
     updateRealtimeStatus();
     try { tick(); } catch(_){ }
   }
 
   function updateRealtimeStatus(){
     const parts = [];
-    const baseLabel = trainDelaySourceLabel ? `Retards temps réel via ${trainDelaySourceLabel}` : 'Retards temps réel';
+    const baseLabel = 'Retards temps réel activés';
     parts.push(baseLabel);
-    if (trainDelayTooltipSuffix){
-      parts.push(trainDelayTooltipSuffix);
-    } else if (trainDelayLastUpdated){
+    if (trainDelayLastUpdated){
       parts.push(`MAJ ${formatLuxTime(new Date(trainDelayLastUpdated))}`);
+    }
     const errorParts = [];
     for (const key of REALTIME_STATUS_DISPLAY_ORDER){
       const src = realtimeSources[key];
@@ -876,7 +894,7 @@ function escapeHTML(str){
 
     const message = parts.filter(Boolean).join(' — ');
     setRealtimeStatus(message);
-    }
+  }
   }
 
     const GTFS_RT_DELAY_MINUTE_KEYS = [
@@ -1802,7 +1820,6 @@ const GTFS_RT_STOP_META_KEYS = new Set([
       if (shouldIgnoreCancellation(entry, train)) return null;
       const station = entry.original || null;
       let title = station ? `Train supprimé à ${station}` : 'Train supprimé';
-      if (trainDelayTooltipSuffix) title += ` — ${trainDelayTooltipSuffix}`;
       const panelText = station ? `Train supprimé à ${station}` : 'Train supprimé (temps réel)';
       return {
         label:'Supprimé',
@@ -1812,7 +1829,7 @@ const GTFS_RT_STOP_META_KEYS = new Set([
         badgeClass:'train-delay-badge train-delay-badge--cancelled',
         title,
         panelText,
-        panelContext: trainDelayTooltipSuffix ? `Source temps réel — ${trainDelayTooltipSuffix}` : '',
+        panelContext: '',
         sourceLabel: trainDelaySourceLabel
       };
     }
@@ -1826,7 +1843,6 @@ const GTFS_RT_STOP_META_KEYS = new Set([
     const label = `+${rounded} min`;
     const where = station ? ` à ${station}` : '';
     let title = `Retard estimé ${label}${where}`;
-    if (trainDelayTooltipSuffix) title += ` — ${trainDelayTooltipSuffix}`;
     const panelText = `Retard ${label}${where}`;
     return {
       label,
@@ -1837,7 +1853,7 @@ const GTFS_RT_STOP_META_KEYS = new Set([
       badgeClass:`train-delay-badge train-delay-badge--${severity}`,
       title,
       panelText,
-      panelContext: trainDelayTooltipSuffix ? `Source temps réel — ${trainDelayTooltipSuffix}` : '',
+      panelContext: '',
       sourceLabel: trainDelaySourceLabel
     };
   }
@@ -2588,6 +2604,12 @@ function sanitizeCflStationName(name){
     stationsRegular: true,
     trains: true
   };
+  const trainFilters = {
+    showTer: true,
+    showTgv: true,
+    showCfl: true,
+    showDelays: true
+  };
   const trainMarkers = new Map();
   const trainCowById = new Map();
   const trainDataById = new Map();
@@ -2787,6 +2809,12 @@ function sanitizeCflStationName(name){
   const toggleMajorEl = document.getElementById('toggle-major');
   const toggleRegularEl = document.getElementById('toggle-regular');
   const toggleTrainsEl = document.getElementById('toggle-trains');
+  const toggleTerEl = document.getElementById('toggle-ter');
+  const toggleTgvEl = document.getElementById('toggle-tgv');
+  const toggleCflEl = document.getElementById('toggle-cfl');
+  const toggleDelaysEl = document.getElementById('toggle-delays');
+  const infoButtonEl = document.getElementById('info-button');
+  const infoPanelEl = document.getElementById('info-panel');
 
   if (toggleMajorEl){
     layerVisibility.stationsMajor = toggleMajorEl.checked;
@@ -2809,6 +2837,52 @@ function sanitizeCflStationName(name){
     toggleTrainsEl.addEventListener('change', ()=>{
       layerVisibility.trains = toggleTrainsEl.checked;
       applyLayerVisibility();
+    });
+  }
+
+  function applyTrainFilters(){
+    const changed = true;
+    if (changed){
+      try { tick(); } catch(_){ }
+    }
+  }
+
+  if (toggleTerEl){
+    trainFilters.showTer = toggleTerEl.checked;
+    toggleTerEl.addEventListener('change', ()=>{ trainFilters.showTer = toggleTerEl.checked; applyTrainFilters(); });
+  }
+
+  if (toggleTgvEl){
+    trainFilters.showTgv = toggleTgvEl.checked;
+    toggleTgvEl.addEventListener('change', ()=>{ trainFilters.showTgv = toggleTgvEl.checked; applyTrainFilters(); });
+  }
+
+  if (toggleCflEl){
+    trainFilters.showCfl = toggleCflEl.checked;
+    toggleCflEl.addEventListener('change', ()=>{ trainFilters.showCfl = toggleCflEl.checked; applyTrainFilters(); });
+  }
+
+  if (toggleDelaysEl){
+    trainFilters.showDelays = toggleDelaysEl.checked;
+    toggleDelaysEl.addEventListener('change', ()=>{ trainFilters.showDelays = toggleDelaysEl.checked; applyTrainFilters(); });
+  }
+
+  function toggleInfoPanel(force){
+    const targetState = force != null ? !!force : infoPanelEl.classList.contains('hidden');
+    infoPanelEl.classList.toggle('hidden', !targetState);
+  }
+
+  if (infoButtonEl && infoPanelEl){
+    infoButtonEl.addEventListener('click', ()=>toggleInfoPanel());
+    infoPanelEl.addEventListener('click', (ev)=>{
+      if (ev.target === infoPanelEl){
+        toggleInfoPanel(false);
+      }
+    });
+    document.addEventListener('keydown', (ev)=>{
+      if (ev.key === 'Escape' && !infoPanelEl.classList.contains('hidden')){
+        toggleInfoPanel(false);
+      }
     });
   }
 
@@ -2846,23 +2920,23 @@ function sanitizeCflStationName(name){
     return trainCowById.get(id);
   }
 
-   function glyphForTrain(train, delayInfoOverride){
+  function glyphForTrain(train, delayInfoOverride){
     if (!train) return '🐄';
-    const info = delayInfoOverride || train.delayInfo || computeTrainDelayInfo(train);
-    if (info?.severity === 'cancelled') return '👻🐄';
+    const info = trainFilters.showDelays ? (delayInfoOverride || train.delayInfo || computeTrainDelayInfo(train)) : null;
+    if (trainFilters.showDelays && info?.severity === 'cancelled') return '👻🐄';
     const id = train.id ?? '';
     return cowForTrain(id);
-  } 
+  }
 
   function iconForTrain(train){
-    const delayInfo = train.delayInfo || computeTrainDelayInfo(train);
+    const delayInfo = trainFilters.showDelays ? (train.delayInfo || computeTrainDelayInfo(train)) : null;
     const cow = glyphForTrain(train, delayInfo);
     const displayNum = train.number || train.headsign || train.id;
     const num = escapeHTML(displayNum || '—');
     const safeId = escapeAttr(train.id);
     const ariaLabelText = formatTrainAriaLabel(train, train.id);
     const ariaParts = [`Voir le détail du ${ariaLabelText}`];
-    if (delayInfo){
+    if (trainFilters.showDelays && delayInfo){
       if (delayInfo.minutes == null){
         ariaParts.push('train supprimé');
       } else {
@@ -2870,13 +2944,13 @@ function sanitizeCflStationName(name){
       }
     }
     const aria = escapeAttr(ariaParts.join(', '));
-    const badge = delayInfo
+    const badge = (trainFilters.showDelays && delayInfo)
       ? `<span class="${delayInfo.badgeClass}"${delayInfo.title ? ` title="${escapeAttr(delayInfo.title)}"` : ''}>${escapeHTML(delayInfo.label)}</span>`
       : '';
-    const titleAttr = delayInfo?.title ? ` title="${escapeAttr(delayInfo.title)}"` : '';
+    const titleAttr = (trainFilters.showDelays && delayInfo?.title) ? ` title="${escapeAttr(delayInfo.title)}"` : '';
     const classNames = ['cow-marker'];
     if (train.branding?.className) classNames.push(train.branding.className);
-    if (delayInfo?.severity === 'cancelled') classNames.push('train-cancelled');
+    if (trainFilters.showDelays && delayInfo?.severity === 'cancelled') classNames.push('train-cancelled');
     const classAttr = escapeAttr(classNames.join(' '));
     return L.divIcon({
       className:'',
@@ -3136,11 +3210,11 @@ const mapContainerEl = map.getContainer();
     const summaryStartTime = plannedStartSec!=null ? fmtHHMM(plannedStartSec) : (stops[0]?.label ?? '—');
     const summaryEndTime = plannedEndSec!=null ? fmtHHMM(plannedEndSec) : (stops[stops.length - 1]?.label ?? '—');
     let summaryHtml = `${escapeHTML(startName)} <strong>${escapeHTML(summaryStartTime)}</strong> → ${escapeHTML(endName)} <strong>${escapeHTML(summaryEndTime)}</strong>`;
-    let renderedDelayInfo = delayInfo;
+    let renderedDelayInfo = trainFilters.showDelays ? delayInfo : null;
     if (renderedDelayInfo?.severity === 'cancelled' && cancellationInfo && cancellationInfo.index > 0){
       renderedDelayInfo = null;
     }
-    if (renderedDelayInfo){
+    if (trainFilters.showDelays && renderedDelayInfo){
       const severityClass = `trip-panel-delay delay-${renderedDelayInfo.severity}`;
       const context = renderedDelayInfo.panelContext ? `<div class="trip-panel-delay-context">${escapeHTML(renderedDelayInfo.panelContext)}</div>` : '';
       summaryHtml += `<div class="${severityClass}">${escapeHTML(renderedDelayInfo.panelText)}${context}</div>`;
@@ -3154,16 +3228,18 @@ const mapContainerEl = map.getContainer();
     if (Array.isArray(data.numberList) && data.numberList.length > 1){
       summaryHtml += `<div class="trip-panel-realtime"><strong>Numéros associés :</strong> ${escapeHTML(data.numberList.join(' / '))}</div>`;
     }
-    const realtimeStartSec = realtimeProfile?.startRealtime ?? data.startSec ?? plannedStartSec;
-    const realtimeEndSec = realtimeProfile?.endRealtime ?? data.endSec ?? plannedEndSec;
-    const startDiffText = (plannedStartSec!=null && realtimeStartSec!=null) ? formatDelayDiff(realtimeStartSec - plannedStartSec) : '';
-    const endDiffText = (plannedEndSec!=null && realtimeEndSec!=null) ? formatDelayDiff(realtimeEndSec - plannedEndSec) : '';
-    if ((startDiffText && realtimeStartSec!=null) || (endDiffText && realtimeEndSec!=null)){
-      const startRealtimeText = realtimeStartSec!=null ? fmtHHMM(realtimeStartSec) : '—';
-      const endRealtimeText = realtimeEndSec!=null ? fmtHHMM(realtimeEndSec) : '—';
-      const startDiffHtml = startDiffText ? `<span class="trip-panel-realtime-diff">${escapeHTML(startDiffText)}</span>` : '';
-      const endDiffHtml = endDiffText ? `<span class="trip-panel-realtime-diff">${escapeHTML(endDiffText)}</span>` : '';
-      summaryHtml += `<div class="trip-panel-realtime">Temps réel : <strong>${escapeHTML(startRealtimeText)}</strong>${startDiffHtml} → <strong>${escapeHTML(endRealtimeText)}</strong>${endDiffHtml}</div>`;
+    if (trainFilters.showDelays){
+      const realtimeStartSec = realtimeProfile?.startRealtime ?? data.startSec ?? plannedStartSec;
+      const realtimeEndSec = realtimeProfile?.endRealtime ?? data.endSec ?? plannedEndSec;
+      const startDiffText = (plannedStartSec!=null && realtimeStartSec!=null) ? formatDelayDiff(realtimeStartSec - plannedStartSec) : '';
+      const endDiffText = (plannedEndSec!=null && realtimeEndSec!=null) ? formatDelayDiff(realtimeEndSec - plannedEndSec) : '';
+      if ((startDiffText && realtimeStartSec!=null) || (endDiffText && realtimeEndSec!=null)){
+        const startRealtimeText = realtimeStartSec!=null ? fmtHHMM(realtimeStartSec) : '—';
+        const endRealtimeText = realtimeEndSec!=null ? fmtHHMM(realtimeEndSec) : '—';
+        const startDiffHtml = startDiffText ? `<span class="trip-panel-realtime-diff">${escapeHTML(startDiffText)}</span>` : '';
+        const endDiffHtml = endDiffText ? `<span class="trip-panel-realtime-diff">${escapeHTML(endDiffText)}</span>` : '';
+        summaryHtml += `<div class="trip-panel-realtime">Temps réel : <strong>${escapeHTML(startRealtimeText)}</strong>${startDiffHtml} → <strong>${escapeHTML(endRealtimeText)}</strong>${endDiffHtml}</div>`;
+      }
     }
     tripPanelSummaryEl.innerHTML = summaryHtml;
 
@@ -3257,7 +3333,8 @@ const mapContainerEl = map.getContainer();
         } else if (!part.showRealtime){
           pieces.push('<span class="time-entry-plan">—</span>');
         }
-        if (part.showRealtime){
+        const showRealtime = trainFilters.showDelays && part.showRealtime;
+        if (showRealtime){
           const mode = classifyDelayDiff(part.diffSec);
           const rtClass = mode === 'delay' ? 'time-entry-rt--delay' : mode === 'advance' ? 'time-entry-rt--advance' : 'time-entry-rt--ontime';
           const prefix = mode === 'delay' ? 'Retardé' : mode === 'advance' ? 'Avance' : 'Temps réel';
@@ -4347,6 +4424,12 @@ function stationNameMatchesKeywords(name, keywords){
       const numberKeyRaw = fallbackNumberCandidate != null ? String(fallbackNumberCandidate) : null;
       const numberKey = numberKeyRaw ? normalizeTrainNumberKey(numberKeyRaw) : null;
       const branding = computeTrainBranding(trip_id, trip, route, rawNumber, numberCandidate || fallbackNumberCandidate);
+      const category = branding.category || 'sncf';
+      if ((category === 'sncf' && !trainFilters.showTer)
+        || (category === 'tgv-roi' && !trainFilters.showTgv)
+        || (category === 'cfl' && !trainFilters.showCfl)){
+        continue;
+      }
       const numberDisplay = branding.displayNumber || rawNumber || (numberKey != null ? String(numberKey) : (numberKeyRaw != null ? String(numberKeyRaw) : null));
       const tripSource = trip?.source === 'CFL' ? 'CFL' : 'SNCF';
       const realtimeProfile = computeRealtimeStopData(
