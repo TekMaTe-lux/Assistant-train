@@ -446,18 +446,7 @@ function escapeHTML(str){
   }
 
   function realtimeOptionsForTrain(train){
-    const category = train?.branding?.category || null;
-    const ignoreCancelledStop = (stopMeta, entry)=>{
-      if (!stopMeta || !entry) return false;
-      const sourceKey = normalizeRealtimeSourceKey(entry.source || entry.sourceKey || null);
-      if (sourceKey !== 'hafas') return false;
-      if (category === 'tgv-roi'){
-        const normalizedName = normalizeStationName(stopMeta.name || '');
-        if (normalizedName.includes('thionville')) return true;
-      }
-      return false;
-    };
-    return { preferredSources: resolvePreferredRealtimeSourceOrder(train), ignoreCancelledStop };
+    return { preferredSources: resolvePreferredRealtimeSourceOrder(train) };
   }
 
   function getRealtimePerStationMaps(normalizedKey, preferredOrder){
@@ -2192,11 +2181,7 @@ function adaptDelayEntryForStop(entry, stopMeta){
         entry = findDelayEntryForStop(combinedFallback, stopMeta);
       }
       if (!entry) continue;
-      const ignoreCancelled = typeof options.ignoreCancelledStop === 'function'
-        ? options.ignoreCancelledStop(stopMeta, entry)
-        : false;
       if (entry.value == null){
-        if (ignoreCancelled) continue;
         const sourceLabel = entry.original || stopMeta?.name || null;
         stops[i].cancelled = true;
         stops[i].delaySource = sourceLabel;
@@ -3856,6 +3841,7 @@ function setLayerGroupVisibility(group, visible){
     'bettembourg',
     'luxembourg'
   ].map(normalizeStationName);
+  const EXCLUDED_TRAIN_NUMBERS = new Set(['44700']);
   const EXCLUDED_TRAIN_NUMBER_PREFIXES = ['447'];
   const CORE_TGV_STOP_KEYWORDS = ['metz','nancy','thionville','luxembourg'].map(normalizeStationName);
   const CORE_TGV_STOP_CODES = new Set([
@@ -4359,26 +4345,14 @@ function stationNameMatchesKeywords(name, keywords){
       const fallbackNumberCandidate = numberCandidate || extractTrainNumberCandidate(trip_id) || null;
       const numberKeyRaw = fallbackNumberCandidate != null ? String(fallbackNumberCandidate) : null;
       const numberKey = numberKeyRaw ? normalizeTrainNumberKey(numberKeyRaw) : null;
-      const isExcludedTrain = ()=>{
-        const probes = [numberKey, numberCandidate, fallbackNumberCandidate];
-        for (const probe of probes){
-          if (probe == null) continue;
-          const value = String(probe);
-          if (EXCLUDED_TRAIN_NUMBERS.has(value)) return true;
-          for (const prefix of EXCLUDED_TRAIN_NUMBER_PREFIXES){
-            if (value.startsWith(prefix)) return true;
-          }
-        }
-        return false;
-      };
-      if (isExcludedTrain()) continue;
+      const branding = computeTrainBranding(trip_id, trip, route, rawNumber, numberCandidate || fallbackNumberCandidate);
       const numberDisplay = branding.displayNumber || rawNumber || (numberKey != null ? String(numberKey) : (numberKeyRaw != null ? String(numberKeyRaw) : null));
       const tripSource = trip?.source === 'CFL' ? 'CFL' : 'SNCF';
       const realtimeProfile = computeRealtimeStopData(
         trip_id,
         seq,
         numberKey,
-        realtimeOptionsForTrain({ source: tripSource, branding })
+        realtimeOptionsForTrain({ source: tripSource })
       );
 
       const startPlanned = seq[0].departure ?? seq[0].arrival;
@@ -5307,15 +5281,10 @@ function stationNameMatchesKeywords(name, keywords){
       setRealtimeSourceError('hafas', 'indisponibles');
     });
 
+    await loadNetworks();
+    await loadGTFS();
+    tick();
     requestAnimationFrame(loop);
-
-    try {
-      await loadNetworks();
-      await loadGTFS();
-      tick();
-    } catch(e){
-      setStatus('Erreur initialisation: '+e.message, true);
-    }
 
     gtfsPromise.finally(()=>{
       if (gtfsRtRefreshTimer == null){
@@ -5348,7 +5317,7 @@ function stationNameMatchesKeywords(name, keywords){
         }, SNCF_RT_REFRESH_INTERVAL_MS);
       }
     });
-  })();
+  })().catch(e=> setStatus('Erreur initialisation: '+e.message, true));
   </script>
 </body>
 </html>
