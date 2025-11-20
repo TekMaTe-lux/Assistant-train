@@ -3912,7 +3912,11 @@ function setLayerGroupVisibility(group, visible){
 
       const rawStopsById = new Map();
       const rawStopChildrenByParent = new Map();
-      const stops = await parseCSVAny(FILES.stops);
+      
+      const [stops, stopTimesRows] = await Promise.all([
+        parseCSVAny(FILES.stops),
+        parseCSVAny(FILES.stop_times)
+      ]);
       for (const s of stops){
         const lat=parseFloat(s.stop_lat), lon=parseFloat(s.stop_lon);
         if (!isFinite(lat)||!isFinite(lon)) continue;
@@ -3927,8 +3931,7 @@ function setLayerGroupVisibility(group, visible){
       }
 
       // stop_times -> groupés par trip
-      const stop_times = await parseCSVAny(FILES.stop_times);
-      for (const st of stop_times){
+      for (const st of stopTimesRows){
         const tid = st.trip_id; if(!tid) continue;
         if (!stopTimesByTrip.has(tid)) stopTimesByTrip.set(tid, []);
         stopTimesByTrip.get(tid).push({
@@ -3983,37 +3986,35 @@ function setLayerGroupVisibility(group, visible){
       rawStopsById.clear();
       rawStopChildrenByParent.clear();
 
+      const tripsPromise = parseCSVAny(FILES.trips).catch(()=>null);
+      const routesPromise = parseCSVAny(FILES.routes).catch(()=>null);
+      const calendarPromise = parseCSVAny(FILES.calendar).catch(()=>null);
+      const calendarDatesPromise = parseCSVAny(FILES.calendar_dates).catch(()=>null);
+
       // trips (optionnel)
-      try {
-        const trips = await parseCSVAny(FILES.trips);
+      const trips = await tripsPromise;
+      if (Array.isArray(trips)){
         for (const t of trips){
          if (axisTripIds.size && !axisTripIds.has(t.trip_id)) continue;
           tripsById.set(t.trip_id, { route_id:t.route_id, headsign:t.trip_headsign, service_id:t.service_id, trip_short_name:t.trip_short_name });
           if (t.route_id) axisRouteIds.add(t.route_id);
         }
-      } catch(_){ /* ok si absent */ }
+      }
 
       filteredTgvCount = pruneTgvTripsWithoutCoreStops(axisTripIds);
 
       // routes (optionnel)
-      try {
-        const routes = await parseCSVAny(FILES.routes);
+      const routes = await routesPromise;
+      if (Array.isArray(routes)){
         for (const r of routes){
           if (axisRouteIds.size && !axisRouteIds.has(r.route_id)) continue;
           routesById.set(r.route_id, { short:r.route_short_name, long:r.route_long_name });
         }
-      } catch(_){ /* ok si absent */ }
+      }
 
       // calendar + calendar_dates (optionnels)
-      let calendarRows = null;
-      try {
-       calendarRows = await parseCSVAny(FILES.calendar);
-      } catch(_){ /* ok si absent */ }
-      
-      let calendarDateRows = null;
-      try {
-        calendarDateRows = await parseCSVAny(FILES.calendar_dates);
-      } catch(_){ /* ok si absent */ }
+      const calendarRows = await calendarPromise;
+      const calendarDateRows = await calendarDatesPromise;
 
       mergeActiveServices(computeActiveServiceSet(calendarRows, calendarDateRows));
 
@@ -5281,8 +5282,10 @@ function stationNameMatchesKeywords(name, keywords){
       setRealtimeSourceError('hafas', 'indisponibles');
     });
 
-    await loadNetworks();
-    await loadGTFS();
+    await Promise.all([
+      loadNetworks(),
+      loadGTFS()
+    ]);
     tick();
     requestAnimationFrame(loop);
 
