@@ -1267,6 +1267,31 @@ const GTFS_RT_STOP_META_KEYS = new Set([
     return { cancelled, minutes };
   }
 
+  function extractSncfStopCause(stopTime){
+    if (!stopTime || typeof stopTime !== 'object') return null;
+    const messageParts = [];
+    const push = (v)=>{ if (v) messageParts.push(String(v)); };
+
+    push(stopTime.cause || stopTime.reason || stopTime.message || stopTime.comment);
+    push(stopTime.stop_time_effect || stopTime.effect || stopTime.status);
+
+    if (Array.isArray(stopTime.notes)){
+      for (const note of stopTime.notes){
+        if (!note) continue;
+        push(note.text || note.value || note.title || note.label);
+      }
+    }
+
+    if (Array.isArray(stopTime.properties)){
+      for (const prop of stopTime.properties){
+        if (!prop) continue;
+        push(prop.text || prop.value || prop.label);
+      }
+    }
+
+    return messageParts.map(s => s.trim()).find(Boolean) || null;
+  }
+    
   function buildNavitiaDisruptionMessage(disruption){
     if (!disruption || typeof disruption !== 'object') return null;
     const messageParts = [];
@@ -1362,6 +1387,7 @@ const GTFS_RT_STOP_META_KEYS = new Set([
     if (!journey || typeof journey !== 'object') return null;
     const stopTimes = Array.isArray(journey.stop_times) ? journey.stop_times : [];
     if (!stopTimes.length) return null;
+    let journeyCause = journey.cause || journey.reason || journey.disruption?.cause || journey.message;
     const numberCandidates = [
       journey.name,
       journey.vehicle_journey_name,
@@ -1391,11 +1417,15 @@ const GTFS_RT_STOP_META_KEYS = new Set([
       if (!stationName) continue;
       const delay = computeSncfStopDelay(stopTime);
       if (!delay) continue;
+      if (!journeyCause){
+        journeyCause = extractSncfStopCause(stopTime);
+      }
       const value = delay.cancelled ? null : delay.minutes;
       registerSncfStationEntry(perStation, stationName, { stopPointId: stopPoint.id, stopAreaId: stopArea.id }, value);
     }
     if (!perStation.size) return null;
-    return { key: String(normalizedKey), perStation };
+    const disruptionText = journeyCause ? String(journeyCause).trim() : null;
+    return { key: String(normalizedKey), perStation, disruptionText };
   }
 
   function parseSncfRealtimeData(raw){
@@ -1405,10 +1435,14 @@ const GTFS_RT_STOP_META_KEYS = new Set([
       : raw;
     const journeys = Array.isArray(payload.vehicle_journeys) ? payload.vehicle_journeys : [];
     const perTrain = new Map();
+    const disruptions = parseSncfDisruptions(payload);
     for (const journey of journeys){
       const entry = buildSncfJourneyEntry(journey);
       if (entry){
         perTrain.set(entry.key, entry.perStation);
+        if (entry.disruptionText){
+          registerSncfDisruptionTarget(disruptions, { id: journey.id || journey.name || entry.key, name: journey.name || journey.id || entry.key }, entry.disruptionText);
+        }
       }
     }
     const updatedAt = parseNavitiaDateTime(
@@ -1418,7 +1452,6 @@ const GTFS_RT_STOP_META_KEYS = new Set([
       || raw.updated_at
       || raw.timestamp
     ) || Date.now();
-    const disruptions = parseSncfDisruptions(payload);
     return { perTrain, updatedAt, disruptions };
   }
 
