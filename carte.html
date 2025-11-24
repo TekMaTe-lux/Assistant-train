@@ -1483,35 +1483,91 @@ const GTFS_RT_STOP_META_KEYS = new Set([
     rebuildRealtimeDelayIndex();
   }
 
-  async function loadSncfRealtime({ forceFresh = false } = {}){
-    if (pendingSncfPromise) return pendingSncfPromise;
-    pendingSncfPromise = (async()=>{
-      const withBuster = (u)=> u + (u.includes('?') ? '&' : '?') + 't=' + (forceFresh ? Date.now() : 'soft');
-      const url = withBuster(SNCF_RT_CACHE_URL);
-      console.log('[SNCF] tentative:', url);
-      const res = await fetchWithTimeoutNoHeaders(url, 10000);
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const ct = (res.headers.get('content-type') || '').toLowerCase();
-      const data = ct.includes('application/json') ? await res.json() : JSON.parse(await res.text());
-      const parsed = parseSncfRealtimeData(data);
-      console.log('[SNCF] ✅ via', SNCF_RT_CACHE_URL);
-      realtimeSources.sncf.origin = 'cache VPS';
-      realtimeSources.sncf.rawSource = SNCF_RT_CACHE_URL;
-      registerSncfVehicleJourneys(parsed.perTrain, { fetchedAt: parsed.updatedAt, disruptions: parsed.disruptions });
-      setRealtimeSourceError('sncf', null);
-    })();
+  function normalizeSncfCachePayload(raw){
+  if (!raw || typeof raw !== 'object') return raw;
 
-    try {
-      await pendingSncfPromise;
-    } catch(err){
-      console.error('[SNCF] ❌ retards indisponibles', err);
-      const hadData = realtimeSources.sncf.lastUpdated != null;
-      setRealtimeSourceError('sncf', hadData ? 'rafraîchissement en échec' : 'indisponibles');
-      throw err;
-    } finally {
-      pendingSncfPromise = null;
+  // Cas "Navitia brut" déjà géré → on ne touche à rien
+  if (Array.isArray(raw.vehicle_journeys) || (raw.data && Array.isArray(raw.data.vehicle_journeys))) {
+    return raw;
+  }
+
+  // Cas "map de caches" du VPS : on fusionne tous les entry.data.*
+  const merged = {
+    vehicle_journeys: [],
+    disruptions: [],
+    context: {}
+  };
+
+  let newestCtx = null;
+
+  for (const entry of Object.values(raw)){
+    if (!entry || typeof entry !== 'object' || !entry.data) continue;
+    const data = entry.data;
+
+    if (Array.isArray(data.vehicle_journeys)) {
+      merged.vehicle_journeys.push(...data.vehicle_journeys);
+    }
+    if (Array.isArray(data.disruptions)) {
+      merged.disruptions.push(...data.disruptions);
+    }
+
+    const ctx = data.context;
+    if (ctx && ctx.current_datetime) {
+      // on garde le plus récent
+      if (!newestCtx || parseNavitiaDateTime(ctx.current_datetime) > parseNavitiaDateTime(newestCtx)) {
+        newestCtx = ctx.current_datetime;
+      }
     }
   }
+
+  if (!merged.vehicle_journeys.length) {
+    // rien de détecté → on rend le raw tel quel (pour ne pas casser)
+    return raw;
+  }
+
+  if (newestCtx) {
+    merged.context.current_datetime = newestCtx;
+  }
+
+  return merged;
+}
+  
+  async function loadSncfRealtime({ forceFresh = false } = {}){
+  if (pendingSncfPromise) return pendingSncfPromise;
+
+  pendingSncfPromise = (async()=>{
+    const withBuster = (u)=> u + (u.includes('?') ? '&' : '?') + 't=' + (forceFresh ? Date.now() : 'soft');
+    const url = withBuster(SNCF_RT_CACHE_URL);
+    console.log('[SNCF] tentative:', url);
+    const res = await fetchWithTimeoutNoHeaders(url, 10000);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+
+    const ct = (res.headers.get('content-type') || '').toLowerCase();
+    const raw = ct.includes('application/json') ? await res.json() : JSON.parse(await res.text());
+
+    // 🔴 NOUVEAU : adapter le format "cache VPS" → format Navitia
+    const data = normalizeSncfCachePayload(raw);
+
+    const parsed = parseSncfRealtimeData(data);
+    console.log('[SNCF] ✅ via', SNCF_RT_CACHE_URL);
+    realtimeSources.sncf.origin = 'cache VPS';
+    realtimeSources.sncf.rawSource = SNCF_RT_CACHE_URL;
+    registerSncfVehicleJourneys(parsed.perTrain, { fetchedAt: parsed.updatedAt, disruptions: parsed.disruptions });
+    setRealtimeSourceError('sncf', null);
+  })();
+
+  try {
+    await pendingSncfPromise;
+  } catch(err){
+    console.error('[SNCF] ❌ retards indisponibles', err);
+    const hadData = realtimeSources.sncf.lastUpdated != null;
+    setRealtimeSourceError('sncf', hadData ? 'rafraîchissement en échec' : 'indisponibles');
+    throw err;
+  } finally {
+    pendingSncfPromise = null;
+  }
+}
+
 
     function pickStatusDisruption(entry){
     if (!entry || typeof entry !== 'object') return null;
