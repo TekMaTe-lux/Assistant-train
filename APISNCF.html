@@ -2,7 +2,7 @@
 <html lang="fr">
 <head>
   <meta charset="UTF-8">
-  <title>APISNCF – retards_carte.json</title>
+  <title>APISNCF – Disruptions retards_carte.json</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <style>
     :root {
@@ -29,11 +29,12 @@
       color: #9ca3af;
       margin-bottom: 1rem;
     }
+
     .card {
       background: #020617;
       border-radius: 0.75rem;
       padding: 1rem 1.25rem;
-      box-shadow: 0 10px 20px rgba(0,0,0,0.3);
+      box-shadow: 0 10px 25px rgba(0,0,0,0.35);
       margin-bottom: 1rem;
       border: 1px solid #1f2937;
     }
@@ -47,12 +48,14 @@
     }
     .stat {
       display: inline-flex;
-      gap: 0.35rem;
       align-items: baseline;
+      gap: 0.35rem;
     }
     .stat strong {
+      font-size: 0.9rem;
       color: #e5e7eb;
     }
+
     .controls {
       display: flex;
       flex-wrap: wrap;
@@ -76,6 +79,7 @@
       color: #e5e7eb;
       font-size: 0.8rem;
     }
+
     table {
       width: 100%;
       border-collapse: collapse;
@@ -113,6 +117,7 @@
       color: #6b7280;
       word-break: break-all;
     }
+
     .status-badge {
       display: inline-flex;
       align-items: center;
@@ -165,22 +170,32 @@
       font-weight: 600;
       margin-left: 0.1rem;
     }
+
+    .cause {
+      font-size: 0.78rem;
+      color: #9ca3af;
+      margin-top: 0.25rem;
+    }
+
     .error {
       color: #fecaca;
       font-size: 0.85rem;
       margin-top: 0.5rem;
     }
+
     @media (max-width: 900px) {
-      th:nth-child(4), td:nth-child(4) { display:none; } /* cache colonne brute sur mobile */
+      th:nth-child(4), td:nth-child(4) { display:none; } /* cache brut sur mobile */
     }
   </style>
 </head>
 <body>
 <div class="page">
-  <h1>APISNCF – retards_carte.json</h1>
+  <h1>APISNCF – Disruptions depuis retards_carte.json</h1>
   <div class="subtitle">
-    Vue debug des retards / suppressions pour les trains de la carte
-    à partir de <code>retards_carte.json</code>.
+    Lecture directe de <code>retards_carte.json</code> et extraction des
+    <code>disruptions[].impacted_stops</code> pour chaque
+    <code>vehicle_journey:SNCF:…</code> (retards par gare + message type
+    « Réutilisation d'un train »).
   </div>
 
   <div class="card">
@@ -211,7 +226,7 @@
       <tr>
         <th>Train</th>
         <th>Statut &amp; retard max</th>
-        <th>Retards par gare (min)</th>
+        <th>Retards par gare</th>
         <th>Détails bruts</th>
       </tr>
       </thead>
@@ -222,8 +237,9 @@
   </div>
 
   <div style="font-size:0.7rem; color:#6b7280; margin-top:0.25rem;">
-    Pour la carte, tu peux réutiliser directement la structure :
-    <code>data.trains[train_number].stops[&quot;Nom gare&quot;] = minutes</code>.
+    Exemple&nbsp;: pour <strong>835087</strong>, tu devrais voir toutes les gares
+    (Nancy, Jarville, Laneuveville, …, Lunéville) avec <code>+5′</code> et le message
+    « Réutilisation d'un train ».
   </div>
 </div>
 
@@ -249,238 +265,124 @@
       .replace(/'/g, '&#39;');
   }
 
-  function maxDelayForStops(stops){
-    let max = 0;
-    if (!stops) return 0;
-    for (const v of Object.values(stops)){
-      const n = Number(v) || 0;
-      if (n > max) max = n;
-    }
-    return max;
+  function parseHHMMSS(str){
+    if (!str || typeof str !== 'string') return null;
+    const s = str.trim();
+    if (!/^\d{6}$/.test(s)) return null;
+    const h = parseInt(s.slice(0,2), 10);
+    const m = parseInt(s.slice(2,4), 10);
+    const sec = parseInt(s.slice(4,6), 10);
+    if (isNaN(h) || isNaN(m) || isNaN(sec)) return null;
+    return h * 3600 + m * 60 + sec;
   }
 
-  function classifyStatus(status){
-    const s = String(status || '').toUpperCase();
-    if (s.includes('CANCEL')) return 'cancelled';
-    if (s === 'ON_TIME') return 'ontime';
-    if (s === 'DELAYED') return 'delayed';
-    return 'other';
+  function delayMinutes(baseStr, amendedStr){
+    const b = parseHHMMSS(baseStr);
+    const a = parseHHMMSS(amendedStr);
+    if (b == null || a == null) return 0;
+    const diff = a - b;
+    if (!Number.isFinite(diff) || diff <= 0) return 0;
+    return Math.round(diff / 60);
   }
 
-  function renderSummary(data){
-    summaryGeneratedEl.textContent =
-      'Généré à (UTC) : ' + (data.generated_at || 'inconnu') +
-      ' — source : ' + (data.source || 'n/a');
-
-    const counters = data.counters || {};
-    const total = Number(data.count) ||
-      (data.trains ? Object.keys(data.trains).length : 0) || 0;
-    const ontime   = Number(counters.ON_TIME || 0);
-    const delayed  = Number(counters.DELAYED || 0);
-    const cancelled = Number(
-      counters.CANCELLED || counters.CANCELED || counters.SUPPRESSED || 0
-    );
-
-    summaryStatsEl.innerHTML = '';
-    function addStat(label, value){
-      const span = document.createElement('span');
-      span.className = 'stat';
-      span.innerHTML =
-        '<strong>' + escapeHTML(value) + '</strong>' +
-        '<span>' + escapeHTML(label) + '</span>';
-      summaryStatsEl.appendChild(span);
+  function classifyStatusFromSeverity(effect){
+    const eff = String(effect || '').toUpperCase();
+    if (eff.includes('NO_SERVICE') || eff.includes('CANCEL')) return 'cancelled';
+    if (eff.includes('SIGNIFICANT_DELAYS') ||
+        eff.includes('REDUCED_SERVICE') ||
+        eff.includes('MODIFIED_SERVICE')) {
+      return 'delayed';
     }
-
-    addStat('trains au total', total);
-    addStat('à l’heure', ontime);
-    addStat('retardés', delayed);
-    addStat('supprimés (si présent)', cancelled);
+    return 'ontime';
   }
 
-  function renderTable(){
-    if (!trainsArray.length){
-      tbodyEl.innerHTML = '<tr><td colspan="4">Aucun train dans le flux.</td></tr>';
-      return;
-    }
+  function extractTrainsFromRoot(root){
+    const result = [];
+    if (!root || typeof root !== 'object') return result;
 
-    const sortMode = sortSelectEl.value;
-    const onlyAffected = filterDelayedEl.checked;
+    for (const [key, entry] of Object.entries(root)){
+      // On ne garde que les blocs Navitia de type vehicle_journey:…
+      if (!key.startsWith('vehicle_journey:')) continue;
+      if (!entry || typeof entry !== 'object') continue;
 
-    let rows = trainsArray.slice();
-    if (onlyAffected){
-      rows = rows.filter(t =>
-        t.statusClass === 'delayed' ||
-        t.statusClass === 'cancelled' ||
-        t.maxDelay > 0
-      );
-    }
+      const data = entry.data || {};
+      const disruptions = Array.isArray(data.disruptions) ? data.disruptions : [];
+      const vjs = Array.isArray(data.vehicle_journeys) ? data.vehicle_journeys : [];
+      const vj = vjs[0] || {};
+      const trip = vj.trip || {};
+      const tripName = trip.name || vj.name || key;
 
-    rows.sort((a, b) => {
-      if (sortMode === 'maxdelay'){
-        const dA = a.maxDelay || 0;
-        const dB = b.maxDelay || 0;
-        if (dB !== dA) return dB - dA;
-        return String(a.train_number).localeCompare(String(b.train_number));
-      }
-      if (sortMode === 'status'){
-        const order = { delayed: 0, cancelled: 1, other: 2, ontime: 3 };
-        const sA = order[a.statusClass] ?? 99;
-        const sB = order[b.statusClass] ?? 99;
-        if (sA !== sB) return sA - sB;
-        const dA = a.maxDelay || 0;
-        const dB = b.maxDelay || 0;
-        if (dB !== dA) return dB - dA;
-        return String(a.train_number).localeCompare(String(b.train_number));
-      }
-      // default: par numéro
-      const nA = Number(a.train_number);
-      const nB = Number(b.train_number);
-      if (!isNaN(nA) && !isNaN(nB)) return nA - nB;
-      return String(a.train_number).localeCompare(String(b.train_number));
-    });
-
-    if (!rows.length){
-      tbodyEl.innerHTML = '<tr><td colspan="4">Aucun train correspondant au filtre.</td></tr>';
-      return;
-    }
-
-    const frag = document.createDocumentFragment();
-
-    for (const t of rows){
-      const tr = document.createElement('tr');
-
-      // Col 1 : train
-      const tdTrain = document.createElement('td');
-      tdTrain.innerHTML =
-        '<div class="train-number">' +
-          escapeHTML(t.train_number || t.key || '?') +
-        '</div>' +
-        '<div class="train-id">' +
-          escapeHTML(t.train_id || '') +
-        '</div>';
-      tr.appendChild(tdTrain);
-
-      // Col 2 : statut + retard max
-      const tdStatus = document.createElement('td');
-
-      let label = t.status || 'UNKNOWN';
-      if (t.status === 'ON_TIME') label = 'À l’heure';
-      else if (t.status === 'DELAYED') label = 'Retardé';
-      else if (t.status && t.status.toUpperCase().includes('CANCEL')) {
-        label = 'Supprimé / partiellement supprimé';
+      if (!disruptions.length && (!data.vehicle_journeys || !data.vehicle_journeys.length)){
+        continue;
       }
 
-      let maxDelayText = t.maxDelay + ' min';
-      let maxDelayClass = 'ok';
-      if (t.statusClass === 'cancelled'){
-        maxDelayText = 'Trajet supprimé / modifié';
-        maxDelayClass = 'bad';
-      } else if (t.maxDelay > 0){
-        maxDelayText = '+' + t.maxDelay + ' min';
-        maxDelayClass = (t.maxDelay >= 10) ? 'bad' : 'neutral';
-      } else {
-        maxDelayText = '0 min';
-        maxDelayClass = 'ok';
-      }
+      const stopsDelays = {};     // nom gare -> max delay (min)
+      let maxDelay = 0;
+      let globalStatus = 'ontime';
+      const causeSet = new Set();
+      const messagesSet = new Set();
+      let severityEffect = '';
 
-      const badgeClasses = ['status-badge'];
-      if (t.statusClass === 'delayed') badgeClasses.push('status-delayed');
-      if (t.statusClass === 'cancelled') badgeClasses.push('status-cancelled');
+      for (const d of disruptions){
+        const severity = d.severity || {};
+        severityEffect = severity.effect || severityEffect;
+        const name = severity.name || '';
 
-      tdStatus.innerHTML =
-        '<div class="' + badgeClasses.join(' ') + '">' +
-          '<span class="dot"></span>' +
-          '<span>' + escapeHTML(label) + '</span>' +
-        '</div>' +
-        '<div style="margin-top:0.3rem; font-size:0.8rem;">' +
-          'Retard max : <span class="max-delay ' + maxDelayClass + '">' +
-          escapeHTML(maxDelayText) +
-          '</span>' +
-        '</div>';
-      tr.appendChild(tdStatus);
-
-      // Col 3 : retards par gare (chips)
-      const tdStops = document.createElement('td');
-      const stopsEntries = Object.entries(t.stops || {});
-      if (!stopsEntries.length){
-        tdStops.innerHTML = '<span style="color:#6b7280;">—</span>';
-      } else {
-        const div = document.createElement('div');
-        div.className = 'stops';
-        for (const [name, val] of stopsEntries){
-          const n = Number(val) || 0;
-          let cls = 'stop-chip';
-          if (n > 0) cls += (n >= 10 ? ' bad' : ' neutral');
-          const span = document.createElement('span');
-          span.className = cls;
-          span.innerHTML =
-            escapeHTML(name) +
-            ' <span class="delay-value">+' + n + '′</span>';
-          div.appendChild(span);
+        const statusFromEff = classifyStatusFromSeverity(severity.effect);
+        if (statusFromEff === 'cancelled') globalStatus = 'cancelled';
+        else if (statusFromEff === 'delayed' && globalStatus !== 'cancelled') {
+          globalStatus = 'delayed';
         }
-        tdStops.appendChild(div);
+
+        if (d.cause) causeSet.add(d.cause);
+        if (name) causeSet.add(name);
+
+        const msgs = Array.isArray(d.messages) ? d.messages : [];
+        for (const m of msgs){
+          if (m && m.text) messagesSet.add(m.text);
+        }
+
+        const impactedObjects = Array.isArray(d.impacted_objects) ? d.impacted_objects : [];
+        for (const obj of impactedObjects){
+          const impactedStops = Array.isArray(obj.impacted_stops) ? obj.impacted_stops : [];
+          for (const is of impactedStops){
+            const sp = is.stop_point || {};
+            const stopName = sp.name || sp.label || '??';
+
+            const delayArr = delayMinutes(is.base_arrival_time, is.amended_arrival_time);
+            const delayDep = delayMinutes(is.base_departure_time, is.amended_departure_time);
+            const delay = Math.max(delayArr, delayDep);
+
+            if (delay > 0){
+              const prev = stopsDelays[stopName] || 0;
+              if (delay > prev) stopsDelays[stopName] = delay;
+              if (delay > maxDelay) maxDelay = delay;
+              if (globalStatus === 'ontime') globalStatus = 'delayed';
+            }
+          }
+        }
       }
-      tr.appendChild(tdStops);
 
-      // Col 4 : brut
-      const tdRaw = document.createElement('td');
-      if (!stopsEntries.length){
-        tdRaw.innerHTML = '<span style="color:#6b7280;">—</span>';
-      } else {
-        tdRaw.textContent = stopsEntries
-          .map(([name, val]) => `${name}: +${val}′`)
-          .join(' · ');
-      }
-      tr.appendChild(tdRaw);
-
-      frag.appendChild(tr);
-    }
-
-    tbodyEl.innerHTML = '';
-    tbodyEl.appendChild(frag);
-  }
-
-  async function loadData(){
-    try {
-      const resp = await fetch(API_URL, { cache: 'no-store' });
-      if (!resp.ok) throw new Error('HTTP ' + resp.status + ' ' + resp.statusText);
-
-      const data = await resp.json();
-
-      const trainsObj = data.trains || {};
-      trainsArray = Object.keys(trainsObj).map(key => {
-        const t = trainsObj[key] || {};
-        const stops = t.stops || {};
-        const maxDelay = maxDelayForStops(stops);
-        const statusClass = classifyStatus(t.status);
-        return {
-          key,
-          train_id: t.train_id || '',
-          train_number: t.train_number || key,
-          status: t.status || 'UNKNOWN',
-          statusClass,
-          stops,
-          maxDelay
-        };
+      result.push({
+        vehicleJourneyId: key,
+        trainNumber: tripName,
+        status: globalStatus,
+        severityEffect,
+        maxDelay,
+        stops: stopsDelays,
+        causeText: Array.from(causeSet).join(' / ') || '',
+        messagesText: Array.from(messagesSet).join(' | ') || ''
       });
-
-      renderSummary(data);
-      renderTable();
-    } catch (e){
-      console.error('Erreur chargement retards_carte.json', e);
-      errorZoneEl.style.display = 'block';
-      errorZoneEl.textContent =
-        'Erreur lors du chargement de ' + API_URL + ' : ' + e;
-      tbodyEl.innerHTML =
-        '<tr><td colspan="4">Impossible de charger les données.</td></tr>';
     }
+
+    return result;
   }
 
-  sortSelectEl.addEventListener('change', renderTable);
-  filterDelayedEl.addEventListener('change', renderTable);
+  function renderSummary(root){
+    const total = trainsArray.length;
+    const delayed = trainsArray.filter(t => t.status === 'delayed').length;
+    const cancelled = trainsArray.filter(t => t.status === 'cancelled').length;
+    const ontime = trainsArray.filter(t => t.status === 'ontime').length;
 
-  loadData();
-})();
-</script>
-</body>
-</html>
+    const gen = root && root.generated_at ? root.generated_at : 'inconnu';
+    summaryGeneratedEl.t
