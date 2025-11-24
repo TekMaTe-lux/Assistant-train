@@ -563,25 +563,46 @@
   }
 
   async function loadStatus(){
+  try {
+    const resp = await fetch(STATUS_URL, { cache: 'no-store' });
+    if (!resp.ok) throw new Error('HTTP ' + resp.status + ' ' + resp.statusText);
+
+    // On récupère d’abord en TEXTE (le serveur renvoie peut-être du HTML autour)
+    const text = await resp.text();
+    let root;
+
     try {
-      const resp = await fetch(STATUS_URL, { cache: 'no-store' });
-      if (!resp.ok) throw new Error('HTTP ' + resp.status + ' ' + resp.statusText);
-
-      // le fichier est en JSON même s’il finit par .html
-      const root = await resp.json();
-
-      trainsArray = extractTrainsFromStatus(root);
-      refreshSummary();
-      renderTable();
-    } catch(e){
-      console.error('Erreur chargement statut SNCF', e);
-      errorZoneEl.style.display = 'block';
-      errorZoneEl.textContent = 'Erreur lors du chargement de ' + STATUS_URL + ' : ' + e;
-      tbodyEl.innerHTML =
-        '<tr><td colspan="4">Impossible de charger les données (' +
-        escapeHTML(String(e)) + ').</td></tr>';
+      // 1) on tente un JSON.parse direct
+      root = JSON.parse(text);
+    } catch(e1){
+      // 2) si ça foire, on essaie d’extraire juste le bloc {...}
+      const firstBrace = text.indexOf('{');
+      const lastBrace  = text.lastIndexOf('}');
+      if (firstBrace === -1 || lastBrace === -1 || lastBrace <= firstBrace){
+        console.error('Contenu non JSON, début de réponse:', text.slice(0, 200));
+        throw new Error('Réponse non JSON (aucune accolade trouvée)');
+      }
+      const jsonSlice = text.slice(firstBrace, lastBrace + 1);
+      try {
+        root = JSON.parse(jsonSlice);
+      } catch(e2){
+        console.error('Échec parse JSON après extraction, slice=', jsonSlice.slice(0, 200));
+        throw new Error('Impossible de parser le JSON extrait: ' + e2);
+      }
     }
+
+    trainsArray = extractTrainsFromStatus(root);
+    refreshSummary();
+    renderTable();
+  } catch(e){
+    console.error('Erreur chargement statut SNCF', e);
+    errorZoneEl.style.display = 'block';
+    errorZoneEl.textContent = 'Erreur lors du chargement de ' + STATUS_URL + ' : ' + e;
+    tbodyEl.innerHTML =
+      '<tr><td colspan="4">Impossible de charger les données (' +
+      escapeHTML(String(e)) + ').</td></tr>';
   }
+}
 
   sortSelectEl.addEventListener('change', renderTable);
   filterDelayedEl.addEventListener('change', renderTable);
