@@ -872,10 +872,9 @@ function escapeHTML(str){
     updateRealtimeStatus();
   }
 
-  function rebuildRealtimeDelayIndex(){
-    trainDelaysByNumber = new Map();
+  function computeRealtimeDelayIndexSnapshot(sources){
+    const combinedByTrain = new Map();
     const labelParts = [];
-    const tooltipParts = [];
     let newest = null;
 
     const mergeEntry = (combined, norm, entry, sourceKey)=>{
@@ -901,7 +900,7 @@ function escapeHTML(str){
     };
 
     for (const key of REALTIME_STATUS_DISPLAY_ORDER){
-      const src = realtimeSources[key];
+      const src = sources[key];
       if (!src) continue;
       let hadData = false;
       if (src.map && src.map.size){
@@ -912,10 +911,10 @@ function escapeHTML(str){
             targets.add(String(alt));
           }
           for (const trainNum of targets){
-            let combined = trainDelaysByNumber.get(trainNum);
+            let combined = combinedByTrain.get(trainNum);
             if (!combined){
               combined = new Map();
-              trainDelaysByNumber.set(trainNum, combined);
+              combinedByTrain.set(trainNum, combined);
             }
             for (const [norm, entry] of perStation.entries()){
               mergeEntry(combined, norm, entry, src.key);
@@ -933,12 +932,68 @@ function escapeHTML(str){
       }
     }
 
+    return { delaysByNumber: combinedByTrain, labelParts, newest };
+  }
+
+  function rebuildRealtimeDelayIndex(){
+    const snapshot = computeRealtimeDelayIndexSnapshot(realtimeSources);
+    trainDelaysByNumber = snapshot.delaysByNumber;
+
     realtimeStopDataByTrip.clear();
-    trainDelaySourceLabel = labelParts.join(' + ');
-    trainDelayLastUpdated = newest;
+    trainDelaySourceLabel = snapshot.labelParts.join(' + ');
+    trainDelayLastUpdated = snapshot.newest;
     trainDelayTooltipSuffix = '';
     updateRealtimeStatus();
     try { tick(); } catch(_){ }
+  }
+
+  function runRealtimePrioritySelfTest(){
+    try {
+      const now = Date.now();
+      const sampleSources = {
+        sncf: { key:'sncf', displayName:'API SNCF', map:new Map(), lastUpdated:now },
+        gtfs: { key:'gtfs', displayName:'GTFS-RT', map:new Map(), lastUpdated:now - 1000 },
+        hafas: { key:'hafas', displayName:'HAFAS', map:new Map(), lastUpdated:now - 2000 }
+      };
+
+      const sncfPerStation = new Map([
+        ['stopA', { value: 600, sourceKey:'sncf' }],
+        ['stopB', { value: null, sourceKey:'sncf' }]
+      ]);
+      sampleSources.sncf.map.set('88526', sncfPerStation);
+
+      const gtfsPerStation = new Map([
+        ['stopA', { value: 120, sourceKey:'gtfs' }],
+        ['stopB', { value: 900, sourceKey:'gtfs' }]
+      ]);
+      sampleSources.gtfs.map.set('88526', gtfsPerStation);
+
+      const hafasPerStation = new Map([
+        ['stopC', { value: 180, sourceKey:'hafas' }]
+      ]);
+      sampleSources.hafas.map.set('88526', hafasPerStation);
+
+      const snapshot = computeRealtimeDelayIndexSnapshot(sampleSources);
+      const merged = snapshot.delaysByNumber.get('88526') || new Map();
+      const stopA = merged.get('stopA');
+      const stopB = merged.get('stopB');
+      const stopC = merged.get('stopC');
+
+      const tests = [
+        { name:'SNCF prioritaire sur GTFS-RT', pass: stopA?.value === 600 && stopA?.sourceKey === 'sncf' },
+        { name:'Suppression SNCF conservée face à GTFS-RT', pass: stopB?.value === null && stopB?.sourceKey === 'sncf' },
+        { name:'HAFAS conservé si seul fournisseur', pass: stopC?.value === 180 && stopC?.sourceKey === 'hafas' }
+      ];
+
+      const failed = tests.filter(t => !t.pass);
+      if (failed.length){
+        console.warn('Self-test priorités temps réel: ECHEC', failed);
+      } else {
+        console.info('Self-test priorités temps réel: OK');
+      }
+    } catch(err){
+      console.warn('Self-test priorités temps réel: erreur', err);
+    }
   }
 
   function updateRealtimeStatus(){
@@ -5631,6 +5686,8 @@ function stationNameMatchesKeywords(name, keywords){
     if (smoothEl.checked) tick();
     requestAnimationFrame(loop);
   }
+
+  runRealtimePrioritySelfTest();
 
   // ---------- Boot ----------
   (async function boot(){
