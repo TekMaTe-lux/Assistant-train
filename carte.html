@@ -457,6 +457,7 @@ function escapeHTML(str){
   const DEFAULT_REALTIME_SOURCE_ORDER = ['sncf','gtfs','hafas'];
   const CFL_REALTIME_SOURCE_ORDER = ['hafas','sncf','gtfs'];
   const REALTIME_STATUS_DISPLAY_ORDER = ['sncf','hafas','gtfs'];
+  const REALTIME_SOURCE_PRIORITY = { sncf: 3, hafas: 2, gtfs: 1 };
 
   function normalizeRealtimeSourceKey(value){
     if (!value && value !== 0) return '';
@@ -863,18 +864,29 @@ function escapeHTML(str){
     const tooltipParts = [];
     let newest = null;
 
-    const mergeEntry = (combined, norm, entry)=>{
+    const mergeEntry = (combined, norm, entry, sourceKey)=>{
       if (!combined || !norm) return;
+      if (entry && !entry.sourceKey && sourceKey) entry.sourceKey = sourceKey;
+      const incomingPriority = entry ? (REALTIME_SOURCE_PRIORITY[entry.sourceKey] ?? REALTIME_SOURCE_PRIORITY[sourceKey] ?? 0) : 0;
       const existing = combined.get(norm);
       const incomingCancelled = entry?.value == null;
       const existingCancelled = existing?.value == null;
       if (existing){
-        if (existingCancelled && !incomingCancelled){
-          combined.set(norm, entry);
+        const existingPriority = REALTIME_SOURCE_PRIORITY[existing.sourceKey] ?? 0;
+        if (existingPriority > incomingPriority){
+          if (existingCancelled && !incomingCancelled){
+            combined.set(norm, entry);
+          }
           return;
         }
-        if (!existingCancelled && incomingCancelled){
-          return;
+        if (existingPriority === incomingPriority){
+          if (existingCancelled && !incomingCancelled){
+            combined.set(norm, entry);
+            return;
+          }
+          if (!existingCancelled && incomingCancelled){
+            return;
+          }
         }
       }
       combined.set(norm, entry);
@@ -898,7 +910,7 @@ function escapeHTML(str){
               trainDelaysByNumber.set(trainNum, combined);
             }
             for (const [norm, entry] of perStation.entries()){
-              mergeEntry(combined, norm, entry);
+              mergeEntry(combined, norm, entry, src.key);
             }
           }
         }
@@ -1154,7 +1166,7 @@ const GTFS_RT_STOP_META_KEYS = new Set([
         let stored = false;
         for (const key of variants){
           if (!key || GTFS_RT_STOP_META_KEYS.has(key)) continue;
-          perStation.set(key, { original: displayName, value, source: 'GTFS-RT', raw: stationName, stationId });
+          perStation.set(key, { original: displayName, value, source: 'GTFS-RT', sourceKey: 'gtfs', raw: stationName, stationId });
           stored = true;
         }
         return stored;
@@ -1378,7 +1390,7 @@ const GTFS_RT_STOP_META_KEYS = new Set([
     if (!variants.size) return false;
     for (const key of variants){
       if (!key || GTFS_RT_STOP_META_KEYS.has(key)) continue;
-      perStation.set(key, { original: displayName || stationName, value, source: 'SNCF API', stationId, raw: stationName });
+      perStation.set(key, { original: displayName || stationName, value, source: 'SNCF API', sourceKey: 'sncf', stationId, raw: stationName });
     }
     return true;
   }
@@ -1674,7 +1686,7 @@ const GTFS_RT_STOP_META_KEYS = new Set([
     if (!norm) return;
     const { cancellation, minutes, hasMinutes } = parseHafasProxyDelayValue(rawValue);
     if (cancellation){
-      map.set(norm, { original: stationName, value: null });
+      map.set(norm, { original: stationName, value: null, source: 'HAFAS', sourceKey: 'hafas' });
       return;
     }
     if (!hasMinutes) return;
@@ -1685,7 +1697,7 @@ const GTFS_RT_STOP_META_KEYS = new Set([
       const existingVal = Number(existing.value);
       if (Number.isFinite(existingVal) && Math.abs(existingVal) >= Math.abs(value)) return;
     }
-    map.set(norm, { original: stationName, value });
+    map.set(norm, { original: stationName, value, source: 'HAFAS', sourceKey: 'hafas' });
   }
 
   function buildHafasProxyStationMap(raw){
