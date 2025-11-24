@@ -244,145 +244,109 @@
 </div>
 
 <script>
-(function(){
-  const API_URL = 'https://vps.labetaillere.fr/gtfs/retards_carte.json';
+const URL_JSON = "https://vps.labetaillere.fr/gtfs/retards_carte.json";
 
-  const summaryGeneratedEl = document.getElementById('summary-generated');
-  const summaryStatsEl = document.getElementById('summary-stats');
-  const errorZoneEl = document.getElementById('error-zone');
-  const sortSelectEl = document.getElementById('sort-select');
-  const filterDelayedEl = document.getElementById('filter-delayed');
-  const tbodyEl = document.getElementById('trains-tbody');
+async function loadData(){
+  try{
+    const resp = await fetch(URL_JSON + "?t=" + Date.now(), {cache:"no-store"});
+    if(!resp.ok) throw new Error("HTTP "+resp.status);
+    const root = await resp.json();
 
-  let trainsArray = [];
+    const trainsObj = root.trains || {};
+    const rows = [];
 
-  function escapeHTML(str){
-    return String(str)
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;')
-      .replace(/'/g, '&#39;');
-  }
+    for(const key of Object.keys(trainsObj)){
+      const train = trainsObj[key];
+      const data  = train.data || {};
+      const vj    = (data.vehicle_journeys && data.vehicle_journeys[0]) || null;
 
-  function parseHHMMSS(str){
-    if (!str || typeof str !== 'string') return null;
-    const s = str.trim();
-    if (!/^\d{6}$/.test(s)) return null;
-    const h = parseInt(s.slice(0,2), 10);
-    const m = parseInt(s.slice(2,4), 10);
-    const sec = parseInt(s.slice(4,6), 10);
-    if (isNaN(h) || isNaN(m) || isNaN(sec)) return null;
-    return h * 3600 + m * 60 + sec;
-  }
+      if(!vj) continue;
 
-  function delayMinutes(baseStr, amendedStr){
-    const b = parseHHMMSS(baseStr);
-    const a = parseHHMMSS(amendedStr);
-    if (b == null || a == null) return 0;
-    const diff = a - b;
-    if (!Number.isFinite(diff) || diff <= 0) return 0;
-    return Math.round(diff / 60);
-  }
+      const trainNumber = vj.name || key;
 
-  function classifyStatusFromSeverity(effect){
-    const eff = String(effect || '').toUpperCase();
-    if (eff.includes('NO_SERVICE') || eff.includes('CANCEL')) return 'cancelled';
-    if (eff.includes('SIGNIFICANT_DELAYS') ||
-        eff.includes('REDUCED_SERVICE') ||
-        eff.includes('MODIFIED_SERVICE')) {
-      return 'delayed';
-    }
-    return 'ontime';
-  }
-
-  function extractTrainsFromRoot(root){
-    const result = [];
-    if (!root || typeof root !== 'object') return result;
-
-    for (const [key, entry] of Object.entries(root)){
-      // On ne garde que les blocs Navitia de type vehicle_journey:…
-      if (!key.startsWith('vehicle_journey:')) continue;
-      if (!entry || typeof entry !== 'object') continue;
-
-      const data = entry.data || {};
-      const disruptions = Array.isArray(data.disruptions) ? data.disruptions : [];
-      const vjs = Array.isArray(data.vehicle_journeys) ? data.vehicle_journeys : [];
-      const vj = vjs[0] || {};
-      const trip = vj.trip || {};
-      const tripName = trip.name || vj.name || key;
-
-      if (!disruptions.length && (!data.vehicle_journeys || !data.vehicle_journeys.length)){
-        continue;
+      // ---- Disruption message (ex : Réutilisation d'un train)
+      let disruptionMsg = "";
+      if(data.disruptions && data.disruptions.length){
+        const d0 = data.disruptions[0];
+        if(d0.messages && d0.messages.length){
+          disruptionMsg = d0.messages[0].text || "";
+        }
       }
 
-      const stopsDelays = {};     // nom gare -> max delay (min)
-      let maxDelay = 0;
-      let globalStatus = 'ontime';
-      const causeSet = new Set();
-      const messagesSet = new Set();
-      let severityEffect = '';
-
-      for (const d of disruptions){
-        const severity = d.severity || {};
-        severityEffect = severity.effect || severityEffect;
-        const name = severity.name || '';
-
-        const statusFromEff = classifyStatusFromSeverity(severity.effect);
-        if (statusFromEff === 'cancelled') globalStatus = 'cancelled';
-        else if (statusFromEff === 'delayed' && globalStatus !== 'cancelled') {
-          globalStatus = 'delayed';
-        }
-
-        if (d.cause) causeSet.add(d.cause);
-        if (name) causeSet.add(name);
-
-        const msgs = Array.isArray(d.messages) ? d.messages : [];
-        for (const m of msgs){
-          if (m && m.text) messagesSet.add(m.text);
-        }
-
-        const impactedObjects = Array.isArray(d.impacted_objects) ? d.impacted_objects : [];
-        for (const obj of impactedObjects){
-          const impactedStops = Array.isArray(obj.impacted_stops) ? obj.impacted_stops : [];
-          for (const is of impactedStops){
-            const sp = is.stop_point || {};
-            const stopName = sp.name || sp.label || '??';
-
-            const delayArr = delayMinutes(is.base_arrival_time, is.amended_arrival_time);
-            const delayDep = delayMinutes(is.base_departure_time, is.amended_departure_time);
-            const delay = Math.max(delayArr, delayDep);
-
-            if (delay > 0){
-              const prev = stopsDelays[stopName] || 0;
-              if (delay > prev) stopsDelays[stopName] = delay;
-              if (delay > maxDelay) maxDelay = delay;
-              if (globalStatus === 'ontime') globalStatus = 'delayed';
+      // ---- Retards par gare depuis impacted_stops
+      let delays = {}; // { gare: +min }
+      if(data.disruptions && data.disruptions.length){
+        for(const d of data.disruptions){
+          if(d.impacted_objects){
+            for(const obj of d.impacted_objects){
+              if(obj.impacted_stops){
+                for(const st of obj.impacted_stops){
+                  if(st.amended_arrival_time && st.base_arrival_time){
+                    const b = parseInt(st.base_arrival_time.slice(0,2))*60 + parseInt(st.base_arrival_time.slice(2,4));
+                    const a = parseInt(st.amended_arrival_time.slice(0,2))*60 + parseInt(st.amended_arrival_time.slice(2,4));
+                    const diff = a - b;
+                    if(diff>0){
+                      delays[st.stop_point.name] = diff;
+                    }
+                  }
+                }
+              }
             }
           }
         }
       }
 
-      result.push({
-        vehicleJourneyId: key,
-        trainNumber: tripName,
-        status: globalStatus,
-        severityEffect,
+      // ---- Retard max
+      let maxDelay = 0;
+      for(const g of Object.keys(delays)){
+        if(delays[g] > maxDelay) maxDelay = delays[g];
+      }
+
+      rows.push({
+        id: trainNumber,
         maxDelay,
-        stops: stopsDelays,
-        causeText: Array.from(causeSet).join(' / ') || '',
-        messagesText: Array.from(messagesSet).join(' | ') || ''
+        delays,
+        message: disruptionMsg,
+        raw: train
       });
     }
 
-    return result;
+    renderTable(rows);
+
+  } catch(e){
+    console.error("Erreur chargement JSON", e);
+    document.querySelector("#tbody").innerHTML = 
+      "<tr><td colspan='4'>Erreur : "+e+"</td></tr>";
+  }
+}
+
+
+function renderTable(rows){
+  const tbody = document.querySelector("#tbody");
+  tbody.innerHTML = "";
+
+  if(!rows.length){
+    tbody.innerHTML = "<tr><td colspan='4'>Aucun train trouvé.</td></tr>";
+    return;
   }
 
-  function renderSummary(root){
-    const total = trainsArray.length;
-    const delayed = trainsArray.filter(t => t.status === 'delayed').length;
-    const cancelled = trainsArray.filter(t => t.status === 'cancelled').length;
-    const ontime = trainsArray.filter(t => t.status === 'ontime').length;
+  for(const r of rows){
+    const listGare = Object.keys(r.delays)
+      .map(g => `${g}: +${r.delays[g]}′`)
+      .join("<br>");
 
-    const gen = root && root.generated_at ? root.generated_at : 'inconnu';
-    summaryGeneratedEl.t
+    tbody.innerHTML += `
+      <tr>
+        <td><b>${r.id}</b></td>
+        <td>${r.maxDelay ? "Retardé +" + r.maxDelay + "′" : "À l'heure"}</td>
+        <td>${listGare || "—"}</td>
+        <td>${r.message || "—"}</td>
+      </tr>
+    `;
+  }
+}
+
+window.addEventListener("DOMContentLoaded", loadData);
+</script>
+</body>
+</html> 
