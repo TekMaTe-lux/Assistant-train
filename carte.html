@@ -714,7 +714,10 @@ function escapeHTML(str){
   const GTFS_RT_REFRESH_INTERVAL_MS = 60000;
   const SNCF_RT_CACHE_URL = 'https://vps.labetaillere.fr/gtfs/retards_carte.json';
   const SNCF_RT_REFRESH_INTERVAL_MS = 5 * 60 * 1000;
-  const SNCF_RT_STATUS_URL = 'https://vps.labetaillere.fr/gtfs/retards_carte_status.json';
+  const SNCF_RT_STATUS_CANDIDATES = [
+    'https://vps.labetaillere.fr/gtfs/retards_carte_status.html',
+    'https://vps.labetaillere.fr/gtfs/retards_carte_status.json'
+  ];
   const SNCF_RT_STATUS_REFRESH_INTERVAL_MS = 5 * 60 * 1000;
 
     const HAFAS_PROXY_SAME_ORIGIN = (()=>{
@@ -1706,12 +1709,24 @@ const GTFS_RT_STOP_META_KEYS = new Set([
   async function loadSncfStatus(){
     if (pendingSncfStatusPromise) return pendingSncfStatusPromise;
     pendingSncfStatusPromise = (async()=>{
-      const url = SNCF_RT_STATUS_URL + '?t=' + Date.now();
-      const res = await fetchWithTimeoutNoHeaders(url, 8000);
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const text = await res.text();
-      const parsed = parseSncfStatusPayload(text);
-      mergeSncfDisruptions(parsed);
+      const errors = [];
+      for (const candidate of SNCF_RT_STATUS_CANDIDATES){
+        const url = candidate + '?t=' + Date.now();
+        try {
+          const res = await fetchWithTimeoutNoHeaders(url, 8000);
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          const text = await res.text();
+          const parsed = parseSncfStatusPayload(text);
+          mergeSncfDisruptions(parsed);
+          console.log('[SNCF] status via', candidate);
+          return;
+        } catch(err){
+          errors.push({ candidate, err });
+        }
+      }
+      const first = errors[0];
+      const message = first ? `${first.candidate} → ${first.err}` : 'Aucune source status disponible';
+      throw new Error(message);
     })();
     try {
       await pendingSncfStatusPromise;
