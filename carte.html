@@ -370,28 +370,32 @@ function escapeHTML(str){
     if (value == null) return null;
     const raw = String(value).trim();
     if (!raw) return null;
-    const tokens = raw.split(/[:\s]/).filter(Boolean);
-    const pickBestCandidate = (candidates)=>{
-      if (!candidates.length) return null;
-      candidates.sort((a,b)=> b.length - a.length);
-      return candidates[0];
+    const candidates = [];
+    const pushCandidate = (val, position = 0)=>{
+      const str = String(val || '').replace(/^0+(?=\d)/, '').trim();
+      if (!/^\d{3,}$/.test(str)) return;
+      candidates.push({ value: str, position, length: str.length });
     };
-    for (let i = tokens.length - 1; i >= 0; i--){
-      const token = tokens[i];
-      const cleaned = token.replace(/\D+/g, ' ').trim();
-      if (!cleaned) continue;
-      const parts = cleaned.split(/\s+/).filter(n => /^\d{3,}$/.test(n));
-      const candidate = pickBestCandidate(parts);
-      if (candidate) return candidate;
+    const tokens = raw.split(/[:\s]/).filter(Boolean);
+    tokens.forEach((token, idx)=>{
+      const matches = Array.from(token.matchAll(/\d{3,}/g));
+      for (const match of matches){
+        pushCandidate(match[0], idx);
+      }
+    });
+
+    const fallbackDigits = Array.from(raw.matchAll(/\d{3,}/g));
+    for (const match of fallbackDigits){
+      pushCandidate(match[0], tokens.length + 1);
     }
-    const probes = [raw.split(':')[0], raw];
-    for (const probe of probes){
-      if (!probe) continue;
-      const allDigits = Array.from(probe.matchAll(/\d{3,}/g)).map(m => m[0]);
-      const candidate = pickBestCandidate(allDigits);
-      if (candidate) return candidate;
-    }
-    return null;
+    if (!candidates.length) return null;
+
+    candidates.sort((a,b)=>{
+      if (b.length !== a.length) return b.length - a.length;
+      return b.position - a.position;
+    });
+
+    return candidates[0]?.value || null;
   }
  function normalizeTrainNumberKey(value){
   if (value == null) return null;
@@ -883,18 +887,12 @@ function escapeHTML(str){
       const existingCancelled = existing?.value == null;
       if (existing){
         const existingPriority = REALTIME_SOURCE_PRIORITY[existing.sourceKey] ?? 0;
-        if (existingPriority > incomingPriority){
-          if (existingCancelled && !incomingCancelled){
-            combined.set(norm, entry);
-          }
+        if (incomingPriority < existingPriority){
           return;
         }
-        if (existingPriority === incomingPriority){
+        if (incomingPriority === existingPriority){
           if (existingCancelled && !incomingCancelled){
             combined.set(norm, entry);
-            return;
-          }
-          if (!existingCancelled && incomingCancelled){
             return;
           }
         }
