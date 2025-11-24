@@ -1501,7 +1501,22 @@ const GTFS_RT_STOP_META_KEYS = new Set([
     }
   }
 
-    function parseSncfStatusPayload(raw){
+    function pickStatusDisruption(entry){
+    if (!entry || typeof entry !== 'object') return null;
+    const keys = [
+      'disruption', 'cause', 'reason', 'message', 'comment', 'status', 'status_text',
+      'motif', 'motif_court', 'motif_long', 'incident', 'info', 'text', 'detail', 'details', 'description'
+    ];
+    for (const key of keys){
+      const value = entry[key];
+      if (value == null) continue;
+      const str = String(value).trim();
+      if (str) return str;
+    }
+    return null;
+  }
+
+  function parseSncfStatusPayload(raw){
     const disruptions = new Map();
     const register = (name, disruption)=>{
       if (!name || !disruption) return;
@@ -1511,7 +1526,7 @@ const GTFS_RT_STOP_META_KEYS = new Set([
     const handleEntry = (entry)=>{
       if (!entry || typeof entry !== 'object') return;
       const name = entry.name || entry.id || entry.tail;
-      const disruption = entry.disruption || entry.cause || entry.reason || entry.message;
+      const disruption = pickStatusDisruption(entry);
       if (name && disruption) register(name, disruption);
     };
 
@@ -1524,7 +1539,21 @@ const GTFS_RT_STOP_META_KEYS = new Set([
             const cells = Array.from(row.querySelectorAll('td'));
             if (!cells.length) return;
             const name = cells[0].textContent?.trim();
-            const disruption = cells[cells.length - 1]?.textContent?.trim();
+            let disruption = null;
+            const bodyCells = cells.slice(1);
+            for (const cell of bodyCells){
+              const text = cell.textContent?.trim();
+              if (!text) continue;
+              if (/d[ée]tails?/i.test(text)) continue;
+              if (/[a-zA-ZÀ-ÿ]/.test(text)){
+                disruption = text;
+                break;
+              }
+              disruption = disruption || text;
+            }
+            if (!disruption && bodyCells.length){
+              disruption = bodyCells[bodyCells.length - 1]?.textContent?.trim();
+            }
             if (name && disruption) register(name, disruption);
           });
         } catch(_){ }
