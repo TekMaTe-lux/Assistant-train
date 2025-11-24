@@ -1506,14 +1506,16 @@ const GTFS_RT_STOP_META_KEYS = new Set([
     return { key: String(normalizedKey), perStation, disruptionText };
   }
 
-  function parseSncfRealtimeData(raw){
-    if (!raw || typeof raw !== 'object') return { perTrain:new Map(), updatedAt:null, disruptions:new Map() };
+  function parseSncfRealtimeContainer(raw, contextRaw){
+    if (!raw || typeof raw !== 'object') return null;
     const payload = raw.data && typeof raw.data === 'object' && !Array.isArray(raw.data)
       ? raw.data
       : raw;
+    
     const journeys = Array.isArray(payload.vehicle_journeys) ? payload.vehicle_journeys : [];
     const perTrain = new Map();
     const disruptions = parseSncfDisruptions(payload);
+    
     for (const journey of journeys){
       const entry = buildSncfJourneyEntry(journey);
       if (entry){
@@ -1523,14 +1525,80 @@ const GTFS_RT_STOP_META_KEYS = new Set([
         }
       }
     }
+    
     const updatedAt = parseNavitiaDateTime(
       payload.context?.current_datetime
       || raw.context?.current_datetime
+      || contextRaw?.context?.current_datetime
       || raw.generated_at
+      || contextRaw?.generated_at
       || raw.updated_at
+      || contextRaw?.updated_at
       || raw.timestamp
+      || contextRaw?.timestamp
     ) || Date.now();
+
     return { perTrain, updatedAt, disruptions };
+  }
+
+  function parseSncfRealtimeData(raw){
+    const aggregated = new Map();
+    const disruptions = new Map();
+    let newest = null;
+
+    const mergeParsed = (parsed)=>{
+      if (!parsed) return;
+      if (parsed.disruptions instanceof Map){
+        for (const [k,v] of parsed.disruptions.entries()){
+          if (!k || !v) continue;
+          if (!disruptions.has(k)) disruptions.set(k, v);
+        }
+      }
+      if (parsed.perTrain instanceof Map){
+        for (const [trainKey, perStation] of parsed.perTrain.entries()){
+          if (!(perStation instanceof Map) || !perStation.size) continue;
+          const existing = aggregated.get(trainKey);
+          if (!existing || (parsed.updatedAt != null && (existing.updatedAt == null || parsed.updatedAt > existing.updatedAt))){
+            aggregated.set(trainKey, { perStation, updatedAt: parsed.updatedAt });
+          }
+        }
+      }
+      if (parsed.updatedAt != null){
+        newest = newest == null ? parsed.updatedAt : Math.max(newest, parsed.updatedAt);
+      }
+    };
+
+    const parseContainer = (container, contextRaw)=>{
+      const parsed = parseSncfRealtimeContainer(container, contextRaw);
+      mergeParsed(parsed);
+    };
+
+    if (Array.isArray(raw)){
+      for (const entry of raw){
+        parseContainer(entry, raw);
+      }
+    } else if (raw && typeof raw === 'object'){
+      const hasVehicleJourneys = Array.isArray(raw.vehicle_journeys) || Array.isArray(raw.data?.vehicle_journeys);
+      const looksLikeNavitiaMap = Object.keys(raw).some(k => /vehicle_journey/i.test(k));
+      if (hasVehicleJourneys){
+        parseContainer(raw);
+      } else if (looksLikeNavitiaMap){
+        for (const value of Object.values(raw)){
+          if (value && typeof value === 'object') parseContainer(value, raw);
+        }
+      } else {
+        parseContainer(raw);
+      }
+    }
+
+    const perTrain = new Map();
+    for (const [key, entry] of aggregated.entries()){
+      if (entry?.perStation instanceof Map && entry.perStation.size){
+        perTrain.set(String(key), entry.perStation);
+      }
+    }
+
+    return { perTrain, updatedAt: newest, disruptions };
   }
 
   function registerSncfVehicleJourneys(perTrainMap, { fetchedAt, disruptions } = {}){
