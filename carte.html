@@ -98,6 +98,8 @@
     .trip-panel-delay.delay-severe{ border-color:rgba(255,150,150,0.75); background:rgba(128,24,24,0.6); color:#ffb6b6; }
     .trip-panel-delay.delay-cancelled{ border-color:rgba(255,150,190,0.75); background:rgba(120,24,52,0.58); color:#ffdce9; text-transform:uppercase; letter-spacing:.05em; }
     .trip-panel-delay .trip-panel-delay-context{ font-size:11px; color:#c8d9f0; opacity:0.9; }
+    .trip-panel-disruption{ margin-top:8px; padding:8px 10px; border-radius:10px; border:1px solid rgba(0,240,255,0.4); background:rgba(0,40,60,0.65); color:#b8e7ff; font-size:12px; box-shadow:0 0 10px rgba(0,240,255,0.15); }
+    .trip-panel-disruption strong{ color:#5bd6ff; }
     .trip-panel-realtime{ font-size:12px; color:#ffc48a; margin-top:6px; display:flex; flex-wrap:wrap; gap:6px; align-items:center; }
     .trip-panel-realtime strong{ color:#ffd8a0; }
     .trip-panel-realtime-diff{ font-size:11px; color:#ffb066; font-weight:600; }
@@ -697,6 +699,8 @@ function escapeHTML(str){
   const GTFS_RT_REFRESH_INTERVAL_MS = 60000;
   const SNCF_RT_CACHE_URL = 'https://vps.labetaillere.fr/gtfs/retards_carte.json';
   const SNCF_RT_REFRESH_INTERVAL_MS = 5 * 60 * 1000;
+  const SNCF_RT_STATUS_URL = 'https://vps.labetaillere.fr/gtfs/retards_carte_status.json';
+  const SNCF_RT_STATUS_REFRESH_INTERVAL_MS = 5 * 60 * 1000;
 
     const HAFAS_PROXY_SAME_ORIGIN = (()=>{
     const base = location.origin + location.pathname.replace(/\/[^\/]*$/, '/');
@@ -817,6 +821,7 @@ function escapeHTML(str){
     gtfs: { key:'gtfs', displayName:'GTFS-RT', origin:'', map:new Map(), lastUpdated:null, rawSource:'', error:null },
     hafas: { key:'hafas', displayName:'HAFAS', origin:'API HAFAS', map:new Map(), lastUpdated:null, rawSource:'', error:null }
   };
+  const sncfDisruptionsByTrain = new Map();  
   let trainDelaysByNumber = new Map();
   let trainDelaySourceLabel = '';
   let trainDelayLastUpdated = null;
@@ -824,9 +829,11 @@ function escapeHTML(str){
   let gtfsRtRefreshTimer = null;
   let hafasRefreshTimer = null;
   let sncfRefreshTimer = null;
+  let sncfStatusRefreshTimer = null;
   let pendingGtfsRtPromise = null;
   let pendingHafasPromise = null;
   let pendingSncfPromise = null;
+  let pendingSncfStatusPromise = null;
 
   function describeRealtimeSource(src){
     if (!src) return '';
@@ -1260,6 +1267,73 @@ const GTFS_RT_STOP_META_KEYS = new Set([
     return { cancelled, minutes };
   }
 
+  function buildNavitiaDisruptionMessage(disruption){
+    if (!disruption || typeof disruption !== 'object') return null;
+    const messageParts = [];
+    const push = (v)=>{ if (v && !messageParts.includes(v)) messageParts.push(v); };
+    if (Array.isArray(disruption.messages)){
+      for (const msg of disruption.messages){
+        if (!msg) continue;
+        push(msg.text || msg.message || msg.title);
+      }
+    }
+    if (Array.isArray(disruption.comments)){
+      for (const msg of disruption.comments){
+        if (!msg) continue;
+        push(msg.text || msg.comment || msg.title);
+      }
+    }
+    push(disruption.cause);
+    push(disruption.status);
+    push(disruption.severity?.name);
+    const text = messageParts.filter(Boolean).join(' — ').trim();
+    if (!text) return null;
+    return text;
+  }
+
+  function registerSncfDisruptionTarget(map, ptObject, disruptionText){
+    if (!ptObject || !disruptionText) return;
+    const candidates = new Set();
+    const id = ptObject.id || ptObject.label || ptObject.name;
+    if (id) candidates.add(String(id));
+    const extracted = extractTrainNumberCandidate(id || ptObject.label || ptObject.name);
+    if (extracted) candidates.add(String(normalizeTrainNumberKey(extracted)));
+    for (const key of candidates){
+      if (!key) continue;
+      if (!map.has(key)){
+        map.set(key, disruptionText);
+      }
+    }
+  }
+
+  function parseSncfDisruptions(payload){
+    const disruptions = new Map();
+    const list = Array.isArray(payload?.disruptions) ? payload.disruptions : [];
+    for (const disruption of list){
+      const message = buildNavitiaDisruptionMessage(disruption);
+      if (!message) continue;
+      const impacted = Array.isArray(disruption.impacted_objects) ? disruption.impacted_objects : [];
+      for (const obj of impacted){
+        if (!obj) continue;
+        registerSncfDisruptionTarget(disruptions, obj.pt_object || obj.ref_object || obj.object, message);
+      }
+    }
+    return disruptions;
+  }
+
+  function mergeSncfDisruptions(disruptions, { replace = false } = {}){
+    if (!(disruptions instanceof Map)) return;
+    if (replace) sncfDisruptionsByTrain.clear();
+    for (const [k,v] of disruptions.entries()){
+      const key = String(k);
+      if (!key || !v) continue;
+      if (replace || !sncfDisruptionsByTrain.has(key)){
+        sncfDisruptionsByTrain.set(key, v);
+      }
+    }
+  }
+
+
   function registerSncfStationEntry(perStation, stationName, { stopPointId, stopAreaId } = {}, value){
     const resolved = resolveRealtimeStationReference(stationName || stopAreaId || stopPointId || '');
     const displayName = resolved.label || stationName || stopAreaId || stopPointId || '';
@@ -1325,7 +1399,7 @@ const GTFS_RT_STOP_META_KEYS = new Set([
   }
 
   function parseSncfRealtimeData(raw){
-    if (!raw || typeof raw !== 'object') return { perTrain:new Map(), updatedAt:null };
+    if (!raw || typeof raw !== 'object') return { perTrain:new Map(), updatedAt:null, disruptions:new Map() };
     const payload = raw.data && typeof raw.data === 'object' && !Array.isArray(raw.data)
       ? raw.data
       : raw;
@@ -1344,10 +1418,11 @@ const GTFS_RT_STOP_META_KEYS = new Set([
       || raw.updated_at
       || raw.timestamp
     ) || Date.now();
-    return { perTrain, updatedAt };
+    const disruptions = parseSncfDisruptions(payload);
+    return { perTrain, updatedAt, disruptions };
   }
 
-  function registerSncfVehicleJourneys(perTrainMap, { fetchedAt } = {}){
+  function registerSncfVehicleJourneys(perTrainMap, { fetchedAt, disruptions } = {}){
     const normalized = new Map();
     if (perTrainMap instanceof Map){
       for (const [key, perStation] of perTrainMap.entries()){
@@ -1358,6 +1433,7 @@ const GTFS_RT_STOP_META_KEYS = new Set([
     realtimeRawData.sncf = perTrainMap instanceof Map ? perTrainMap : new Map();
     realtimeSources.sncf.map = normalized;
     realtimeSources.sncf.lastUpdated = fetchedAt || Date.now();
+    mergeSncfDisruptions(disruptions, { replace:true });
     realtimeSources.sncf.error = null;
     rebuildRealtimeDelayIndex();
   }
@@ -1376,7 +1452,7 @@ const GTFS_RT_STOP_META_KEYS = new Set([
       console.log('[SNCF] ✅ via', SNCF_RT_CACHE_URL);
       realtimeSources.sncf.origin = 'cache VPS';
       realtimeSources.sncf.rawSource = SNCF_RT_CACHE_URL;
-      registerSncfVehicleJourneys(parsed.perTrain, { fetchedAt: parsed.updatedAt });
+      registerSncfVehicleJourneys(parsed.perTrain, { fetchedAt: parsed.updatedAt, disruptions: parsed.disruptions });
       setRealtimeSourceError('sncf', null);
     })();
 
@@ -1389,6 +1465,67 @@ const GTFS_RT_STOP_META_KEYS = new Set([
       throw err;
     } finally {
       pendingSncfPromise = null;
+    }
+  }
+
+    function parseSncfStatusPayload(raw){
+    const disruptions = new Map();
+    const register = (name, disruption)=>{
+      if (!name || !disruption) return;
+      registerSncfDisruptionTarget(disruptions, { id:String(name), name:String(name) }, String(disruption));
+    };
+
+    const handleEntry = (entry)=>{
+      if (!entry || typeof entry !== 'object') return;
+      const name = entry.name || entry.id || entry.tail;
+      const disruption = entry.disruption || entry.cause || entry.reason || entry.message;
+      if (name && disruption) register(name, disruption);
+    };
+
+    if (typeof raw === 'string'){
+      try { return parseSncfStatusPayload(JSON.parse(raw)); } catch(_){ }
+      if (typeof DOMParser !== 'undefined'){
+        try {
+          const doc = new DOMParser().parseFromString(raw, 'text/html');
+          doc.querySelectorAll('table tr').forEach(row=>{
+            const cells = Array.from(row.querySelectorAll('td'));
+            if (!cells.length) return;
+            const name = cells[0].textContent?.trim();
+            const disruption = cells[cells.length - 1]?.textContent?.trim();
+            if (name && disruption) register(name, disruption);
+          });
+        } catch(_){ }
+      }
+      return disruptions;
+    }
+
+    if (Array.isArray(raw)){
+      for (const entry of raw) handleEntry(entry);
+    } else if (raw && typeof raw === 'object'){
+      const entries = Array.isArray(raw.entries) ? raw.entries : Array.isArray(raw.data) ? raw.data : null;
+      if (entries){
+        for (const entry of entries) handleEntry(entry);
+      }
+    }
+    return disruptions;
+  }
+
+  async function loadSncfStatus(){
+    if (pendingSncfStatusPromise) return pendingSncfStatusPromise;
+    pendingSncfStatusPromise = (async()=>{
+      const url = SNCF_RT_STATUS_URL + '?t=' + Date.now();
+      const res = await fetchWithTimeoutNoHeaders(url, 8000);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const text = await res.text();
+      const parsed = parseSncfStatusPayload(text);
+      mergeSncfDisruptions(parsed);
+    })();
+    try {
+      await pendingSncfStatusPromise;
+    } catch(err){
+      console.warn('[SNCF] status indisponible', err);
+    } finally {
+      pendingSncfStatusPromise = null;
     }
   }
 
@@ -1861,7 +1998,7 @@ const GTFS_RT_STOP_META_KEYS = new Set([
     }
     return fallback;
   }
- function computeTrainDelayInfo(train){
+  function computeTrainDelayInfo(train){
     if (!train || !trainDelaysByNumber.size) return null;
     const candidateKeys = [];
     const pushKey = (value)=>{
@@ -1912,6 +2049,29 @@ const GTFS_RT_STOP_META_KEYS = new Set([
     }
     return cancelledInfo;
   }
+
+  
+  function findSncfDisruptionForTrain(train){
+    const candidates = [];
+    const push = (v)=>{ if (v!=null) candidates.push(v); };
+    push(buildSncfTailForTrain(train));
+    push(train.id);
+    push(train.numberKey);
+    push(train.numberDigits);
+    push(train.number);
+    push(train.numberRaw);
+    push(train.branding?.digits);
+    for (const candidate of candidates){
+      if (candidate == null) continue;
+      const norm = normalizeTrainNumberKey(candidate);
+      const keyList = [String(candidate)];
+      if (norm != null || norm === 0) keyList.push(String(norm));
+      for (const k of keyList){
+        if (sncfDisruptionsByTrain.has(k)) return sncfDisruptionsByTrain.get(k);
+      }
+    }
+    return null;
+  }  
     
  function getStopNameCandidates(stopMeta){
     if (!stopMeta) return [];
@@ -3202,6 +3362,8 @@ const mapContainerEl = map.getContainer();
     if (Array.isArray(data.numberList) && data.numberList.length > 1){
       summaryHtml += `<div class="trip-panel-realtime"><strong>Numéros associés :</strong> ${escapeHTML(data.numberList.join(' / '))}</div>`;
     }
+    const disruptionText = findSncfDisruptionForTrain(data);
+    
     if (trainFilters.showDelays){
       const realtimeStartSec = realtimeProfile?.startRealtime ?? data.startSec ?? plannedStartSec;
       const realtimeEndSec = realtimeProfile?.endRealtime ?? data.endSec ?? plannedEndSec;
@@ -3214,6 +3376,9 @@ const mapContainerEl = map.getContainer();
         const endDiffHtml = endDiffText ? `<span class="trip-panel-realtime-diff">${escapeHTML(endDiffText)}</span>` : '';
         summaryHtml += `<div class="trip-panel-realtime">Temps réel : <strong>${escapeHTML(startRealtimeText)}</strong>${startDiffHtml} → <strong>${escapeHTML(endRealtimeText)}</strong>${endDiffHtml}</div>`;
       }
+    }
+    if (disruptionText){
+      summaryHtml += `<div class="trip-panel-disruption"><strong>Cause SNCF :</strong> ${escapeHTML(disruptionText)}</div>`;
     }
     tripPanelSummaryEl.innerHTML = summaryHtml;
 
@@ -3384,6 +3549,9 @@ const mapContainerEl = map.getContainer();
       if (ev.delayInfo){
         subtitle.push(ev.delayInfo.panelText);
       }
+      if (ev.disruptionText){
+        subtitle.push(ev.disruptionText);
+      }
       const statusText = ev.state + (ev.diff!=null && isFinite(ev.diff) ? ` · ${fmtRelative(ev.diff)}` : '');
       const arrLine = renderStationEventTime('Arrivée', ev.arrPlanned, ev.arrSec);
       const depLine = renderStationEventTime('Départ', ev.depPlanned, ev.depSec);
@@ -3449,6 +3617,8 @@ const mapContainerEl = map.getContainer();
       const labelMeta = trainLabelParts(train, tripId);
 
       const delayInfo = train.delayInfo || computeTrainDelayInfo(train);
+
+      const disruptionText = findSncfDisruptionForTrain(train);
       
       events.push({
         trainId: tripId,
@@ -3467,7 +3637,8 @@ const mapContainerEl = map.getContainer();
         focusSec,
         diff: focusSec - now,
         cow: glyphForTrain(train, delayInfo),
-        delayInfo
+        delayInfo,
+        disruptionText
       });
     }
 
@@ -5330,6 +5501,7 @@ function stationNameMatchesKeywords(name, keywords){
       console.error('[SNCF] échec initial', err);
       setRealtimeSourceError('sncf', 'indisponibles');
     });
+    const sncfStatusPromise = loadSncfStatus().catch(err => console.warn('[SNCF] statut initial indisponible', err));
     const gtfsPromise = loadGtfsRetards({ forceFresh: true }).catch(err => {
       console.error('[GTFS-RT] échec initial', err);
       setRealtimeSourceError('gtfs', 'indisponibles');
@@ -5375,6 +5547,13 @@ function stationNameMatchesKeywords(name, keywords){
             setRealtimeSourceError('sncf', hadData ? 'rafraîchissement en échec' : 'indisponibles');
           });
         }, SNCF_RT_REFRESH_INTERVAL_MS);
+      }
+    });
+    sncfStatusPromise.finally(()=>{
+      if (sncfStatusRefreshTimer == null){
+        sncfStatusRefreshTimer = setInterval(()=>{
+          loadSncfStatus().catch(err => console.warn('[SNCF] statut indisponible', err));
+        }, SNCF_RT_STATUS_REFRESH_INTERVAL_MS);
       }
     });
   })().catch(e=> setStatus('Erreur initialisation: '+e.message, true));
