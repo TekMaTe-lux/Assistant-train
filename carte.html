@@ -1618,53 +1618,75 @@ const GTFS_RT_STOP_META_KEYS = new Set([
   }
 
   function normalizeSncfCachePayload(raw){
-  if (!raw || typeof raw !== 'object') return raw;
+    if (!raw || typeof raw !== 'object') return raw;
 
-  // Cas "Navitia brut" déjà géré → on ne touche à rien
-  if (Array.isArray(raw.vehicle_journeys) || (raw.data && Array.isArray(raw.data.vehicle_journeys))) {
-    return raw;
-  }
+      // Cas "Navitia brut" déjà géré → on ne touche à rien
+    if (Array.isArray(raw.vehicle_journeys) || (raw.data && Array.isArray(raw.data.vehicle_journeys))) {
+      return raw;
+    }
 
   // Cas "map de caches" du VPS : on fusionne tous les entry.data.*
-  const merged = {
-    vehicle_journeys: [],
-    disruptions: [],
-    context: {}
-  };
+    const merged = {
+      vehicle_journeys: [],
+      disruptions: [],
+      context: {}
+    };
 
-  let newestCtx = null;
+    const pushCandidate = (obj)=>{
+      if (!obj || typeof obj !== 'object') return;
+      if (seen.has(obj)) return;
+      seen.add(obj);
+      candidates.push(obj);
+      if (obj.trains && typeof obj.trains === 'object'){
+        for (const v of Object.values(obj.trains)) pushCandidate(v);
+      }
+    };
+    const seen = new Set();
+    const candidates = [];
 
-  for (const entry of Object.values(raw)){
-    if (!entry || typeof entry !== 'object' || !entry.data) continue;
-    const data = entry.data;
+    const pushCandidate = (obj)=>{
+      if (!obj || typeof obj !== 'object') return;
+      if (seen.has(obj)) return;
+      seen.add(obj);
+      candidates.push(obj);
+      if (obj.trains && typeof obj.trains === 'object'){
+        for (const v of Object.values(obj.trains)) pushCandidate(v);
+      }
+    };
+
+   pushCandidate(raw);
+
+    for (const entry of candidates){
+      const data = entry.data;
+      if (!data || typeof data !== 'object') continue;
 
     if (Array.isArray(data.vehicle_journeys)) {
-      merged.vehicle_journeys.push(...data.vehicle_journeys);
-    }
-    if (Array.isArray(data.disruptions)) {
-      merged.disruptions.push(...data.disruptions);
-    }
+        merged.vehicle_journeys.push(...data.vehicle_journeys);
+      }
+      if (Array.isArray(data.disruptions)) {
+        merged.disruptions.push(...data.disruptions);
+      }
 
-    const ctx = data.context;
-    if (ctx && ctx.current_datetime) {
-      // on garde le plus récent
-      if (!newestCtx || parseNavitiaDateTime(ctx.current_datetime) > parseNavitiaDateTime(newestCtx)) {
-        newestCtx = ctx.current_datetime;
+      const ctx = data.context;
+      if (ctx && ctx.current_datetime) {
+        // on garde le plus récent
+        if (!newestCtx || parseNavitiaDateTime(ctx.current_datetime) > parseNavitiaDateTime(newestCtx)) {
+          newestCtx = ctx.current_datetime;
+        }
       }
     }
-  }
+    
+      if (!merged.vehicle_journeys.length) {
+      // rien de détecté → on rend le raw tel quel (pour ne pas casser)
+      return raw;
+    }
 
-  if (!merged.vehicle_journeys.length) {
-    // rien de détecté → on rend le raw tel quel (pour ne pas casser)
-    return raw;
-  }
+    if (newestCtx) {
+      merged.context.current_datetime = newestCtx;
+    }
 
-  if (newestCtx) {
-    merged.context.current_datetime = newestCtx;
+    return merged;
   }
-
-  return merged;
-}
   
   async function loadSncfRealtime({ forceFresh = false } = {}){
   if (pendingSncfPromise) return pendingSncfPromise;
