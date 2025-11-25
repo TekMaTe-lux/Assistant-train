@@ -1284,10 +1284,38 @@ const GTFS_RT_STOP_META_KEYS = new Set([
         perTrain.set(normalizedKey, perStation);
       }
     }
+
+// Fallback: some feeds (ex: retards_nancymetzlux.json) return Navitia-style vehicle_journeys.
+    // Parse them to keep per-stop delays when no classic GTFS-RT mapping was found.
+    let navitiaParsed = null;
+    if (!perTrain.size){
+      navitiaParsed = parseSncfRealtimeData(data);
+      if (navitiaParsed?.perTrain instanceof Map && navitiaParsed.perTrain.size){
+        for (const [trainKey, perStation] of navitiaParsed.perTrain.entries()){
+          if (!(perStation instanceof Map) || !perStation.size) continue;
+          const normalized = new Map();
+          for (const [norm, entry] of perStation.entries()){
+            if (!norm || !entry) continue;
+            normalized.set(String(norm), {
+              original: entry.original,
+              value: entry.value,
+              source: 'GTFS-RT',
+              sourceKey: 'gtfs',
+              stationId: entry.stationId,
+              raw: entry.raw
+            });
+          }
+          if (normalized.size){
+            perTrain.set(String(trainKey), normalized);
+          }
+        }
+        mergeSncfDisruptions(navitiaParsed.disruptions);
+      }
+    }
     
     const originLabel = describeRealtimeSource(source);
     const generatedAtTs = parseGtfsRtTimestamp(
-      data.generated_at || data.generatedAt || data.updated_at || data.updatedAt || data.last_updated || data.timestamp
+      data.generated_at || data.generatedAt || data.updated_at || data.updatedAt || data.last_updated || data.timestamp || navitiaParsed?.updatedAt
     );
     realtimeSources.gtfs.origin = originLabel || realtimeSources.gtfs.origin;
     realtimeSources.gtfs.map = perTrain;
