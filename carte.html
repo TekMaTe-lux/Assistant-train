@@ -2616,26 +2616,47 @@ function adaptDelayEntryForStop(entry, stopMeta){
       realtimeStopDataByTrip.delete(tripId);
       return null;
     }
-    const normalizedKey = normalizeTrainNumberKey(numberKey);
     const preferredSources = Array.isArray(options.preferredSources) && options.preferredSources.length
       ? options.preferredSources
       : resolvePreferredRealtimeSourceOrder(null);
+
+    const normalizedCandidates = [];
+    const pushCandidate = (value)=>{
+      if (value == null) return;
+      const direct = normalizeTrainNumberKey(value);
+      if (direct || direct === 0) normalizedCandidates.push(String(direct));
+      const extracted = extractTrainNumberCandidate(value);
+      const extractedNorm = normalizeTrainNumberKey(extracted);
+      if ((extractedNorm || extractedNorm === 0) && !normalizedCandidates.includes(String(extractedNorm))){
+        normalizedCandidates.push(String(extractedNorm));
+      }
+    };
+
+    pushCandidate(numberKey);
+    if (options.numberKey != null) pushCandidate(options.numberKey);
+    
     const perSourceMaps = new Map();
-    if (normalizedKey != null){
-      const matches = getRealtimePerStationMaps(String(normalizedKey), preferredSources);
-      for (const match of matches){
-        if (!match) continue;
-        const normalizedSource = normalizeRealtimeSourceKey(match.sourceKey);
-        if (!normalizedSource || perSourceMaps.has(normalizedSource)) continue;
-        if (!(match.perStation instanceof Map) || !match.perStation.size) continue;
-        perSourceMaps.set(normalizedSource, match.perStation);
+    if (normalizedCandidates.length){
+      for (const candidateKey of normalizedCandidates){
+        const matches = getRealtimePerStationMaps(String(candidateKey), preferredSources);
+        for (const match of matches){
+          if (!match) continue;
+          const normalizedSource = normalizeRealtimeSourceKey(match.sourceKey);
+          if (!normalizedSource || perSourceMaps.has(normalizedSource)) continue;
+          if (!(match.perStation instanceof Map) || !match.perStation.size) continue;
+          perSourceMaps.set(normalizedSource, match.perStation);
+        }
+        if (perSourceMaps.size) break;
       }
     }
     let combinedFallback = null;
-    if (normalizedKey != null){
-      const candidate = trainDelaysByNumber.get(String(normalizedKey));
-      if (candidate instanceof Map && candidate.size){
-        combinedFallback = candidate;
+    if (normalizedCandidates.length){
+      for (const candidateKey of normalizedCandidates){
+        const candidate = trainDelaysByNumber.get(String(candidateKey));
+        if (candidate instanceof Map && candidate.size){
+          combinedFallback = candidate;
+          break;
+        }
       }
     }
     const startPlanned = seq[0]?.departure ?? seq[0]?.arrival ?? null;
