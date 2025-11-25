@@ -1438,6 +1438,31 @@ const GTFS_RT_STOP_META_KEYS = new Set([
 
     return messageParts.map(s => s.trim()).find(Boolean) || null;
   }
+
+  function simplifySncfDisruptionText(text){
+    const raw = String(text ?? '').trim();
+    if (!raw) return null;
+    const parts = raw.split(/\s+[—–-]+\s+/).map(p=>p.trim()).filter(Boolean);
+    return parts[0] || raw;
+  }
+
+  function formatSncfDisruptionLabel(disruptionText, { delayInfo, cancellationInfo } = {}){
+    const cause = simplifySncfDisruptionText(disruptionText);
+    if (!cause) return null;
+
+    let prefix = 'Info SNCF';
+    if (cancellationInfo && cancellationInfo.index === 0){
+      prefix = 'Supprimé';
+    } else if (cancellationInfo && cancellationInfo.index > 0){
+      prefix = 'Suppression partielle';
+    } else if (delayInfo?.severity === 'cancelled'){
+      prefix = 'Supprimé';
+    } else if (delayInfo){
+      prefix = 'Retard';
+    }
+
+    return `${prefix} : ${cause} (selon SNCF)`;
+  }  
     
   function buildNavitiaDisruptionMessage(disruption){
     if (!disruption || typeof disruption !== 'object') return null;
@@ -3738,6 +3763,7 @@ const mapContainerEl = map.getContainer();
       summaryHtml += `<div class="trip-panel-realtime"><strong>Numéros associés :</strong> ${escapeHTML(data.numberList.join(' / '))}</div>`;
     }
     const disruptionText = findSncfDisruptionForTrain(data);
+    const formattedDisruption = formatSncfDisruptionLabel(disruptionText, { delayInfo, cancellationInfo });
     
     if (trainFilters.showDelays){
       const realtimeStartSec = realtimeProfile?.startRealtime ?? data.startSec ?? plannedStartSec;
@@ -3752,11 +3778,11 @@ const mapContainerEl = map.getContainer();
         summaryHtml += `<div class="trip-panel-realtime">Temps réel : <strong>${escapeHTML(startRealtimeText)}</strong>${startDiffHtml} → <strong>${escapeHTML(endRealtimeText)}</strong>${endDiffHtml}</div>`;
       }
     }
-    if (disruptionText){
+    if (formattedDisruption){
       const disruptionClass = cancellationInfo && cancellationInfo.index != null && cancellationInfo.index < stops.length
         ? 'trip-panel-disruption is-cancelled'
         : 'trip-panel-disruption';
-      summaryHtml += `<div class="${disruptionClass}"><strong>Cause SNCF :</strong> ${escapeHTML(disruptionText)}</div>`;
+      summaryHtml += `<div class="${disruptionClass}">${escapeHTML(formattedDisruption)}</div>`;
     }
     tripPanelSummaryEl.innerHTML = summaryHtml;
 
