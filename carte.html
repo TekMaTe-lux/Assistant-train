@@ -2354,7 +2354,55 @@ const GTFS_RT_STOP_META_KEYS = new Set([
     return fallback;
   }
   function computeTrainDelayInfo(train){
-    if (!train || !trainDelaysByNumber.size) return null;
+    if (!train) return null;
+
+    const seq = stopTimesByTrip.get(train.id);
+    const resolvedNumberKey = resolveRealtimeNumberKey(train) ?? extractTrainNumberCandidate(train.id);
+    const realtimeProfile = (seq && seq.length)
+      ? (realtimeStopDataByTrip.get(train.id)
+        || computeRealtimeStopData(train.id, seq, resolvedNumberKey, realtimeOptionsForTrain(train)))
+      : null;
+
+    const cancellation = realtimeProfile?.cancellation;
+    if (cancellation){
+      const stopName = (()=>{
+        const idx = cancellation.index;
+        if (seq && seq[idx]){
+          const meta = stopsById.get(seq[idx].stop_id);
+          return meta?.name || cancellation.station || null;
+        }
+        return cancellation.station || null;
+      })();
+      const info = buildDelayInfo({ value:null, original: stopName || null }, train);
+      if (info) return info;
+    }
+
+    const currentDelayMin = Number.isFinite(train.currentDelaySec) ? train.currentDelaySec/60 : null;
+    const startSearchIdx = Number.isInteger(train.segmentIndex) && train.segmentIndex >= 0
+      ? train.segmentIndex
+      : 0;
+
+    if (realtimeProfile?.stops?.length){
+      for (let i=startSearchIdx;i<realtimeProfile.stops.length;i++){
+        const st = realtimeProfile.stops[i];
+        const minutes = Number.isFinite(st?.delayMinutes)
+          ? st.delayMinutes
+          : (Number.isFinite(st?.delaySec) ? st.delaySec/60 : null);
+        if (minutes && minutes > 0){
+          const meta = seq && seq[i] ? stopsById.get(seq[i].stop_id) : null;
+          const entry = { value: minutes, original: meta?.name || st?.delaySource || null };
+          const info = buildDelayInfo(entry, train);
+          if (info) return info;
+        }
+      }
+    }
+
+    if (currentDelayMin && currentDelayMin > 0){
+      const info = buildDelayInfo({ value: currentDelayMin, original: train.from || null }, train);
+      if (info) return info;
+    }
+
+    if (!trainDelaysByNumber.size) return null;
     const candidateKeys = [];
     const pushKey = (value)=>{
       if (value == null) return;
