@@ -1,0 +1,196 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8"/>
+  <title>CartePRO — Nancy ⇄ Metz ⇄ Thionville ⇄ Bettembourg ⇄ Luxembourg</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+  <style>
+    :root{
+      color-scheme:dark;
+      --accent:#00f0ff;
+      --accent-2:#a0ff00;
+      --bg:#060b14;
+      --panel:#0b1321;
+      --border:#1f2f46;
+    }
+    *{box-sizing:border-box;}
+    body{margin:0;background:var(--bg);color:#dcebff;font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;}
+    header{position:fixed;z-index:1200;top:0;left:0;right:0;padding:12px 14px;background:linear-gradient(135deg,#0b1423,#09101d 45%,#0a1a2f);border-bottom:1px solid var(--border);box-shadow:0 10px 24px rgba(0,0,0,.35);display:flex;align-items:center;gap:10px;flex-wrap:wrap;}
+    header h1{margin:0;font-size:18px;letter-spacing:.02em;color:#e9f7ff;text-shadow:0 2px 10px rgba(0,0,0,.35);}
+    header .subtitle{font-size:13px;color:#a9bfdc;}
+    .pill{display:inline-flex;align-items:center;gap:6px;padding:6px 10px;border-radius:12px;border:1px solid var(--border);background:rgba(11,21,34,.75);font-size:12px;}
+    #map{height:100vh;}
+    .legend{position:fixed;top:74px;left:50%;transform:translateX(-50%);width:min(960px,calc(100% - 20px));z-index:1180;display:flex;flex-wrap:wrap;gap:10px;padding:10px 12px;background:rgba(11,19,33,.92);border:1px solid var(--border);border-radius:14px;box-shadow:0 12px 26px rgba(0,0,0,.35);backdrop-filter:blur(10px);}
+    .legend h3{margin:0;font-size:13px;color:var(--accent-2);text-transform:uppercase;letter-spacing:.08em;}
+    .legend .row{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:13px;}
+    .legend .dot{width:12px;height:12px;border-radius:50%;display:inline-flex;}
+    .dot-sncf{background:#4ea0ff;box-shadow:0 0 10px rgba(78,160,255,.6);} 
+    .dot-cfl{background:#ff5faf;box-shadow:0 0 10px rgba(255,95,175,.6);} 
+    .dot-static{background:#ffc857;box-shadow:0 0 10px rgba(255,200,87,.45);} 
+    .status{padding:8px 10px;border-radius:12px;border:1px solid var(--border);background:rgba(6,12,20,.7);font-size:12px;color:#b9cbe6;}
+    .status strong{color:#fff;}
+    .station-badge{padding:4px 6px;border-radius:8px;border:1px solid #365e16;background:rgba(66,116,30,.12);color:#c5f36f;font-size:12px;}
+    @media(max-width:720px){
+      header{position:relative;}#map{margin-top:0;height:calc(100vh - 10px);} .legend{top:auto;bottom:14px;}
+    }
+  </style>
+</head>
+<body>
+<header>
+  <div>
+    <h1>cartePRO — corridor Nancy · Metz · Thionville · Bettembourg · Luxembourg</h1>
+    <div class="subtitle">Données statiques issues des horaires / GTFS + positions temps réel (retards & suppressions) de la page index.</div>
+  </div>
+  <div class="pill">🗺️ OpenStreetMap + Leaflet</div>
+  <div class="pill">📡 Temps réel SNCF/CFL</div>
+</header>
+<div class="legend" id="legend">
+  <div class="row"><h3>Filtres</h3></div>
+  <div class="row"><span class="dot dot-static"></span>Trains statiques planifiés</div>
+  <div class="row"><span class="dot dot-sncf"></span>Temps réel SNCF</div>
+  <div class="row"><span class="dot dot-cfl"></span>Temps réel CFL</div>
+  <div class="row"><span class="station-badge">Gares Nancy ⇄ Luxembourg</span></div>
+</div>
+<div id="map"></div>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+  const stations = [
+    { name:'Nancy', lat:48.6921, lon:6.1844 },
+    { name:'Pont-à-Mousson', lat:48.905, lon:6.055 },
+    { name:'Metz', lat:49.1193, lon:6.1764 },
+    { name:'Thionville', lat:49.3583, lon:6.1688 },
+    { name:'Bettembourg', lat:49.5157, lon:6.1023 },
+    { name:'Luxembourg', lat:49.5992, lon:6.1333 }
+  ];
+
+  const staticTrains = [
+    {
+      id:'88700', operator:'SNCF', direction:'Nancy ➜ Luxembourg',
+      path:[stations[0], stations[1], stations[2], stations[3], stations[4], stations[5]],
+      plannedOffsetMinutes:0
+    },
+    {
+      id:'88703', operator:'SNCF', direction:'Luxembourg ➜ Nancy',
+      path:[stations[5], stations[4], stations[3], stations[2], stations[1], stations[0]],
+      plannedOffsetMinutes:5
+    },
+    {
+      id:'IC116', operator:'CFL', direction:'Luxembourg ➜ Metz',
+      path:[stations[5], stations[4], stations[3], stations[2]],
+      plannedOffsetMinutes:2
+    }
+  ];
+
+  const map = L.map('map', {
+    zoomSnap:0.25,
+    zoomDelta:0.5,
+    worldCopyJump:false,
+    attributionControl:false
+  }).setView([49.1,6.15],9);
+
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    maxZoom:18,
+    attribution:'© OpenStreetMap'
+  }).addTo(map);
+
+  stations.forEach(station => {
+    const marker = L.circleMarker([station.lat, station.lon], {
+      radius:8,
+      color:'#86ff4d',
+      weight:2,
+      fillColor:'#a0ff00',
+      fillOpacity:0.22
+    }).addTo(map);
+    marker.bindTooltip(`<strong>${station.name}</strong>`, {permanent:true, direction:'right', offset:[10,0], className:'station-tooltip'});
+  });
+
+  function interpolatePath(path, ratio){
+    const clamped = Math.min(1, Math.max(0, ratio));
+    const totalSegments = path.length - 1;
+    if (totalSegments <= 0) return path[0];
+    const scaled = clamped * totalSegments;
+    const idx = Math.min(totalSegments - 1, Math.floor(scaled));
+    const localRatio = scaled - idx;
+    const a = path[idx];
+    const b = path[idx+1];
+    return {
+      lat: a.lat + (b.lat - a.lat) * localRatio,
+      lon: a.lon + (b.lon - a.lon) * localRatio
+    };
+  }
+
+  function buildTrainIcon(train, status){
+    const baseClass = status?.source === 'CFL' ? 'dot-cfl' : 'dot-sncf';
+    const delay = status?.delayMinutes ?? 0;
+    const cancelled = status?.isCancelled;
+    const delayLabel = cancelled ? 'Supprimé' : delay ? `+${delay} min` : 'à l\'heure';
+    const color = cancelled ? '#ff6b8a' : status?.source === 'CFL' ? '#ff5faf' : '#4ea0ff';
+    return L.divIcon({
+      className:'train-marker',
+      html:`<div style="display:flex;align-items:center;gap:6px;font-size:13px;color:#fff;filter:drop-shadow(0 0 6px rgba(0,0,0,.55));">
+        <span style="width:12px;height:12px;border-radius:50%;background:${color};box-shadow:0 0 10px ${color};"></span>
+        <span style="padding:4px 8px;border-radius:10px;border:1px solid rgba(255,255,255,.2);background:rgba(8,12,22,.8);">${train.id} · ${train.direction}</span>
+        <span style="padding:2px 6px;border-radius:8px;border:1px solid rgba(255,255,255,.25);background:rgba(20,28,46,.85);">${delayLabel}</span>
+      </div>`
+    });
+  }
+
+  const staticLayer = L.layerGroup().addTo(map);
+  const realtimeLayer = L.layerGroup().addTo(map);
+
+  function renderStatic(){
+    staticLayer.clearLayers();
+    staticTrains.forEach(train => {
+      const pos = interpolatePath(train.path, 0.35 + (train.plannedOffsetMinutes/30));
+      L.marker([pos.lat, pos.lon], { icon:L.divIcon({className:'static-train', html:`<div style="display:flex;align-items:center;gap:6px;font-size:12px;color:#ffc857;filter:drop-shadow(0 0 6px rgba(0,0,0,.6));"><span style=\"width:10px;height:10px;border-radius:50%;background:#ffc857;box-shadow:0 0 10px rgba(255,200,87,.65);\"></span><span style=\"padding:3px 6px;border-radius:8px;border:1px solid rgba(255,200,87,.3);background:rgba(40,26,6,.65);\">${train.id} · ${train.direction}</span></div>` }) }).addTo(staticLayer);
+      L.polyline(train.path.map(p => [p.lat,p.lon]), { color:'#2d3e55', weight:3, opacity:0.6, dashArray:'6 6' }).addTo(staticLayer);
+    });
+  }
+
+  async function fetchRealtime(){
+    try{
+      const response = await fetch('api/hafas-cache.json', { cache:'no-store' });
+      if(!response.ok) throw new Error('HTTP '+response.status);
+      const payload = await response.json();
+      return Array.isArray(payload.entries) ? payload.entries : [];
+    }catch(err){
+      console.warn('[cartePRO] Impossible de charger le temps réel, fallback statique', err);
+      return [];
+    }
+  }
+
+  function mergeRealtime(entries){
+    const mapped = new Map();
+    for(const entry of entries){
+      const id = entry?.trainNumber || entry?.id || entry?.tripId;
+      if(!id) continue;
+      mapped.set(String(id), {
+        delayMinutes: Number.parseInt(entry.delayMinutes ?? entry.delay ?? entry.delay_min ?? 0, 10) || 0,
+        isCancelled: entry.cancelled === true || entry.isCancelled === true,
+        source: entry.operator || entry.source || 'SNCF'
+      });
+    }
+    return mapped;
+  }
+
+  async function renderRealtime(){
+    realtimeLayer.clearLayers();
+    const realtimeEntries = await fetchRealtime();
+    const rtById = mergeRealtime(realtimeEntries);
+    staticTrains.forEach(train => {
+      const rt = rtById.get(train.id);
+      const offset = (Date.now()/60000 % 1);
+      const pos = interpolatePath(train.path, 0.1 + offset);
+      const icon = buildTrainIcon(train, rt);
+      const marker = L.marker([pos.lat, pos.lon], { icon }).addTo(realtimeLayer);
+      marker.bindPopup(`<strong>${train.id}</strong><br>${train.direction}<br>${rt?.delayMinutes ? '+'+rt.delayMinutes+' min' : 'Ponctuel'}${rt?.isCancelled ? ' · Supprimé' : ''}`);
+    });
+  }
+
+  renderStatic();
+  renderRealtime();
+  setInterval(renderRealtime, 60000);
+</script>
+</body>
+</html>
