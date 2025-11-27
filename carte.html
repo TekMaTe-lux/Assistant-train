@@ -1687,68 +1687,159 @@ const GTFS_RT_STOP_META_KEYS = new Set([
   }
 
   function normalizeSncfCachePayload(raw){
-    if (!raw || typeof raw !== 'object') return raw;
+  if (!raw || typeof raw !== 'object') return raw;
 
-      // Cas "Navitia brut" déjà géré → on ne touche à rien
-    if (Array.isArray(raw.vehicle_journeys) || (raw.data && Array.isArray(raw.data.vehicle_journeys))) {
-      return raw;
-    }
+  // Cas "Navitia brut" déjà géré → on ne touche à rien
+  if (Array.isArray(raw.vehicle_journeys) || (raw.data && Array.isArray(raw.data.vehicle_journeys))) {
+    return raw;
+  }
 
   // Cas "map de caches" du VPS : on fusionne tous les entry.data.*
-    const merged = {
-      vehicle_journeys: [],
-      disruptions: [],
-      context: {}
-    };
+  const merged = {
+    vehicle_journeys: [],
+    disruptions: [],
+    context: {}
+  };
 
-    let newestCtx = null;
-    const seen = new Set();
-    const candidates = [];
+  let newestCtx = null;
+  const seen = new Set();
+  const candidates = [];
 
-    const pushCandidate = (obj)=>{
-      if (!obj || typeof obj !== 'object') return;
-      if (seen.has(obj)) return;
-      seen.add(obj);
-      candidates.push(obj);
-      if (obj.trains && typeof obj.trains === 'object'){
-        for (const v of Object.values(obj.trains)) pushCandidate(v);
-      }
-    };
+  const pushCandidate = (obj)=>{
+    if (!obj || typeof obj !== 'object') return;
+    if (seen.has(obj)) return;
+    seen.add(obj);
+    candidates.push(obj);
+    if (obj.trains && typeof obj.trains === 'object'){
+      for (const v of Object.values(obj.trains)) pushCandidate(v);
+    }
+  };
 
-   pushCandidate(raw);
+  pushCandidate(raw);
 
-    for (const entry of candidates){
-      const data = entry.data;
-      if (!data || typeof data !== 'object') continue;
+  for (const entry of candidates){
+    const data = entry.data;
+    if (!data || typeof data !== 'object') continue;
 
     if (Array.isArray(data.vehicle_journeys)) {
-        merged.vehicle_journeys.push(...data.vehicle_journeys);
-      }
-      if (Array.isArray(data.disruptions)) {
-        merged.disruptions.push(...data.disruptions);
-      }
+      merged.vehicle_journeys.push(...data.vehicle_journeys);
+    }
+    if (Array.isArray(data.disruptions)) {
+      merged.disruptions.push(...data.disruptions);
+    }
 
-      const ctx = data.context;
-      if (ctx && ctx.current_datetime) {
-        // on garde le plus récent
-        if (!newestCtx || parseNavitiaDateTime(ctx.current_datetime) > parseNavitiaDateTime(newestCtx)) {
-          newestCtx = ctx.current_datetime;
+    const ctx = data.context;
+    if (ctx && ctx.current_datetime) {
+      // on garde le plus récent
+      if (!newestCtx || parseNavitiaDateTime(ctx.current_datetime) > parseNavitiaDateTime(newestCtx)) {
+        newestCtx = ctx.current_datetime;
+      }
+    }
+  }
+
+  if (!merged.vehicle_journeys.length) {
+    // rien de détecté → on rend le raw tel quel (pour ne pas casser)
+    return raw;
+  }
+
+  if (newestCtx) {
+    merged.context.current_datetime = newestCtx;
+  }
+
+  // Map<numberKey, Map<stationKey, { original, value }>>
+  const perTrainPerStation = new Map();
+
+  const trains = raw && raw.trains ? raw.trains : {};
+  for (const [tail, entry] of Object.entries(trains)){
+    const data = entry && entry.data;
+    if (!data) continue;
+
+    const disruptions = Array.isArray(data.disruptions) ? data.disruptions : [];
+    if (!disruptions.length) continue;
+
+    // Exemple de clef tail :
+    // "vehicle_journey:SNCF:2025-11-27:833604:1187:Train"
+    // → on peut en extraire un candidat numéro de train
+    const tailNumCandidate = extractTrainNumberCandidate(tail);
+    const numberKey = tailNumCandidate != null
+      ? normalizeTrainNumberKey(tailNumCandidate)
+      : null;
+    if (numberKey == null && numberKey !== 0) continue;
+    const trainKey = String(numberKey);
+
+    let perStation = perTrainPerStation.get(trainKey);
+    if (!perStation){
+      perStation = new Map();
+      perTrainPerStation.set(trainKey, perStation);
+    }
+
+    for (const disruption of disruptions){
+      const impacted = Array.isArray(disruption.impacted_stops)
+        ? disruption.impacted_stops
+        : [];
+      for (const imp of impacted){
+        const sp = imp.stop_point || {};
+        const label = sp.label || sp.name || null;
+        if (!label) continue;
+
+        const base = imp.base_departure_time
+          || imp.base_arrival_time
+          || null;
+        const amended = imp.amended_departure_time
+          || imp.amended_arrival_time
+          || null;
+        if (!base || !amended) continue;
+
+        const baseSec = sncfHhmmssToSec(base);
+        const amendedSec = sncfHhmmssToSec(amended);
+        if (!Number.isFinite(baseSec) || !Number.isFinite(amendedSec)) continue;
+
+        const delayMin = Math.round((amendedSec - baseSec) / 60);
+        if (!Number.isFinite(delayMin)) continue;
+
+        // clé de gare normalisée, pour matcher les stops GTFS
+        const stationKey = normalizeStationName(label);
+        if (!stationKey) continue;
+
+        // on garde le retard "dominant" (val absolue la plus grande)
+        const prev = perStation.get(stationKey);
+        if (!prev || Math.abs(delayMin) > Math.abs(prev.value)){
+          perStation.set(stationKey, {
+            original: label,
+            value: delayMin
+          });
         }
       }
     }
-    
-      if (!merged.vehicle_journeys.length) {
-      // rien de détecté → on rend le raw tel quel (pour ne pas casser)
-      return raw;
-    }
-
-    if (newestCtx) {
-      merged.context.current_datetime = newestCtx;
-    }
-
-    return merged;
   }
-  
+
+  // Intégration dans la structure temps réel commune
+  if (!window.realtimeSources) window.realtimeSources = {};
+  if (!realtimeSources.sncf){
+    realtimeSources.sncf = {
+      perStationByTrainNumber: new Map(),
+      lastUpdated: null
+    };
+  } else {
+    if (!realtimeSources.sncf.perStationByTrainNumber){
+      realtimeSources.sncf.perStationByTrainNumber = new Map();
+    }
+  }
+
+  for (const [trainKey, perStation] of perTrainPerStation.entries()){
+    if (!perStation || !perStation.size) continue;
+    realtimeSources.sncf.perStationByTrainNumber.set(trainKey, perStation);
+  }
+
+  if (typeof raw.generated_at === 'number'){
+    realtimeSources.sncf.lastUpdated = raw.generated_at;
+  } else {
+    realtimeSources.sncf.lastUpdated = Math.floor(Date.now()/1000);
+  }
+
+  return merged;
+}
+ 
   async function loadSncfRealtime({ forceFresh = false } = {}){
   if (pendingSncfPromise) return pendingSncfPromise;
 
