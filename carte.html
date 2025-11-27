@@ -1813,28 +1813,84 @@ const GTFS_RT_STOP_META_KEYS = new Set([
     }
   }
 
-  // Intégration dans la structure temps réel commune
-  if (!window.realtimeSources) window.realtimeSources = {};
-  if (!realtimeSources.sncf){
-    realtimeSources.sncf = {
-      perStationByTrainNumber: new Map(),
-      lastUpdated: null
-    };
-  } else {
-    if (!realtimeSources.sncf.perStationByTrainNumber){
-      realtimeSources.sncf.perStationByTrainNumber = new Map();
+  // Map<numberKey, Map<stationKey, { original, value }>>
+  const perTrainPerStation = new Map();
+
+  const trains = raw && raw.trains ? raw.trains : {};
+  for (const [tail, entry] of Object.entries(trains)){
+    const data = entry && entry.data;
+    if (!data) continue;
+
+    const disruptions = Array.isArray(data.disruptions) ? data.disruptions : [];
+    if (!disruptions.length) continue;
+
+    // Exemple de clef tail :
+    // "vehicle_journey:SNCF:2025-11-27:833604:1187:Train"
+    const tailNumCandidate = extractTrainNumberCandidate(tail);
+    const numberKey = tailNumCandidate != null
+      ? normalizeTrainNumberKey(tailNumCandidate)
+      : null;
+    if (numberKey == null && numberKey !== 0) continue;
+    const trainKey = String(numberKey);
+
+    let perStation = perTrainPerStation.get(trainKey);
+    if (!perStation){
+      perStation = new Map();
+      perTrainPerStation.set(trainKey, perStation);
+    }
+
+    for (const disruption of disruptions){
+      const impacted = Array.isArray(disruption.impacted_stops)
+        ? disruption.impacted_stops
+        : [];
+      for (const imp of impacted){
+        const sp = imp.stop_point || {};
+        const label = sp.label || sp.name || null;
+        if (!label) continue;
+
+        const base = imp.base_departure_time
+          || imp.base_arrival_time
+          || null;
+        const amended = imp.amended_departure_time
+          || imp.amended_arrival_time
+          || null;
+        if (!base || !amended) continue;
+
+        const baseSec = sncfHhmmssToSec(base);
+        const amendedSec = sncfHhmmssToSec(amended);
+        if (!Number.isFinite(baseSec) || !Number.isFinite(amendedSec)) continue;
+
+        const delayMin = Math.round((amendedSec - baseSec) / 60);
+        if (!Number.isFinite(delayMin)) continue;
+
+        const stationKey = normalizeStationName(label);
+        if (!stationKey) continue;
+
+        const prev = perStation.get(stationKey);
+        if (!prev || Math.abs(delayMin) > Math.abs(prev.value)){
+          perStation.set(stationKey, {
+            original: label,
+            value: delayMin
+          });
+        }
+      }
     }
   }
 
-  for (const [trainKey, perStation] of perTrainPerStation.entries()){
-    if (!perStation || !perStation.size) continue;
-    realtimeSources.sncf.perStationByTrainNumber.set(trainKey, perStation);
-  }
-
-  if (typeof raw.generated_at === 'number'){
-    realtimeSources.sncf.lastUpdated = raw.generated_at;
-  } else {
-    realtimeSources.sncf.lastUpdated = Math.floor(Date.now()/1000);
+  // Intégration dans le fallback global trainDelaysByNumber
+  if (typeof trainDelaysByNumber !== 'undefined' && trainDelaysByNumber instanceof Map){
+    for (const [trainKey, perStation] of perTrainPerStation.entries()){
+      if (!perStation || !perStation.size) continue;
+      const existing = trainDelaysByNumber.get(trainKey);
+      const mergedMap = existing instanceof Map ? new Map(existing) : new Map();
+      for (const [stationKey, entry] of perStation.entries()){
+        const prev = mergedMap.get(stationKey);
+        if (!prev || Math.abs(entry.value) > Math.abs(prev.value)){
+          mergedMap.set(stationKey, entry);
+        }
+      }
+      trainDelaysByNumber.set(trainKey, mergedMap);
+    }
   }
 
   return merged;
