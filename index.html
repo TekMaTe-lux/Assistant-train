@@ -3714,8 +3714,7 @@ function renderRowsChunked(htmlRows, tbody, chunk=200){
 
   <div id="bustram" class="tab-content">
     <h2>Bus/Tram</h2>
-    <input type="text" id="stopSearch" placeholder="Chercher un arrêt..." style="width:90%; padding:5px;">
-    <div id="stops-list" style="margin-top:10px;">Entrez un arrêt pour afficher les prochains départs</div>
+    <div id="stops-list" style="margin-top:10px;">Bientôt disponible</div>
   </div>
 </div>
 
@@ -5931,7 +5930,7 @@ async function fetchCflHafasDepartures({ stopId, dateYmd, baseTimeHHMM, duration
 
   if (!CFL_HAFAS_CACHE.has(cacheKey)){
     try {
-      const url = `https://cdt.hafas.de/opendata/apiserver/departureBoard?accessId=58ef9a71-6837-4405-bd5d-23beaf92864c&id=${hafasId}&date=${dateStr}&time=${timeParam}&duration=${duration}&maxJourneys=50&format=json`;
+      const url = `https://vps.labetaillere.fr/hafas/departureBoard?accessId=58ef9a71-6837-4405-bd5d-23beaf92864c&id=${hafasId}&date=${dateStr}&time=${timeParam}&duration=${duration}&maxJourneys=50&format=json`;
       const resp = await fetch(url, { cache: 'no-store' });
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
       const data = await resp.json();
@@ -9876,7 +9875,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const now = new Date();
     const dateStr = now.toISOString().split("T")[0];
     const timeStr = now.toTimeString().slice(0,8);
-    const url = `https://cdt.hafas.de/opendata/apiserver/departureBoard?accessId=58ef9a71-6837-4405-bd5d-23beaf92864c&id=${stationId}&date=${dateStr}&time=${timeStr}&duration=${interval}&maxJourneys=20&format=json`;
+    const url = `https://vps.labetaillere.fr/hafas/departureBoard?accessId=58ef9a71-6837-4405-bd5d-23beaf92864c&id=${stationId}&date=${dateStr}&time=${timeStr}&duration=${interval}&maxJourneys=20&format=json`;
 
     try {
       const resp = await fetch(url);
@@ -9920,169 +9919,14 @@ document.addEventListener('DOMContentLoaded', () => {
   stationSelect.addEventListener("change", chargerDepartures);
 
   // ----------------------
-  // PARTIE BUS/TRAM
+  // PARTIE BUS/TRAM (désactivée provisoirement pour limiter les requêtes)
   // ----------------------
-  const stopsUrl = "https://raw.githubusercontent.com/TekMaTe-lux/Assistant-train/main/CFL/stopscfl.txt";
-  let stopsData = [];
-  let busInterval;
-
-  function parseStopLine(line) {
-    if (!line) return null;
-    const cells = [];
-    let current = '';
-    let inQuotes = false;
-    for (let i = 0; i < line.length; i++) {
-      const ch = line[i];
-      if (ch === '"') {
-        if (inQuotes && line[i + 1] === '"') {
-          current += '"';
-          i++;
-        } else {
-          inQuotes = !inQuotes;
-        }
-        continue;
-      }
-      if (ch === ',' && !inQuotes) {
-        cells.push(current);
-        current = '';
-      } else {
-        current += ch;
-      }
-    }
-    cells.push(current);
-
-    const rawId = (cells[0] || '').trim();
-    const name = (cells[2] || '').trim();
-    if (!rawId || !name) return null;
-
-    const cleanedId = rawId.replace(/^"|"$/g, '');
-    const cleanedName = name.replace(/^"|"$/g, '');
-    if (!cleanedId || !cleanedName) return null;
-
-    const normalized = cleanedName
-      .normalize('NFD')
-      .replace(/\p{Diacritic}/gu, '')
-      .toLowerCase();
-
-    return {
-      id: cleanedId,
-      name: cleanedName,
-      normalized
-    };
-  }
-
-  // Charger la base de données des arrêts
-  fetch(stopsUrl)
-    .then(r => {
-      if (!r.ok) throw new Error(`HTTP ${r.status}`);
-      return r.text();
-    })
-    .then(txt => {
-      const lines = txt.split(/\r?\n/).slice(1);
-      stopsData = lines.map(parseStopLine).filter(Boolean);
-      console.log("Stops chargés:", stopsData.length);
-    })
-    .catch(err => {
-      console.error("Erreur lors du chargement des arrêts CFL", err);
-      stopsData = [];
-    });
-
-  const stopSearch = document.getElementById("stopSearch");
+  
   const stopsList = document.getElementById("stops-list");
 
-  async function afficherDepartures(stopId, stopName){
-    stopsList.innerHTML = `Chargement des prochains départs pour ${stopName}...`;
-
-    const now = new Date();
-    const dateStr = now.toISOString().split("T")[0];
-    const timeStr = now.toTimeString().slice(0,8);
-    const duration = 120;
-
-    const url = `https://cdt.hafas.de/opendata/apiserver/departureBoard?accessId=58ef9a71-6837-4405-bd5d-23beaf92864c&id=${stopId}&date=${dateStr}&time=${timeStr}&duration=${duration}&maxJourneys=20&format=json`;
-
-    try {
-      const resp = await fetch(url);
-      const data = await resp.json();
-      let html = "";
-
-      if(data.Departure && data.Departure.length){
-        data.Departure.forEach(dep => {
-          const direction = (dep.direction || "").replace(/,?\s*Gare$/i,'');
-          let statutText = "À l'heure";
-          let classeStatut = "statut-heure";
-
-          if(dep.rtTime && dep.rtTime !== dep.time){
-            const scheduled = new Date(`${dep.date}T${dep.time}`);
-            const real = new Date(`${dep.rtDate || dep.date}T${dep.rtTime}`);
-            const diffMin = Math.round((real - scheduled)/60000);
-            if(diffMin > 0 && diffMin <=10){ 
-              statutText=`Retardé à ${formatHeure(dep.rtTime)} (+${diffMin} min)`; 
-              classeStatut="statut-retard"; 
-            } else if(diffMin >10){ 
-              statutText=`Retardé à ${formatHeure(dep.rtTime)} (+${diffMin} min)`; 
-              classeStatut="statut-retard-long"; 
-            }
-          }
-
-          if(dep.cancelled || dep.status==="deleted"){ 
-            statutText="Supprimé"; 
-            classeStatut="statut-supprime"; 
-          }
-
-          const voie = dep.rtTrack || dep.track || "?";
-
-          html += `<div style="margin-bottom:12px;">
-            <strong>${dep.name}</strong> vers ${direction}<br>
-            Départ prévu : ${formatHeure(dep.time)}<br>
-            Quai : ${voie}<br>
-            Statut : <span class="${classeStatut}">${statutText}</span>
-          </div>`;
-        });
-      } else html="<p>Aucun départ trouvé.</p>";
-
-      stopsList.innerHTML = html;
-
-      if (busInterval) clearInterval(busInterval);
-      busInterval = setInterval(() => afficherDepartures(stopId, stopName), 60000);
-
-    } catch(err){
-      console.error(err);
-      stopsList.innerHTML = "<p>Erreur de chargement</p>";
-    }
+ if (stopsList) {
+    stopsList.textContent = "Bientôt disponible";
   }
-
-  stopSearch.addEventListener("input", () => {
-    const query = stopSearch.value
-      .normalize('NFD')
-      .replace(/\p{Diacritic}/gu, '')
-      .toLowerCase();
-    if (!query) {
-      stopsList.innerHTML = "Entrez un arrêt pour afficher les prochains départs";
-      return;
-    }
-
-    const results = stopsData
-      .filter(s => s.normalized.includes(query))
-      .slice(0,10);
-    if (results.length === 0) {
-      stopsList.innerHTML = "Aucun arrêt trouvé";
-      return;
-    }
-
-    stopsList.innerHTML = results.map(s => 
-      `<div style="margin-bottom:8px;cursor:pointer;color:#0ff;" data-id="${s.id}">${s.name}</div>`
-    ).join('');
-
-    stopsList.querySelectorAll("div").forEach(div => {
-      div.addEventListener("click", () => {
-        const stopId = div.dataset.id;
-        const stopName = div.textContent;
-        stopSearch.value = stopName;
-        stopsList.innerHTML = "";
-        afficherDepartures(stopId, stopName);
-      });
-    });
-  });
 });  
 </script>
 <script>
