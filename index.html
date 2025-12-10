@@ -834,20 +834,6 @@ table[data-snapshotting="true"] tbody tr:nth-child(even) {
     background: rgba(0, 240, 255, 0.08);
     box-shadow: inset 0 0 14px rgba(0, 240, 255, 0.08);
   }
-   .voie-badge {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    margin-top: 4px;
-    padding: 2px 8px;
-    border-radius: 999px;
-    border: 1px solid rgba(0, 240, 255, 0.5);
-    background: rgba(0, 240, 255, 0.12);
-    color: #00f0ff;
-    font-size: 0.85em;
-    font-weight: 700;
-    letter-spacing: 0.02em;
-  } 
   .fallback-pill {
     display: inline-flex;
     align-items: center;
@@ -7943,86 +7929,6 @@ function vpsVehicleJourneyUrl(date, num) {
   return `${VPS_BASE}/sncf/vehicle_journey/${d}/${num}`;
 }
 
-const VOIES_BY_TRAIN_URL = `${VPS_BASE}/gtfs/voies_by_train.json`;
-const voiesCache = { data: null, fetchedAt: 0 };
-
-function normalizeVoieStation(name){
-  return String(name || '')
-    .normalize('NFD')
-    .replace(/\p{Diacritic}/gu, '')
-    .replace(/\s+/g, ' ')
-    .trim()
-    .toLowerCase();
-}
-
-function normalizeVoieTime(timeStr){
-  if (!timeStr) return null;
-  const m = String(timeStr).match(/(\d{1,2}):(\d{2})/);
-  if (!m) return null;
-  const hh = m[1].padStart(2, '0');
-  const mm = m[2];
-  return `${hh}:${mm}`;
-}
-
-function buildVoiesLookup(raw){
-  const trainsMap = new Map();
-  const trains = raw?.trains || {};
-  Object.entries(trains).forEach(([trainId, stops]) => {
-    if (!trainId || typeof stops !== 'object' || !stops) return;
-    const stopMap = new Map();
-    Object.entries(stops).forEach(([key, voie]) => {
-      const [station, time] = String(key || '').split('|');
-      const stationKey = normalizeVoieStation(station);
-      const timeKey = normalizeVoieTime(time);
-      if (!stationKey || !timeKey) return;
-      const voieLabel = String(voie || '').trim();
-      if (!voieLabel) return;
-      stopMap.set(`${stationKey}|${timeKey}`, voieLabel);
-    });
-    trainsMap.set(trainId, stopMap);
-  });
-
-  return {
-    generatedAt: raw?.generated_at || null,
-    trains: trainsMap
-  };
-}
-
-async function loadVoiesByTrain(){
-  const now = Date.now();
-  if (voiesCache.data && (now - voiesCache.fetchedAt) < 55_000) {
-    return voiesCache.data;
-  }
-
-  try {
-    const resp = await fetch(VOIES_BY_TRAIN_URL, { cache: 'no-store' });
-    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-    const raw = await resp.json();
-    const normalized = buildVoiesLookup(raw || {});
-    voiesCache.data = normalized;
-    voiesCache.fetchedAt = now;
-    return normalized;
-  } catch (err) {
-    console.warn('[Voies] Impossible de charger les données', err);
-    return voiesCache.data;
-  }
-}
-
-function getTrainIdForVoies(result){
-  const train = result?.train || {};
-  return train.vehicle_journey_id || train.id || train.name || null;
-}
-
-function findVoieForStop(voiesData, result, stopName, timeStr){
-  if (!voiesData || !voiesData.trains || !result) return null;
-  const trainId = getTrainIdForVoies(result);
-  const stationKey = normalizeVoieStation(stopName);
-  const timeKey = normalizeVoieTime(timeStr);
-  if (!trainId || !stationKey || !timeKey) return null;
-  const key = `${stationKey}|${timeKey}`;
-  return voiesData.trains.get(trainId)?.get(key) || null;
-}
-
 // Fetch JSON + lecture du header X-Cache (HIT/MISS/REFRESH) pour debug
 async function fetchJSON(url) {
   const r = await fetch(url, { credentials: 'omit' });
@@ -8293,7 +8199,6 @@ function addManualTrain(){
 
     try {
       await loadCompoData();
-      const voiesData = await loadVoiesByTrain();
 
       /* ===== Helper compo (US / UM / UM3) ===== */
       function getCompoClass(comp){
@@ -8724,13 +8629,7 @@ const stopHasSchedule = (result, stopName) => {
           content = `<strong>${content}</strong>`;
         }
 
-       const voie = findVoieForStop(voiesData, result, stopName, amended || base);
-        if (voie) {
-          const safeVoie = escapeHtml(String(voie));
-          content += `<div class="voie-badge" aria-label="Voie ${safeVoie}">Voie ${safeVoie}</div>`;
-        }
-
-        const baseAttr = base ? ` data-base-time="${base}"` : '';
+       const baseAttr = base ? ` data-base-time="${base}"` : '';
         html += `<td${classAttr}${baseAttr}>${content}</td>`;
       }
 
