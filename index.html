@@ -916,7 +916,10 @@ table[data-snapshotting="true"] tbody tr:nth-child(even) {
   font-weight:900;
   margin-right:4px;
 }
-
+.voie-info{
+  white-space: nowrap;
+  font-weight: 600;
+}
  .us-train {
   color: #bf00ff;
   text-shadow: 0 0 5px #bf00ff, 0 0 10px #8000ff;
@@ -3874,9 +3877,107 @@ function extractTrainNumber(s){
     
 /* ---------- DONNÉES COMPO + GTFS-RT (unifiée) ---------- */
 if (typeof window.retardsGTFS === 'undefined') window.retardsGTFS = null;
-if (typeof window.retardsGTFS_RAW === 'undefined') window.retardsGTFS_RAW = null;    
+if (typeof window.retardsGTFS_RAW === 'undefined') window.retardsGTFS_RAW = null;
 if (typeof window.retardsGTFS_SOURCE === 'undefined') window.retardsGTFS_SOURCE = null;
 if (typeof window.compoData === 'undefined') window.compoData = {};
+if (typeof window.voiesByTrainMap === 'undefined') window.voiesByTrainMap = new Map();
+
+let voiesByTrainPromise = null;
+
+function normalizeVoiesTrainKey(raw){
+  return String(raw || '')
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .trim()
+    .toLowerCase();
+}
+
+function normalizeVoiesStopKey(rawKey){
+  if (!rawKey) return null;
+  const [cityRaw, timeRaw] = String(rawKey).split('|');
+  const city = normalizeVoiesTrainKey(cityRaw);
+  const time = (() => {
+    if (!timeRaw) return null;
+    let t = String(timeRaw).trim();
+    t = t.replace(/h/ig, ':');
+    t = t.replace(/[^0-9:]/g, '');
+    if (/^\d{4}$/.test(t)) t = `${t.slice(0, 2)}:${t.slice(2)}`;
+    if (!/^\d{2}:\d{2}$/.test(t)) return null;
+    return t;
+  })();
+  if (!city || !time) return null;
+  return `${city}|${time}`;
+}
+
+function normalizeVoiesPayload(data){
+  const out = new Map();
+  if (!data || typeof data !== 'object') return out;
+  Object.entries(data).forEach(([trainKey, rawEntries]) => {
+    const normalizedTrain = normalizeVoiesTrainKey(trainKey);
+    if (!normalizedTrain) return;
+    const entriesMap = new Map();
+    if (rawEntries && typeof rawEntries === 'object') {
+      Object.entries(rawEntries).forEach(([k, v]) => {
+        const normKey = normalizeVoiesStopKey(k);
+        const val = (v && typeof v === 'object') ? (v.voie || v.value || v.label || '') : v;
+        const voie = String(val || '').trim();
+        if (normKey && voie) entriesMap.set(normKey, voie);
+      });
+    }
+    if (entriesMap.size) out.set(normalizedTrain, entriesMap);
+  });
+  return out;
+}
+
+async function loadVoiesByTrain(){
+  if (voiesByTrainPromise) return voiesByTrainPromise;
+
+  voiesByTrainPromise = (async () => {
+    try {
+      const res = await fetch('https://vps.labetaillere.fr/gtfs/voies_by_train.json', { cache: 'no-store' });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const json = await res.json();
+      window.voiesByTrainMap = normalizeVoiesPayload(json);
+      return window.voiesByTrainMap;
+    } catch (err) {
+      console.warn('[Voies] Chargement échoué', err?.message || err);
+      window.voiesByTrainMap = new Map();
+      return window.voiesByTrainMap;
+    }
+  })();
+
+  return voiesByTrainPromise;
+}
+
+function getVoiesForTrain(num){
+  if (!num) return null;
+  const map = (window.voiesByTrainMap instanceof Map) ? window.voiesByTrainMap : null;
+  if (!map || !map.size) return null;
+  const trainKey = normalizeVoiesTrainKey(`Train ${num}`);
+  return map.get(trainKey) || map.get(normalizeVoiesTrainKey(num)) || null;
+}
+
+function resolveVoieForStop({ voiesMap, stopName, baseTimeRaw }){
+  if (!(voiesMap instanceof Map) || !stopName || !baseTimeRaw) return null;
+  const key = normalizeVoiesStopKey(`${stopName}|${ft(baseTimeRaw)}`);
+  if (!key) return null;
+  return voiesMap.get(key) || null;
+}
+
+function formatVoieLabel(raw){
+  const val = String(raw || '').trim();
+  if (!val) return '';
+  const cleaned = val.replace(/\s+/g, ' ');
+  if (/^(voie|quai)\s/i.test(cleaned)) return cleaned;
+  if (/^[A-Za-z0-9]+$/.test(cleaned)) return `Voie ${cleaned}`;
+  return cleaned;
+}
+
+function formatClockWithVoie(clock, voie){
+  if (!clock || !voie) return clock;
+  const label = formatVoieLabel(voie);
+  if (!label) return clock;
+  return `${clock} <span class="voie-info">– ${escapeHtml(label)}</span>`;
+}
 
 async function loadCompoData() {
   try {
@@ -8198,7 +8299,11 @@ function addManualTrain(){
     $('#trainInfo').html('<p>Chargement de vos bétaillères…</p>');
 
     try {
-      await loadCompoData();
+      await Promise.all([
+        loadCompoData(),
+        loadVoiesByTrain().catch(() => null)
+      ]);
+      
 
       /* ===== Helper compo (US / UM / UM3) ===== */
       function getCompoClass(comp){
@@ -8293,7 +8398,8 @@ if (!newStart) {
           }
         }
         
-        results[num] = { train, impacted, newStart, newEnd, disruptions, disruptionCauses };
+        const voies = getVoiesForTrain(num);
+        results[num] = { train, impacted, newStart, newEnd, disruptions, disruptionCauses, voies };
       } catch (e) {
         console.error("Erreur lors de la requête API:", e);
         results[num] = { error: 'Non prévu' };
@@ -8552,6 +8658,11 @@ const stopHasSchedule = (result, stopName) => {
             : null;
         const hasDelayFromImpact = Number.isFinite(delayFromImpactRaw) && delayFromImpactRaw > 0;
 
+        // voie
+        const voieLabel = resolveVoieForStop({ voiesMap: result.voies, stopName, baseTimeRaw: base });
+        const baseClock = ft(base);
+        const baseWithVoie = base ? formatClockWithVoie(baseClock, voieLabel) : '';
+
         // statuts
         const departureDeleted = imp?.departure_status === 'deleted';
         const arrivalDeleted   = imp?.arrival_status === 'deleted';
@@ -8587,7 +8698,7 @@ const stopHasSchedule = (result, stopName) => {
           continue;
         }
 
-        let content = ft(base);
+        let content = baseWithVoie || baseClock;
 
         const isFirstStop = stopName === result.train.stop_times[0]?.stop_point?.name;
         const isLastStop  = stopName === result.train.stop_times[result.train.stop_times.length - 1]?.stop_point?.name;
@@ -8606,11 +8717,11 @@ const stopHasSchedule = (result, stopName) => {
           const hasAmended = !!amended;
           const hasBase = !!base;
           const diffMinutes = (hasAmended && hasBase) ? dl(base, amended) : null;
-          const mainTime = hasAmended && (!hasBase || diffMinutes !== 0) ? ft(amended) : ft(base);
+          const mainTimeRaw = hasAmended && (!hasBase || diffMinutes !== 0) ? ft(amended) : (baseWithVoie || baseClock);
           const baseStrike = (hasAmended && hasBase && diffMinutes > 0)
-            ? `<span class="delay-strike">${ft(base)}</span><br>`
+            ? `<span class="delay-strike">${baseWithVoie || baseClock}</span><br>`
             : '';
-          content = `${baseStrike}<span class="new-start">${mainTime}</span>`;     
+          content = `${baseStrike}<span class="new-start">${mainTimeRaw}</span>`;   
         } else if (
           isStopDeleted ||
           (newStartIndex >= 0 && index >= 0 && index < newStartIndex) ||
@@ -8618,12 +8729,12 @@ const stopHasSchedule = (result, stopName) => {
         ) {
           content = `<span class="deleted">${content}</span>`;
         } else if (amended && dl(base, amended) > 0) {
-          content = `<span class="delay-strike">${ft(base)}</span><br><span class="delayed">${ft(amended)}</span>`;
+          content = `<span class="delay-strike">${baseWithVoie || baseClock}</span><br><span class="delayed">${ft(amended)}</span>`;
           } else if (hasDelayFromImpact) {
           const roundedDelay = Math.round(delayFromImpactRaw);
           const fallbackClock = base ? computeRetardedTime(base, delayFromImpactRaw) : null;
           const delayLabel = fallbackClock ? fallbackClock : `+${roundedDelay} min`;
-          const baseStrike = base ? `<span class="delay-strike">${ft(base)}</span><br>` : '';
+          const baseStrike = base ? `<span class="delay-strike">${baseWithVoie || baseClock}</span><br>` : '';
           content = `${baseStrike}<span class="delayed">${delayLabel}</span>`;
         } else if (isFirstStop || isLastStop) {
           content = `<strong>${content}</strong>`;
@@ -9346,6 +9457,7 @@ const normalized = mergeGtfsNormalizedPayloads(datasetResults.map(r => r.normali
 // 1er chargement au load (frais)
 window.addEventListener('load', () => {
   loadCompoData(); // ← optionnel : charge Compotrains.json au démarrage
+  loadVoiesByTrain().catch(err => console.warn('[Voies] Préchargement échoué', err?.message || err));
   loadGtfsRetards({ forceFresh: true })
     .catch(err => console.error("Erreur GTFS-RT au load:", err));
 });
