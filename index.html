@@ -822,6 +822,21 @@ table[data-snapshotting="true"] tbody tr:nth-child(even) {
     color: #ff8a00;
     font-weight: 600;
   }
+.voie-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    margin-top: 4px;
+    padding: 2px 8px;
+    border-radius: 10px;
+    font-size: 0.78em;
+    letter-spacing: 0.04em;
+    color: #00f0ff;
+    background: rgba(0, 240, 255, 0.08);
+    border: 1px solid rgba(0, 240, 255, 0.4);
+    text-shadow: 0 0 4px rgba(0, 240, 255, 0.6);
+    white-space: nowrap;
+  }
   .supprimé {
       color: #ff4c4c;
     }
@@ -3891,7 +3906,122 @@ async function loadCompoData() {
     console.error("Erreur lors du chargement des compositions :", error);
   }
 }
+/* ---------- VOIES / QUAIS PAR TRAIN ---------- */
+const VOIES_BY_TRAIN_URL = 'https://vps.labetaillere.fr/gtfs/voies_by_train.json';
+let VOIES_BY_TRAIN_CACHE = { map: null, fetchedAt: 0 };
 
+function normalizeVoieLabel(label) {
+  if (label == null) return '';
+  return String(label)
+    .replace(/^"|"$/g, '')
+    .replace(/^(voie\s+)/i, '')
+    .trim();
+}
+
+function parseVoieEntry(entry, stationHint = null) {
+  let station = stationHint || null;
+  let voie = null;
+
+  if (entry == null) return { station: null, voie: null };
+
+  if (Array.isArray(entry)) {
+    if (!station && entry.length > 0) station = entry[0];
+    if (entry.length > 2) voie = entry[2];
+    else if (entry.length > 1) voie = entry[1];
+  } else if (typeof entry === 'object') {
+    station = station
+      || entry.station
+      || entry.stop
+      || entry.name
+      || entry.gare
+      || entry.label
+      || entry[0];
+    voie = entry.voie
+      ?? entry.platform
+      ?? entry.platform_code
+      ?? entry.quai
+      ?? entry.track
+      ?? entry.platformName
+      ?? entry.track_number
+      ?? entry.value;
+  } else if (typeof entry === 'string') {
+    const parts = entry.split('|');
+    if (!station && parts.length) station = parts[0].trim();
+    const lastPart = parts.length > 1 ? parts.slice(1).join('|') : entry;
+    const voieMatch = lastPart.match(/"?([A-Za-z0-9]+\s?BIS?)"?$/i);
+    voie = voieMatch ? voieMatch[1] : lastPart;
+  }
+
+  const voieLabel = normalizeVoieLabel(voie);
+  return { station: station || null, voie: voieLabel || null };
+}
+
+function parseVoiesPayload(raw) {
+  const map = new Map();
+  if (!raw || typeof raw !== 'object') return map;
+
+  Object.entries(raw).forEach(([trainKey, stops]) => {
+    const trainNumber = normalizeTrainNumberKey(extractTrainNumberCandidate(trainKey) || trainKey);
+    if (!trainNumber) return;
+
+    const stationMap = new Map();
+    const addStation = (stationName, voie) => {
+      if (!stationName || !voie) return;
+      const normStation = normalizeStationName(stationName);
+      if (!normStation) return;
+      if (!stationMap.has(normStation)) {
+        stationMap.set(normStation, { voie, station: stationName });
+      }
+    };
+
+    const handleEntry = (entry, stationHint = null) => {
+      const { station, voie } = parseVoieEntry(entry, stationHint);
+      if (station && voie) addStation(station, voie);
+    };
+
+    if (Array.isArray(stops)) {
+      stops.forEach(item => handleEntry(item));
+    } else if (stops && typeof stops === 'object') {
+      Object.entries(stops).forEach(([stationName, value]) => {
+        if (Array.isArray(value)) handleEntry(value, stationName);
+        else if (value && typeof value === 'object') handleEntry({ station: stationName, ...value });
+        else handleEntry({ station: stationName, voie: value });
+      });
+    }
+
+    if (stationMap.size) map.set(trainNumber, stationMap);
+  });
+
+  return map;
+}
+
+async function loadVoiesByTrain() {
+  if (VOIES_BY_TRAIN_CACHE.map) return VOIES_BY_TRAIN_CACHE.map;
+  try {
+    const resp = await fetch(VOIES_BY_TRAIN_URL, { cache: 'no-store' });
+    if (!resp.ok) throw new Error('HTTP ' + resp.status);
+    const data = await resp.json();
+    VOIES_BY_TRAIN_CACHE = { map: parseVoiesPayload(data), fetchedAt: Date.now() };
+  } catch (err) {
+    console.warn('[VOIES] Impossible de charger les voies par train:', err);
+    VOIES_BY_TRAIN_CACHE = { map: new Map(), fetchedAt: Date.now(), error: err };
+  }
+  return VOIES_BY_TRAIN_CACHE.map;
+}
+
+function voieForTrainStop(trainNumber, stopName) {
+  if (!trainNumber || !stopName) return null;
+  const map = VOIES_BY_TRAIN_CACHE.map;
+  if (!map) return null;
+  const normTrain = normalizeTrainNumberKey(trainNumber);
+  const normStation = normalizeStationName(stopName);
+  if (!normTrain || !normStation) return null;
+  const stationMap = map.get(normTrain);
+  if (!stationMap) return null;
+  const entry = stationMap.get(normStation);
+  return entry?.voie || null;
+}
+    
 /* ---------- LIGNE : GARES + OUTILS D’ORDRE/SÉLECTEUR ---------- */
 const garesParLigne = [
   { code: "82001000", nom: "Luxembourg", principal: true },
@@ -8199,6 +8329,7 @@ function addManualTrain(){
 
     try {
       await loadCompoData();
+      await loadVoiesByTrain();
 
       /* ===== Helper compo (US / UM / UM3) ===== */
       function getCompoClass(comp){
@@ -8629,7 +8760,13 @@ const stopHasSchedule = (result, stopName) => {
           content = `<strong>${content}</strong>`;
         }
 
-       const baseAttr = base ? ` data-base-time="${base}"` : '';
+        const voieLabel = voieForTrainStop(num, stopName);
+        if (voieLabel) {
+          const safeVoie = escapeHtml(voieLabel);
+          content += `<div class="voie-badge" aria-label="Voie ${safeVoie}">Voie ${safeVoie}</div>`;
+        }
+
+        const baseAttr = base ? ` data-base-time="${base}"` : '';
         html += `<td${classAttr}${baseAttr}>${content}</td>`;
       }
 
