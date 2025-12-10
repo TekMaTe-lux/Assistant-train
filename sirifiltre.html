@@ -1,0 +1,331 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <title>Voies – Ligne Nancy &lt;=&gt; Metz &lt;=&gt; Thionville &lt;=&gt; Luxembourg</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    body {
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: #020617;
+      color: #e5e7eb;
+      margin: 0;
+      padding: 20px;
+    }
+    h1 {
+      font-size: 1.3rem;
+      margin-bottom: 0.25rem;
+    }
+    .card {
+      max-width: 980px;
+      margin: 0 auto;
+      background: #020617;
+      border-radius: 14px;
+      border: 1px solid #1f2937;
+      padding: 16px 20px 20px;
+      box-shadow: 0 18px 45px rgba(0,0,0,0.6);
+    }
+    button {
+      cursor: pointer;
+      border-radius: 999px;
+      padding: 8px 16px;
+      border: none;
+      font-size: 0.9rem;
+      margin-right: 8px;
+      margin-bottom: 8px;
+    }
+    #scan-btn {
+      background: #22c55e;
+      color: #022c22;
+      font-weight: 600;
+    }
+    #download-btn {
+      background: #0f172a;
+      color: #e5e7eb;
+      border: 1px solid #4b5563;
+    }
+    button:disabled {
+      opacity: 0.5;
+      cursor: default;
+    }
+    pre {
+      background: #020617;
+      color: #bbf7d0;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+      font-size: 12px;
+      padding: 10px;
+      border-radius: 8px;
+      border: 1px solid #1f2937;
+      max-height: 420px;
+      overflow: auto;
+      white-space: pre-wrap;
+      word-wrap: break-word;
+    }
+    .small {
+      font-size: 0.8rem;
+      color: #9ca3af;
+      margin-top: 8px;
+    }
+    code {
+      background: #111827;
+      padding: 2px 5px;
+      border-radius: 4px;
+      font-size: 0.8rem;
+    }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>Voies pour la ligne Nancy – Metz – Thionville – Luxembourg</h1>
+    <p style="font-size:0.9rem; color:#d1d5db;">
+      Cet outil appelle le flux public <code>sncf-siri-lite-estimated-timetable</code> (XML),
+      mais ne garde que les arrêts situés sur&nbsp;:
+      <br>
+      <strong>Nancy, Pont-à-Mousson, Pagny-sur-Moselle, Metz, Thionville, Luxembourg</strong>.
+      <br>
+      Pour chaque train, tu récupères les gares de ce corridor avec les numéros de voie.
+    </p>
+
+    <div style="margin:12px 0 10px;">
+      <button id="scan-btn">🔍 Scanner la ligne Nancy–Lux</button>
+      <button id="download-btn" disabled>💾 Télécharger le JSON</button>
+    </div>
+
+    <pre id="output">Clique sur "Scanner la ligne Nancy–Lux" pour commencer…</pre>
+
+    <p class="small">
+      Remarque&nbsp;: si certains trains n’ont pas de voie affichée pour une gare donnée,
+      c’est que SNCF ne la publie pas (ou pas encore) dans SIRI Lite à cet instant.
+    </p>
+  </div>
+
+  <script>
+    const SIRI_URL = 'https://proxy.transport.data.gouv.fr/resource/sncf-siri-lite-estimated-timetable';
+    const SIRI_NS = 'http://www.siri.org.uk/siri';
+
+    const scanBtn = document.getElementById('scan-btn');
+    const downloadBtn = document.getElementById('download-btn');
+    const outputEl = document.getElementById('output');
+
+    let lastBlobUrl = null;
+    let lastData = null;
+
+    // --- Config des gares du corridor Nancy <-> Lux ------------------------
+
+    const targetStopNames = [
+      'Nancy',
+      'Nancy Ville',
+      'Pont-à-Mousson',
+      'Pont a Mousson',
+      'Pagny-sur-Moselle',
+      'Pagny sur Moselle',
+      'Metz',
+      'Metz Ville',
+      'Thionville',
+      'Luxembourg'
+    ];
+
+    function normalize(str) {
+      return (str || '')
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '') // accents
+        .toLowerCase()
+        .trim();
+    }
+
+    const targetNorms = targetStopNames.map(normalize);
+
+    function isCorridorStopName(stopName) {
+      const n = normalize(stopName);
+      // on teste l'égalité, ou si le nom contient un des modèles
+      return targetNorms.some(t => n === t || n.includes(t));
+    }
+
+    // --- Aide pour lire les balises XML dans le namespace SIRI -------------
+
+    function getFirstTextNS(parent, localName) {
+      const el = parent.getElementsByTagNameNS(SIRI_NS, localName)[0];
+      if (!el) return null;
+      const txt = (el.textContent || '').trim();
+      return txt || null;
+    }
+
+    // -----------------------------------------------------------------------
+
+    scanBtn.addEventListener('click', async () => {
+      outputEl.textContent = '⏳ Récupération du flux SIRI Lite EstimatedTimetable (XML)...\n';
+      scanBtn.disabled = true;
+      downloadBtn.disabled = true;
+
+      try {
+        const res = await fetch(SIRI_URL);
+        const rawText = await res.text();
+
+        if (!res.ok) {
+          outputEl.textContent +=
+            `\n❌ HTTP ${res.status} ${res.statusText}\n\nRéponse brute (début) :\n` +
+            rawText.slice(0, 500);
+          return;
+        }
+
+        const parser = new DOMParser();
+        const xmlDoc = parser.parseFromString(rawText, 'application/xml');
+
+        const parseError = xmlDoc.getElementsByTagName('parsererror')[0];
+        if (parseError) {
+          outputEl.textContent +=
+            '\n❌ Erreur de parsing XML.\n\nDébut de la réponse :\n\n' +
+            rawText.slice(0, 500);
+          console.error('parsererror:', parseError.textContent);
+          return;
+        }
+
+        // Tous les EstimatedVehicleJourney
+        const evjNodes = xmlDoc.getElementsByTagNameNS(SIRI_NS, 'EstimatedVehicleJourney');
+        const allVehicleJourneysCount = evjNodes.length;
+
+        // On agrège par trainRef
+        const trainsMap = new Map();
+
+        for (let i = 0; i < evjNodes.length; i++) {
+          const evj = evjNodes[i];
+
+          const lineRef = getFirstTextNS(evj, 'LineRef');
+          const routeName = getFirstTextNS(evj, 'PublishedLineName');
+          const datedVJRef = getFirstTextNS(evj, 'DatedVehicleJourneyRef');
+          const vjRef = getFirstTextNS(evj, 'VehicleJourneyRef');
+          const trainRef = datedVJRef || vjRef || ('NOREF_' + i);
+
+          const callNodes = evj.getElementsByTagNameNS(SIRI_NS, 'EstimatedCall');
+
+          for (let j = 0; j < callNodes.length; j++) {
+            const call = callNodes[j];
+
+            const stopPointRef = getFirstTextNS(call, 'StopPointRef');
+            const stopName = getFirstTextNS(call, 'StopPointName') || '';
+
+            // ⬇️ on ne garde que les arrêts sur le corridor
+            if (!isCorridorStopName(stopName)) continue;
+
+            const arrivalPlatform = getFirstTextNS(call, 'ArrivalPlatformName');
+            const departurePlatform = getFirstTextNS(call, 'DeparturePlatformName');
+
+            const aimedArrivalTime =
+              getFirstTextNS(call, 'AimedArrivalTime') ||
+              getFirstTextNS(call, 'AimedArrival');
+
+            const expectedArrivalTime =
+              getFirstTextNS(call, 'ExpectedArrivalTime') ||
+              getFirstTextNS(call, 'EstimatedArrivalTime');
+
+            const aimedDepartureTime =
+              getFirstTextNS(call, 'AimedDepartureTime') ||
+              getFirstTextNS(call, 'AimedDeparture');
+
+            const expectedDepartureTime =
+              getFirstTextNS(call, 'ExpectedDepartureTime') ||
+              getFirstTextNS(call, 'EstimatedDepartureTime');
+
+            // Création ou récupération de l'entrée train
+            if (!trainsMap.has(trainRef)) {
+              trainsMap.set(trainRef, {
+                trainRef,
+                lineRef,
+                routeName,
+                calls: []
+              });
+            }
+
+            const train = trainsMap.get(trainRef);
+            train.calls.push({
+              stopPointRef,
+              stopName,
+              aimedArrivalTime,
+              expectedArrivalTime,
+              aimedDepartureTime,
+              expectedDepartureTime,
+              arrivalPlatform,
+              departurePlatform
+            });
+          }
+        }
+
+        // Convertir la map en tableau et ne garder que les trains qui ont au moins un arrêt sur le corridor
+        const trains = Array.from(trainsMap.values())
+          .filter(t => t.calls.length > 0);
+
+        // Optionnel : on trie les arrêts de chaque train par heure prévue de départ
+        for (const t of trains) {
+          t.calls.sort((a, b) => {
+            const ta = a.aimedDepartureTime || a.expectedDepartureTime || '';
+            const tb = b.aimedDepartureTime || b.expectedDepartureTime || '';
+            return ta.localeCompare(tb);
+          });
+        }
+
+        lastData = trains;
+
+        // --- Affichage dans la page ---------------------------------------
+        let txt = '';
+        txt += '✅ Scan terminé.\n\n';
+        txt += `- Véhicules (EstimatedVehicleJourney) dans tout le flux : ${allVehicleJourneysCount}\n`;
+        txt += `- Trains passant par le corridor Nancy–Metz–Thionville–Lux : ${trains.length}\n\n`;
+
+        if (trains.length === 0) {
+          txt += 'Aucun train du flux actuel ne passe par les gares ciblées (ou pas au moment présent).\n';
+        } else {
+          txt += 'Extrait JSON (max 10 trains) :\n\n';
+          txt += JSON.stringify(trains.slice(0, 10), null, 2);
+          if (trains.length > 10) {
+            txt += `\n\n(... ${trains.length - 10} trains supplémentaires non affichés)`;
+          }
+        }
+
+        outputEl.textContent = txt;
+
+        // --- Préparation du téléchargement -------------------------------
+        if (trains.length > 0) {
+          if (lastBlobUrl) {
+            URL.revokeObjectURL(lastBlobUrl);
+          }
+          const blob = new Blob([JSON.stringify(trains, null, 2)], {
+            type: 'application/json'
+          });
+          lastBlobUrl = URL.createObjectURL(blob);
+          downloadBtn.disabled = false;
+        } else {
+          downloadBtn.disabled = true;
+        }
+      } catch (err) {
+        console.error(err);
+        outputEl.textContent += '\n❌ Erreur JS : ' + err.message;
+        downloadBtn.disabled = true;
+      } finally {
+        scanBtn.disabled = false;
+      }
+    });
+
+    downloadBtn.addEventListener('click', () => {
+      if (!lastBlobUrl || !lastData) return;
+
+      const a = document.createElement('a');
+      const now = new Date();
+      const pad = (n) => String(n).padStart(2, '0');
+      const filename =
+        'voies_Nancy-Metz-Thionville-Lux_' +
+        now.getFullYear() +
+        pad(now.getMonth() + 1) +
+        pad(now.getDate()) + '_' +
+        pad(now.getHours()) +
+        pad(now.getMinutes()) +
+        '.json';
+
+      a.href = lastBlobUrl;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+    });
+  </script>
+</body>
+</html>
