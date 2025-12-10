@@ -93,6 +93,7 @@
 
 <script>
   const SIRI_URL = 'https://proxy.transport.data.gouv.fr/resource/sncf-siri-lite-estimated-timetable';
+  const SIRI_NS = 'http://www.siri.org.uk/siri';
 
   const scanBtn = document.getElementById('scan-btn');
   const downloadBtn = document.getElementById('download-btn');
@@ -101,84 +102,87 @@
   let lastBlobUrl = null;
   let lastData = null;
 
+  function getFirstTextNS(parent, localName) {
+    const el = parent.getElementsByTagNameNS(SIRI_NS, localName)[0];
+    if (!el) return null;
+    const txt = (el.textContent || '').trim();
+    return txt || null;
+  }
+
   scanBtn.addEventListener('click', async () => {
-    outputEl.textContent = '⏳ Récupération du flux SIRI Lite EstimatedTimetable...\n';
+    outputEl.textContent = '⏳ Récupération du flux SIRI Lite EstimatedTimetable (XML)...\n';
     scanBtn.disabled = true;
     downloadBtn.disabled = true;
 
     try {
       const res = await fetch(SIRI_URL);
-
-      const rawText = await res.text();  // ⬅️ on lit toujours en texte d’abord
+      const rawText = await res.text();
 
       if (!res.ok) {
-        // Si pas 2xx, on affiche la réponse brute (souvent HTML d’erreur)
         outputEl.textContent +=
           `\n❌ HTTP ${res.status} ${res.statusText}\n\nRéponse brute (début) :\n` +
           rawText.slice(0, 500);
         return;
       }
 
-      let data;
-      try {
-        data = JSON.parse(rawText);
-      } catch (e) {
-        // Ici, ce n’est pas du JSON → on affiche un extrait pour inspecter
+      // 🔁 Parse XML
+      const parser = new DOMParser();
+      const xmlDoc = parser.parseFromString(rawText, 'application/xml');
+
+      const parseError = xmlDoc.getElementsByTagName('parsererror')[0];
+      if (parseError) {
         outputEl.textContent +=
-          '\n❌ La réponse reçue ne semble pas être du JSON.\n' +
-          'Voici le début du contenu retourné :\n\n' +
+          '\n❌ Erreur de parsing XML.\n\nDébut de la réponse :\n\n' +
           rawText.slice(0, 500);
-        console.error('Réponse non-JSON :', rawText);
+        console.error('parsererror:', parseError.textContent);
         return;
       }
 
-      // À partir d’ici, on est sûr d’avoir du JSON
-      const deliveries = data?.Siri?.ServiceDelivery?.EstimatedTimetableDelivery || [];
-      const allVehicleJourneys = [];
-
-      for (const del of deliveries) {
-        const frames = del?.EstimatedJourneyVersionFrame || [];
-        for (const frame of frames) {
-          const journeys = frame?.EstimatedVehicleJourney || [];
-          allVehicleJourneys.push(...journeys);
-        }
-      }
+      // 🔍 On récupère tous les EstimatedVehicleJourney
+      const evjNodes = xmlDoc.getElementsByTagNameNS(SIRI_NS, 'EstimatedVehicleJourney');
+      const allVehicleJourneysCount = evjNodes.length;
 
       const results = [];
 
-      for (const evj of allVehicleJourneys) {
-        const lineRef = evj.LineRef || null;
-        const routeName =
-          (evj.PublishedLineName && (evj.PublishedLineName.value || evj.PublishedLineName)) || null;
-        const trainRef =
-          evj.DatedVehicleJourneyRef ||
-          evj.VehicleJourneyRef ||
-          null;
+      for (let i = 0; i < evjNodes.length; i++) {
+        const evj = evjNodes[i];
 
-        const estimatedCalls =
-          (evj.EstimatedCalls && evj.EstimatedCalls.EstimatedCall) || [];
+        const lineRef = getFirstTextNS(evj, 'LineRef');
+        const routeName = getFirstTextNS(evj, 'PublishedLineName');
+        const datedVJRef = getFirstTextNS(evj, 'DatedVehicleJourneyRef');
+        const vjRef = getFirstTextNS(evj, 'VehicleJourneyRef');
+        const trainRef = datedVJRef || vjRef || null;
 
-        for (const call of estimatedCalls) {
-          const stopPointRef = call.StopPointRef || null;
-          const stopName =
-            (call.StopPointName && (call.StopPointName.value || call.StopPointName)) || null;
+        // Tous les EstimatedCall de CE véhicule
+        const callNodes = evj.getElementsByTagNameNS(SIRI_NS, 'EstimatedCall');
 
-          const arrivalPlatform =
-            (call.ArrivalPlatformName && (call.ArrivalPlatformName.value || call.ArrivalPlatformName)) || null;
-          const departurePlatform =
-            (call.DeparturePlatformName && (call.DeparturePlatformName.value || call.DeparturePlatformName)) || null;
+        for (let j = 0; j < callNodes.length; j++) {
+          const call = callNodes[j];
 
+          const stopPointRef = getFirstTextNS(call, 'StopPointRef');
+          const stopName = getFirstTextNS(call, 'StopPointName');
+
+          const arrivalPlatform = getFirstTextNS(call, 'ArrivalPlatformName');
+          const departurePlatform = getFirstTextNS(call, 'DeparturePlatformName');
+
+          // On ne garde que s'il y a une info de voie
           if (!arrivalPlatform && !departurePlatform) continue;
 
           const aimedArrivalTime =
-            call.AimedArrivalTime || call.AimedArrival || null;
+            getFirstTextNS(call, 'AimedArrivalTime') ||
+            getFirstTextNS(call, 'AimedArrival');
+
           const expectedArrivalTime =
-            call.ExpectedArrivalTime || call.EstimatedArrivalTime || null;
+            getFirstTextNS(call, 'ExpectedArrivalTime') ||
+            getFirstTextNS(call, 'EstimatedArrivalTime');
 
           const aimedDepartureTime =
-            call.AimedDepartureTime || call.AimedDeparture || null;
+            getFirstTextNS(call, 'AimedDepartureTime') ||
+            getFirstTextNS(call, 'AimedDeparture');
+
           const expectedDepartureTime =
-            call.ExpectedDepartureTime || call.EstimatedDepartureTime || null;
+            getFirstTextNS(call, 'ExpectedDepartureTime') ||
+            getFirstTextNS(call, 'EstimatedDepartureTime');
 
           results.push({
             lineRef,
@@ -200,7 +204,7 @@
 
       let txt = '';
       txt += '✅ Scan terminé.\n\n';
-      txt += `- Véhicules trouvés : ${allVehicleJourneys.length}\n`;
+      txt += `- Véhicules trouvés (EstimatedVehicleJourney) : ${allVehicleJourneysCount}\n`;
       txt += `- Arrêts avec une voie : ${results.length}\n\n`;
 
       if (results.length === 0) {
@@ -258,5 +262,6 @@
     document.body.removeChild(a);
   });
 </script>
+
 </body>
 </html>
