@@ -90,155 +90,173 @@
     </p>
   </div>
 
-  <script>
-    const SIRI_URL = 'https://proxy.transport.data.gouv.fr/resource/sncf-siri-lite-estimated-timetable';
 
-    const scanBtn = document.getElementById('scan-btn');
-    const downloadBtn = document.getElementById('download-btn');
-    const outputEl = document.getElementById('output');
+<script>
+  const SIRI_URL = 'https://proxy.transport.data.gouv.fr/resource/sncf-siri-lite-estimated-timetable';
 
-    let lastBlobUrl = null;
-    let lastData = null;
+  const scanBtn = document.getElementById('scan-btn');
+  const downloadBtn = document.getElementById('download-btn');
+  const outputEl = document.getElementById('output');
 
-    scanBtn.addEventListener('click', async () => {
-      outputEl.textContent = '⏳ Récupération du flux SIRI Lite EstimatedTimetable...\n';
-      scanBtn.disabled = true;
-      downloadBtn.disabled = true;
+  let lastBlobUrl = null;
+  let lastData = null;
 
-      try {
-        const res = await fetch(SIRI_URL);
-        if (!res.ok) {
-          throw new Error('Réponse HTTP ' + res.status + ' ' + res.statusText);
-        }
+  scanBtn.addEventListener('click', async () => {
+    outputEl.textContent = '⏳ Récupération du flux SIRI Lite EstimatedTimetable...\n';
+    scanBtn.disabled = true;
+    downloadBtn.disabled = true;
 
-        const data = await res.json();
+    try {
+      const res = await fetch(SIRI_URL);
 
-        // Navigation dans la structure SIRI Lite
-        const deliveries = data?.Siri?.ServiceDelivery?.EstimatedTimetableDelivery || [];
-        const allVehicleJourneys = [];
+      const rawText = await res.text();  // ⬅️ on lit toujours en texte d’abord
 
-        for (const del of deliveries) {
-          const frames = del?.EstimatedJourneyVersionFrame || [];
-          for (const frame of frames) {
-            const journeys = frame?.EstimatedVehicleJourney || [];
-            allVehicleJourneys.push(...journeys);
-          }
-        }
-
-        const results = [];
-
-        for (const evj of allVehicleJourneys) {
-          const lineRef = evj.LineRef || null;
-          const routeName =
-            (evj.PublishedLineName && (evj.PublishedLineName.value || evj.PublishedLineName)) || null;
-          const trainRef =
-            evj.DatedVehicleJourneyRef ||
-            evj.VehicleJourneyRef ||
-            null;
-
-          const estimatedCalls =
-            (evj.EstimatedCalls && evj.EstimatedCalls.EstimatedCall) || [];
-
-          for (const call of estimatedCalls) {
-            const stopPointRef = call.StopPointRef || null;
-            const stopName =
-              (call.StopPointName && (call.StopPointName.value || call.StopPointName)) || null;
-
-            const arrivalPlatform =
-              (call.ArrivalPlatformName && (call.ArrivalPlatformName.value || call.ArrivalPlatformName)) || null;
-            const departurePlatform =
-              (call.DeparturePlatformName && (call.DeparturePlatformName.value || call.DeparturePlatformName)) || null;
-
-            // On ne garde que si on a une info de voie
-            if (!arrivalPlatform && !departurePlatform) continue;
-
-            const aimedArrivalTime =
-              call.AimedArrivalTime || call.AimedArrival || null;
-            const expectedArrivalTime =
-              call.ExpectedArrivalTime || call.EstimatedArrivalTime || null;
-
-            const aimedDepartureTime =
-              call.AimedDepartureTime || call.AimedDeparture || null;
-            const expectedDepartureTime =
-              call.ExpectedDepartureTime || call.EstimatedDepartureTime || null;
-
-            results.push({
-              lineRef,
-              routeName,
-              trainRef,
-              stopPointRef,
-              stopName,
-              aimedArrivalTime,
-              expectedArrivalTime,
-              aimedDepartureTime,
-              expectedDepartureTime,
-              arrivalPlatform,
-              departurePlatform
-            });
-          }
-        }
-
-        lastData = results;
-
-        let txt = '';
-        txt += '✅ Scan terminé.\n\n';
-        txt += `- Véhicules trouvés : ${allVehicleJourneys.length}\n`;
-        txt += `- Arrêts avec une voie : ${results.length}\n\n`;
-
-        if (results.length === 0) {
-          txt += 'Aucun champ ArrivalPlatformName / DeparturePlatformName trouvé dans ce flux.\n';
-        } else {
-          txt += 'Extrait JSON (max 30 lignes) :\n\n';
-          txt += JSON.stringify(results.slice(0, 30), null, 2);
-          if (results.length > 30) {
-            txt += `\n\n(... ${results.length - 30} lignes supplémentaires non affichées)`;
-          }
-        }
-
-        outputEl.textContent = txt;
-
-        if (results.length > 0) {
-          if (lastBlobUrl) {
-            URL.revokeObjectURL(lastBlobUrl);
-          }
-          const blob = new Blob([JSON.stringify(results, null, 2)], {
-            type: 'application/json'
-          });
-          lastBlobUrl = URL.createObjectURL(blob);
-          downloadBtn.disabled = false;
-        } else {
-          downloadBtn.disabled = true;
-        }
-      } catch (err) {
-        console.error(err);
-        outputEl.textContent += '\n❌ Erreur : ' + err.message;
-        downloadBtn.disabled = true;
-      } finally {
-        scanBtn.disabled = false;
+      if (!res.ok) {
+        // Si pas 2xx, on affiche la réponse brute (souvent HTML d’erreur)
+        outputEl.textContent +=
+          `\n❌ HTTP ${res.status} ${res.statusText}\n\nRéponse brute (début) :\n` +
+          rawText.slice(0, 500);
+        return;
       }
-    });
 
-    downloadBtn.addEventListener('click', () => {
-      if (!lastBlobUrl || !lastData) return;
+      let data;
+      try {
+        data = JSON.parse(rawText);
+      } catch (e) {
+        // Ici, ce n’est pas du JSON → on affiche un extrait pour inspecter
+        outputEl.textContent +=
+          '\n❌ La réponse reçue ne semble pas être du JSON.\n' +
+          'Voici le début du contenu retourné :\n\n' +
+          rawText.slice(0, 500);
+        console.error('Réponse non-JSON :', rawText);
+        return;
+      }
 
-      const a = document.createElement('a');
-      const now = new Date();
-      const pad = (n) => String(n).padStart(2, '0');
-      const filename =
-        'siri_voies_' +
-        now.getFullYear() +
-        pad(now.getMonth() + 1) +
-        pad(now.getDate()) + '_' +
-        pad(now.getHours()) +
-        pad(now.getMinutes()) +
-        '.json';
+      // À partir d’ici, on est sûr d’avoir du JSON
+      const deliveries = data?.Siri?.ServiceDelivery?.EstimatedTimetableDelivery || [];
+      const allVehicleJourneys = [];
 
-      a.href = lastBlobUrl;
-      a.download = filename;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-    });
-  </script>
+      for (const del of deliveries) {
+        const frames = del?.EstimatedJourneyVersionFrame || [];
+        for (const frame of frames) {
+          const journeys = frame?.EstimatedVehicleJourney || [];
+          allVehicleJourneys.push(...journeys);
+        }
+      }
+
+      const results = [];
+
+      for (const evj of allVehicleJourneys) {
+        const lineRef = evj.LineRef || null;
+        const routeName =
+          (evj.PublishedLineName && (evj.PublishedLineName.value || evj.PublishedLineName)) || null;
+        const trainRef =
+          evj.DatedVehicleJourneyRef ||
+          evj.VehicleJourneyRef ||
+          null;
+
+        const estimatedCalls =
+          (evj.EstimatedCalls && evj.EstimatedCalls.EstimatedCall) || [];
+
+        for (const call of estimatedCalls) {
+          const stopPointRef = call.StopPointRef || null;
+          const stopName =
+            (call.StopPointName && (call.StopPointName.value || call.StopPointName)) || null;
+
+          const arrivalPlatform =
+            (call.ArrivalPlatformName && (call.ArrivalPlatformName.value || call.ArrivalPlatformName)) || null;
+          const departurePlatform =
+            (call.DeparturePlatformName && (call.DeparturePlatformName.value || call.DeparturePlatformName)) || null;
+
+          if (!arrivalPlatform && !departurePlatform) continue;
+
+          const aimedArrivalTime =
+            call.AimedArrivalTime || call.AimedArrival || null;
+          const expectedArrivalTime =
+            call.ExpectedArrivalTime || call.EstimatedArrivalTime || null;
+
+          const aimedDepartureTime =
+            call.AimedDepartureTime || call.AimedDeparture || null;
+          const expectedDepartureTime =
+            call.ExpectedDepartureTime || call.EstimatedDepartureTime || null;
+
+          results.push({
+            lineRef,
+            routeName,
+            trainRef,
+            stopPointRef,
+            stopName,
+            aimedArrivalTime,
+            expectedArrivalTime,
+            aimedDepartureTime,
+            expectedDepartureTime,
+            arrivalPlatform,
+            departurePlatform
+          });
+        }
+      }
+
+      lastData = results;
+
+      let txt = '';
+      txt += '✅ Scan terminé.\n\n';
+      txt += `- Véhicules trouvés : ${allVehicleJourneys.length}\n`;
+      txt += `- Arrêts avec une voie : ${results.length}\n\n`;
+
+      if (results.length === 0) {
+        txt += 'Aucun champ ArrivalPlatformName / DeparturePlatformName trouvé dans ce flux.\n';
+      } else {
+        txt += 'Extrait JSON (max 30 lignes) :\n\n';
+        txt += JSON.stringify(results.slice(0, 30), null, 2);
+        if (results.length > 30) {
+          txt += `\n\n(... ${results.length - 30} lignes supplémentaires non affichées)`;
+        }
+      }
+
+      outputEl.textContent = txt;
+
+      if (results.length > 0) {
+        if (lastBlobUrl) {
+          URL.revokeObjectURL(lastBlobUrl);
+        }
+        const blob = new Blob([JSON.stringify(results, null, 2)], {
+          type: 'application/json'
+        });
+        lastBlobUrl = URL.createObjectURL(blob);
+        downloadBtn.disabled = false;
+      } else {
+        downloadBtn.disabled = true;
+      }
+    } catch (err) {
+      console.error(err);
+      outputEl.textContent += '\n❌ Erreur JS : ' + err.message;
+      downloadBtn.disabled = true;
+    } finally {
+      scanBtn.disabled = false;
+    }
+  });
+
+  downloadBtn.addEventListener('click', () => {
+    if (!lastBlobUrl || !lastData) return;
+
+    const a = document.createElement('a');
+    const now = new Date();
+    const pad = (n) => String(n).padStart(2, '0');
+    const filename =
+      'siri_voies_' +
+      now.getFullYear() +
+      pad(now.getMonth() + 1) +
+      pad(now.getDate()) + '_' +
+      pad(now.getHours()) +
+      pad(now.getMinutes()) +
+      '.json';
+
+    a.href = lastBlobUrl;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+  });
+</script>
 </body>
 </html>
