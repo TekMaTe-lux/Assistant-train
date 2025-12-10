@@ -3966,12 +3966,14 @@ function normalizeVoiesPayload(data){
   return out;
 }
 
-async function loadVoiesByTrain(){
+async function loadVoiesByTrain({ forceFresh = false } = {}){
+  if (forceFresh) voiesByTrainPromise = null;
   if (voiesByTrainPromise) return voiesByTrainPromise;
 
   voiesByTrainPromise = (async () => {
     try {
-      const res = await fetch('https://vps.labetaillere.fr/gtfs/voies_by_train.json', { cache: 'no-store' });
+      const url = 'https://vps.labetaillere.fr/gtfs/voies_by_train.json' + (forceFresh ? `?t=${Date.now()}` : '');
+      const res = await fetch(url, { cache: 'no-store' });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const json = await res.json();
       window.voiesByTrainMap = normalizeVoiesPayload(json);
@@ -9124,7 +9126,13 @@ $('#refreshButton').off('click').on('click', async function () {
   const el = document.getElementById('lastUpdated');
   if (el) el.textContent = 'Actualisation en cours…';
   try {
-    await loadGtfsRetards({ forceFresh: true });
+    await Promise.all([
+      loadGtfsRetards({ forceFresh: true }),
+      loadVoiesByTrain({ forceFresh: true }).catch(err => {
+        console.warn('[Voies] Actualisation échouée', err?.message || err);
+        return null;
+      })
+    ]);
   } catch (e) {
     console.error('[GTFS-RT] Actualiser ->', e);
     alert("Échec de l'actualisation GTFS-RT.\n" + (e && e.message ? e.message : ''));
