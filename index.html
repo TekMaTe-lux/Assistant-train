@@ -3900,8 +3900,10 @@ if (typeof window.retardsGTFS_RAW === 'undefined') window.retardsGTFS_RAW = null
 if (typeof window.retardsGTFS_SOURCE === 'undefined') window.retardsGTFS_SOURCE = null;
 if (typeof window.compoData === 'undefined') window.compoData = {};
 if (typeof window.voiesByTrainMap === 'undefined') window.voiesByTrainMap = new Map();
+if (typeof window.cflVoiesByTrainMap === 'undefined') window.cflVoiesByTrainMap = new Map();
 
 let voiesByTrainPromise = null;
+let cflVoiesByTrainPromise = null;
 
 function normalizeVoiesTrainKey(raw){
   return String(raw || '')
@@ -3994,6 +3996,93 @@ function getVoiesForTrain(num){
   if (!map || !map.size) return null;
   const trainKey = normalizeVoiesTrainKey(`Train ${num}`);
   return map.get(trainKey) || map.get(normalizeVoiesTrainKey(num)) || null;
+}
+
+function normalizeCflVoiesTrainKey(raw){
+  const digits = String(raw || '').match(/(\d{4,6})/g);
+  if (digits && digits.length){
+    const last = digits[digits.length - 1];
+    return normalizeVoiesTrainKey(last);
+  }
+  return normalizeVoiesTrainKey(raw);
+}
+
+function normalizeCflVoiesPayload(data){
+  const out = new Map();
+  if (!data || typeof data !== 'object') return out;
+
+  const trainsData = (data.trains && typeof data.trains === 'object') ? data.trains : data;
+
+  Object.entries(trainsData).forEach(([trainKey, stops]) => {
+    const normalizedTrain = normalizeCflVoiesTrainKey(trainKey);
+    if (!normalizedTrain) return;
+
+    const stopMap = new Map();
+    if (stops && typeof stops === 'object') {
+      Object.entries(stops).forEach(([stopName, meta]) => {
+        const voie = (meta && typeof meta === 'object') ? (meta.platform || meta.voie || meta.track) : null;
+        const cleaned = String(voie || '').trim();
+        const normalizedStop = normalizeVoiesTrainKey(stopName);
+        if (normalizedStop && cleaned) stopMap.set(normalizedStop, cleaned);
+      });
+    }
+
+    if (stopMap.size) out.set(normalizedTrain, stopMap);
+  });
+
+  return out;
+}
+
+async function loadCflVoiesByTrain({ forceFresh = false } = {}){
+  if (forceFresh) cflVoiesByTrainPromise = null;
+  if (cflVoiesByTrainPromise) return cflVoiesByTrainPromise;
+
+  cflVoiesByTrainPromise = (async () => {
+    try {
+      const url = 'https://vps.labetaillere.fr/gtfs/retards_cfl.json' + (forceFresh ? `?t=${Date.now()}` : '');
+      const res = await fetch(url, { cache: 'no-store' });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const json = await res.json();
+      window.cflVoiesByTrainMap = normalizeCflVoiesPayload(json);
+      return window.cflVoiesByTrainMap;
+    } catch (err) {
+      console.warn('[CFL][Voies] Chargement échoué', err?.message || err);
+      window.cflVoiesByTrainMap = new Map();
+      return window.cflVoiesByTrainMap;
+    }
+  })();
+
+  return cflVoiesByTrainPromise;
+}
+
+function getCflVoiesForTrain(num){
+  if (!num) return null;
+  const map = (window.cflVoiesByTrainMap instanceof Map) ? window.cflVoiesByTrainMap : null;
+  if (!map || !map.size) return null;
+
+  const candidates = [];
+  const normalizedFromNumber = normalizeCflVoiesTrainKey(num);
+  if (normalizedFromNumber) candidates.push(normalizedFromNumber);
+
+  const digits = String(num || '').match(/(\d{4,6})/g);
+  if (digits && digits.length){
+    digits.forEach(d => {
+      const norm = normalizeCflVoiesTrainKey(d);
+      if (norm) candidates.push(norm);
+    });
+  }
+
+  for (const key of candidates){
+    if (map.has(key)) return map.get(key);
+  }
+  return null;
+}
+
+function resolveCflVoieForStop({ voiesMap, stopName }){
+  if (!(voiesMap instanceof Map) || !stopName) return null;
+  const stopKey = normalizeVoiesTrainKey(stopName);
+  if (!stopKey) return null;
+  return voiesMap.get(stopKey) || null;
 }
 
 function resolveVoieForStop({ voiesMap, stopName, baseTimeRaw, timeCandidates }){
@@ -8361,7 +8450,8 @@ function addManualTrain(){
     try {
       await Promise.all([
         loadCompoData(),
-        loadVoiesByTrain().catch(() => null)
+        loadVoiesByTrain().catch(() => null),
+        loadCflVoiesByTrain().catch(() => null)
       ]);
       
 
@@ -8459,7 +8549,8 @@ if (!newStart) {
         }
         
         const voies = getVoiesForTrain(num);
-        results[num] = { train, impacted, newStart, newEnd, disruptions, disruptionCauses, voies };
+        const cflVoies = getCflVoiesForTrain(num);
+        results[num] = { train, impacted, newStart, newEnd, disruptions, disruptionCauses, voies, cflVoies };
       } catch (e) {
         console.error("Erreur lors de la requête API:", e);
         results[num] = { error: 'Non prévu' };
@@ -8468,7 +8559,9 @@ if (!newStart) {
 
     for (const key of cflKeys) {
       try {
-        results[key] = await buildCflResult(key, { ymd: ymdDate });
+        const cflResult = await buildCflResult(key, { ymd: ymdDate });
+        const voies = getCflVoiesForTrain(key);
+        results[key] = { ...cflResult, voies, cflVoies: voies };
       } catch (err) {
         console.warn('[CFL] Erreur', err);
         results[key] = { error: 'Erreur CFL' };
@@ -8728,12 +8821,15 @@ const stopHasSchedule = (result, stopName) => {
           stop?.arrival_time,
           base
         ];
-        const voieLabel = resolveVoieForStop({
+        let voieLabel = resolveVoieForStop({
           voiesMap: result.voies,
           stopName,
           baseTimeRaw: base,
           timeCandidates: voieTimeCandidates
         });
+        if (!voieLabel) {
+          voieLabel = resolveCflVoieForStop({ voiesMap: result.cflVoies || result.voies, stopName });
+        }
         const baseClock = ft(base);
         const baseWithVoie = base ? formatClockWithVoie(baseClock, voieLabel) : '';
 
@@ -9144,6 +9240,10 @@ $('#refreshButton').off('click').on('click', async function () {
       loadVoiesByTrain({ forceFresh: true }).catch(err => {
         console.warn('[Voies] Actualisation échouée', err?.message || err);
         return null;
+     }),
+      loadCflVoiesByTrain({ forceFresh: true }).catch(err => {
+        console.warn('[CFL][Voies] Actualisation échouée', err?.message || err);
+        return null; 
       })
     ]);
   } catch (e) {
