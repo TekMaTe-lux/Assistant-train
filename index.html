@@ -3940,12 +3940,13 @@ function normalizeVoiesBaseTime(raw){
   return null;
 }
 
-function normalizeVoiesPayload(data){
+function normalizeVoiesPayload(data, { addCflAliases = false } = {}){
   const out = new Map();
   if (!data || typeof data !== 'object') return out;
   
-  // Certains flux encapsulent les trains dans { trains: { ... } }
-  const trainsData = (data.trains && typeof data.trains === 'object') ? data.trains : data;
+  // Certains flux encapsulent les trains dans { data: { ... } } ou { trains: { ... } }
+  const root = (data.data && typeof data.data === 'object') ? data.data : data;
+  const trainsData = (root.trains && typeof root.trains === 'object') ? root.trains : root;
 
   Object.entries(trainsData).forEach(([trainKey, rawEntries]) => {
     const normalizedTrain = normalizeVoiesTrainKey(trainKey);
@@ -3956,12 +3957,21 @@ function normalizeVoiesPayload(data){
     if (rawEntries && typeof rawEntries === 'object') {
       Object.entries(rawEntries).forEach(([k, v]) => {
         const normKey = normalizeVoiesStopKey(k);
-        const val = (v && typeof v === 'object') ? (v.voie || v.value || v.label || '') : v;
+        const val = (v && typeof v === 'object') ? (v.voie || v.platform || v.quai || v.value || v.label || '') : v;
         const voie = String(val || '').trim();
         if (normKey && voie) entriesMap.set(normKey, voie);
       });
     }
-    if (entriesMap.size) out.set(normalizedTrain, entriesMap);
+    if (entriesMap.size) {
+      out.set(normalizedTrain, entriesMap);
+      if (addCflAliases) {
+        const digitsOnly = (normalizedTrain.match(/\d+/g) || []).join('');
+        if (digitsOnly) {
+          out.set(digitsOnly, entriesMap);
+          out.set(`cfl${digitsOnly}`, entriesMap);
+        }
+      }
+    }
   });
   return out;
 }
@@ -3971,18 +3981,32 @@ async function loadVoiesByTrain({ forceFresh = false } = {}){
   if (voiesByTrainPromise) return voiesByTrainPromise;
 
   voiesByTrainPromise = (async () => {
+    const merged = new Map();
+    
     try {
       const url = 'https://vps.labetaillere.fr/gtfs/voies_by_train.json' + (forceFresh ? `?t=${Date.now()}` : '');
       const res = await fetch(url, { cache: 'no-store' });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const json = await res.json();
-      window.voiesByTrainMap = normalizeVoiesPayload(json);
-      return window.voiesByTrainMap;
+      const baseMap = normalizeVoiesPayload(json);
+      baseMap.forEach((value, key) => merged.set(key, value));
     } catch (err) {
       console.warn('[Voies] Chargement échoué', err?.message || err);
-      window.voiesByTrainMap = new Map();
-      return window.voiesByTrainMap;
     }
+
+    try {
+      const urlCfl = 'https://vps.labetaillere.fr/gtfs/retards_cfl.json' + (forceFresh ? `?t=${Date.now()}` : '');
+      const resCfl = await fetch(urlCfl, { cache: 'no-store' });
+      if (!resCfl.ok) throw new Error(`HTTP ${resCfl.status}`);
+      const jsonCfl = await resCfl.json();
+      const cflMap = normalizeVoiesPayload(jsonCfl, { addCflAliases: true });
+      cflMap.forEach((value, key) => merged.set(key, value));
+    } catch (err) {
+      console.warn('[Voies][CFL] Chargement échoué', err?.message || err);
+    }
+
+    window.voiesByTrainMap = merged;
+    return window.voiesByTrainMap;
   })();
 
   return voiesByTrainPromise;
@@ -3993,7 +4017,15 @@ function getVoiesForTrain(num){
   const map = (window.voiesByTrainMap instanceof Map) ? window.voiesByTrainMap : null;
   if (!map || !map.size) return null;
   const trainKey = normalizeVoiesTrainKey(`Train ${num}`);
-  return map.get(trainKey) || map.get(normalizeVoiesTrainKey(num)) || null;
+  const simpleKey = normalizeVoiesTrainKey(num);
+  const digitsKey = simpleKey.replace(/[^0-9]/g, '');
+  const candidates = [trainKey, simpleKey];
+  if (digitsKey) candidates.push(digitsKey);
+  for (const key of candidates){
+    const val = map.get(key);
+    if (val) return val;
+  }
+  return null;
 }
 
 function resolveVoieForStop({ voiesMap, stopName, baseTimeRaw, timeCandidates }){
@@ -8468,7 +8500,9 @@ if (!newStart) {
 
     for (const key of cflKeys) {
       try {
-        results[key] = await buildCflResult(key, { ymd: ymdDate });
+        const cflResult = await buildCflResult(key, { ymd: ymdDate });
+        cflResult.voies = getVoiesForTrain(key);
+        results[key] = cflResult;
       } catch (err) {
         console.warn('[CFL] Erreur', err);
         results[key] = { error: 'Erreur CFL' };
