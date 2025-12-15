@@ -3912,7 +3912,8 @@ function normalizeVoiesTrainKey(raw){
 }
 
 function normalizeVoiesStopKey(rawKey){
-  if (!rawKey) return null;
+  const result = { city: null, time: null, key: null };
+  if (!rawKey) return result;
   const [cityRaw, timeRaw] = String(rawKey).split('|');
   const city = normalizeVoiesTrainKey(cityRaw);
   const time = (() => {
@@ -3924,8 +3925,11 @@ function normalizeVoiesStopKey(rawKey){
     if (!/^\d{2}:\d{2}$/.test(t)) return null;
     return t;
   })();
-  if (!city || !time) return null;
-  return `${city}|${time}`;
+  
+  if (city) result.city = city;
+  if (city && time) result.key = `${city}|${time}`;
+  if (time) result.time = time;
+  return result;
 }
 
 function normalizeVoiesBaseTime(raw){
@@ -3956,10 +3960,15 @@ function normalizeVoiesPayload(data, { addCflAliases = false } = {}){
     const entriesMap = new Map();
     if (rawEntries && typeof rawEntries === 'object') {
       Object.entries(rawEntries).forEach(([k, v]) => {
-        const normKey = normalizeVoiesStopKey(k);
+        const { city, key } = normalizeVoiesStopKey(k);
         const val = (v && typeof v === 'object') ? (v.voie || v.platform || v.quai || v.value || v.label || '') : v;
         const voie = String(val || '').trim();
-        if (normKey && voie) entriesMap.set(normKey, voie);
+        if (!voie) return;
+        if (key) {
+          entriesMap.set(key, voie);
+        } else if (city) {
+          entriesMap.set(city, voie);
+        }
       });
     }
     if (entriesMap.size) {
@@ -4035,9 +4044,14 @@ function resolveVoieForStop({ voiesMap, stopName, baseTimeRaw, timeCandidates })
     if (!raw) continue;
     const timeHHMM = normalizeVoiesBaseTime(raw);
     if (!timeHHMM) continue;
-    const key = normalizeVoiesStopKey(`${stopName}|${timeHHMM}`);
+    const { key } = normalizeVoiesStopKey(`${stopName}|${timeHHMM}`);
     if (!key) continue;
     const voie = voiesMap.get(key);
+    if (voie) return voie;
+  }
+  const { city } = normalizeVoiesStopKey(stopName);
+  if (city) {
+    const voie = voiesMap.get(city);
     if (voie) return voie;
   }
   return null;
