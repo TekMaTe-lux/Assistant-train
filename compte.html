@@ -1,0 +1,145 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Mon compte — La Bétaillère</title>
+  <meta name="description" content="Connexion et espace personnel La Bétaillère" />
+  <style>
+    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Arial; margin:0; background:#0b0f14; color:#e9eef5;}
+    .wrap{max-width:900px; margin:0 auto; padding:24px;}
+    .card{background:#111826; border:1px solid rgba(255,255,255,.08); border-radius:14px; padding:18px; margin:12px 0;}
+    label{display:block; margin:10px 0 6px; color:#b8c4d6;}
+    input{width:100%; padding:12px; border-radius:10px; border:1px solid rgba(255,255,255,.12); background:#0b1220; color:#e9eef5;}
+    button{padding:12px 14px; border-radius:10px; border:0; background:#ff3b3b; color:white; font-weight:700; cursor:pointer; margin-right:8px;}
+    button.secondary{background:#2a3446;}
+    .row{display:flex; gap:12px; flex-wrap:wrap;}
+    .row > *{flex:1;}
+    pre{white-space:pre-wrap; background:#0b1220; padding:12px; border-radius:10px; border:1px solid rgba(255,255,255,.08);}
+    .muted{color:#aab6c8; font-size:14px;}
+    a{color:#ff7b7b;}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>🐄 Mon compte</h1>
+    <p class="muted">
+      Ici tu peux te connecter pour accéder à des données personnalisées (ex: tes trains, tes stats).
+    </p>
+
+    <div class="card">
+      <h2>Statut</h2>
+      <div id="status">Chargement…</div>
+      <div style="margin-top:10px">
+        <button class="secondary" id="btnRefresh">Rafraîchir</button>
+        <button class="secondary" id="btnLogout">Se déconnecter</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Connexion / Inscription</h2>
+
+      <div class="row">
+        <div>
+          <label>Email</label>
+          <input id="email" type="email" placeholder="ton@email.fr" />
+        </div>
+        <div>
+          <label>Mot de passe</label>
+          <input id="password" type="password" placeholder="min. 10 caractères" />
+        </div>
+      </div>
+
+      <div style="margin-top:12px">
+        <button id="btnLogin">Se connecter</button>
+        <button class="secondary" id="btnRegister">Créer un compte</button>
+      </div>
+
+      <p class="muted" style="margin-top:10px">
+        (Astuce: utilise un vrai mot de passe. On stocke un hash côté serveur, jamais le mot de passe en clair.)
+      </p>
+    </div>
+
+    <div class="card">
+      <h2>Debug</h2>
+      <pre id="debug">(vide)</pre>
+    </div>
+
+    <p class="muted">
+      API: <code>https://vps.labetaillere.fr/api</code>
+    </p>
+  </div>
+
+<script>
+  const API = "https://vps.labetaillere.fr/api";
+
+  const $ = (id) => document.getElementById(id);
+  const debug = (obj) => { $("debug").textContent = typeof obj === "string" ? obj : JSON.stringify(obj, null, 2); };
+
+  async function api(path, opts = {}) {
+    const res = await fetch(API + path, {
+      ...opts,
+      headers: { "Content-Type": "application/json", ...(opts.headers || {}) },
+      credentials: "include" // IMPORTANT pour cookies
+    });
+    const text = await res.text();
+    let data;
+    try { data = JSON.parse(text); } catch { data = text; }
+    if (!res.ok) throw { status: res.status, data };
+    return data;
+  }
+
+  async function refreshStatus() {
+    try {
+      const me = await api("/me");
+      $("status").innerHTML = `✅ Connecté : <b>${me.user.email}</b><br><span class="muted">Créé le ${me.user.created_at}</span>`;
+      debug(me);
+    } catch (e) {
+      $("status").innerHTML = `❌ Non connecté`;
+      debug(e);
+    }
+  }
+
+  $("btnRefresh").onclick = refreshStatus;
+
+  $("btnRegister").onclick = async () => {
+    try {
+      const email = $("email").value.trim();
+      const password = $("password").value;
+      const out = await api("/auth/register", { method: "POST", body: JSON.stringify({ email, password }) });
+      debug(out);
+      await refreshStatus();
+    } catch (e) {
+      debug(e);
+      alert("Erreur inscription: " + (e?.data?.error || e.status || "inconnue"));
+    }
+  };
+
+  $("btnLogin").onclick = async () => {
+    try {
+      const email = $("email").value.trim();
+      const password = $("password").value;
+      const out = await api("/auth/login", { method: "POST", body: JSON.stringify({ email, password }) });
+      debug(out);
+      await refreshStatus();
+    } catch (e) {
+      debug(e);
+      alert("Erreur connexion: " + (e?.data?.error || e.status || "inconnue"));
+    }
+  };
+
+  $("btnLogout").onclick = async () => {
+    try {
+      const out = await api("/auth/logout", { method: "POST", body: "{}" });
+      debug(out);
+      await refreshStatus();
+    } catch (e) {
+      debug(e);
+      alert("Erreur logout: " + (e?.data?.error || e.status || "inconnue"));
+    }
+  };
+
+  refreshStatus();
+</script>
+</body>
+</html>
