@@ -3459,6 +3459,47 @@ body.modal-open{ overflow:hidden; }
   flex-direction: column;
   gap: 10px;
 }
+
+.lb-account-box{
+  margin-top: 16px;
+  padding: 12px;
+  border-radius: 10px;
+  border: 1px solid rgba(255,120,120,.35);
+  background: rgba(255,80,80,.08);
+  display: none;
+}
+
+.lb-account-box h4{
+  margin: 0 0 8px;
+  color: #ffb0b0;
+  font-size: 0.95rem;
+}
+
+.lb-account-box input{
+  width: 100%;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid rgba(255,120,120,.35);
+  background: #0b0f1a;
+  color: #e6f7ff;
+  box-shadow: inset 0 0 10px rgba(255,120,120,.12);
+  margin-bottom: 8px;
+}
+
+.lb-account-box .delete-button{
+  background: linear-gradient(135deg, rgba(255,70,70,.8), rgba(190,30,30,.9));
+  border-color: rgba(255,120,120,.75);
+}
+
+.lb-account-box .delete-button:hover{
+  box-shadow: 0 0 22px rgba(255,120,120,.5);
+}
+
+.lb-account-box .delete-msg{
+  font-size: 0.85rem;
+  color: #ffd1d1;
+  min-height: 18px;
+}   
     
 .rgpd{
   display: flex;
@@ -3672,6 +3713,12 @@ function renderRowsChunked(htmlRows, tbody, chunk=200){
       <div class="lb-auth-actions">
         <button id="lbBtnSubmit" class="auth-button" type="button">Se connecter</button>
         <button id="lbBtnLogout" class="auth-button auth-button--ghost" type="button" style="display:none;">Déconnexion</button>
+      </div>
+      <div id="delete-account-box" class="lb-account-box">
+        <h4>Supprimer mon compte</h4>
+        <input id="deletePassword" type="password" autocomplete="current-password" placeholder="Mot de passe">
+        <button id="deleteBtn" class="auth-button delete-button" type="button">Supprimer mon compte</button>
+        <div id="deleteMsg" class="delete-msg"></div>
       </div>
     </div>
   </div>
@@ -10980,15 +11027,18 @@ function scheduleWeatherAfterTableSettled(){
   const refreshAccountUI = async () => {
     const openBtn = $("lbBtnOpenAuth");
     const logoutBtn = $("lbBtnLogout");
+    const deleteBox = $("delete-account-box");
     if (!openBtn || !logoutBtn) return;
     try {
       const me = await api("/me");
       openBtn.textContent = "Mon compte / Déconnexion";
       logoutBtn.style.display = "inline-flex";
+      if (deleteBox) deleteBox.style.display = "block";
       msg(`✅ Connecté : ${me?.user?.email || "utilisateur"}`);
     } catch {
       openBtn.textContent = "Se connecter";
       logoutBtn.style.display = "none";
+      if (deleteBox) deleteBox.style.display = "none";
       msg("ℹ️ Non connecté");
     }
   };
@@ -11036,6 +11086,37 @@ function scheduleWeatherAfterTableSettled(){
     }
   });
 
+  const deleteAccount = async () => {
+    const pwd = $("deletePassword").value;
+    const deleteMsg = $("deleteMsg");
+
+    if (!pwd || pwd.length < 1) {
+      if (deleteMsg) deleteMsg.textContent = "❌ Mot de passe requis.";
+      return;
+    }
+
+    const ok1 = confirm("⚠️ Supprimer ton compte ? Cette action est définitive.");
+    if (!ok1) return;
+    const ok2 = prompt("Tape SUPPRIMER pour confirmer :");
+    if (ok2 !== "SUPPRIMER") {
+      if (deleteMsg) deleteMsg.textContent = "Annulé.";
+      return;
+    }
+
+    if (deleteMsg) deleteMsg.textContent = "Suppression en cours…";
+
+    try {
+      await api("/auth/delete-account", {
+        method: "POST",
+        body: JSON.stringify({ password: pwd })
+      });
+      if (deleteMsg) deleteMsg.textContent = "✅ Compte supprimé. Déconnexion…";
+      setTimeout(() => location.reload(), 800);
+    } catch (e) {
+      if (deleteMsg) deleteMsg.textContent = "❌ " + e;
+    }
+  };
+
   logoutBtn.addEventListener("click", async () => {
     try {
       await api("/auth/logout", { method: "POST", body: "{}" });
@@ -11045,6 +11126,9 @@ function scheduleWeatherAfterTableSettled(){
       msg("❌ " + e, true);
     }
   });
+
+  const deleteBtn = $("deleteBtn");
+  if (deleteBtn) deleteBtn.addEventListener("click", deleteAccount);
 
   setMode("login");
   refreshAccountUI();
