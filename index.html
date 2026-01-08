@@ -3969,13 +3969,21 @@ function renderRowsChunked(htmlRows, tbody, chunk=200){
     <div class="section-content">
       <div class="filters-row">
         <div class="filter-item" style="justify-content:flex-start; gap:12px;">
-          <button id="btnMatin" class="mini-btn preset-btn" type="button" title="Matin">
+          <button id="btnMatin" class="mini-btn preset-btn" type="button" title="Matin" data-preset-kind="AM">
             <span aria-hidden="true">🌅</span>
             <span class="preset-label" data-preset-label="AM">Matin</span>
           </button>
-          <button id="btnSoir"  class="mini-btn preset-btn" type="button" title="Soir">
+          <button id="btnSoir"  class="mini-btn preset-btn" type="button" title="Soir" data-preset-kind="PM">
             <span aria-hidden="true">🌇</span>
             <span class="preset-label" data-preset-label="PM">Soir</span>
+          </button>
+          <button id="btnListe3" class="mini-btn preset-btn" type="button" title="Liste 3" data-preset-kind="L3" style="display:none;">
+            <span aria-hidden="true">🧾</span>
+            <span class="preset-label" data-preset-label="L3">Liste 3</span>
+          </button>
+          <button id="btnListe4" class="mini-btn preset-btn" type="button" title="Liste 4" data-preset-kind="L4" style="display:none;">
+            <span aria-hidden="true">🧾</span>
+            <span class="preset-label" data-preset-label="L4">Liste 4</span>
           </button>
         </div>
       </div>
@@ -8208,8 +8216,8 @@ async function proposerTrainsOD(eventOrOptions){
 /* ====================== PRESETS (listes) ====================== */
 const PRESET_AM = "88704,88706,88708,88710,88802,88712,88501,88804,88714,88503,88806,88716,88505,88718,88571,88722".split(',');
 const PRESET_PM = "88741,88743,88745,88747,88530,88749,88751,88753,88532,88755,88813,88759,88761,88815,88534,88763,88765,88767,88769".split(',');
-const DEFAULT_PRESET_LABELS = { AM: "Matin", PM: "Soir" };
-const customRapidPresets = { AM: null, PM: null };
+const DEFAULT_PRESET_LABELS = { AM: "Matin", PM: "Soir", L3: "Liste 3", L4: "Liste 4" };
+const customRapidPresets = { AM: null, PM: null, L3: null, L4: null };
 
 function normalizePresetLabel(label, fallback){
   const trimmed = String(label || '').trim();
@@ -8219,20 +8227,41 @@ function normalizePresetLabel(label, fallback){
 function setPresetButtonLabel(kind, label){
   const node = document.querySelector(`[data-preset-label="${kind}"]`);
   if (node) node.textContent = label;
-  const btn = kind === 'PM' ? document.getElementById('btnSoir') : document.getElementById('btnMatin');
+  const btn = document.querySelector(`.preset-btn[data-preset-kind="${kind}"]`);
   if (btn) btn.setAttribute('title', label);
 }
 
 function applyRapidPresetLabels(){
   const amLabel = normalizePresetLabel(customRapidPresets.AM?.label, DEFAULT_PRESET_LABELS.AM);
   const pmLabel = normalizePresetLabel(customRapidPresets.PM?.label, DEFAULT_PRESET_LABELS.PM);
+  const l3Label = normalizePresetLabel(customRapidPresets.L3?.label, DEFAULT_PRESET_LABELS.L3);
+  const l4Label = normalizePresetLabel(customRapidPresets.L4?.label, DEFAULT_PRESET_LABELS.L4);
   setPresetButtonLabel('AM', amLabel);
   setPresetButtonLabel('PM', pmLabel);
+  setPresetButtonLabel('L3', l3Label);
+  setPresetButtonLabel('L4', l4Label);
+}
+
+function presetHasContent(preset){
+  if (!preset) return false;
+  const label = String(preset.label || '').trim();
+  const trains = Array.isArray(preset.trains) ? preset.trains : [];
+  return Boolean(label || trains.length);
+}
+
+function updateRapidPresetVisibility(){
+  const kinds = ['L3', 'L4'];
+  kinds.forEach((kind) => {
+    const btn = document.querySelector(`.preset-btn[data-preset-kind="${kind}"]`);
+    if (!btn) return;
+    const isVisible = presetHasContent(customRapidPresets[kind]);
+    btn.style.display = isVisible ? 'inline-flex' : 'none';
+  });
 }
 
 function getRapidPresetNumbers(kind){
   const custom = customRapidPresets[kind];
-  const list = custom?.trains?.length ? custom.trains : (kind === 'PM' ? PRESET_PM : PRESET_AM);
+  const list = custom?.trains?.length ? custom.trains : (kind === 'PM' ? PRESET_PM : (kind === 'AM' ? PRESET_AM : []));
   return Array.isArray(list) ? list.slice() : [];
 }
 
@@ -8249,9 +8278,14 @@ function applyCustomRapidPresets(prefs){
   const raw = prefs?.rapidPresets || {};
   const am = raw.AM || raw.am || null;
   const pm = raw.PM || raw.pm || null;
+  const l3 = raw.L3 || raw.l3 || null;
+  const l4 = raw.L4 || raw.l4 || null;
   customRapidPresets.AM = am ? { label: String(am.label || ''), trains: Array.isArray(am.trains) ? am.trains : [] } : null;
   customRapidPresets.PM = pm ? { label: String(pm.label || ''), trains: Array.isArray(pm.trains) ? pm.trains : [] } : null;
+  customRapidPresets.L3 = l3 ? { label: String(l3.label || ''), trains: Array.isArray(l3.trains) ? l3.trains : [] } : null;
+  customRapidPresets.L4 = l4 ? { label: String(l4.label || ''), trains: Array.isArray(l4.trains) ? l4.trains : [] } : null;
   applyRapidPresetLabels();
+  updateRapidPresetVisibility();
 }    
 function detectPresetMatch(list){
   if (!Array.isArray(list) || list.length === 0) return null;
@@ -8260,19 +8294,16 @@ function detectPresetMatch(list){
     && a.every((val, idx) => b[idx] === val);
   if (sameNumbers(list, getRapidPresetNumbers('AM'))) return 'AM';
   if (sameNumbers(list, getRapidPresetNumbers('PM'))) return 'PM';
+  if (sameNumbers(list, getRapidPresetNumbers('L3'))) return 'L3';
+  if (sameNumbers(list, getRapidPresetNumbers('L4'))) return 'L4';
   return null;
 }
 
 function updatePresetHighlights(kind){
   const active = kind || '';
- const morningBtn = document.getElementById('btnMatin');
-  const eveningBtn = document.getElementById('btnSoir');
-  if (morningBtn) {
-    morningBtn.classList.toggle('is-active', active === 'AM');
-  }
-  if (eveningBtn) {
-    eveningBtn.classList.toggle('is-active', active === 'PM');
-  }
+  document.querySelectorAll('.preset-btn[data-preset-kind]').forEach((btn) => {
+    btn.classList.toggle('is-active', btn.dataset.presetKind === active);
+  });
 }
 
   const RAPID_PRESET_CONFIG = {
@@ -8876,12 +8907,13 @@ syncSelectionDateFromMain();
   // Bouton “Proposer” -> lance la recherche
   $('#btnProposer').off('click').on('click', proposerTrainsOD);
 
-  // Raccourcis Matin/Soir
-  $('#btnMatin').off('click').on('click', function(){
-   applyRapidPreset('AM', { trigger: this, openModal: true });
-  });
-  $('#btnSoir').off('click').on('click', function(){
-   applyRapidPreset('PM', { trigger: this, openModal: true });
+  // Raccourcis presets rapides
+  document.querySelectorAll('.preset-btn[data-preset-kind]').forEach((btn) => {
+    btn.addEventListener('click', function(){
+      const kind = this.dataset.presetKind;
+      if (!kind) return;
+      applyRapidPreset(kind, { trigger: this, openModal: true });
+    });
   });
 
   (function($){
@@ -11315,10 +11347,10 @@ function scheduleWeatherAfterTableSettled(){
     if (!options.auto) return;
     if (!lbPrefsAppliedOnce && defaultMode) {
       const kind = defaultMode === 'SOIR' ? 'PM' : (defaultMode === 'MATIN' ? 'AM' : defaultMode);
-      if (kind === 'AM' || kind === 'PM') {
+      if (['AM', 'PM', 'L3', 'L4'].includes(kind)) {
         applyRapidPreset(kind, { auto: true, openModal: false, focus: false });
         if (autoLoad) {
-          const trigger = kind === 'PM' ? document.getElementById('btnSoir') : document.getElementById('btnMatin');
+          const trigger = document.querySelector(`.preset-btn[data-preset-kind="${kind}"]`);
           if (trigger) trigger.classList.add('is-active');
         }
       }
@@ -11382,7 +11414,10 @@ function scheduleWeatherAfterTableSettled(){
       lbPrefsAppliedOnce = false;
       customRapidPresets.AM = null;
       customRapidPresets.PM = null;
+      customRapidPresets.L3 = null;
+      customRapidPresets.L4 = null;
       applyRapidPresetLabels();
+      updateRapidPresetVisibility();
       msg("ℹ️ Non connecté");
     }
   };
