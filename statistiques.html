@@ -1,0 +1,234 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Stats SNCF (local) – La Bétaillère</title>
+  <style>
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial; margin: 24px; line-height: 1.35; }
+    .box { border: 1px dashed #aaa; padding: 18px; border-radius: 12px; }
+    .row { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; margin-top: 12px; }
+    input[type="date"] { padding: 8px 10px; border-radius: 10px; border: 1px solid #ccc; }
+    button { padding: 10px 14px; border: 1px solid #ccc; border-radius: 12px; background: #fff; cursor: pointer; }
+    button:disabled { opacity: .5; cursor: not-allowed; }
+    .kpi { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; margin-top: 16px; }
+    .card { border: 1px solid #ddd; border-radius: 14px; padding: 14px; }
+    .label { font-size: 13px; opacity: .75; }
+    .value { font-size: 28px; font-weight: 700; margin-top: 6px; }
+    .log { white-space: pre-wrap; background: #f7f7f7; border: 1px solid #eee; border-radius: 12px; padding: 12px; margin-top: 16px; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; font-size: 12px;}
+    .hint { opacity:.8; font-size: 13px; margin-top: 8px; }
+  </style>
+</head>
+<body>
+  <h1>Stats SNCF (local)</h1>
+  <p>Charge un fichier <b>sncf_history.jsonl.gz</b> (ou .jsonl) et calcule les stats pour une date.</p>
+
+  <div id="drop" class="box">
+    <b>Dépose ton fichier ici</b> ou sélectionne-le :
+    <div class="row">
+      <input id="file" type="file" accept=".gz,.jsonl,.json" />
+      <label>
+        Date :
+        <input id="date" type="date" value="2026-01-09" />
+      </label>
+      <button id="run" disabled>Calculer</button>
+    </div>
+    <div class="hint">
+      Règles :
+      <ul>
+        <li><b>Retardé</b> = <code>final_delay_min &gt; 0</code></li>
+        <li><b>Partiel</b> = <code>partially_cancelled === true</code></li>
+        <li><b>Supprimé</b> = <code>cancelled === true</code> OU disruption <code>trip canceled</code> / <code>NO_SERVICE</code></li>
+        <li><b>Pas à l'heure</b> = union (retardé ∪ partiel ∪ supprimé) sans double-compte</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="kpi" id="kpis" style="display:none;">
+    <div class="card"><div class="label">Total trains (clé trains)</div><div class="value" id="total">—</div></div>
+    <div class="card"><div class="label">Retardés</div><div class="value" id="delayed">—</div></div>
+    <div class="card"><div class="label">Supprimés</div><div class="value" id="cancelled">—</div></div>
+    <div class="card"><div class="label">Partiellement supprimés</div><div class="value" id="partial">—</div></div>
+    <div class="card"><div class="label">Pas à l’heure (unique)</div><div class="value" id="notOnTime">—</div></div>
+    <div class="card"><div class="label">% pas à l’heure</div><div class="value" id="pct">—</div></div>
+  </div>
+
+  <div class="log" id="log">Log…</div>
+
+  <!-- Décompression .gz en navigateur -->
+  <script src="https://cdn.jsdelivr.net/npm/pako@2.1.0/dist/pako.min.js"></script>
+
+  <script>
+    const $ = (id) => document.getElementById(id);
+    const drop = $("drop");
+    const fileInput = $("file");
+    const runBtn = $("run");
+    const logEl = $("log");
+    const kpis = $("kpis");
+
+    let currentFile = null;
+
+    function log(msg) {
+      logEl.textContent = msg;
+    }
+
+    function hasCancelDisruption(trainObj) {
+      const dis = trainObj?.disruptions || [];
+      return dis.some(d => d?.severity === "trip canceled" || d?.effect === "NO_SERVICE");
+    }
+
+    function setKPIs({total, delayed, cancelled, partial, notOnTime, pct}) {
+      $("total").textContent = total;
+      $("delayed").textContent = delayed;
+      $("cancelled").textContent = cancelled;
+      $("partial").textContent = partial;
+      $("notOnTime").textContent = notOnTime;
+      $("pct").textContent = (isFinite(pct) ? pct.toFixed(2) : "0.00") + " %";
+      kpis.style.display = "";
+    }
+
+    async function readFileAsArrayBuffer(file) {
+      return new Promise((resolve, reject) => {
+        const r = new FileReader();
+        r.onload = () => resolve(r.result);
+        r.onerror = () => reject(r.error);
+        r.readAsArrayBuffer(file);
+      });
+    }
+
+    function decodeUTF8(uint8) {
+      return new TextDecoder("utf-8").decode(uint8);
+    }
+
+    function splitJsonl(text) {
+      // JSONL : 1 objet JSON par ligne
+      return text.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+    }
+
+    async function parseAndCompute(file, targetDate) {
+      log("Lecture du fichier…");
+
+      const buf = await readFileAsArrayBuffer(file);
+      let text = "";
+
+      if (file.name.endsWith(".gz")) {
+        log("Décompression .gz…");
+        const uint8 = new Uint8Array(buf);
+        const inflated = window.pako.inflate(uint8);
+        text = decodeUTF8(inflated);
+      } else {
+        text = decodeUTF8(new Uint8Array(buf));
+      }
+
+      // Tente JSONL (le plus probable). Si ce n’est pas JSONL, on tentera JSON direct.
+      let objects = [];
+      const lines = splitJsonl(text);
+
+      if (lines.length > 1) {
+        log(`Détection JSONL : ${lines.length} lignes. Parsing…`);
+        for (let i = 0; i < lines.length; i++) {
+          try {
+            objects.push(JSON.parse(lines[i]));
+          } catch (e) {
+            // Si une ligne est cassée, on le note et continue
+            // (mais idéalement ton fichier est propre)
+          }
+        }
+      } else {
+        log("Pas vraiment JSONL → tentative JSON complet…");
+        objects = [JSON.parse(text)];
+      }
+
+      // Trouver l'objet du jour (souvent snapshot 23:59)
+      const dayObj = objects.find(o => o && o.date === targetDate);
+
+      if (!dayObj) {
+        log(`❌ Aucun objet trouvé pour la date ${targetDate}.`);
+        setKPIs({total:0, delayed:0, cancelled:0, partial:0, notOnTime:0, pct:0});
+        return;
+      }
+
+      const trains = dayObj.trains || {};
+      const ids = Object.keys(trains);
+      const total = ids.length;
+
+      let delayed = 0, cancelled = 0, partial = 0;
+      const notOnTimeSet = new Set();
+
+      for (const tid of ids) {
+        const t = trains[tid];
+
+        // si ton format inclut found:false
+        if (t && t.found === false) continue;
+
+        const d = Number(t?.final_delay_min || 0);
+        const isDelayed = d > 0;
+        const isPartial = t?.partially_cancelled === true;
+        const isCancelled = t?.cancelled === true || hasCancelDisruption(t);
+
+        if (isDelayed) delayed++;
+        if (isPartial) partial++;
+        if (isCancelled) cancelled++;
+
+        if (isDelayed || isPartial || isCancelled) notOnTimeSet.add(tid);
+      }
+
+      const notOnTime = notOnTimeSet.size;
+      const pct = total ? (notOnTime / total) * 100 : 0;
+
+      log(`✅ OK. Snapshot trouvé: date=${dayObj.date} generated_at=${dayObj.generated_at || "?"}\n` +
+          `Total=${total} | Retardés=${delayed} | Supprimés=${cancelled} | Partiels=${partial} | Pas à l'heure=${notOnTime} (${pct.toFixed(2)}%)`);
+
+      setKPIs({total, delayed, cancelled, partial, notOnTime, pct});
+    }
+
+    function enableRunIfReady() {
+      runBtn.disabled = !(currentFile && $("date").value);
+    }
+
+    // Drag & drop
+    drop.addEventListener("dragover", (e) => {
+      e.preventDefault();
+      drop.style.borderColor = "#333";
+    });
+    drop.addEventListener("dragleave", () => {
+      drop.style.borderColor = "#aaa";
+    });
+    drop.addEventListener("drop", (e) => {
+      e.preventDefault();
+      drop.style.borderColor = "#aaa";
+      const f = e.dataTransfer.files?.[0];
+      if (f) {
+        currentFile = f;
+        log(`Fichier sélectionné: ${f.name} (${Math.round(f.size/1024)} Ko)`);
+        enableRunIfReady();
+      }
+    });
+
+    fileInput.addEventListener("change", () => {
+      const f = fileInput.files?.[0];
+      if (f) {
+        currentFile = f;
+        log(`Fichier sélectionné: ${f.name} (${Math.round(f.size/1024)} Ko)`);
+        enableRunIfReady();
+      }
+    });
+
+    runBtn.addEventListener("click", async () => {
+      try {
+        runBtn.disabled = true;
+        await parseAndCompute(currentFile, $("date").value);
+      } catch (e) {
+        console.error(e);
+        log("❌ Erreur: " + (e?.message || String(e)));
+      } finally {
+        enableRunIfReady();
+      }
+    });
+
+    $("date").addEventListener("change", enableRunIfReady);
+
+    log("Prêt. Charge un fichier pour commencer.");
+  </script>
+</body>
+</html>
