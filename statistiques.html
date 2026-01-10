@@ -1,9 +1,10 @@
+```html
 <!doctype html>
 <html lang="fr">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Stats SNCF (local) – La Bétaillère</title>
+  <title>Stats SNCF – Local (06→09 jan 2026)</title>
   <style>
     body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial; margin: 24px; line-height: 1.35; }
     .box { border: 1px dashed #aaa; padding: 18px; border-radius: 12px; }
@@ -11,17 +12,32 @@
     input[type="date"] { padding: 8px 10px; border-radius: 10px; border: 1px solid #ccc; }
     button { padding: 10px 14px; border: 1px solid #ccc; border-radius: 12px; background: #fff; cursor: pointer; }
     button:disabled { opacity: .5; cursor: not-allowed; }
+
     .kpi { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; margin-top: 16px; }
     .card { border: 1px solid #ddd; border-radius: 14px; padding: 14px; }
     .label { font-size: 13px; opacity: .75; }
     .value { font-size: 28px; font-weight: 700; margin-top: 6px; }
-    .log { white-space: pre-wrap; background: #f7f7f7; border: 1px solid #eee; border-radius: 12px; padding: 12px; margin-top: 16px; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; font-size: 12px;}
+
+    .log { white-space: pre-wrap; background: #f7f7f7; border: 1px solid #eee; border-radius: 12px; padding: 12px; margin-top: 16px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; font-size: 12px; }
+
     .hint { opacity:.8; font-size: 13px; margin-top: 8px; }
+
+    .details { margin-top: 18px; }
+    .details h2 { margin: 8px 0 10px; }
+    .details-grid { display:grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; }
+    .dcard { border: 1px solid #ddd; border-radius: 14px; padding: 14px; }
+    .dhead { display:flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+    .dtitle { font-weight: 700; }
+    .dcount { opacity: .75; font-size: 13px; }
+    .trainlist { margin-top: 10px; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+      font-size: 12px; white-space: pre-wrap; background: #fafafa; border: 1px solid #eee; border-radius: 10px; padding: 10px; max-height: 180px; overflow:auto; }
+    .muted { opacity:.7; }
   </style>
 </head>
 <body>
-  <h1>Stats SNCF (local)</h1>
-  <p>Charge un fichier <b>sncf_history.jsonl.gz</b> (ou .jsonl) et calcule les stats pour une date.</p>
+  <h1>Stats SNCF (local) – recherche par date</h1>
+  <p>Charge une fois le fichier <b>sncf_history.jsonl.gz</b>, puis change la date (06→09 janvier 2026).</p>
 
   <div id="drop" class="box">
     <b>Dépose ton fichier ici</b> ou sélectionne-le :
@@ -29,33 +45,90 @@
       <input id="file" type="file" accept=".gz,.jsonl,.json" />
       <label>
         Date :
-        <input id="date" type="date" value="2026-01-09" />
+        <input id="date" type="date" min="2026-01-06" max="2026-01-09" value="2026-01-09" />
       </label>
       <button id="run" disabled>Calculer</button>
+      <button id="runAll" disabled>Calculer 06→09</button>
     </div>
     <div class="hint">
-      Règles :
+      <div>Règles :</div>
       <ul>
         <li><b>Retardé</b> = <code>final_delay_min &gt; 0</code></li>
         <li><b>Partiel</b> = <code>partially_cancelled === true</code></li>
         <li><b>Supprimé</b> = <code>cancelled === true</code> OU disruption <code>trip canceled</code> / <code>NO_SERVICE</code></li>
         <li><b>Pas à l'heure</b> = union (retardé ∪ partiel ∪ supprimé) sans double-compte</li>
       </ul>
+      <div class="muted">Note : un train peut être à la fois “retardé” et “partiellement supprimé”. Les compteurs “Retardés/Supprimés/Partiels” sont indépendants.
+        Le “Pas à l’heure” est une union (sans double-compte).</div>
     </div>
   </div>
 
   <div class="kpi" id="kpis" style="display:none;">
-    <div class="card"><div class="label">Total trains (clé trains)</div><div class="value" id="total">—</div></div>
+    <div class="card"><div class="label">Date</div><div class="value" id="k_date">—</div></div>
+    <div class="card"><div class="label">Total trains</div><div class="value" id="total">—</div></div>
     <div class="card"><div class="label">Retardés</div><div class="value" id="delayed">—</div></div>
     <div class="card"><div class="label">Supprimés</div><div class="value" id="cancelled">—</div></div>
     <div class="card"><div class="label">Partiellement supprimés</div><div class="value" id="partial">—</div></div>
-    <div class="card"><div class="label">Pas à l’heure (unique)</div><div class="value" id="notOnTime">—</div></div>
+    <div class="card"><div class="label">Pas à l’heure</div><div class="value" id="notOnTime">—</div></div>
     <div class="card"><div class="label">% pas à l’heure</div><div class="value" id="pct">—</div></div>
+  </div>
+
+  <!-- Détails par catégories (jour sélectionné uniquement) -->
+  <div class="details" id="details" style="display:none;">
+    <h2>Détails du jour sélectionné</h2>
+    <div class="details-grid">
+      <div class="dcard">
+        <div class="dhead">
+          <div class="dtitle">Retards (5 à 9 min)</div>
+          <div class="dcount" id="c_5_9">0</div>
+        </div>
+        <div class="trainlist" id="l_5_9">—</div>
+      </div>
+
+      <div class="dcard">
+        <div class="dhead">
+          <div class="dtitle">Retards (10 à 19 min)</div>
+          <div class="dcount" id="c_10_19">0</div>
+        </div>
+        <div class="trainlist" id="l_10_19">—</div>
+      </div>
+
+      <div class="dcard">
+        <div class="dhead">
+          <div class="dtitle">Retards (20 à 39 min)</div>
+          <div class="dcount" id="c_20_39">0</div>
+        </div>
+        <div class="trainlist" id="l_20_39">—</div>
+      </div>
+
+      <div class="dcard">
+        <div class="dhead">
+          <div class="dtitle">Retards (≥ 40 min)</div>
+          <div class="dcount" id="c_40p">0</div>
+        </div>
+        <div class="trainlist" id="l_40p">—</div>
+      </div>
+
+      <div class="dcard">
+        <div class="dhead">
+          <div class="dtitle">Suppressions</div>
+          <div class="dcount" id="c_cancel">0</div>
+        </div>
+        <div class="trainlist" id="l_cancel">—</div>
+      </div>
+
+      <div class="dcard">
+        <div class="dhead">
+          <div class="dtitle">Suppressions partielles</div>
+          <div class="dcount" id="c_partial">0</div>
+        </div>
+        <div class="trainlist" id="l_partial">—</div>
+      </div>
+    </div>
   </div>
 
   <div class="log" id="log">Log…</div>
 
-  <!-- Décompression .gz en navigateur -->
   <script src="https://cdn.jsdelivr.net/npm/pako@2.1.0/dist/pako.min.js"></script>
 
   <script>
@@ -63,28 +136,56 @@
     const drop = $("drop");
     const fileInput = $("file");
     const runBtn = $("run");
+    const runAllBtn = $("runAll");
     const logEl = $("log");
     const kpis = $("kpis");
+    const details = $("details");
 
     let currentFile = null;
+    let cachedObjectsByDate = null; // Map(date -> obj)
+    let parsingInProgress = false;
 
-    function log(msg) {
-      logEl.textContent = msg;
-    }
+    function log(msg) { logEl.textContent = msg; }
 
     function hasCancelDisruption(trainObj) {
       const dis = trainObj?.disruptions || [];
       return dis.some(d => d?.severity === "trip canceled" || d?.effect === "NO_SERVICE");
     }
 
-    function setKPIs({total, delayed, cancelled, partial, notOnTime, pct}) {
-      $("total").textContent = total;
-      $("delayed").textContent = delayed;
-      $("cancelled").textContent = cancelled;
-      $("partial").textContent = partial;
-      $("notOnTime").textContent = notOnTime;
+    function setKPIs({date, total, delayed, cancelled, partial, notOnTime, pct}) {
+      $("k_date").textContent = date || "—";
+      $("total").textContent = total ?? "—";
+      $("delayed").textContent = delayed ?? "—";
+      $("cancelled").textContent = cancelled ?? "—";
+      $("partial").textContent = partial ?? "—";
+      $("notOnTime").textContent = notOnTime ?? "—";
       $("pct").textContent = (isFinite(pct) ? pct.toFixed(2) : "0.00") + " %";
       kpis.style.display = "";
+    }
+
+    function fmtList(arr) {
+      if (!arr || arr.length === 0) return "—";
+      // Tri “numérique” si possible
+      const sorted = [...arr].sort((a,b) => (Number(a)-Number(b)));
+      // Une ligne lisible
+      return sorted.join(", ");
+    }
+
+    function setDetailsBuckets(b) {
+      // b = {r5_9, r10_19, r20_39, r40p, cancels, partials}
+      const map = [
+        ["c_5_9", "l_5_9", b.r5_9],
+        ["c_10_19", "l_10_19", b.r10_19],
+        ["c_20_39", "l_20_39", b.r20_39],
+        ["c_40p", "l_40p", b.r40p],
+        ["c_cancel", "l_cancel", b.cancels],
+        ["c_partial", "l_partial", b.partials],
+      ];
+      for (const [cid, lid, arr] of map) {
+        $(cid).textContent = (arr?.length ?? 0) + " train(s)";
+        $(lid).textContent = fmtList(arr);
+      }
+      details.style.display = "";
     }
 
     async function readFileAsArrayBuffer(file) {
@@ -101,16 +202,28 @@
     }
 
     function splitJsonl(text) {
-      // JSONL : 1 objet JSON par ligne
       return text.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
     }
 
-    async function parseAndCompute(file, targetDate) {
+    function dateRangeISO(startISO, endISO) {
+      const out = [];
+      const start = new Date(startISO + "T00:00:00");
+      const end = new Date(endISO + "T00:00:00");
+      for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
+        const iso = d.toISOString().slice(0,10);
+        out.push(iso);
+      }
+      return out;
+    }
+
+    async function parseFileOnce(file) {
+      if (cachedObjectsByDate || parsingInProgress) return;
+      parsingInProgress = true;
+
       log("Lecture du fichier…");
-
       const buf = await readFileAsArrayBuffer(file);
-      let text = "";
 
+      let text = "";
       if (file.name.endsWith(".gz")) {
         log("Décompression .gz…");
         const uint8 = new Uint8Array(buf);
@@ -120,88 +233,180 @@
         text = decodeUTF8(new Uint8Array(buf));
       }
 
-      // Tente JSONL (le plus probable). Si ce n’est pas JSONL, on tentera JSON direct.
-      let objects = [];
+      const map = new Map();
       const lines = splitJsonl(text);
 
       if (lines.length > 1) {
-        log(`Détection JSONL : ${lines.length} lignes. Parsing…`);
-        for (let i = 0; i < lines.length; i++) {
+        log(`Parsing JSONL… (${lines.length} lignes)`);
+        let ok = 0, bad = 0;
+        for (const line of lines) {
           try {
-            objects.push(JSON.parse(lines[i]));
+            const obj = JSON.parse(line);
+            if (obj && obj.date) {
+              // Si plusieurs snapshots même jour, on garde le dernier (souvent le 23:59)
+              map.set(obj.date, obj);
+            }
+            ok++;
           } catch (e) {
-            // Si une ligne est cassée, on le note et continue
-            // (mais idéalement ton fichier est propre)
+            bad++;
           }
         }
+        cachedObjectsByDate = map;
+        log(`✅ Fichier parsé. Lignes OK=${ok}, lignes ignorées=${bad}. Jours trouvés: ${[...map.keys()].sort().join(", ") || "aucun"}`);
       } else {
+        // JSON complet
         log("Pas vraiment JSONL → tentative JSON complet…");
-        objects = [JSON.parse(text)];
+        const obj = JSON.parse(text);
+        if (obj?.date) map.set(obj.date, obj);
+        cachedObjectsByDate = map;
+        log(`✅ JSON chargé. Jours trouvés: ${[...map.keys()].sort().join(", ") || "aucun"}`);
       }
 
-      // Trouver l'objet du jour (souvent snapshot 23:59)
-      const dayObj = objects.find(o => o && o.date === targetDate);
+      parsingInProgress = false;
+    }
 
-      if (!dayObj) {
-        log(`❌ Aucun objet trouvé pour la date ${targetDate}.`);
-        setKPIs({total:0, delayed:0, cancelled:0, partial:0, notOnTime:0, pct:0});
-        return;
-      }
-
-      const trains = dayObj.trains || {};
+    function computeForDay(dayObj) {
+      const trains = dayObj?.trains || {};
       const ids = Object.keys(trains);
       const total = ids.length;
 
       let delayed = 0, cancelled = 0, partial = 0;
       const notOnTimeSet = new Set();
 
+      // Buckets demandés
+      const buckets = {
+        r5_9: [],
+        r10_19: [],
+        r20_39: [],
+        r40p: [],
+        cancels: [],
+        partials: [],
+      };
+
       for (const tid of ids) {
         const t = trains[tid];
-
-        // si ton format inclut found:false
         if (t && t.found === false) continue;
 
         const d = Number(t?.final_delay_min || 0);
         const isDelayed = d > 0;
+
         const isPartial = t?.partially_cancelled === true;
         const isCancelled = t?.cancelled === true || hasCancelDisruption(t);
 
+        // Compteurs KPI
         if (isDelayed) delayed++;
         if (isPartial) partial++;
         if (isCancelled) cancelled++;
 
+        // Union “pas à l’heure”
         if (isDelayed || isPartial || isCancelled) notOnTimeSet.add(tid);
+
+        // Buckets retards (uniquement si retard > 0)
+        if (isDelayed) {
+          if (d >= 5 && d <= 9) buckets.r5_9.push(tid);
+          else if (d >= 10 && d <= 19) buckets.r10_19.push(tid);
+          else if (d >= 20 && d <= 39) buckets.r20_39.push(tid);
+          else if (d >= 40) buckets.r40p.push(tid);
+          // (0-4 min non affichés)
+        }
+
+        // Buckets suppressions
+        if (isCancelled) buckets.cancels.push(tid);
+        if (isPartial) buckets.partials.push(tid);
       }
 
       const notOnTime = notOnTimeSet.size;
       const pct = total ? (notOnTime / total) * 100 : 0;
 
-      log(`✅ OK. Snapshot trouvé: date=${dayObj.date} generated_at=${dayObj.generated_at || "?"}\n` +
-          `Total=${total} | Retardés=${delayed} | Supprimés=${cancelled} | Partiels=${partial} | Pas à l'heure=${notOnTime} (${pct.toFixed(2)}%)`);
-
-      setKPIs({total, delayed, cancelled, partial, notOnTime, pct});
+      return { total, delayed, cancelled, partial, notOnTime, pct, buckets };
     }
 
-    function enableRunIfReady() {
-      runBtn.disabled = !(currentFile && $("date").value);
+    function enableButtons() {
+      const ready = !!currentFile;
+      runBtn.disabled = !ready;
+      runAllBtn.disabled = !ready;
+    }
+
+    async function runOne() {
+      const targetDate = $("date").value;
+      if (!currentFile) return;
+
+      runBtn.disabled = true;
+      runAllBtn.disabled = true;
+
+      try {
+        await parseFileOnce(currentFile);
+
+        const dayObj = cachedObjectsByDate.get(targetDate);
+        if (!dayObj) {
+          log(`❌ Aucun objet trouvé pour ${targetDate}. (Le fichier contient: ${[...cachedObjectsByDate.keys()].sort().join(", ") || "rien"})`);
+          setKPIs({date: targetDate, total:0, delayed:0, cancelled:0, partial:0, notOnTime:0, pct:0});
+          details.style.display = "none";
+          return;
+        }
+
+        const res = computeForDay(dayObj);
+        setKPIs({date: targetDate, ...res});
+        setDetailsBuckets(res.buckets);
+
+        log(
+          `✅ ${targetDate} (generated_at=${dayObj.generated_at || "?"})\n` +
+          `Total=${res.total} | Retardés=${res.delayed} | Supprimés=${res.cancelled} | Partiels=${res.partial}\n` +
+          `Pas à l'heure=${res.notOnTime} (${res.pct.toFixed(2)}%)\n\n` +
+          `Détails (listes) affichés en bas.`
+        );
+      } catch (e) {
+        console.error(e);
+        log("❌ Erreur: " + (e?.message || String(e)));
+      } finally {
+        enableButtons();
+      }
+    }
+
+    async function runAll() {
+      if (!currentFile) return;
+
+      runBtn.disabled = true;
+      runAllBtn.disabled = true;
+
+      try {
+        await parseFileOnce(currentFile);
+
+        const days = dateRangeISO("2026-01-06", "2026-01-09");
+        let out = `📅 Résumé 06→09 janvier 2026\n\n`;
+        for (const d of days) {
+          const obj = cachedObjectsByDate.get(d);
+          if (!obj) {
+            out += `${d} : ❌ pas trouvé dans le fichier\n`;
+            continue;
+          }
+          const res = computeForDay(obj);
+          out += `${d} : Total=${res.total}, Retardés=${res.delayed}, Supprimés=${res.cancelled}, Partiels=${res.partial}, Pas à l'heure=${res.notOnTime} (${res.pct.toFixed(2)}%)\n`;
+        }
+        out += `\n(Le détail par catégories n’est affiché que pour le jour sélectionné.)\n`;
+        log(out);
+      } catch (e) {
+        console.error(e);
+        log("❌ Erreur: " + (e?.message || String(e)));
+      } finally {
+        enableButtons();
+      }
     }
 
     // Drag & drop
-    drop.addEventListener("dragover", (e) => {
-      e.preventDefault();
-      drop.style.borderColor = "#333";
-    });
-    drop.addEventListener("dragleave", () => {
-      drop.style.borderColor = "#aaa";
-    });
-    drop.addEventListener("drop", (e) => {
+    drop.addEventListener("dragover", (e) => { e.preventDefault(); drop.style.borderColor = "#333"; });
+    drop.addEventListener("dragleave", () => { drop.style.borderColor = "#aaa"; });
+    drop.addEventListener("drop", async (e) => {
       e.preventDefault();
       drop.style.borderColor = "#aaa";
       const f = e.dataTransfer.files?.[0];
       if (f) {
         currentFile = f;
-        log(`Fichier sélectionné: ${f.name} (${Math.round(f.size/1024)} Ko)`);
-        enableRunIfReady();
+        cachedObjectsByDate = null;
+        details.style.display = "none";
+        kpis.style.display = "none";
+        log(`Fichier sélectionné: ${f.name} (${Math.round(f.size/1024)} Ko)\n➡️ Clique “Calculer” (jour choisi) ou “Calculer 06→09”.`);
+        enableButtons();
       }
     });
 
@@ -209,26 +414,20 @@
       const f = fileInput.files?.[0];
       if (f) {
         currentFile = f;
-        log(`Fichier sélectionné: ${f.name} (${Math.round(f.size/1024)} Ko)`);
-        enableRunIfReady();
+        cachedObjectsByDate = null;
+        details.style.display = "none";
+        kpis.style.display = "none";
+        log(`Fichier sélectionné: ${f.name} (${Math.round(f.size/1024)} Ko)\n➡️ Clique “Calculer” (jour choisi) ou “Calculer 06→09”.`);
+        enableButtons();
       }
     });
 
-    runBtn.addEventListener("click", async () => {
-      try {
-        runBtn.disabled = true;
-        await parseAndCompute(currentFile, $("date").value);
-      } catch (e) {
-        console.error(e);
-        log("❌ Erreur: " + (e?.message || String(e)));
-      } finally {
-        enableRunIfReady();
-      }
-    });
+    runBtn.addEventListener("click", runOne);
+    runAllBtn.addEventListener("click", runAll);
 
-    $("date").addEventListener("change", enableRunIfReady);
-
+    enableButtons();
     log("Prêt. Charge un fichier pour commencer.");
   </script>
 </body>
 </html>
+```
