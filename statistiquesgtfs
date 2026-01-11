@@ -1,0 +1,553 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Stats GTFS-RT – Local (gtfsrt_history.jsonl.gz)</title>
+  <style>
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial; margin: 24px; line-height: 1.35; }
+    .box { border: 1px dashed #aaa; padding: 18px; border-radius: 12px; }
+    .row { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; margin-top: 12px; }
+    input[type="date"] { padding: 8px 10px; border-radius: 10px; border: 1px solid #ccc; }
+    button { padding: 10px 14px; border: 1px solid #ccc; border-radius: 12px; background: #fff; cursor: pointer; }
+    button:disabled { opacity: .5; cursor: not-allowed; }
+
+    .kpi { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; margin-top: 16px; }
+    .card { border: 1px solid #ddd; border-radius: 14px; padding: 14px; }
+    .label { font-size: 13px; opacity: .75; }
+    .value { font-size: 28px; font-weight: 700; margin-top: 6px; }
+
+    .log { white-space: pre-wrap; background: #f7f7f7; border: 1px solid #eee; border-radius: 12px; padding: 12px; margin-top: 16px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; font-size: 12px; }
+
+    .hint { opacity:.8; font-size: 13px; margin-top: 8px; }
+    .muted { opacity:.7; }
+
+    .details { margin-top: 18px; }
+    .details h2 { margin: 8px 0 10px; }
+    .details-grid { display:grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; }
+    .dcard { border: 1px solid #ddd; border-radius: 14px; padding: 14px; }
+    .dhead { display:flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+    .dtitle { font-weight: 700; }
+    .dcount { opacity: .75; font-size: 13px; }
+    .trainlist { margin-top: 10px; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+      font-size: 12px; white-space: pre-wrap; background: #fafafa; border: 1px solid #eee; border-radius: 10px; padding: 10px; max-height: 180px; overflow:auto; }
+
+    .chips { display:flex; flex-wrap:wrap; gap:8px; margin-top:10px; }
+    .chip { border:1px solid #ddd; border-radius:999px; padding:6px 10px; font-size:12px; background:#fff; }
+  </style>
+</head>
+<body>
+  <h1>Stats GTFS-RT (local) – recherche par date</h1>
+  <p>
+    Charge une fois le fichier <b>gtfsrt_history.jsonl.gz</b> (ou .jsonl/.json),
+    puis sélectionne une date disponible.
+  </p>
+
+  <div id="drop" class="box">
+    <b>Dépose ton fichier ici</b> ou sélectionne-le :
+    <div class="row">
+      <input id="file" type="file" accept=".gz,.jsonl,.json" />
+
+      <label>
+        Jour :
+        <input id="date" type="date" />
+      </label>
+
+      <button id="run" disabled>Calculer (jour)</button>
+
+      <span class="muted">|</span>
+
+      <label>
+        Début :
+        <input id="start" type="date" />
+      </label>
+      <label>
+        Fin :
+        <input id="end" type="date" />
+      </label>
+      <button id="runRange" disabled>Calculer (plage)</button>
+
+      <button id="last7" disabled>7 derniers jours</button>
+    </div>
+
+    <div class="hint">
+      <div>Règles :</div>
+      <ul>
+        <li><b>Retardé</b> = <code>final_delay_min &gt; 0</code></li>
+        <li><b>Partiel</b> = <code>partially_cancelled === true</code></li>
+        <li><b>Supprimé</b> = <code>cancelled === true</code> OU disruption <code>trip canceled</code> / <code>NO_SERVICE</code></li>
+        <li><b>Pas à l'heure</b> = union (retardé ∪ partiel ∪ supprimé) sans double-compte</li>
+      </ul>
+      <div class="muted">
+        Note : un train peut être à la fois “retardé” et “partiellement supprimé”.
+        Les compteurs “Retardés/Supprimés/Partiels” sont indépendants.
+        Le “Pas à l’heure” est une union (sans double-compte).
+      </div>
+
+      <div id="availableWrap" style="margin-top:10px; display:none;">
+        <div class="muted">Dates trouvées dans le fichier :</div>
+        <div class="chips" id="available"></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="kpi" id="kpis" style="display:none;">
+    <div class="card"><div class="label">Date</div><div class="value" id="k_date">—</div></div>
+    <div class="card"><div class="label">Total trains</div><div class="value" id="total">—</div></div>
+    <div class="card"><div class="label">Retardés</div><div class="value" id="delayed">—</div></div>
+    <div class="card"><div class="label">Supprimés</div><div class="value" id="cancelled">—</div></div>
+    <div class="card"><div class="label">Partiellement supprimés</div><div class="value" id="partial">—</div></div>
+    <div class="card"><div class="label">Pas à l’heure</div><div class="value" id="notOnTime">—</div></div>
+    <div class="card"><div class="label">% pas à l’heure</div><div class="value" id="pct">—</div></div>
+  </div>
+
+  <!-- Détails par catégories (jour sélectionné uniquement) -->
+  <div class="details" id="details" style="display:none;">
+    <h2>Détails du jour sélectionné</h2>
+    <div class="details-grid">
+      <div class="dcard">
+        <div class="dhead">
+          <div class="dtitle">Retards (5 à 9 min)</div>
+          <div class="dcount" id="c_5_9">0</div>
+        </div>
+        <div class="trainlist" id="l_5_9">—</div>
+      </div>
+
+      <div class="dcard">
+        <div class="dhead">
+          <div class="dtitle">Retards (10 à 19 min)</div>
+          <div class="dcount" id="c_10_19">0</div>
+        </div>
+        <div class="trainlist" id="l_10_19">—</div>
+      </div>
+
+      <div class="dcard">
+        <div class="dhead">
+          <div class="dtitle">Retards (20 à 39 min)</div>
+          <div class="dcount" id="c_20_39">0</div>
+        </div>
+        <div class="trainlist" id="l_20_39">—</div>
+      </div>
+
+      <div class="dcard">
+        <div class="dhead">
+          <div class="dtitle">Retards (≥ 40 min)</div>
+          <div class="dcount" id="c_40p">0</div>
+        </div>
+        <div class="trainlist" id="l_40p">—</div>
+      </div>
+
+      <div class="dcard">
+        <div class="dhead">
+          <div class="dtitle">Suppressions</div>
+          <div class="dcount" id="c_cancel">0</div>
+        </div>
+        <div class="trainlist" id="l_cancel">—</div>
+      </div>
+
+      <div class="dcard">
+        <div class="dhead">
+          <div class="dtitle">Suppressions partielles</div>
+          <div class="dcount" id="c_partial">0</div>
+        </div>
+        <div class="trainlist" id="l_partial">—</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="log" id="log">Log…</div>
+
+  <script src="https://cdn.jsdelivr.net/npm/pako@2.1.0/dist/pako.min.js"></script>
+
+  <script>
+    const $ = (id) => document.getElementById(id);
+    const drop = $("drop");
+    const fileInput = $("file");
+    const runBtn = $("run");
+    const runRangeBtn = $("runRange");
+    const last7Btn = $("last7");
+    const logEl = $("log");
+    const kpis = $("kpis");
+    const details = $("details");
+
+    const dateEl = $("date");
+    const startEl = $("start");
+    const endEl = $("end");
+
+    const availableWrap = $("availableWrap");
+    const availableEl = $("available");
+
+    let currentFile = null;
+    let cachedObjectsByDate = null; // Map(date -> obj)
+    let parsingInProgress = false;
+    let availableDates = []; // sorted array of yyyy-mm-dd
+
+    function log(msg) { logEl.textContent = msg; }
+
+    function hasCancelDisruption(trainObj) {
+      const dis = trainObj?.disruptions || [];
+      return dis.some(d => d?.severity === "trip canceled" || d?.effect === "NO_SERVICE");
+    }
+
+    function setKPIs({date, total, delayed, cancelled, partial, notOnTime, pct}) {
+      $("k_date").textContent = date || "—";
+      $("total").textContent = total ?? "—";
+      $("delayed").textContent = delayed ?? "—";
+      $("cancelled").textContent = cancelled ?? "—";
+      $("partial").textContent = partial ?? "—";
+      $("notOnTime").textContent = notOnTime ?? "—";
+      $("pct").textContent = (isFinite(pct) ? pct.toFixed(2) : "0.00") + " %";
+      kpis.style.display = "";
+    }
+
+    function fmtList(arr) {
+      if (!arr || arr.length === 0) return "—";
+      const sorted = [...arr].sort((a,b) => {
+        const na = Number(a), nb = Number(b);
+        if (Number.isFinite(na) && Number.isFinite(nb)) return na - nb;
+        return String(a).localeCompare(String(b));
+      });
+      return sorted.join(", ");
+    }
+
+    function setDetailsBuckets(b) {
+      const map = [
+        ["c_5_9", "l_5_9", b.r5_9],
+        ["c_10_19", "l_10_19", b.r10_19],
+        ["c_20_39", "l_20_39", b.r20_39],
+        ["c_40p", "l_40p", b.r40p],
+        ["c_cancel", "l_cancel", b.cancels],
+        ["c_partial", "l_partial", b.partials],
+      ];
+      for (const [cid, lid, arr] of map) {
+        $(cid).textContent = (arr?.length ?? 0) + " train(s)";
+        $(lid).textContent = fmtList(arr);
+      }
+      details.style.display = "";
+    }
+
+    async function readFileAsArrayBuffer(file) {
+      return new Promise((resolve, reject) => {
+        const r = new FileReader();
+        r.onload = () => resolve(r.result);
+        r.onerror = () => reject(r.error);
+        r.readAsArrayBuffer(file);
+      });
+    }
+
+    function decodeUTF8(uint8) {
+      return new TextDecoder("utf-8").decode(uint8);
+    }
+
+    function splitJsonl(text) {
+      return text.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+    }
+
+    function dateRangeISO(startISO, endISO) {
+      const out = [];
+      const start = new Date(startISO + "T00:00:00");
+      const end = new Date(endISO + "T00:00:00");
+      for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
+        out.push(d.toISOString().slice(0,10));
+      }
+      return out;
+    }
+
+    function clampToAvailable(iso) {
+      if (!availableDates.length) return iso;
+      if (availableDates.includes(iso)) return iso;
+      // sinon, on prend le plus proche <= iso, sinon le premier
+      const idx = availableDates.findIndex(d => d > iso);
+      if (idx === -1) return availableDates[availableDates.length - 1];
+      if (idx === 0) return availableDates[0];
+      return availableDates[idx - 1];
+    }
+
+    function renderAvailableDatesChips() {
+      availableEl.innerHTML = "";
+      if (!availableDates.length) {
+        availableWrap.style.display = "none";
+        return;
+      }
+      // on affiche les ~20 derniers pour éviter un mur de chips
+      const show = availableDates.slice(-20);
+      for (const d of show) {
+        const chip = document.createElement("button");
+        chip.className = "chip";
+        chip.textContent = d;
+        chip.title = "Cliquer pour sélectionner ce jour";
+        chip.addEventListener("click", () => {
+          dateEl.value = d;
+          runOne();
+        });
+        availableEl.appendChild(chip);
+      }
+      availableWrap.style.display = "";
+    }
+
+    function syncDateInputsMinMax() {
+      if (!availableDates.length) return;
+      const min = availableDates[0];
+      const max = availableDates[availableDates.length - 1];
+
+      for (const el of [dateEl, startEl, endEl]) {
+        el.min = min;
+        el.max = max;
+      }
+
+      if (!dateEl.value) dateEl.value = max;
+      if (!startEl.value) startEl.value = min;
+      if (!endEl.value) endEl.value = max;
+    }
+
+    async function parseFileOnce(file) {
+      if (cachedObjectsByDate || parsingInProgress) return;
+      parsingInProgress = true;
+
+      log("Lecture du fichier…");
+      const buf = await readFileAsArrayBuffer(file);
+
+      let text = "";
+      if (file.name.endsWith(".gz")) {
+        log("Décompression .gz…");
+        const uint8 = new Uint8Array(buf);
+        const inflated = window.pako.inflate(uint8);
+        text = decodeUTF8(inflated);
+      } else {
+        text = decodeUTF8(new Uint8Array(buf));
+      }
+
+      const map = new Map();
+      const lines = splitJsonl(text);
+
+      if (lines.length > 1) {
+        log(`Parsing JSONL… (${lines.length} lignes)`);
+        let ok = 0, bad = 0;
+        for (const line of lines) {
+          try {
+            const obj = JSON.parse(line);
+            if (obj && obj.date) {
+              // si plusieurs snapshots même jour → on garde le dernier
+              map.set(obj.date, obj);
+            }
+            ok++;
+          } catch (e) {
+            bad++;
+          }
+        }
+        cachedObjectsByDate = map;
+        availableDates = [...map.keys()].sort();
+        log(`✅ Fichier parsé. Lignes OK=${ok}, lignes ignorées=${bad}. Jours trouvés: ${availableDates.join(", ") || "aucun"}`);
+      } else {
+        // JSON complet
+        log("Pas vraiment JSONL → tentative JSON complet…");
+        const obj = JSON.parse(text);
+        if (obj?.date) map.set(obj.date, obj);
+        cachedObjectsByDate = map;
+        availableDates = [...map.keys()].sort();
+        log(`✅ JSON chargé. Jours trouvés: ${availableDates.join(", ") || "aucun"}`);
+      }
+
+      syncDateInputsMinMax();
+      renderAvailableDatesChips();
+      parsingInProgress = false;
+    }
+
+    function computeForDay(dayObj) {
+      const trains = dayObj?.trains || {};
+      const ids = Object.keys(trains);
+      const total = ids.length;
+
+      let delayed = 0, cancelled = 0, partial = 0;
+      const notOnTimeSet = new Set();
+
+      const buckets = {
+        r5_9: [],
+        r10_19: [],
+        r20_39: [],
+        r40p: [],
+        cancels: [],
+        partials: [],
+      };
+
+      for (const tid of ids) {
+        const t = trains[tid];
+        if (t && t.found === false) continue;
+
+        const d = Number(t?.final_delay_min || 0);
+        const isDelayed = d > 0;
+
+        const isPartial = t?.partially_cancelled === true;
+        const isCancelled = t?.cancelled === true || hasCancelDisruption(t);
+
+        if (isDelayed) delayed++;
+        if (isPartial) partial++;
+        if (isCancelled) cancelled++;
+
+        if (isDelayed || isPartial || isCancelled) notOnTimeSet.add(tid);
+
+        if (isDelayed) {
+          if (d >= 5 && d <= 9) buckets.r5_9.push(tid);
+          else if (d >= 10 && d <= 19) buckets.r10_19.push(tid);
+          else if (d >= 20 && d <= 39) buckets.r20_39.push(tid);
+          else if (d >= 40) buckets.r40p.push(tid);
+        }
+
+        if (isCancelled) buckets.cancels.push(tid);
+        if (isPartial) buckets.partials.push(tid);
+      }
+
+      const notOnTime = notOnTimeSet.size;
+      const pct = total ? (notOnTime / total) * 100 : 0;
+
+      return { total, delayed, cancelled, partial, notOnTime, pct, buckets };
+    }
+
+    function enableButtons() {
+      const ready = !!currentFile;
+      runBtn.disabled = !ready;
+      runRangeBtn.disabled = !ready;
+      last7Btn.disabled = !ready;
+    }
+
+    async function runOne() {
+      if (!currentFile) return;
+
+      runBtn.disabled = true;
+      runRangeBtn.disabled = true;
+      last7Btn.disabled = true;
+
+      try {
+        await parseFileOnce(currentFile);
+
+        const targetDate = clampToAvailable(dateEl.value);
+        dateEl.value = targetDate;
+
+        const dayObj = cachedObjectsByDate.get(targetDate);
+        if (!dayObj) {
+          log(`❌ Aucun objet trouvé pour ${targetDate}. (Le fichier contient: ${availableDates.join(", ") || "rien"})`);
+          setKPIs({date: targetDate, total:0, delayed:0, cancelled:0, partial:0, notOnTime:0, pct:0});
+          details.style.display = "none";
+          return;
+        }
+
+        const res = computeForDay(dayObj);
+        setKPIs({date: targetDate, ...res});
+        setDetailsBuckets(res.buckets);
+
+        log(
+          `✅ ${targetDate} (generated_at=${dayObj.generated_at || "?"})\n` +
+          `Total=${res.total} | Retardés=${res.delayed} | Supprimés=${res.cancelled} | Partiels=${res.partial}\n` +
+          `Pas à l'heure=${res.notOnTime} (${res.pct.toFixed(2)}%)\n\n` +
+          `Détails (listes) affichés en bas.`
+        );
+      } catch (e) {
+        console.error(e);
+        log("❌ Erreur: " + (e?.message || String(e)));
+      } finally {
+        enableButtons();
+      }
+    }
+
+    async function runRange(startISO, endISO) {
+      if (!currentFile) return;
+
+      runBtn.disabled = true;
+      runRangeBtn.disabled = true;
+      last7Btn.disabled = true;
+
+      try {
+        await parseFileOnce(currentFile);
+
+        // sécurisation
+        let s = clampToAvailable(startISO);
+        let e = clampToAvailable(endISO);
+        if (s > e) { const tmp = s; s = e; e = tmp; }
+
+        startEl.value = s;
+        endEl.value = e;
+
+        const days = dateRangeISO(s, e).filter(d => availableDates.includes(d));
+        let out = `📅 Résumé ${s} → ${e}\n`;
+        out += `(jours présents: ${days.length} / ${dateRangeISO(s,e).length})\n\n`;
+
+        if (!days.length) {
+          out += "❌ Aucun jour de cette plage n'est présent dans le fichier.\n";
+          log(out);
+          return;
+        }
+
+        for (const d of days) {
+          const obj = cachedObjectsByDate.get(d);
+          if (!obj) continue;
+          const res = computeForDay(obj);
+          out += `${d} : Total=${res.total}, Retardés=${res.delayed}, Supprimés=${res.cancelled}, Partiels=${res.partial}, Pas à l'heure=${res.notOnTime} (${res.pct.toFixed(2)}%)\n`;
+        }
+
+        out += `\n(Le détail par catégories reste affiché uniquement pour le jour sélectionné.)\n`;
+        log(out);
+      } catch (e) {
+        console.error(e);
+        log("❌ Erreur: " + (e?.message || String(e)));
+      } finally {
+        enableButtons();
+      }
+    }
+
+    async function runLast7() {
+      if (!currentFile) return;
+      await parseFileOnce(currentFile);
+      if (!availableDates.length) return;
+
+      const max = availableDates[availableDates.length - 1];
+      const idxStart = Math.max(0, availableDates.length - 7);
+      const min7 = availableDates[idxStart];
+
+      startEl.value = min7;
+      endEl.value = max;
+      await runRange(min7, max);
+    }
+
+    // Drag & drop
+    drop.addEventListener("dragover", (e) => { e.preventDefault(); drop.style.borderColor = "#333"; });
+    drop.addEventListener("dragleave", () => { drop.style.borderColor = "#aaa"; });
+    drop.addEventListener("drop", async (e) => {
+      e.preventDefault();
+      drop.style.borderColor = "#aaa";
+      const f = e.dataTransfer.files?.[0];
+      if (f) {
+        currentFile = f;
+        cachedObjectsByDate = null;
+        availableDates = [];
+        details.style.display = "none";
+        kpis.style.display = "none";
+        availableWrap.style.display = "none";
+        log(`Fichier sélectionné: ${f.name} (${Math.round(f.size/1024)} Ko)\n➡️ Clique “Calculer (jour)” ou “Calculer (plage)”.`);
+        enableButtons();
+      }
+    });
+
+    fileInput.addEventListener("change", () => {
+      const f = fileInput.files?.[0];
+      if (f) {
+        currentFile = f;
+        cachedObjectsByDate = null;
+        availableDates = [];
+        details.style.display = "none";
+        kpis.style.display = "none";
+        availableWrap.style.display = "none";
+        log(`Fichier sélectionné: ${f.name} (${Math.round(f.size/1024)} Ko)\n➡️ Clique “Calculer (jour)” ou “Calculer (plage)”.`);
+        enableButtons();
+      }
+    });
+
+    runBtn.addEventListener("click", runOne);
+    runRangeBtn.addEventListener("click", () => runRange(startEl.value, endEl.value));
+    last7Btn.addEventListener("click", runLast7);
+
+    enableButtons();
+    log("Prêt. Charge gtfsrt_history.jsonl.gz pour commencer.");
+  </script>
+</body>
+</html>
