@@ -21,7 +21,6 @@
       font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; font-size: 12px; }
 
     .hint { opacity:.8; font-size: 13px; margin-top: 8px; }
-    .muted { opacity:.7; }
 
     .details { margin-top: 18px; }
     .details h2 { margin: 8px 0 10px; }
@@ -32,11 +31,21 @@
     .dcount { opacity: .75; font-size: 13px; }
     .trainlist { margin-top: 10px; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
       font-size: 12px; white-space: pre-wrap; background: #fafafa; border: 1px solid #eee; border-radius: 10px; padding: 10px; max-height: 180px; overflow:auto; }
+    .muted { opacity:.7; }
 
     .chips { display:flex; flex-wrap:wrap; gap:8px; margin-top:10px; }
-    .chip { border:1px solid #ddd; border-radius:999px; padding:6px 10px; font-size:12px; background:#fff; }
+    .chip { border:1px solid #ddd; border-radius:999px; padding:6px 10px; font-size:12px; background:#fff; cursor:pointer; }
+    .chip:hover { border-color:#999; }
+
+    canvas { width: 100% !important; max-width: 100%; }
   </style>
+
+  <!-- Décompression .gz -->
+  <script src="https://cdn.jsdelivr.net/npm/pako@2.1.0/dist/pako.min.js"></script>
+  <!-- Graphiques -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 </head>
+
 <body>
   <h1>Stats GTFS-RT (local) – recherche par date</h1>
   <p>
@@ -53,7 +62,6 @@
         Jour :
         <input id="date" type="date" />
       </label>
-
       <button id="run" disabled>Calculer (jour)</button>
 
       <span class="muted">|</span>
@@ -67,26 +75,23 @@
         <input id="end" type="date" />
       </label>
       <button id="runRange" disabled>Calculer (plage)</button>
-
       <button id="last7" disabled>7 derniers jours</button>
     </div>
 
     <div class="hint">
-      <div>Règles :</div>
+      <div>Règles (format GTFSRT “history” que tu m’as montré) :</div>
       <ul>
-        <li><b>Retardé</b> = <code>final_delay_min &gt; 0</code></li>
-        <li><b>Partiel</b> = <code>partially_cancelled === true</code></li>
-        <li><b>Supprimé</b> = <code>cancelled === true</code> OU disruption <code>trip canceled</code> / <code>NO_SERVICE</code></li>
-        <li><b>Pas à l'heure</b> = union (retardé ∪ partiel ∪ supprimé) sans double-compte</li>
+        <li><b>Supprimé</b> = <code>status === "CANCELED"</code></li>
+        <li><b>Partiel</b> = <code>status === "PARTIAL_CANCELLATION"</code></li>
+        <li><b>Retardé</b> = <code>max(stops) &gt; 0</code> ou <code>status === "DELAYED"</code></li>
+        <li><b>Pas à l’heure</b> = union (retardé ∪ partiel ∪ supprimé) sans double-compte</li>
       </ul>
       <div class="muted">
-        Note : un train peut être à la fois “retardé” et “partiellement supprimé”.
-        Les compteurs “Retardés/Supprimés/Partiels” sont indépendants.
-        Le “Pas à l’heure” est une union (sans double-compte).
+        Les buckets retards (5–9 / 10–19 / 20–39 / ≥40) sont basés sur <code>max(stops)</code> (retard max du train sur ses arrêts).
       </div>
 
       <div id="availableWrap" style="margin-top:10px; display:none;">
-        <div class="muted">Dates trouvées dans le fichier :</div>
+        <div class="muted">Dernières dates trouvées dans le fichier :</div>
         <div class="chips" id="available"></div>
       </div>
     </div>
@@ -100,6 +105,44 @@
     <div class="card"><div class="label">Partiellement supprimés</div><div class="value" id="partial">—</div></div>
     <div class="card"><div class="label">Pas à l’heure</div><div class="value" id="notOnTime">—</div></div>
     <div class="card"><div class="label">% pas à l’heure</div><div class="value" id="pct">—</div></div>
+  </div>
+
+  <!-- Graphiques -->
+  <div class="details" id="charts" style="display:none;">
+    <h2>Graphiques</h2>
+    <div class="details-grid">
+      <div class="dcard">
+        <div class="dhead">
+          <div class="dtitle">% Pas à l’heure (par jour)</div>
+          <div class="dcount muted" id="chart_note">—</div>
+        </div>
+        <canvas id="chart_pct" height="140"></canvas>
+      </div>
+
+      <div class="dcard">
+        <div class="dhead">
+          <div class="dtitle">Volumes (par jour)</div>
+          <div class="dcount muted">Retardés / Partiels / Supprimés</div>
+        </div>
+        <canvas id="chart_stack" height="140"></canvas>
+      </div>
+
+      <div class="dcard">
+        <div class="dhead">
+          <div class="dtitle">Répartition (jour sélectionné)</div>
+          <div class="dcount muted" id="chart_day">—</div>
+        </div>
+        <canvas id="chart_donut" height="140"></canvas>
+      </div>
+
+      <div class="dcard">
+        <div class="dhead">
+          <div class="dtitle">Histogramme des retards (jour)</div>
+          <div class="dcount muted">5–9 / 10–19 / 20–39 / ≥40</div>
+        </div>
+        <canvas id="chart_buckets" height="140"></canvas>
+      </div>
+    </div>
   </div>
 
   <!-- Détails par catégories (jour sélectionné uniquement) -->
@@ -158,8 +201,6 @@
 
   <div class="log" id="log">Log…</div>
 
-  <script src="https://cdn.jsdelivr.net/npm/pako@2.1.0/dist/pako.min.js"></script>
-
   <script>
     const $ = (id) => document.getElementById(id);
     const drop = $("drop");
@@ -179,16 +220,19 @@
     const availableEl = $("available");
 
     let currentFile = null;
-    let cachedObjectsByDate = null; // Map(date -> obj)
+    let cachedObjectsByDate = null;  // Map(date -> obj)
     let parsingInProgress = false;
-    let availableDates = []; // sorted array of yyyy-mm-dd
+    let availableDates = [];         // sorted array YYYY-MM-DD
+
+    // Charts
+    let chartPct = null;
+    let chartStack = null;
+    let chartDonut = null;
+    let chartBuckets = null;
+
+    let computedByDate = new Map();  // date -> computed result
 
     function log(msg) { logEl.textContent = msg; }
-
-    function hasCancelDisruption(trainObj) {
-      const dis = trainObj?.disruptions || [];
-      return dis.some(d => d?.severity === "trip canceled" || d?.effect === "NO_SERVICE");
-    }
 
     function setKPIs({date, total, delayed, cancelled, partial, notOnTime, pct}) {
       $("k_date").textContent = date || "—";
@@ -257,7 +301,6 @@
     function clampToAvailable(iso) {
       if (!availableDates.length) return iso;
       if (availableDates.includes(iso)) return iso;
-      // sinon, on prend le plus proche <= iso, sinon le premier
       const idx = availableDates.findIndex(d => d > iso);
       if (idx === -1) return availableDates[availableDates.length - 1];
       if (idx === 0) return availableDates[0];
@@ -270,7 +313,6 @@
         availableWrap.style.display = "none";
         return;
       }
-      // on affiche les ~20 derniers pour éviter un mur de chips
       const show = availableDates.slice(-20);
       for (const d of show) {
         const chip = document.createElement("button");
@@ -328,8 +370,7 @@
           try {
             const obj = JSON.parse(line);
             if (obj && obj.date) {
-              // si plusieurs snapshots même jour → on garde le dernier
-              map.set(obj.date, obj);
+              map.set(obj.date, obj); // si plusieurs snapshots/jour -> dernier gagne
             }
             ok++;
           } catch (e) {
@@ -340,7 +381,6 @@
         availableDates = [...map.keys()].sort();
         log(`✅ Fichier parsé. Lignes OK=${ok}, lignes ignorées=${bad}. Jours trouvés: ${availableDates.join(", ") || "aucun"}`);
       } else {
-        // JSON complet
         log("Pas vraiment JSONL → tentative JSON complet…");
         const obj = JSON.parse(text);
         if (obj?.date) map.set(obj.date, obj);
@@ -354,69 +394,65 @@
       parsingInProgress = false;
     }
 
+    // === LOGIQUE GTFSRT HISTORY ===
     function computeForDay(dayObj) {
-  const trains = dayObj?.trains || {};
-  const ids = Object.keys(trains);
-  const total = ids.length;
+      const trains = dayObj?.trains || {};
+      const ids = Object.keys(trains);
+      const total = Number(dayObj?.count ?? ids.length);
 
-  let delayed = 0, cancelled = 0, partial = 0;
-  const notOnTimeSet = new Set();
+      let delayed = 0, cancelled = 0, partial = 0;
+      const notOnTimeSet = new Set();
 
-  const buckets = {
-    r5_9: [],
-    r10_19: [],
-    r20_39: [],
-    r40p: [],
-    cancels: [],
-    partials: [],
-  };
+      const buckets = {
+        r5_9: [],
+        r10_19: [],
+        r20_39: [],
+        r40p: [],
+        cancels: [],
+        partials: [],
+      };
 
-  function maxStopDelayMinutes(stopsObj) {
-    if (!stopsObj || typeof stopsObj !== "object") return 0;
-    let m = 0;
-    for (const v of Object.values(stopsObj)) {
-      const n = Number(v);
-      if (Number.isFinite(n) && n > m) m = n;
+      function maxStopDelayMinutes(stopsObj) {
+        if (!stopsObj || typeof stopsObj !== "object") return 0;
+        let m = 0;
+        for (const v of Object.values(stopsObj)) {
+          const n = Number(v);
+          if (Number.isFinite(n) && n > m) m = n;
+        }
+        return m;
+      }
+
+      for (const tid of ids) {
+        const t = trains[tid] || {};
+        const status = String(t.status || "").toUpperCase();
+        const d = maxStopDelayMinutes(t.stops);
+
+        const isCancelled = (status === "CANCELED" || status === "CANCELLED");
+        const isPartial = (status === "PARTIAL_CANCELLATION" || status === "PARTIALLY_CANCELED");
+        const isDelayed = (!isCancelled && !isPartial) && (status === "DELAYED" || d > 0);
+
+        if (isDelayed) delayed++;
+        if (isPartial) partial++;
+        if (isCancelled) cancelled++;
+
+        if (isDelayed || isPartial || isCancelled) notOnTimeSet.add(tid);
+
+        if (isDelayed && d > 0) {
+          if (d >= 5 && d <= 9) buckets.r5_9.push(tid);
+          else if (d >= 10 && d <= 19) buckets.r10_19.push(tid);
+          else if (d >= 20 && d <= 39) buckets.r20_39.push(tid);
+          else if (d >= 40) buckets.r40p.push(tid);
+        }
+
+        if (isCancelled) buckets.cancels.push(tid);
+        if (isPartial) buckets.partials.push(tid);
+      }
+
+      const notOnTime = notOnTimeSet.size;
+      const pct = total ? (notOnTime / total) * 100 : 0;
+
+      return { total, delayed, cancelled, partial, notOnTime, pct, buckets };
     }
-    return m;
-  }
-
-  for (const tid of ids) {
-    const t = trains[tid] || {};
-    const status = String(t.status || "").toUpperCase();
-
-    const d = maxStopDelayMinutes(t.stops); // ⭐ clé de ton format
-    const isCancelled = (status === "CANCELED" || status === "CANCELLED");
-    const isPartial = (status === "PARTIAL_CANCELLATION" || status === "PARTIALLY_CANCELED");
-
-    // "DELAYED" ou max stop delay > 0
-    const isDelayed = (!isCancelled && !isPartial) && (status === "DELAYED" || d > 0);
-
-    // Compteurs KPI
-    if (isDelayed) delayed++;
-    if (isPartial) partial++;
-    if (isCancelled) cancelled++;
-
-    // Union “pas à l’heure”
-    if (isDelayed || isPartial || isCancelled) notOnTimeSet.add(tid);
-
-    // Buckets retards: basé sur d (max des stops)
-    if (isDelayed && d > 0) {
-      if (d >= 5 && d <= 9) buckets.r5_9.push(tid);
-      else if (d >= 10 && d <= 19) buckets.r10_19.push(tid);
-      else if (d >= 20 && d <= 39) buckets.r20_39.push(tid);
-      else if (d >= 40) buckets.r40p.push(tid);
-    }
-
-    if (isCancelled) buckets.cancels.push(tid);
-    if (isPartial) buckets.partials.push(tid);
-  }
-
-  const notOnTime = notOnTimeSet.size;
-  const pct = total ? (notOnTime / total) * 100 : 0;
-
-  return { total, delayed, cancelled, partial, notOnTime, pct, buckets };
-}
 
     function enableButtons() {
       const ready = !!currentFile;
@@ -425,6 +461,139 @@
       last7Btn.disabled = !ready;
     }
 
+    // ====== CHARTS ======
+    function onTimeCount(res) {
+      return Math.max(0, (res.total || 0) - (res.notOnTime || 0));
+    }
+
+    function ensureChartsVisible() {
+      $("charts").style.display = "";
+    }
+
+    function computeSeriesForRange(startISO, endISO) {
+      const daysAll = dateRangeISO(startISO, endISO);
+      const days = daysAll.filter(d => cachedObjectsByDate.has(d));
+
+      const labels = [];
+      const pct = [];
+      const delayed = [];
+      const partial = [];
+      const cancelled = [];
+
+      for (const d of days) {
+        const obj = cachedObjectsByDate.get(d);
+        const res = computeForDay(obj);
+        computedByDate.set(d, res);
+
+        labels.push(d);
+        pct.push(Number(res.pct || 0));
+        delayed.push(Number(res.delayed || 0));
+        partial.push(Number(res.partial || 0));
+        cancelled.push(Number(res.cancelled || 0));
+      }
+      return { labels, pct, delayed, partial, cancelled, daysPresent: days.length, daysTotal: daysAll.length };
+    }
+
+    function renderCharts(rangeStart, rangeEnd, selectedDate) {
+      ensureChartsVisible();
+
+      const series = computeSeriesForRange(rangeStart, rangeEnd);
+
+      $("chart_note").textContent = `${rangeStart} → ${rangeEnd} (jours présents: ${series.daysPresent}/${series.daysTotal})`;
+      $("chart_day").textContent = selectedDate || "—";
+
+      // 1) Courbe % pas à l’heure
+      const ctxPct = $("chart_pct").getContext("2d");
+      if (chartPct) chartPct.destroy();
+      chartPct = new Chart(ctxPct, {
+        type: "line",
+        data: {
+          labels: series.labels,
+          datasets: [{
+            label: "% pas à l’heure",
+            data: series.pct,
+            tension: 0.25,
+            pointRadius: 3,
+          }]
+        },
+        options: {
+          responsive: true,
+          plugins: { legend: { display: true } },
+          scales: {
+            y: { beginAtZero: true, ticks: { callback: (v) => v + "%" } }
+          }
+        }
+      });
+
+      // 2) Barres empilées volumes
+      const ctxStack = $("chart_stack").getContext("2d");
+      if (chartStack) chartStack.destroy();
+      chartStack = new Chart(ctxStack, {
+        type: "bar",
+        data: {
+          labels: series.labels,
+          datasets: [
+            { label: "Retardés", data: series.delayed, stack: "s" },
+            { label: "Partiels", data: series.partial, stack: "s" },
+            { label: "Supprimés", data: series.cancelled, stack: "s" },
+          ]
+        },
+        options: {
+          responsive: true,
+          plugins: { legend: { display: true } },
+          scales: {
+            x: { stacked: true },
+            y: { stacked: true, beginAtZero: true }
+          }
+        }
+      });
+
+      // Donut + histogramme du jour
+      const dayObj = cachedObjectsByDate.get(selectedDate);
+      if (!dayObj) return;
+
+      const dayRes = computedByDate.get(selectedDate) || computeForDay(dayObj);
+      computedByDate.set(selectedDate, dayRes);
+
+      const ontime = onTimeCount(dayRes);
+
+      const ctxDonut = $("chart_donut").getContext("2d");
+      if (chartDonut) chartDonut.destroy();
+      chartDonut = new Chart(ctxDonut, {
+        type: "doughnut",
+        data: {
+          labels: ["À l’heure", "Retardés", "Partiels", "Supprimés"],
+          datasets: [{ data: [ontime, dayRes.delayed, dayRes.partial, dayRes.cancelled] }]
+        },
+        options: { responsive: true, plugins: { legend: { display: true } } }
+      });
+
+      const ctxBuckets = $("chart_buckets").getContext("2d");
+      if (chartBuckets) chartBuckets.destroy();
+      const b = dayRes.buckets || { r5_9:[], r10_19:[], r20_39:[], r40p:[] };
+      chartBuckets = new Chart(ctxBuckets, {
+        type: "bar",
+        data: {
+          labels: ["5–9", "10–19", "20–39", "≥40"],
+          datasets: [{
+            label: "Nombre de trains",
+            data: [
+              b.r5_9?.length || 0,
+              b.r10_19?.length || 0,
+              b.r20_39?.length || 0,
+              b.r40p?.length || 0
+            ]
+          }]
+        },
+        options: {
+          responsive: true,
+          plugins: { legend: { display: false } },
+          scales: { y: { beginAtZero: true } }
+        }
+      });
+    }
+
+    // ====== ACTIONS ======
     async function runOne() {
       if (!currentFile) return;
 
@@ -443,18 +612,28 @@
           log(`❌ Aucun objet trouvé pour ${targetDate}. (Le fichier contient: ${availableDates.join(", ") || "rien"})`);
           setKPIs({date: targetDate, total:0, delayed:0, cancelled:0, partial:0, notOnTime:0, pct:0});
           details.style.display = "none";
+          $("charts").style.display = "none";
           return;
         }
 
         const res = computeForDay(dayObj);
+        computedByDate.set(targetDate, res);
+
         setKPIs({date: targetDate, ...res});
         setDetailsBuckets(res.buckets);
+
+        const rs = clampToAvailable(startEl.value || targetDate);
+        const re = clampToAvailable(endEl.value || targetDate);
+        startEl.value = rs;
+        endEl.value = re;
+
+        renderCharts(rs, re, targetDate);
 
         log(
           `✅ ${targetDate} (generated_at=${dayObj.generated_at || "?"})\n` +
           `Total=${res.total} | Retardés=${res.delayed} | Supprimés=${res.cancelled} | Partiels=${res.partial}\n` +
           `Pas à l'heure=${res.notOnTime} (${res.pct.toFixed(2)}%)\n\n` +
-          `Détails (listes) affichés en bas.`
+          `Graphiques mis à jour + détails en bas.`
         );
       } catch (e) {
         console.error(e);
@@ -474,7 +653,6 @@
       try {
         await parseFileOnce(currentFile);
 
-        // sécurisation
         let s = clampToAvailable(startISO);
         let e = clampToAvailable(endISO);
         if (s > e) { const tmp = s; s = e; e = tmp; }
@@ -482,24 +660,42 @@
         startEl.value = s;
         endEl.value = e;
 
-        const days = dateRangeISO(s, e).filter(d => availableDates.includes(d));
+        const daysAll = dateRangeISO(s, e);
+        const days = daysAll.filter(d => cachedObjectsByDate.has(d));
+
         let out = `📅 Résumé ${s} → ${e}\n`;
-        out += `(jours présents: ${days.length} / ${dateRangeISO(s,e).length})\n\n`;
+        out += `(jours présents: ${days.length}/${daysAll.length})\n\n`;
 
         if (!days.length) {
           out += "❌ Aucun jour de cette plage n'est présent dans le fichier.\n";
           log(out);
+          $("charts").style.display = "none";
           return;
         }
 
         for (const d of days) {
           const obj = cachedObjectsByDate.get(d);
-          if (!obj) continue;
           const res = computeForDay(obj);
+          computedByDate.set(d, res);
           out += `${d} : Total=${res.total}, Retardés=${res.delayed}, Supprimés=${res.cancelled}, Partiels=${res.partial}, Pas à l'heure=${res.notOnTime} (${res.pct.toFixed(2)}%)\n`;
         }
 
-        out += `\n(Le détail par catégories reste affiché uniquement pour le jour sélectionné.)\n`;
+        // On choisit une date "valide" pour donut + détails : soit dateEl si dans la plage, sinon le dernier jour présent
+        let selected = clampToAvailable(dateEl.value || days[days.length - 1]);
+        if (!cachedObjectsByDate.has(selected) || selected < s || selected > e) selected = days[days.length - 1];
+        dateEl.value = selected;
+
+        // Met à jour KPI + détails sur le jour "selected"
+        const selObj = cachedObjectsByDate.get(selected);
+        const selRes = computedByDate.get(selected) || computeForDay(selObj);
+        computedByDate.set(selected, selRes);
+        setKPIs({date: selected, ...selRes});
+        setDetailsBuckets(selRes.buckets);
+
+        // Graphiques de la plage + donut/histo sur selected
+        renderCharts(s, e, selected);
+
+        out += `\n(Le détail par catégories correspond au jour sélectionné : ${selected})\n`;
         log(out);
       } catch (e) {
         console.error(e);
@@ -523,7 +719,7 @@
       await runRange(min7, max);
     }
 
-    // Drag & drop
+    // ====== UI events ======
     drop.addEventListener("dragover", (e) => { e.preventDefault(); drop.style.borderColor = "#333"; });
     drop.addEventListener("dragleave", () => { drop.style.borderColor = "#aaa"; });
     drop.addEventListener("drop", async (e) => {
@@ -534,9 +730,13 @@
         currentFile = f;
         cachedObjectsByDate = null;
         availableDates = [];
+        computedByDate = new Map();
+
         details.style.display = "none";
         kpis.style.display = "none";
+        $("charts").style.display = "none";
         availableWrap.style.display = "none";
+
         log(`Fichier sélectionné: ${f.name} (${Math.round(f.size/1024)} Ko)\n➡️ Clique “Calculer (jour)” ou “Calculer (plage)”.`);
         enableButtons();
       }
@@ -548,9 +748,13 @@
         currentFile = f;
         cachedObjectsByDate = null;
         availableDates = [];
+        computedByDate = new Map();
+
         details.style.display = "none";
         kpis.style.display = "none";
+        $("charts").style.display = "none";
         availableWrap.style.display = "none";
+
         log(`Fichier sélectionné: ${f.name} (${Math.round(f.size/1024)} Ko)\n➡️ Clique “Calculer (jour)” ou “Calculer (plage)”.`);
         enableButtons();
       }
