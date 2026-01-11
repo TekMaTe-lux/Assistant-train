@@ -355,54 +355,68 @@
     }
 
     function computeForDay(dayObj) {
-      const trains = dayObj?.trains || {};
-      const ids = Object.keys(trains);
-      const total = ids.length;
+  const trains = dayObj?.trains || {};
+  const ids = Object.keys(trains);
+  const total = ids.length;
 
-      let delayed = 0, cancelled = 0, partial = 0;
-      const notOnTimeSet = new Set();
+  let delayed = 0, cancelled = 0, partial = 0;
+  const notOnTimeSet = new Set();
 
-      const buckets = {
-        r5_9: [],
-        r10_19: [],
-        r20_39: [],
-        r40p: [],
-        cancels: [],
-        partials: [],
-      };
+  const buckets = {
+    r5_9: [],
+    r10_19: [],
+    r20_39: [],
+    r40p: [],
+    cancels: [],
+    partials: [],
+  };
 
-      for (const tid of ids) {
-        const t = trains[tid];
-        if (t && t.found === false) continue;
-
-        const d = Number(t?.final_delay_min || 0);
-        const isDelayed = d > 0;
-
-        const isPartial = t?.partially_cancelled === true;
-        const isCancelled = t?.cancelled === true || hasCancelDisruption(t);
-
-        if (isDelayed) delayed++;
-        if (isPartial) partial++;
-        if (isCancelled) cancelled++;
-
-        if (isDelayed || isPartial || isCancelled) notOnTimeSet.add(tid);
-
-        if (isDelayed) {
-          if (d >= 5 && d <= 9) buckets.r5_9.push(tid);
-          else if (d >= 10 && d <= 19) buckets.r10_19.push(tid);
-          else if (d >= 20 && d <= 39) buckets.r20_39.push(tid);
-          else if (d >= 40) buckets.r40p.push(tid);
-        }
-
-        if (isCancelled) buckets.cancels.push(tid);
-        if (isPartial) buckets.partials.push(tid);
-      }
-
-      const notOnTime = notOnTimeSet.size;
-      const pct = total ? (notOnTime / total) * 100 : 0;
-
-      return { total, delayed, cancelled, partial, notOnTime, pct, buckets };
+  function maxStopDelayMinutes(stopsObj) {
+    if (!stopsObj || typeof stopsObj !== "object") return 0;
+    let m = 0;
+    for (const v of Object.values(stopsObj)) {
+      const n = Number(v);
+      if (Number.isFinite(n) && n > m) m = n;
     }
+    return m;
+  }
+
+  for (const tid of ids) {
+    const t = trains[tid] || {};
+    const status = String(t.status || "").toUpperCase();
+
+    const d = maxStopDelayMinutes(t.stops); // ⭐ clé de ton format
+    const isCancelled = (status === "CANCELED" || status === "CANCELLED");
+    const isPartial = (status === "PARTIAL_CANCELLATION" || status === "PARTIALLY_CANCELED");
+
+    // "DELAYED" ou max stop delay > 0
+    const isDelayed = (!isCancelled && !isPartial) && (status === "DELAYED" || d > 0);
+
+    // Compteurs KPI
+    if (isDelayed) delayed++;
+    if (isPartial) partial++;
+    if (isCancelled) cancelled++;
+
+    // Union “pas à l’heure”
+    if (isDelayed || isPartial || isCancelled) notOnTimeSet.add(tid);
+
+    // Buckets retards: basé sur d (max des stops)
+    if (isDelayed && d > 0) {
+      if (d >= 5 && d <= 9) buckets.r5_9.push(tid);
+      else if (d >= 10 && d <= 19) buckets.r10_19.push(tid);
+      else if (d >= 20 && d <= 39) buckets.r20_39.push(tid);
+      else if (d >= 40) buckets.r40p.push(tid);
+    }
+
+    if (isCancelled) buckets.cancels.push(tid);
+    if (isPartial) buckets.partials.push(tid);
+  }
+
+  const notOnTime = notOnTimeSet.size;
+  const pct = total ? (notOnTime / total) * 100 : 0;
+
+  return { total, delayed, cancelled, partial, notOnTime, pct, buckets };
+}
 
     function enableButtons() {
       const ready = !!currentFile;
