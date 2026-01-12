@@ -3574,6 +3574,13 @@ body.modal-open{ overflow:hidden; }
 .lb-prefs-remove:hover{
   box-shadow: 0 0 16px rgba(255,120,120,.35);
 }
+.preset-btn--add{
+  border-style: dashed;
+  opacity: 0.85;
+}
+.preset-btn--add:hover{
+  opacity: 1;
+}    
 .lb-account-box{
   margin-top: 16px;
   padding: 12px;
@@ -3969,6 +3976,10 @@ function renderRowsChunked(htmlRows, tbody, chunk=200){
           <button id="btnListe4" class="mini-btn preset-btn" type="button" title="Liste 4" data-preset-kind="L4" style="display:none;">
             <span aria-hidden="true">🧾</span>
             <span class="preset-label" data-preset-label="L4">Liste 4</span>
+          </button>
+          <button id="lbQuickAddList" class="mini-btn preset-btn preset-btn--add" type="button" title="Ajouter une liste" style="display:none;">
+            <span aria-hidden="true">＋</span>
+            <span>Ajouter</span>
           </button>
         </div>
       </div>
@@ -11298,6 +11309,7 @@ function scheduleWeatherAfterTableSettled(){
     }
   };
   
+  let lbIsAuthed = false;
   const refreshAccountUI = async () => {
     const openBtn = $("lbBtnOpenAuth");
     const logoutBtn = $("lbBtnLogout");
@@ -11312,6 +11324,7 @@ function scheduleWeatherAfterTableSettled(){
     if (!openBtn || !logoutBtn) return;
     try {
       const me = await api("/me");
+      lbIsAuthed = true;
       openBtn.textContent = "Mon compte / Déconnexion";
       logoutBtn.style.display = "inline-flex";
       if (deleteBox) deleteBox.style.display = "none";
@@ -11348,8 +11361,10 @@ function scheduleWeatherAfterTableSettled(){
       customRapidPresets.L4 = null;
       applyRapidPresetLabels();
       updateRapidPresetVisibility();
+      lbIsAuthed = false;
       msg("ℹ️ Non connecté");
     }
+    updateQuickAddButton();
   };
 
   const openBtn = $("lbBtnOpenAuth");
@@ -11365,6 +11380,7 @@ function scheduleWeatherAfterTableSettled(){
   const prefsCloseBtnAlt = $("lbClosePrefs");
   const prefsSaveBtn = $("lbSavePrefs");
   const prefsAddListBtn = $("lbAddPrefsList");
+  const quickAddListBtn = $("lbQuickAddList");
   const registerModal = $("lbRegisterModal");
   const registerCloseBtn = $("lbBtnCloseRegister");
   const registerBtn = $("lbBtnRegister");
@@ -11511,13 +11527,22 @@ function scheduleWeatherAfterTableSettled(){
     });
   };
 
-  const updatePrefsAddButton = () => {
-    if (!prefsAddListBtn) return;
-    const hasHidden = PREFS_LIST_CONFIG.filter((item) => item.optional).some(({ key }) => {
+  const hasHiddenOptionalPreset = () => (
+    PREFS_LIST_CONFIG.filter((item) => item.optional).some(({ key }) => {
       const section = getPresetFields(key)?.section;
       return section && section.style.display === "none";
-    });
-    prefsAddListBtn.style.display = hasHidden ? "inline-flex" : "none";
+    })
+  );
+
+  const updatePrefsAddButton = () => {
+    if (!prefsAddListBtn) return;
+    prefsAddListBtn.style.display = hasHiddenOptionalPreset() ? "inline-flex" : "none";
+  };
+
+  const updateQuickAddButton = () => {
+    if (!quickAddListBtn) return;
+    const shouldShow = lbIsAuthed && hasHiddenOptionalPreset();
+    quickAddListBtn.style.display = shouldShow ? "inline-flex" : "none";
   };
 
   const openPrefsModal = () => {
@@ -11541,6 +11566,7 @@ function scheduleWeatherAfterTableSettled(){
     syncOptionalPrefsSections();
     updateDefaultListOptions();
     updatePrefsAddButton();
+    updateQuickAddButton();
   };
 
   const closePrefsModal = () => {
@@ -11575,16 +11601,26 @@ function scheduleWeatherAfterTableSettled(){
     }
   });
 
+  const revealNextOptionalPreset = () => {
+    const next = PREFS_LIST_CONFIG.filter((item) => item.optional)
+      .map((item) => getPresetFields(item.key))
+      .find((fields) => fields?.section && fields.section.style.display === "none");
+    if (next?.section) {
+      next.section.style.display = "grid";
+      updatePrefsAddButton();
+      updateQuickAddButton();
+      if (next.label) next.label.focus();
+    }
+  };
+  
   if (prefsAddListBtn) {
-    prefsAddListBtn.addEventListener("click", () => {
-      const next = PREFS_LIST_CONFIG.filter((item) => item.optional)
-        .map((item) => getPresetFields(item.key))
-        .find((fields) => fields?.section && fields.section.style.display === "none");
-      if (next?.section) {
-        next.section.style.display = "grid";
-        updatePrefsAddButton();
-        if (next.label) next.label.focus();
-      }
+    prefsAddListBtn.addEventListener("click", revealNextOptionalPreset);
+  }
+
+  if (quickAddListBtn) {
+    quickAddListBtn.addEventListener("click", () => {
+      openPrefsModal();
+      revealNextOptionalPreset();
     });
   }
 
@@ -11598,6 +11634,7 @@ function scheduleWeatherAfterTableSettled(){
       fields.section.style.display = "none";
       updateDefaultListOptions();
       updatePrefsAddButton();
+      updateQuickAddButton();
     });
   });
 
