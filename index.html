@@ -3574,6 +3574,20 @@ body.modal-open{ overflow:hidden; }
 .lb-prefs-remove:hover{
   box-shadow: 0 0 16px rgba(255,120,120,.35);
 }
+.lb-prefs-build{
+  justify-self: start;
+  border: 1px dashed rgba(120,220,255,.45);
+  background: rgba(6,16,28,.65);
+  color: #d7f9ff;
+  padding: 6px 10px;
+  border-radius: 10px;
+  font-weight: 600;
+  cursor: pointer;
+  box-shadow: inset 0 0 10px rgba(0,220,255,.12);
+}
+.lb-prefs-build:hover{
+  box-shadow: 0 0 16px rgba(0,220,255,.35);
+}    
 .preset-btn--add{
   border-style: dashed;
   opacity: 0.85;
@@ -3899,6 +3913,7 @@ function renderRowsChunked(htmlRows, tbody, chunk=200){
           <label for="lbPresetTrainsAM">Trains de la liste 1</label>
           <input id="lbPresetTrainsAM" type="text" placeholder="88704, 88706, 88708">
           <small>Format : 10 numéros max, séparés par des virgules.</small>
+          <button class="lb-prefs-build" type="button" data-preset-build="AM">Rechercher</button>
         </div>
         <div class="lb-prefs-section" data-preset="PM">
           <div class="lb-prefs-section-title">Liste 2</div>
@@ -3907,6 +3922,7 @@ function renderRowsChunked(htmlRows, tbody, chunk=200){
           <label for="lbPresetTrainsPM">Trains de la liste 2</label>
           <input id="lbPresetTrainsPM" type="text" placeholder="88741, 88743, 88745">
           <small>Format : 10 numéros max, séparés par des virgules.</small>
+          <button class="lb-prefs-build" type="button" data-preset-build="PM">Rechercher</button>
         </div>
         <div class="lb-prefs-section lb-prefs-section--optional" data-preset="L3">
           <div class="lb-prefs-section-title">Liste 3</div>
@@ -3915,6 +3931,7 @@ function renderRowsChunked(htmlRows, tbody, chunk=200){
           <label for="lbPresetTrainsL3">Trains de la liste 3</label>
           <input id="lbPresetTrainsL3" type="text" placeholder="88752, 88754, 88756">
           <small>Format : 10 numéros max, séparés par des virgules.</small>
+          <button class="lb-prefs-build" type="button" data-preset-build="L3">Rechercher</button>
           <button class="lb-prefs-remove" type="button" data-remove-preset="L3">Supprimer la liste 3</button>
         </div>
         <div class="lb-prefs-section lb-prefs-section--optional" data-preset="L4">
@@ -3924,6 +3941,7 @@ function renderRowsChunked(htmlRows, tbody, chunk=200){
           <label for="lbPresetTrainsL4">Trains de la liste 4</label>
           <input id="lbPresetTrainsL4" type="text" placeholder="88760, 88762, 88764">
           <small>Format : 10 numéros max, séparés par des virgules.</small>
+          <button class="lb-prefs-build" type="button" data-preset-build="L4">Rechercher</button>
           <button class="lb-prefs-remove" type="button" data-remove-preset="L4">Supprimer la liste 4</button>
         </div>
       </div>
@@ -3954,7 +3972,7 @@ function renderRowsChunked(htmlRows, tbody, chunk=200){
   <div class="console-header"> Console de Commande – Sélection des Bétaillères</div>
 
   <!-- 1) GÉNÉRATION RAPIDE -->
-  <details class="console-section">
+  <details id="customGenerationSection" class="console-section">
     <summary class="section-summary">
       <span class="section-icon" aria-hidden="true">⚡</span>
       <span class="section-title">Génération rapide</span>
@@ -4186,6 +4204,7 @@ function renderRowsChunked(htmlRows, tbody, chunk=200){
 
         <div id="selectionFooter" class="chips-footer centered" hidden>
           <button id="loadTrains" class="btn primary" type="button" data-modal-autofocus>Générer le tableau</button>
+          <button id="applySelectionToPreset" class="btn primary ghost" type="button" hidden>Ajouter à la liste</button>
         </div>
       </div>
     </div>
@@ -11467,6 +11486,8 @@ function scheduleWeatherAfterTableSettled(){
     });
   }
 
+  let prefsSelectionTargetKey = null;
+  
   const PREFS_LIST_CONFIG = [
     { key: "AM", labelId: "lbPresetLabelAM", trainsId: "lbPresetTrainsAM", name: "Liste 1" },
     { key: "PM", labelId: "lbPresetLabelPM", trainsId: "lbPresetTrainsPM", name: "Liste 2" },
@@ -11527,10 +11548,13 @@ function scheduleWeatherAfterTableSettled(){
     });
   };
 
-  const hasHiddenOptionalPreset = () => (
-    PREFS_LIST_CONFIG.filter((item) => item.optional)
-      .some(({ key }) => !presetHasContent(customRapidPresets[key]))
-  );
+  const getNextOptionalPresetKey = () => {
+    const candidate = PREFS_LIST_CONFIG.filter((item) => item.optional)
+      .find(({ key }) => !presetHasContent(customRapidPresets[key]));
+    return candidate?.key || null;
+  };
+
+  const hasHiddenOptionalPreset = () => Boolean(getNextOptionalPresetKey());
 
   const updatePrefsAddButton = () => {
     if (!prefsAddListBtn) return;
@@ -11541,6 +11565,35 @@ function scheduleWeatherAfterTableSettled(){
     if (!quickAddListBtn) return;
     const shouldShow = lbIsAuthed && hasHiddenOptionalPreset();
     quickAddListBtn.style.display = shouldShow ? "inline-flex" : "none";
+  };
+
+  const updateSelectionApplyButton = () => {
+    const btn = document.getElementById('applySelectionToPreset');
+    if (!btn) return;
+    if (!prefsSelectionTargetKey) {
+      btn.hidden = true;
+      btn.textContent = "Ajouter à la liste";
+      return;
+    }
+    const fields = getPresetFields(prefsSelectionTargetKey);
+    const defaultName = fields?.config?.name || "liste";
+    const labelValue = fields?.label?.value?.trim();
+    const label = labelValue || defaultName;
+    btn.textContent = `Ajouter à ${label}`;
+    btn.hidden = false;
+  };
+
+  const focusCustomGeneration = () => {
+    const section = document.getElementById('customGenerationSection');
+    if (!section) return;
+    section.open = true;
+    section.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  };
+
+  const prepareSelectionForPreset = (key) => {
+    prefsSelectionTargetKey = key;
+    updateSelectionApplyButton();
+    focusCustomGeneration();
   };
 
   const openPrefsModal = () => {
@@ -11619,8 +11672,20 @@ function scheduleWeatherAfterTableSettled(){
     quickAddListBtn.addEventListener("click", () => {
       openPrefsModal();
       revealNextOptionalPreset();
+      const target = getNextOptionalPresetKey();
+      if (!target) return;
+      prepareSelectionForPreset(target);
     });
   }
+
+  document.querySelectorAll('[data-preset-build]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const key = btn.dataset.presetBuild;
+      if (!key) return;
+      closePrefsModal();
+      prepareSelectionForPreset(key);
+    });
+  });
 
   document.querySelectorAll('[data-remove-preset]').forEach((btn) => {
     btn.addEventListener('click', () => {
@@ -11635,6 +11700,33 @@ function scheduleWeatherAfterTableSettled(){
       updateQuickAddButton();
     });
   });
+
+  const applySelectionToPreset = () => {
+    if (!prefsSelectionTargetKey) return;
+    const fields = getPresetFields(prefsSelectionTargetKey);
+    if (!fields?.trains) return;
+    const numbers = Array.from(selectedTrains || [])
+      .map((val) => (String(val).match(/\b\d{5,6}\b/) || [])[0])
+      .filter(Boolean);
+    if (!numbers.length) {
+      prefsMsg("❌ Sélectionne au moins un numéro de train.", true);
+      openPrefsModal();
+      return;
+    }
+    const unique = Array.from(new Set(numbers)).slice(0, 10);
+    fields.trains.value = unique.join(", ");
+    if (fields.section) fields.section.style.display = "grid";
+    if (fields.label && !fields.label.value.trim()) {
+      fields.label.value = fields.config?.name || "";
+    }
+    updateDefaultListOptions();
+    updatePrefsAddButton();
+    updateQuickAddButton();
+    prefsSelectionTargetKey = null;
+    updateSelectionApplyButton();
+    openPrefsModal();
+    closeSelectionModal({ restoreFocus: false });
+  };
 
   if (prefsSaveBtn) {
     prefsSaveBtn.addEventListener("click", async () => {
@@ -11677,6 +11769,10 @@ function scheduleWeatherAfterTableSettled(){
         prefsMsg("❌ " + err, true);
       }
     });
+  }
+  const applySelectionBtn = document.getElementById('applySelectionToPreset');
+  if (applySelectionBtn) {
+    applySelectionBtn.addEventListener('click', applySelectionToPreset);
   }
 
   const openRegisterModal = () => {
