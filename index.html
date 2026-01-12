@@ -4157,7 +4157,7 @@ function renderRowsChunked(htmlRows, tbody, chunk=200){
 </div>  
 
  <div id="selectionModalBackdrop" class="selection-modal__backdrop" hidden></div>
-<div id="selectionModal" class="selection-modal" role="dialog" aria-modal="true" aria-labelledby="selectionModalTitle" hidden>
+  <div id="selectionModal" class="selection-modal" role="dialog" aria-modal="true" aria-labelledby="selectionModalTitle" hidden>
   <div class="selection-modal__panel">
     <button type="button" class="selection-modal__close tron-close-button" id="closeSelectionModal" aria-label="Fermer la sélection">
       <span class="visually-hidden">Fermer</span>
@@ -4211,6 +4211,31 @@ function renderRowsChunked(htmlRows, tbody, chunk=200){
   </div>
 </div>
 
+<div id="presetBuilderModal" class="lb-auth-modal" aria-hidden="true">
+  <div class="lb-auth-card" role="dialog" aria-modal="true" aria-labelledby="presetBuilderTitle">
+    <button id="presetBuilderClose" class="lb-auth-close tron-close-button" type="button" aria-label="Fermer"></button>
+    <h3 id="presetBuilderTitle">Sélection liste</h3>
+    <p class="lb-prefs-note">Choisis les critères pour générer des trains, puis sélectionne les chips à ajouter (10 max).</p>
+    <div class="lb-auth-fields">
+      <label for="presetStartSearch">Gare de départ</label>
+      <input id="presetStartSearch" type="search" list="stationNamesList" placeholder="Tape Nancy, Champigneulles..." autocomplete="off">
+      <label for="presetEndSearch">Gare d'arrivée</label>
+      <input id="presetEndSearch" type="search" list="stationNamesList" placeholder="...et où tu descends ?" autocomplete="off">
+      <label for="presetDate">Date</label>
+      <input id="presetDate" type="date">
+      <label>Plage horaire</label>
+      <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;">
+        <input id="presetTimeFrom" type="time" value="06:00">
+        <input id="presetTimeTo" type="time" value="10:00">
+      </div>
+    </div>
+    <div class="lb-auth-actions">
+      <button id="presetBuilderSearch" class="auth-button" type="button">Rechercher</button>
+      <button id="presetBuilderCancel" class="auth-button auth-button--ghost" type="button">Fermer</button>
+    </div>
+  </div>
+</div>
+  
 <!-- BLOC 1 : Perturbations -->
 <div id="disruptionsSummary" class="command-console" style="display:none;">
   <div class="disruption-header">Perturbations en cours</div>
@@ -11583,24 +11608,33 @@ function scheduleWeatherAfterTableSettled(){
     btn.hidden = false;
   };
 
-  const focusCustomGeneration = () => {
-    const section = document.getElementById('customGenerationSection');
-    if (!section) return;
-    section.open = true;
-    section.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    const startInput = document.getElementById('startStationSearch');
-    if (startInput) {
+  const openPresetBuilderModal = () => {
+    const modal = $("presetBuilderModal");
+    if (!modal) return;
+    modal.style.display = "flex";
+    modal.setAttribute("aria-hidden", "false");
+    const date = $("presetDate");
+    if (date && !date.value) date.value = $("trainDate")?.value || "";
+    const start = $("presetStartSearch");
+    if (start) {
       setTimeout(() => {
-        try { startInput.focus({ preventScroll: true }); }
-        catch { startInput.focus(); }
+        try { start.focus({ preventScroll: true }); }
+        catch { start.focus(); }
       }, 0);
     }
+  };
+
+  const closePresetBuilderModal = () => {
+    const modal = $("presetBuilderModal");
+    if (!modal) return;
+    modal.style.display = "none";
+    modal.setAttribute("aria-hidden", "true");
   };
 
   const prepareSelectionForPreset = (key) => {
     prefsSelectionTargetKey = key;
     updateSelectionApplyButton();
-    focusCustomGeneration();
+    openPresetBuilderModal();
   };
 
   const openPrefsModal = () => {
@@ -11693,6 +11727,52 @@ function scheduleWeatherAfterTableSettled(){
       prepareSelectionForPreset(key);
     });
   });
+
+ const presetBuilderModal = $("presetBuilderModal");
+  const presetBuilderClose = $("presetBuilderClose");
+  const presetBuilderCancel = $("presetBuilderCancel");
+  const presetBuilderSearch = $("presetBuilderSearch");
+
+  if (presetBuilderClose) presetBuilderClose.addEventListener("click", closePresetBuilderModal);
+  if (presetBuilderCancel) presetBuilderCancel.addEventListener("click", closePresetBuilderModal);
+  if (presetBuilderModal) {
+    presetBuilderModal.addEventListener("click", (e) => {
+      if (e.target === presetBuilderModal) closePresetBuilderModal();
+    });
+  }
+
+  if (presetBuilderSearch) {
+    presetBuilderSearch.addEventListener("click", () => {
+      const startName = $("presetStartSearch")?.value?.trim() || "";
+      const endName = $("presetEndSearch")?.value?.trim() || "";
+      const date = $("presetDate")?.value || "";
+      const fromHHMM = $("presetTimeFrom")?.value || "06:00";
+      const toHHMM = $("presetTimeTo")?.value || "10:00";
+      if (!startName || !endName) {
+        prefsMsg("❌ Choisis une gare de départ et d'arrivée.", true);
+        return;
+      }
+      if (date) {
+        const mainDate = $("trainDate");
+        if (mainDate && mainDate.value !== date) {
+          mainDate.value = date;
+          mainDate.dispatchEvent(new Event('input', { bubbles: true }));
+          mainDate.dispatchEvent(new Event('change', { bubbles: true }));
+        }
+      }
+      proposerTrainsOD({
+        startName,
+        endName,
+        fromHHMM,
+        toHHMM,
+        openModal: true,
+        focus: false,
+        trigger: presetBuilderSearch
+      });
+      closePresetBuilderModal();
+    });
+  }
+ 
 
   document.querySelectorAll('[data-remove-preset]').forEach((btn) => {
     btn.addEventListener('click', () => {
