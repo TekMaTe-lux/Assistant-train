@@ -11603,6 +11603,13 @@ document.getElementById("btnCarte").addEventListener("click", function() {
 document.addEventListener('DOMContentLoaded', () => {
   const statsRoot = document.getElementById('stats-section');
   if (!statsRoot) return;
+  const statsConsole = document.getElementById('statsConsole');
+  const updateStatsConsoleAuth = (isAuthed) => {
+    if (!statsConsole) return;
+    statsConsole.style.display = isAuthed ? "block" : "none";
+  };
+  window.updateStatsConsoleAuth = updateStatsConsoleAuth;
+  updateStatsConsoleAuth(window.lbIsAuthed === true);
 
   const $ = (id) => document.getElementById(id);
 
@@ -11761,14 +11768,25 @@ document.addEventListener('DOMContentLoaded', () => {
         type: "line",
         data: {
           labels: [],
-          datasets: [{
-            label:"Retard (min)",
-            data: [],
-            tension: 0.25,
-            pointRadius: 2,
-            spanGaps: true,
-            borderColor: "#00eaff"
-          }]
+          datasets: [
+            {
+              label:"Retard (min)",
+              data: [],
+              tension: 0.25,
+              pointRadius: 2,
+              spanGaps: true,
+              borderColor: "#00eaff"
+            },
+            {
+              label:"Supprimé",
+              data: [],
+              showLine:false,
+              pointStyle:"cross",
+              pointRadius:6,
+              borderColor:"#ff5673",
+              backgroundColor:"#ff5673"
+            }
+          ]
         },
         options: {
           responsive:true,
@@ -11783,6 +11801,7 @@ document.addEventListener('DOMContentLoaded', () => {
               callbacks:{
                 label: (ctx)=>{
                   const raw = ctx.raw;
+                  if (ctx.dataset?.label === "Supprimé") return "Supprimé";
                   if (raw == null) return "ANNULÉ — pas de point";
                   const y = (raw && typeof raw === "object") ? raw.y : raw;
                   const bucket = raw?.bucket;
@@ -12222,10 +12241,14 @@ document.addEventListener('DOMContentLoaded', () => {
       if (r.value == null) return null;
       return { x: r.date, y: Number(r.value||0), partial: !!r.partial, bucket: r.bucket, status: r.status };
     });
+    const canceledPoints = s
+      .filter(r => r.bucket === "CANCELED")
+      .map(r => ({ x: r.date, y: 0, bucket: r.bucket, status: r.status }));
 
     chTrain.data.labels = labels;
     chTrain.data.datasets[0].label = optStopName ? `Retard à ${optStopName} (min)` : "Retard max (min)";
     chTrain.data.datasets[0].data = points;
+    chTrain.data.datasets[1].data = canceledPoints;
     chTrain.update();
 
     let on=0, del=0, part=0, can=0;
@@ -13016,6 +13039,7 @@ function scheduleWeatherAfterTableSettled(){
   };
   
   let lbIsAuthed = false;
+  window.lbIsAuthed = false;
   const refreshAccountUI = async () => {
     const openBtn = $("lbBtnOpenAuth");
     const logoutBtn = $("lbBtnLogout");
@@ -13031,6 +13055,10 @@ function scheduleWeatherAfterTableSettled(){
     try {
       const me = await api("/me");
       lbIsAuthed = true;
+      window.lbIsAuthed = true;
+      if (typeof window.updateStatsConsoleAuth === "function") {
+        window.updateStatsConsoleAuth(true);
+      }
       openBtn.textContent = "Mon compte / Déconnexion";
       logoutBtn.style.display = "inline-flex";
       if (deleteBox) deleteBox.style.display = "none";
@@ -13073,6 +13101,10 @@ function scheduleWeatherAfterTableSettled(){
       applyRapidPresetLabels();
       updateRapidPresetVisibility();
       lbIsAuthed = false;
+      window.lbIsAuthed = false;
+      if (typeof window.updateStatsConsoleAuth === "function") {
+        window.updateStatsConsoleAuth(false);
+      }
       msg("ℹ️ Non connecté");
     }
     updateQuickAddButton();
