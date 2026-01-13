@@ -4635,6 +4635,15 @@ function renderRowsChunked(htmlRows, tbody, chunk=200){
         <div class="stats-mini">Si l’URL est bloquée par le CORS, charge un fichier local ci-dessous.</div>
       </div>
 
+     <div class="stats-field stats-archive-only">
+        <label class="stats-mini" for="statsUseCorsProxy" style="display:flex;align-items:center;gap:8px;">
+          <input id="statsUseCorsProxy" type="checkbox" checked />
+          <span>Utiliser un proxy CORS pour l’URL</span>
+        </label>
+        <input id="statsCorsProxyUrl" class="stats-input" value="https://corsproxy.io/?" />
+        <div class="stats-mini">Proxy public (tu peux le changer). Le fichier n’est pas stocké ici.</div>
+      </div> 
+
       <div class="stats-field stats-archive-only">
         <label for="statsArchiveFile">Fichier local (jsonl ou jsonl.gz)</label>
         <input id="statsArchiveFile" class="stats-input" type="file" accept=".jsonl,.jsonl.gz,application/gzip" />
@@ -4677,7 +4686,7 @@ function renderRowsChunked(htmlRows, tbody, chunk=200){
     </div>
 
     <div id="statsArchiveHint" class="stats-warning stats-hide">
-      <strong>Mode archive :</strong> utilise une URL <code>jsonl.gz</code> autorisée en CORS ou charge un fichier local, puis clique “Charger”.
+      <strong>Mode archive :</strong> utilise une URL <code>jsonl.gz</code>, active le proxy CORS si besoin, ou charge un fichier local, puis clique “Charger”.
     </div>
 
     <div class="stats-tabs">
@@ -11882,11 +11891,11 @@ document.addEventListener('DOMContentLoaded', () => {
   let STATS_DB = null;
   let STATS_DB_SOURCE = "";
 
-  async function fetchArchiveText(url){
+  async function fetchArchiveText(url, isGzHint = false){
     const res = await fetch(url, { cache: "no-store" });
     if (!res.ok) throw new Error("HTTP " + res.status);
     const buf = new Uint8Array(await res.arrayBuffer());
-    const isGz = url.toLowerCase().endsWith(".gz") || res.headers.get("content-type") === "application/gzip";
+    const isGz = isGzHint || url.toLowerCase().endsWith(".gz") || res.headers.get("content-type") === "application/gzip";
     if (isGz){
       return window.pako.ungzip(buf, { to: "string" });
     }
@@ -11939,17 +11948,37 @@ document.addEventListener('DOMContentLoaded', () => {
     return { daysByDate, datesSorted, trainSet, stopSet };
   }
 
+  function getArchiveRequest(){
+    const url = $("statsArchiveUrl").value.trim();
+    const useProxy = $("statsUseCorsProxy")?.checked;
+    const proxyBase = $("statsCorsProxyUrl")?.value.trim();
+    const isGzHint = url.toLowerCase().endsWith(".gz");
+
+    if (!url) return { url: "", isGzHint, sourceId: "url:" };
+
+    if (useProxy){
+      if (!proxyBase) throw new Error("NO_PROXY_URL");
+      return {
+        url: `${proxyBase}${encodeURIComponent(url)}`,
+        isGzHint,
+        sourceId: `url:${url}|proxy:${proxyBase}`
+      };
+    }
+
+    return { url, isGzHint, sourceId: `url:${url}` };
+  }
+
   async function loadArchiveDbIfNeeded(){
     const file = $("statsArchiveFile")?.files?.[0];
-    const url = $("statsArchiveUrl").value.trim();
-    const sourceId = file ? `file:${file.name}:${file.size}:${file.lastModified}` : `url:${url}`;
+    const { url, isGzHint, sourceId } = getArchiveRequest();
+    const fileSourceId = file ? `file:${file.name}:${file.size}:${file.lastModified}` : sourceId;
 
     if (!file && !url) throw new Error("NO_ARCHIVE_URL");
-    if (STATS_DB && STATS_DB_SOURCE === sourceId) return;
+    if (STATS_DB && STATS_DB_SOURCE === fileSourceId) return;
 
-    const txt = file ? await readArchiveFileText(file) : await fetchArchiveText(url);
+    const txt = file ? await readArchiveFileText(file) : await fetchArchiveText(url, isGzHint);
     STATS_DB = buildDbFromText(txt);
-    STATS_DB_SOURCE = sourceId;
+    STATS_DB_SOURCE = fileSourceId;
 
     fillDatalist("statsTrainList", STATS_DB.trainSet);
     fillDatalist("statsStopList", STATS_DB.stopSet);
@@ -12419,6 +12448,16 @@ document.addEventListener('DOMContentLoaded', () => {
     STATS_DB = null;
     STATS_DB_SOURCE = "";
     $("statsStatus").textContent = "Archive mise à jour — clique Charger";
+  });
+  $("statsUseCorsProxy").addEventListener("change", ()=>{
+    STATS_DB = null;
+    STATS_DB_SOURCE = "";
+    $("statsStatus").textContent = "Proxy CORS mis à jour — clique Charger";
+  });
+  $("statsCorsProxyUrl").addEventListener("change", ()=>{
+    STATS_DB = null;
+    STATS_DB_SOURCE = "";
+    $("statsStatus").textContent = "Proxy CORS mis à jour — clique Charger";
   });
   $("statsArchiveFile").addEventListener("change", ()=>{
     STATS_DB = null;
