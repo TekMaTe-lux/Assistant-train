@@ -4612,45 +4612,6 @@ function renderRowsChunked(htmlRows, tbody, chunk=200){
 
     <div class="stats-toolbar">
       <div class="stats-field">
-        <label for="statsSourceMode">Source</label>
-        <select id="statsSourceMode" class="stats-select">
-          <option value="archive" selected>Archive (URL ou fichier local)</option>
-          <option value="api">API (VPS)</option>
-        </select>
-      </div>
-
-      <div class="stats-field stats-api-only">
-        <label for="statsApiBase">API (VPS)</label>
-        <input id="statsApiBase" class="stats-input" value="https://vps.labetaillere.fr" />
-      </div>
-
-      <div class="stats-field stats-api-only">
-        <label for="statsToken">Token (si Bearer)</label>
-        <input id="statsToken" class="stats-input" placeholder="Laisse vide si cookie/session" />
-      </div>
-
-      <div class="stats-field stats-archive-only">
-        <label for="statsArchiveUrl">Archive (URL jsonl.gz)</label>
-        <input id="statsArchiveUrl" class="stats-input" value="https://vps.labetaillere.fr/stats/gtfsrt_history.jsonl.gz" />
-        <div class="stats-mini">Si l’URL est bloquée par le CORS, charge un fichier local ci-dessous.</div>
-      </div>
-
-     <div class="stats-field stats-archive-only">
-        <label class="stats-mini" for="statsUseCorsProxy" style="display:flex;align-items:center;gap:8px;">
-          <input id="statsUseCorsProxy" type="checkbox" checked />
-          <span>Utiliser un proxy CORS pour l’URL</span>
-        </label>
-        <input id="statsCorsProxyUrl" class="stats-input" value="https://corsproxy.io/?" />
-        <div class="stats-mini">Proxy public (tu peux le changer). Le fichier n’est pas stocké ici.</div>
-      </div> 
-
-      <div class="stats-field stats-archive-only">
-        <label for="statsArchiveFile">Fichier local (jsonl ou jsonl.gz)</label>
-        <input id="statsArchiveFile" class="stats-input" type="file" accept=".jsonl,.jsonl.gz,application/gzip" />
-        <div class="stats-mini">Le fichier n’est jamais envoyé au serveur.</div>
-      </div>
-
-      <div class="stats-field">
         <label for="statsFrom">Période — du</label>
         <input id="statsFrom" class="stats-input" type="date" />
       </div>
@@ -4671,22 +4632,8 @@ function renderRowsChunked(htmlRows, tbody, chunk=200){
       <div class="stats-status" id="statsStatus">Prêt ✅</div>
     </div>
 
-    <div class="stats-warning">
-      <strong>Règles (données actuelles) :</strong>
-      <ul style="margin:8px 0 0 18px;">
-        <li><strong>Supprimé</strong> = <code>status === "CANCELED"</code> (ou variantes)</li>
-        <li><strong>Partiel</strong> = <code>status === "PARTIAL_CANCELLATION"</code> (ou variantes)</li>
-        <li><strong>Retardé</strong> = <code>max(stops) &gt; 0</code> <strong>OU</strong> <code>status === "DELAYED"</code> (hors annulé/partiel)</li>
-        <li><strong>Retard à un arrêt</strong> = <code>stops[ARRET] &gt; 0</code></li>
-      </ul>
-    </div>
-
     <div id="statsAuthHint" class="stats-warning stats-hide">
-      <strong>Accès refusé.</strong> Tu n’es pas connecté (ou token manquant). Connecte-toi puis reviens.
-    </div>
-
-    <div id="statsArchiveHint" class="stats-warning stats-hide">
-      <strong>Mode archive :</strong> utilise une URL <code>jsonl.gz</code>, active le proxy CORS si besoin, ou charge un fichier local, puis clique “Charger”.
+      <strong>Accès refusé.</strong> Tu n’es pas connecté. Connecte-toi puis reviens.
     </div>
 
     <div class="stats-tabs">
@@ -4773,7 +4720,7 @@ function renderRowsChunked(htmlRows, tbody, chunk=200){
     <section id="statsTabTrain" class="stats-tabcontent">
       <div class="stats-toolbar" style="margin-top:0">
         <div class="stats-field">
-          <label for="statsTrainId">Numéro du train</label>
+          <label for="statsTrainId">Train favori</label>
           <input id="statsTrainId" class="stats-input" list="statsTrainList" placeholder="ex: 88511" />
           <datalist id="statsTrainList"></datalist>
         </div>
@@ -4831,7 +4778,7 @@ function renderRowsChunked(htmlRows, tbody, chunk=200){
     <section id="statsTabStop" class="stats-tabcontent">
       <div class="stats-toolbar" style="margin-top:0">
         <div class="stats-field">
-          <label for="statsStopName">Arrêt</label>
+          <label for="statsStopName">Arrêt favori</label>
           <input id="statsStopName" class="stats-input" list="statsStopList" placeholder="ex: Metz" />
         </div>
 
@@ -11882,13 +11829,10 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }
 
-  async function apiFetch(path){
-    const base = $("statsApiBase").value.trim().replace(/\/+$/,"");
-    const token = $("statsToken").value.trim();
-    const headers = {};
-    if (token) headers["Authorization"] = "Bearer " + token;
+  const STATS_API_BASE = "https://vps.labetaillere.fr";
 
-    const r = await fetch(base + path, { headers, credentials: "include" });
+    async function apiFetch(path){
+    const r = await fetch(STATS_API_BASE + path, { credentials: "include" });
     if (r.status === 401) {
       $("statsAuthHint").classList.remove("stats-hide");
       throw new Error("401");
@@ -11905,102 +11849,6 @@ document.addEventListener('DOMContentLoaded', () => {
   }
   async function loadRawRangeAPI(from,to){
     return apiFetch(`/api/stats/gtfs/rawrange?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`);
-  }
-
-  let STATS_DB = null;
-  let STATS_DB_SOURCE = "";
-
-  async function fetchArchiveText(url, isGzHint = false){
-    const res = await fetch(url, { cache: "no-store" });
-    if (!res.ok) throw new Error("HTTP " + res.status);
-    const buf = new Uint8Array(await res.arrayBuffer());
-    const isGz = isGzHint || url.toLowerCase().endsWith(".gz") || res.headers.get("content-type") === "application/gzip";
-    if (isGz){
-      return window.pako.ungzip(buf, { to: "string" });
-    }
-    return new TextDecoder("utf-8").decode(buf);
-  }
-
-  async function readArchiveFileText(file){
-    const buf = new Uint8Array(await file.arrayBuffer());
-    const isGz = file.name.toLowerCase().endsWith(".gz") || file.type === "application/gzip";
-    if (isGz){
-      return window.pako.ungzip(buf, { to: "string" });
-    }
-    return new TextDecoder("utf-8").decode(buf);
-  }
-
-  function fillDatalist(id, values){
-    const dl = $(id);
-    if (!dl) return;
-    dl.innerHTML = "";
-    [...values].sort((a,b)=>String(a).localeCompare(String(b))).slice(0, 8000).forEach(v=>{
-      const o = document.createElement("option");
-      o.value = v;
-      dl.appendChild(o);
-    });
-  }
-
-  function buildDbFromText(txt){
-    const daysByDate = new Map();
-    const trainSet = new Set();
-    const stopSet = new Set();
-
-    const lines = txt.split(/\r?\n/);
-    for (const line of lines){
-      if (!line.trim()) continue;
-      let obj;
-      try { obj = JSON.parse(line); } catch { continue; }
-      if (!obj || !obj.date || !obj.trains) continue;
-
-      daysByDate.set(obj.date, obj);
-
-      const trains = obj.trains || {};
-      for (const tid of Object.keys(trains)){
-        trainSet.add(tid);
-        const st = trains[tid]?.stops || {};
-        for (const sn of Object.keys(st)) stopSet.add(sn);
-      }
-    }
-
-    const datesSorted = [...daysByDate.keys()].sort((a,b)=>a.localeCompare(b));
-    return { daysByDate, datesSorted, trainSet, stopSet };
-  }
-
-  function getArchiveRequest(){
-    const url = $("statsArchiveUrl").value.trim();
-    const useProxy = $("statsUseCorsProxy")?.checked;
-    const proxyBase = $("statsCorsProxyUrl")?.value.trim();
-    const isGzHint = url.toLowerCase().endsWith(".gz");
-
-    if (!url) return { url: "", isGzHint, sourceId: "url:" };
-
-    if (useProxy){
-      if (!proxyBase) throw new Error("NO_PROXY_URL");
-      return {
-        url: `${proxyBase}${encodeURIComponent(url)}`,
-        isGzHint,
-        sourceId: `url:${url}|proxy:${proxyBase}`
-      };
-    }
-
-    return { url, isGzHint, sourceId: `url:${url}` };
-  }
-
-  async function loadArchiveDbIfNeeded(){
-    const file = $("statsArchiveFile")?.files?.[0];
-    const { url, isGzHint, sourceId } = getArchiveRequest();
-    const fileSourceId = file ? `file:${file.name}:${file.size}:${file.lastModified}` : sourceId;
-
-    if (!file && !url) throw new Error("NO_ARCHIVE_URL");
-    if (STATS_DB && STATS_DB_SOURCE === fileSourceId) return;
-
-    const txt = file ? await readArchiveFileText(file) : await fetchArchiveText(url, isGzHint);
-    STATS_DB = buildDbFromText(txt);
-    STATS_DB_SOURCE = fileSourceId;
-
-    fillDatalist("statsTrainList", STATS_DB.trainSet);
-    fillDatalist("statsStopList", STATS_DB.stopSet);
   }
 
   function computeDaySummaryFromRaw(raw){
@@ -12049,27 +11897,6 @@ document.addEventListener('DOMContentLoaded', () => {
     out.not_on_time_trains = notSet.size;
     out.pct_not_on_time = out.total_trains ? (out.not_on_time_trains / out.total_trains) * 100 : 0;
     return out;
-  }
-
-  function computeRangeSeriesFromLocal(from,to){
-    const series = [];
-    for (const date of STATS_DB.datesSorted){
-      if (date < from || date > to) continue;
-      const raw = STATS_DB.daysByDate.get(date);
-      if (!raw) continue;
-      const day = computeDaySummaryFromRaw(raw);
-      series.push({
-        date,
-        total: day.total_trains,
-        delayed: day.delayed_trains,
-        partial: day.partial_canceled_trains,
-        canceled: day.canceled_trains,
-        not_on_time: day.not_on_time_trains,
-        pct_not_on_time: day.pct_not_on_time
-      });
-    }
-    series.sort((a,b)=>a.date.localeCompare(b.date));
-    return { from, to, days: series.length, series };
   }
 
   function computeStopDailyFromRaw(raw, stopName){
@@ -12335,16 +12162,6 @@ document.addEventListener('DOMContentLoaded', () => {
     $("statsStopTableCount").textContent = `${s.length} ligne(s) (jours présents dans la période)`;
   }
 
-  function updateModeUI(){
-    const mode = $("statsSourceMode").value;
-    const apiOn = (mode === "api");
-    document.querySelectorAll(".stats-api-only").forEach(el => el.classList.toggle("stats-hide", !apiOn));
-    document.querySelectorAll(".stats-archive-only").forEach(el => el.classList.toggle("stats-hide", apiOn));
-    $("statsAuthHint").classList.add("stats-hide");
-    $("statsArchiveHint").classList.toggle("stats-hide", apiOn);
-    $("statsStatus").textContent = apiOn ? "Mode API" : "Mode archive (URL/fichier)";
-  }
-
   async function refreshAllGlobal(){
     ensureCharts();
     $("statsStatus").textContent = "Chargement…";
@@ -12352,25 +12169,9 @@ document.addEventListener('DOMContentLoaded', () => {
     const from = clampDateStr($("statsFrom").value);
     const to = clampDateStr($("statsTo").value);
     const day = clampDateStr($("statsDay").value);
-    if (!from || !to || !day) { $("statsStatus").textContent = "Dates invalides ❌"; return; }
-
-    const mode = $("statsSourceMode").value;
-
     try{
       let range, dayData;
-
-      if (mode === "api"){
-        $("statsArchiveHint").classList.add("stats-hide");
-        [range, dayData] = await Promise.all([ loadRangeAPI(from, to), loadDayAPI(day) ]);
-      } else {
-        await loadArchiveDbIfNeeded();
-        $("statsArchiveHint").classList.add("stats-hide");
-
-        range = computeRangeSeriesFromLocal(from, to);
-
-        const rawDay = STATS_DB.daysByDate.get(day);
-        dayData = rawDay ? computeDaySummaryFromRaw(rawDay) : computeDaySummaryFromRaw({ date: day, trains: {} });
-      }
+      [range, dayData] = await Promise.all([ loadRangeAPI(from, to), loadDayAPI(day) ]);
 
       renderRange(range);
       renderKpi(dayData);
@@ -12381,7 +12182,6 @@ document.addEventListener('DOMContentLoaded', () => {
       $("statsStatus").textContent = "OK ✅";
     }catch(e){
       if (String(e.message) === "401") $("statsStatus").textContent = "Connexion requise 🔒";
-      else if (String(e.message) === "NO_ARCHIVE_URL") $("statsStatus").textContent = "URL archive requise 📄";
       else $("statsStatus").textContent = "Erreur ❌ (" + e.message + ")";
     }
   }
@@ -12396,22 +12196,16 @@ document.addEventListener('DOMContentLoaded', () => {
     const optStop = String($("statsTrainStop").value || "").trim();
     if (!trainId) { $("statsTrainMeta").textContent = "Entre un numéro de train"; return; }
 
-    const mode = $("statsSourceMode").value;
     try{
       let range;
 
-      if (mode === "api"){
-        const payload = await loadRawRangeAPI(from, to);
-        const rawDays = normalizeRawRangePayload(payload);
-        if (!rawDays.length){
-          $("statsTrainMeta").textContent = "Mode API: endpoint rawrange indisponible (prévu côté VPS).";
-          return;
-        }
-        range = computeTrainSeriesFromRawDays(rawDays, from, to, trainId, optStop || null);
-      } else {
-        await loadArchiveDbIfNeeded();
-        range = computeTrainSeriesFromRawDays([...STATS_DB.daysByDate.values()], from, to, trainId, optStop || null);
+      const payload = await loadRawRangeAPI(from, to);
+      const rawDays = normalizeRawRangePayload(payload);
+      if (!rawDays.length){
+        $("statsTrainMeta").textContent = "Endpoint rawrange indisponible (prévu côté VPS).";
+        return;
       }
+      range = computeTrainSeriesFromRawDays(rawDays, from, to, trainId, optStop || null);
 
       renderTrain(trainId, optStop || null, range);
       $("statsStatus").textContent = "OK ✅ (train)";
@@ -12429,22 +12223,16 @@ document.addEventListener('DOMContentLoaded', () => {
     const stopName = String($("statsStopName").value || "").trim();
     if (!stopName) { $("statsStopMeta").textContent = "Entre un arrêt"; return; }
 
-    const mode = $("statsSourceMode").value;
     try{
       let range;
 
-      if (mode === "api"){
-        const payload = await loadRawRangeAPI(from, to);
-        const rawDays = normalizeRawRangePayload(payload);
-        if (!rawDays.length){
-          $("statsStopMeta").textContent = "Mode API: endpoint rawrange indisponible (prévu côté VPS).";
-          return;
-        }
-        range = computeStopSeriesFromRawDays(rawDays, from, to, stopName);
-      } else {
-        await loadArchiveDbIfNeeded();
-        range = computeStopSeriesFromRawDays([...STATS_DB.daysByDate.values()], from, to, stopName);
+      const payload = await loadRawRangeAPI(from, to);
+      const rawDays = normalizeRawRangePayload(payload);
+      if (!rawDays.length){
+        $("statsStopMeta").textContent = "Endpoint rawrange indisponible (prévu côté VPS).";
+        return;
       }
+      range = computeStopSeriesFromRawDays(rawDays, from, to, stopName);
 
       renderStop(stopName, range);
       $("statsStatus").textContent = "OK ✅ (arrêt)";
@@ -12462,36 +12250,6 @@ document.addEventListener('DOMContentLoaded', () => {
     $("statsTo").value = iso;
   }
 
-  $("statsSourceMode").addEventListener("change", ()=>{
-    STATS_DB = null;
-    STATS_DB_SOURCE = "";
-    updateModeUI();
-  });
-  $("statsArchiveUrl").addEventListener("change", ()=>{
-    STATS_DB = null;
-    STATS_DB_SOURCE = "";
-    $("statsStatus").textContent = "Archive mise à jour — clique Charger";
-  });
-  $("statsUseCorsProxy").addEventListener("change", ()=>{
-    STATS_DB = null;
-    STATS_DB_SOURCE = "";
-    $("statsStatus").textContent = "Proxy CORS mis à jour — clique Charger";
-  });
-  $("statsCorsProxyUrl").addEventListener("change", ()=>{
-    STATS_DB = null;
-    STATS_DB_SOURCE = "";
-    $("statsStatus").textContent = "Proxy CORS mis à jour — clique Charger";
-  });
-  $("statsArchiveFile").addEventListener("change", ()=>{
-    STATS_DB = null;
-    STATS_DB_SOURCE = "";
-    const file = $("statsArchiveFile")?.files?.[0];
-    if (file) {
-      $("statsStatus").textContent = `Fichier local sélectionné (${file.name}) — clique Charger`;
-    } else {
-      $("statsStatus").textContent = "Fichier local retiré — clique Charger";
-    }
-  });
   $("statsBtnLoad").addEventListener("click", refreshAllGlobal);
   $("statsBtnToday").addEventListener("click", ()=>{ setToday(); refreshAllGlobal(); });
   $("statsBtnTrainRun").addEventListener("click", runTrain);
@@ -12499,7 +12257,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
   setToday();
   ensureCharts();
-  updateModeUI();
   setStatsTab("global");
 });
 </script>
