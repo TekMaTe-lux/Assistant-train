@@ -4805,9 +4805,8 @@ function renderRowsChunked(htmlRows, tbody, chunk=200){
 
       <div class="stats-table" style="margin-top:10px">
         <div class="stats-table-top">
-          <div class="stats-mini" id="statsStopTableCount">—</div>
-          <div class="stats-mini">Logique simple = basée uniquement sur ta structure actuelle</div>
-        </div>
+        <div class="stats-mini" id="statsStopTableCount">—</div>
+      </div>
 
         <div style="overflow:auto;max-height:460px;border-radius:12px;border:1px solid rgba(0,240,255,0.15);margin-top:10px">
           <table>
@@ -4827,10 +4826,6 @@ function renderRowsChunked(htmlRows, tbody, chunk=200){
         </div>
       </div>
 
-      <div class="stats-ok" style="margin-top:10px">
-        <strong>Note :</strong> pour distinguer “arrêt supprimé” vs “nouveau départ/terminus”, il faudrait enrichir ton historique avec un statut par arrêt.
-        Là on garde volontairement la logique simple “status du train + présence de l’arrêt dans stops”.
-      </div>
     </section>
   
   </section>    </div>
@@ -11858,6 +11853,43 @@ document.addEventListener('DOMContentLoaded', () => {
     ]);
   }
 
+  function fillDatalist(id, values){
+    const dl = $(id);
+    if (!dl) return;
+    dl.innerHTML = "";
+    [...values].sort((a,b)=>String(a).localeCompare(String(b))).slice(0, 8000).forEach(v=>{
+      const o = document.createElement("option");
+      o.value = v;
+      dl.appendChild(o);
+    });
+  }
+
+  let STATS_RAW_CACHE = { key: "", days: [] };
+
+  async function getRawRange(from, to){
+    const key = `${from}|${to}`;
+    if (STATS_RAW_CACHE.key === key && STATS_RAW_CACHE.days.length) return STATS_RAW_CACHE.days;
+    const payload = await loadRawRangeAPI(from, to);
+    const rawDays = normalizeRawRangePayload(payload);
+    STATS_RAW_CACHE = { key, days: rawDays };
+    return rawDays;
+  }
+
+  function fillStatsListsFromRaw(rawDays){
+    const trainSet = new Set();
+    const stopSet = new Set();
+    for (const raw of rawDays){
+      const trains = raw?.trains || {};
+      for (const tid of Object.keys(trains)){
+        trainSet.add(tid);
+        const stops = trains[tid]?.stops || {};
+        for (const sn of Object.keys(stops)) stopSet.add(sn);
+      }
+    }
+    fillDatalist("statsTrainList", trainSet);
+    fillDatalist("statsStopList", stopSet);
+  }
+
   function computeDaySummaryFromRaw(raw){
     const date = raw.date;
     const out = {
@@ -12206,12 +12238,12 @@ document.addEventListener('DOMContentLoaded', () => {
     try{
       let range;
 
-      const payload = await loadRawRangeAPI(from, to);
-      const rawDays = normalizeRawRangePayload(payload);
+      const rawDays = await getRawRange(from, to);;
       if (!rawDays.length){
         $("statsTrainMeta").textContent = "Endpoint rawrange indisponible (prévu côté VPS).";
         return;
       }
+      fillStatsListsFromRaw(rawDays);
       range = computeTrainSeriesFromRawDays(rawDays, from, to, trainId, optStop || null);
 
       renderTrain(trainId, optStop || null, range);
@@ -12233,12 +12265,12 @@ document.addEventListener('DOMContentLoaded', () => {
     try{
       let range;
 
-      const payload = await loadRawRangeAPI(from, to);
-      const rawDays = normalizeRawRangePayload(payload);
+      const rawDays = await getRawRange(from, to);
       if (!rawDays.length){
         $("statsStopMeta").textContent = "Endpoint rawrange indisponible (prévu côté VPS).";
         return;
       }
+      fillStatsListsFromRaw(rawDays)
       range = computeStopSeriesFromRawDays(rawDays, from, to, stopName);
 
       renderStop(stopName, range);
