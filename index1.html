@@ -4240,6 +4240,21 @@ body.modal-open{ overflow:hidden; }
   flex-direction:column;
   gap:12px;
 }
+.stats-trend.is-up .stats-trend-delta .v,
+.stats-trend.is-up .stats-trend-text .state{
+  color:#39f78c;
+  text-shadow:0 0 10px rgba(57,247,140,0.45);
+}
+.stats-trend.is-down .stats-trend-delta .v,
+.stats-trend.is-down .stats-trend-text .state{
+  color:#ff6363;
+  text-shadow:0 0 10px rgba(255,99,99,0.45);
+}
+.stats-trend.is-flat .stats-trend-delta .v,
+.stats-trend.is-flat .stats-trend-text .state{
+  color:#ffd166;
+  text-shadow:0 0 10px rgba(255,209,102,0.35);
+}
 .stats-trend-toggle{
   display:flex;
   gap:6px;
@@ -4911,7 +4926,7 @@ function renderRowsChunked(htmlRows, tbody, chunk=200){
           <div class="stats-express-canvas"><canvas id="statsRingYesterday"></canvas></div>
         </article>
 
-        <article class="stats-express-card" data-trend-card>
+        <article class="stats-express-card">
           <div class="head">
             <h3>Répartition (hier)</h3>
             <div class="meta">Statut des trains</div>
@@ -4920,7 +4935,7 @@ function renderRowsChunked(htmlRows, tbody, chunk=200){
           <div class="stats-express-legend" id="statsExpressLegend"></div>
         </article>
 
-        <article class="stats-express-card">
+        <article class="stats-express-card" data-trend-card>
           <div class="head">
             <h3>Tendance (7 jours)</h3>
             <div class="meta">Synthèse</div>
@@ -4944,6 +4959,25 @@ function renderRowsChunked(htmlRows, tbody, chunk=200){
                   <div class="v" id="statsTrendDelta">—</div>
                 </div>
               </div>
+              <div class="stats-trend-facts">
+                <div class="stats-trend-facts">
+                <div class="stats-trend-fact">
+                  <div class="k">Train le moins fiable (7j)</div>
+                  <div class="v" data-trend-dup="worstTrain">—</div>
+                  <div class="s" data-trend-dup="worstWhy">—</div>
+                </div>
+                <div class="stats-trend-fact">
+                  <div class="k">Plus gros retard cumulé (7j)</div>
+                  <div class="v" data-trend-dup="delayTrain">—</div>
+                  <div class="s" data-trend-dup="delayWhy">—</div>
+                </div>
+                </div>
+                <div class="stats-trend-fact">
+                  <div class="k">Plus gros retard cumulé (7j)</div>
+                  <div class="v" id="statsMostDelayTrain">—</div>
+                  <div class="s" id="statsMostDelayWhy">—</div>
+                </div>
+              </div>
             </div>
             <div class="stats-trend-facts">
               <div class="stats-trend-panel" data-trend-panel="worst">
@@ -4953,10 +4987,17 @@ function renderRowsChunked(htmlRows, tbody, chunk=200){
               </div>
             </div>
             <div class="stats-trend-panel" data-trend-panel="delay">
-              <div class="stats-trend-fact">
-                <div class="k">Plus gros retard cumulé (7j)</div>
-                <div class="v" id="statsMostDelayTrain">—</div>
-                <div class="s" id="statsMostDelayWhy">—</div>
+              <div class="stats-trend-facts">
+                <div class="stats-trend-fact">
+                  <div class="k">Train le moins fiable (7j)</div>
+                  <div class="v" data-trend-dup="worstTrain">—</div>
+                  <div class="s" data-trend-dup="worstWhy">—</div>
+                </div>
+                <div class="stats-trend-fact">
+                  <div class="k">Plus gros retard cumulé (7j)</div>
+                  <div class="v" data-trend-dup="delayTrain">—</div>
+                  <div class="s" data-trend-dup="delayWhy">—</div>
+                </div>
               </div>
             </div>
           </div>
@@ -12711,8 +12752,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
     let trendState = "Stable";
     let trendColor = statsPalette.delayed;
-    if (delta >= 1){ trendState = "En hausse"; trendColor = statsPalette.onTime; }
-    if (delta <= -1){ trendState = "En baisse"; trendColor = statsPalette.canceled; }
+    let trendClass = "is-flat";
+    if (delta >= 1){ trendState = "En hausse"; trendColor = statsPalette.onTime; trendClass = "is-up"; }
+    if (delta <= -1){ trendState = "En baisse"; trendColor = statsPalette.canceled; trendClass = "is-down"; }
 
     const led = $("statsTrendLed");
     if (led){
@@ -12722,6 +12764,11 @@ document.addEventListener('DOMContentLoaded', () => {
     $("statsTrendState").textContent = trendState;
     $("statsTrendDelta").textContent = `${delta >= 0 ? "+" : ""}${delta.toFixed(1)} pts`;
     $("statsTrendSub").textContent = `Ponctualité récente: ${avgLast3.toFixed(1)}%`;
+    const trendContainer = document.querySelector("[data-trend-card] .stats-trend");
+    if (trendContainer){
+      trendContainer.classList.remove("is-up", "is-down", "is-flat");
+      trendContainer.classList.add(trendClass);
+    }
 
     const trainAgg = buildTrainAggFromRaw(rawDays || []);
     const worst = pickWorstReliabilityTrain(trainAgg);
@@ -12736,6 +12783,22 @@ document.addEventListener('DOMContentLoaded', () => {
     $("statsMostDelayWhy").textContent = mostDelay
       ? `${fmtDelayWithPlus(mostDelay.delayMin7)} · ${mostDelay.cancelled7} supp. · ${mostDelay.partial7} partiels`
       : "—";
+    document.querySelectorAll("[data-trend-dup=\"worstTrain\"]").forEach(el => {
+      el.textContent = worst ? `TER ${worst.trainNo}` : "—";
+    });
+    document.querySelectorAll("[data-trend-dup=\"worstWhy\"]").forEach(el => {
+      el.textContent = worst
+        ? `${worst.cancelled7} supp. · ${worst.partial7} partiels · ${fmtDelayWithPlus(worst.delayMin7)}`
+        : "—";
+    });
+    document.querySelectorAll("[data-trend-dup=\"delayTrain\"]").forEach(el => {
+      el.textContent = mostDelay ? `TER ${mostDelay.trainNo}` : "—";
+    });
+    document.querySelectorAll("[data-trend-dup=\"delayWhy\"]").forEach(el => {
+      el.textContent = mostDelay
+        ? `${fmtDelayWithPlus(mostDelay.delayMin7)} · ${mostDelay.cancelled7} supp. · ${mostDelay.partial7} partiels`
+        : "—";
+    });
   }
 
   function renderTrain(trainId, optStopName, range){
