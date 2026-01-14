@@ -5145,7 +5145,7 @@ function renderRowsChunked(htmlRows, tbody, chunk=200){
         <div class="stats-card" style="grid-column:span 2">
           <div class="head">
             <div class="title">Répartition (période)</div>
-            <div class="meta">À l’heure / Retardés / Suppression partielle / Supprimés (intégral)</div>
+            <div class="meta">ON_TIME / DELAYED / PARTIAL / CANCELED</div>
           </div>
           <div class="stats-canvas"><canvas id="statsChTrainDonut"></canvas></div>
         </div>
@@ -12022,18 +12022,6 @@ document.addEventListener('DOMContentLoaded', () => {
   function clampDateStr(s){
     return (typeof s === "string" && /^\d{4}-\d{2}-\d{2}$/.test(s)) ? s : null;
   }
-  function listDateRange(from, to){
-    if (!from || !to) return [];
-    const out = [];
-    const d = new Date(from + "T00:00:00");
-    const end = new Date(to + "T00:00:00");
-    if (Number.isNaN(d.getTime()) || Number.isNaN(end.getTime())) return [];
-    while (d <= end){
-      out.push(d.toISOString().slice(0,10));
-      d.setDate(d.getDate() + 1);
-    }
-    return out;
-  }
 
   function fmtPctShort(x){
     if (x == null || !isFinite(x)) return "—";
@@ -12172,7 +12160,7 @@ document.addEventListener('DOMContentLoaded', () => {
       chDonutYesterday = new Chart($("statsDonutYesterday"), {
         type: "doughnut",
         data: {
-          labels: ["À l’heure","Retardés","Partiels (supp.)","Supprimés (intégral)"],
+          labels: ["À l’heure","Retardés","Partiels","Supprimés"],
           datasets:[{ data:[0,0,0,0], backgroundColor:[
             statsPalette.onTime,
             statsPalette.delayed,
@@ -12228,7 +12216,7 @@ document.addEventListener('DOMContentLoaded', () => {
   chDonut = new Chart($("statsChDonut"), {
     type: "doughnut",
     data: {
-      labels: ["À l’heure","Retardés","Partiels (supp.)","Supprimés (intégral)"],
+      labels: ["À l’heure","Retardés","Partiels","Supprimés"],
       datasets: [{
         data: [0,0,0,0],
         backgroundColor: [
@@ -12269,44 +12257,27 @@ document.addEventListener('DOMContentLoaded', () => {
 
     if (!chTrain){
       chTrain = new Chart($("statsChTrain"), {
-        type: "bar",
+        type: "line",
         data: {
           labels: [],
           datasets: [
             {
               label:"Retard (min)",
               data: [],
-              backgroundColor: statsPalette.delayed,
-              borderRadius: 4,
-              yAxisID: "y"
+              tension: 0.25,
+              pointRadius: 2,
+              spanGaps: true,
+              borderColor: statsPalette.delayed
             },
             {
-              label:"Supprimé (intégral)",
+              label:"Supprimé",
               data: [],
-              backgroundColor: statsPalette.canceled,
-              yAxisID: "y2",
-              barThickness: 10
-            },
-            {
-              label:"Supprimé (partiel)",
-              data: [],
-              backgroundColor: statsPalette.partial,
-              yAxisID: "y2",
-              barThickness: 10
-            },
-            {
-              label:"Ne circule pas",
-              data: [],
-              backgroundColor: "#64748b",
-              yAxisID: "y2",
-              barThickness: 10
-            },
-            {
-              label:"Données absentes",
-              data: [],
-              backgroundColor: "#334155",
-              yAxisID: "y2",
-              barThickness: 10
+              showLine:false,
+              pointStyle:"cross",
+              pointRadius:6,
+              borderColor: statsPalette.canceled,
+              backgroundColor: statsPalette.canceled
+
             }
           ]
         },
@@ -12316,26 +12287,31 @@ document.addEventListener('DOMContentLoaded', () => {
           parsing: false,
           scales:{
             x:{ grid:{ color: gridColor }, ticks:{ color: tickColor } },
-            y:{ beginAtZero:true, grid:{ color: gridColor }, ticks:{ color: tickColor } },
-            y2:{
-              beginAtZero:true,
-              max: 1,
-              position: "right",
-              grid:{ display:false },
-              ticks:{ color: tickColor, callback: (v)=> (v === 1 ? "Oui" : "") }
-            }
+            y:{ beginAtZero:true, grid:{ color: gridColor }, ticks:{ color: tickColor } }
           },
           plugins:{
             tooltip:{
               callbacks:{
                 label: (ctx)=>{
-                  if (ctx.dataset?.yAxisID === "y2"){
-                    return ctx.dataset.label;
-                  }
                   const raw = ctx.raw;
-                  if (raw == null) return "—";
+                  if (ctx.dataset?.label === "Supprimé") return "Supprimé";
+                  if (raw == null) return "ANNULÉ — pas de point";
                   const y = (raw && typeof raw === "object") ? raw.y : raw;
-                  return `${ctx.dataset.label}: ${fmtInt(y)} min`;
+                  const bucket = raw?.bucket;
+                  const st = raw?.status;
+                  const isPartial = !!raw?.partial;
+                  const star = isPartial ? "*" : "";
+                  let line = `${ctx.dataset.label}: ${fmtInt(y)}${star}`;
+                  if (bucket) line += ` • ${bucket}`;
+                  if (st) line += ` • status=${st}`;
+                  return line;
+                },
+                afterLabel: (ctx)=>{
+                  const raw = ctx.raw;
+                  if (raw?.partial){
+                    return "⚠︎ suppression partielle : arrêts supprimés inconnus dans la donnée.";
+                  }
+                  return "";
                 }
               }
             }
@@ -12346,7 +12322,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (!chTrainDonut){
       chTrainDonut = new Chart($("statsChTrainDonut"), {
         type: "doughnut",
-        data: { labels: ["À l’heure","Retardés","Suppression partielle","Supprimés (intégral)"], datasets:[{ data:[0,0,0,0], backgroundColor:[
+        data: { labels: ["ON_TIME","DELAYED","PARTIAL","CANCELED"], datasets:[{ data:[0,0,0,0], backgroundColor:[
           statsPalette.onTime,
           statsPalette.delayed,
           statsPalette.partial,
@@ -12602,26 +12578,14 @@ document.addEventListener('DOMContentLoaded', () => {
 
   function computeTrainSeriesFromRawDays(rawDays, from, to, trainId, optStopName){
     const series = [];
-    const rawMap = new Map();
     for (const raw of rawDays){
       const date = raw?.date;
-      if (!date) continue;
-      rawMap.set(date, raw);
-    }
-    const dates = listDateRange(from, to);
-    for (const date of dates){
-      const raw = rawMap.get(date);
-      if (!raw){
-        series.push({ date, bucket: "NO_DATA", status: "NO_DATA", value: null, partial: false, hasStop: false });
-        continue;
-      }
+      if (!date || date < from || date > to) continue;
       const r = computeTrainDailyFromRaw(raw, trainId, optStopName);
-      if (!r){
-        series.push({ date, bucket: "NOT_RUNNING", status: "NOT_RUNNING", value: null, partial: false, hasStop: false });
-        continue;
-      }
+      if (!r) continue;
       series.push({ date, ...r });
     }
+    series.sort((a,b)=>a.date.localeCompare(b.date));
     return { from, to, days: series.length, series };
   }
 
@@ -12792,8 +12756,8 @@ document.addEventListener('DOMContentLoaded', () => {
       legend.innerHTML = [
         { label:"À l’heure", color: statsPalette.onTime },
         { label:"En retard", color: statsPalette.delayed },
-        { label:"Partiels (supp.)", color: statsPalette.partial },
-        { label:"Supprimés (intégral)", color: statsPalette.canceled }
+        { label:"Partiels", color: statsPalette.partial },
+        { label:"Supprimés", color: statsPalette.canceled }
       ].map(it => `
         <div class="item">
           <span class="dot" style="background:${it.color}"></span>
@@ -12847,35 +12811,22 @@ document.addEventListener('DOMContentLoaded', () => {
     const s = range.series || [];
     const labels = s.map(x=>x.date);
 
+    const points = s.map(r => {
+      if (r.value == null) return null;
+      return { x: r.date, y: Number(r.value||0), partial: !!r.partial, bucket: r.bucket, status: r.status };
+    });
+    const canceledPoints = s
+      .filter(r => r.bucket === "CANCELED")
+      .map(r => ({ x: r.date, y: 0, bucket: r.bucket, status: r.status }));
+
     chTrain.data.labels = labels;
     if (optStopName) {
       chTrain.data.datasets[0].label = "Retard à " + optStopName + " (min)";
     } else {
       chTrain.data.datasets[0].label = "Retard max (min)";
     }
-    chTrain.data.datasets[0].data = s.map(r => ({
-  x: r.date,
-  y: (r.bucket === "CANCELED" ||
-      r.bucket === "PARTIAL" ||
-      r.bucket === "NOT_RUNNING" ||
-      r.bucket === "NO_DATA")
-    ? null
-    : Number(r.value || 0)
-}));
-    });
-    chTrain.data.datasets[1].data = s.map(r =>
-  r.bucket === "CANCELED" ? { x: r.date, y: 0 } : null
-);
-chTrain.data.datasets[2].data = s.map(r =>
-  r.bucket === "PARTIAL" ? { x: r.date, y: 0 } : null
-);
-chTrain.data.datasets[3].data = s.map(r =>
-  r.bucket === "NOT_RUNNING" ? { x: r.date, y: 0 } : null
-);
-chTrain.data.datasets[4].data = s.map(r =>
-  r.bucket === "NO_DATA" ? { x: r.date, y: 0 } : null
-);
-chTrain.data.datasets.forEach(ds => ds.data = ds.data.filter(p => p !== null)); 
+    chTrain.data.datasets[0].data = points;
+    chTrain.data.datasets[1].data = canceledPoints;
     chTrain.update();
 
     let on=0, del=0, part=0, can=0;
@@ -12883,13 +12834,13 @@ chTrain.data.datasets.forEach(ds => ds.data = ds.data.filter(p => p !== null));
       if (r.bucket === "CANCELED") can++;
       else if (r.bucket === "PARTIAL") part++;
       else if (r.bucket === "DELAYED") del++;
-      else if (r.bucket === "ON_TIME") on++;
+      else on++;
     }
     chTrainDonut.data.datasets[0].data = [on, del, part, can];
     chTrainDonut.update();
 
     $("statsTrainChartNote").textContent =
-      String(range.from || "") + " → " + String(range.to || "") + " (jours: " + String(range.days || 0) + ", suppressions et non-circulation incluses)";
+      String(range.from || "") + " → " + String(range.to || "") + " (jours trouvés: " + String(range.days || 0) + ")";
 
     if (optStopName) {
       $("statsTrainMeta").textContent =
@@ -12917,45 +12868,21 @@ chTrain.data.datasets.forEach(ds => ds.data = ds.data.filter(p => p !== null));
 
     const tbody = $("statsTrainTbody");
     tbody.innerHTML = "";
-    const statusLabels = {
-      ON_TIME: "À l’heure",
-      DELAYED: "Retard",
-      PARTIAL: "Supprimé (partiel)",
-      CANCELED: "Supprimé (intégral)",
-      NOT_RUNNING: "Ne circule pas",
-      NO_DATA: "Données absentes"
-    };
-    let countCanceled = 0;
-    let countPartial = 0;
-    let countNotRunning = 0;
-    let countNoData = 0;
     for (const r of s){
-      if (r.bucket === "CANCELED") countCanceled += 1;
-      if (r.bucket === "PARTIAL") countPartial += 1;
-      if (r.bucket === "NOT_RUNNING") countNotRunning += 1;
-      if (r.bucket === "NO_DATA") countNoData += 1;
-      
       let star = "";
       if (r.bucket === "PARTIAL") {
         star = " *";
       }
       const tr = document.createElement("tr");
-      const showValue = r.value != null && r.bucket !== "CANCELED" && r.bucket !== "PARTIAL" && r.bucket !== "NOT_RUNNING" && r.bucket !== "NO_DATA";
-      const valueCell = showValue ? (fmtInt(r.value) + star) : "—";
+      const valueCell = (r.value == null) ? "—" : (fmtInt(r.value) + star);
       tr.innerHTML =
         "<td>" + r.date + "</td>" +
-        "<td>" + (statusLabels[r.bucket] || r.bucket) + "</td>" +
+        "<td>" + r.bucket + "</td>" +
         "<td class=\"num\">" + valueCell + "</td>";
       tbody.appendChild(tr);
     }
-    const metaParts = [
-      String(s.length || 0) + " jour(s) dans la période",
-      countCanceled ? `${countCanceled} supprimé(s)` : null,
-      countPartial ? `${countPartial} partiel(s)` : null,
-      countNotRunning ? `${countNotRunning} non circulé(s)` : null,
-      countNoData ? `${countNoData} jour(s) sans donnée` : null
-    ].filter(Boolean);
-    $("statsTrainTableCount").textContent = metaParts.join(" · ");
+    $("statsTrainTableCount").textContent =
+      String(s.length || 0) + " jour(s) où le train est présent dans le fichier";
   }
 
   function renderStop(stopName, range){
