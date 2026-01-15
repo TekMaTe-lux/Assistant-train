@@ -12360,27 +12360,26 @@ document.addEventListener('DOMContentLoaded', () => {
 
     if (!chTrain){
       chTrain = new Chart($("statsChTrain"), {
-        type: "line",
+        type: "bar",
         data: {
           labels: [],
           datasets: [
             {
               label:"Retard (min)",
               data: [],
-              tension: 0.25,
-              pointRadius: 2,
-              spanGaps: true,
-              borderColor: statsPalette.delayed
+              backgroundColor: statsPalette.delayed,
+              borderColor: statsPalette.delayed,
+              borderWidth: 1
+
             },
             {
               label:"Supprimé",
               data: [],
-              showLine:false,
-              pointStyle:"cross",
-              pointRadius:6,
+              backgroundColor: statsPalette.canceled,
               borderColor: statsPalette.canceled,
-              backgroundColor: statsPalette.canceled
 
+              borderWidth: 1,
+              minBarLength: 6
             }
           ]
         },
@@ -12396,15 +12395,14 @@ document.addEventListener('DOMContentLoaded', () => {
             tooltip:{
               callbacks:{
                 label: (ctx)=>{
-                  const raw = ctx.raw;
                   if (ctx.dataset?.label === "Supprimé") return "Supprimé";
-                  if (raw == null) return "ANNULÉ — pas de point";
-                  const y = (raw && typeof raw === "object") ? raw.y : raw;
-                  const bucket = raw?.bucket;
-                  const st = raw?.status;
-                  const isPartial = !!raw?.partial;
-                  const star = isPartial ? "*" : "";
-                  let line = `${ctx.dataset.label}: ${fmtInt(y)}${star}`;
+                  if (Number.isNaN(ctx.parsed?.y)) return null;
+                  const y = ctx.parsed?.y;
+                  let line = `${ctx.dataset.label}: ${fmtInt(y)}`;
+                  const bucket = ctx.raw?.bucket;
+                  const st = ctx.raw?.status;
+                  const isPartial = !!ctx.raw?.partial;
+                  if (isPartial) line += " *";
                   if (bucket) line += ` • ${bucket}`;
                   if (st) line += ` • status=${st}`;
                   return line;
@@ -12912,7 +12910,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   function renderTrain(trainId, optStopName, range){
     const s = range.series || [];
-    const labels = s.map(x => x?.date).filter(Boolean);
+    const labels = s.map(x => x?.date ?? "");
 
     if (!s.length) {
       chTrain.data.labels = [];
@@ -12937,9 +12935,10 @@ document.addEventListener('DOMContentLoaded', () => {
       const v = Number(r.value);
       return Number.isFinite(v) ? v : Number.NaN;
     });
-    const canceledPoints = s
-      .filter(r => (r?.bucket ?? r?.status ?? "") === "CANCELED")
-      .map(r => ({ x: r.date, y: 0, bucket: r.bucket, status: r.status }));
+    const canceledPoints = s.map(r => {
+      const b = r?.bucket ?? r?.status ?? "NO_DATA";
+      return (b === "CANCELED") ? 0 : Number.NaN;
+    });
 
     chTrain.data.labels = labels;
     if (optStopName) {
@@ -12973,7 +12972,7 @@ document.addEventListener('DOMContentLoaded', () => {
       $("statsTrainMeta").textContent = "Train " + trainId + " — valeur = retard max";
     }
 
-    const hasPartial = s.some(r => r.bucket === "PARTIAL");
+    const hasPartial = s.some(r => (r?.bucket ?? r?.status ?? "") === "PARTIAL");
     const warn = $("statsTrainWarn");
     if (hasPartial){
       warn.style.display = "block";
