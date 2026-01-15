@@ -12904,14 +12904,33 @@ document.addEventListener('DOMContentLoaded', () => {
 
   function renderTrain(trainId, optStopName, range){
     const s = range.series || [];
-    const labels = s.map(x=>x.date);
+    const labels = s.map(x => x?.date).filter(Boolean);
+
+    if (!s.length) {
+      chTrain.data.labels = [];
+      chTrain.data.datasets[0].data = [];
+      chTrain.data.datasets[1].data = [];
+      chTrain.update();
+      chTrainDonut.data.datasets[0].data = [0, 0, 0, 0];
+      chTrainDonut.update();
+      $("statsTrainChartNote").textContent = "—";
+      $("statsTrainMeta").textContent = "Train " + trainId + " — aucune donnée";
+      $("statsTrainWarn").style.display = "none";
+      $("statsTrainWarn").textContent = "";
+      return;
+    }
 
     const points = s.map(r => {
-      if (r.value == null) return null;
-      return { x: r.date, y: Number(r.value||0), partial: !!r.partial, bucket: r.bucket, status: r.status };
+      if (!r) return Number.NaN;
+      const b = r?.bucket ?? r?.status ?? "NO_DATA";
+      if (b === "CANCELED" || b === "PARTIAL" || b === "NOT_RUNNING" || b === "NO_DATA") {
+        return Number.NaN;
+      }
+      const v = Number(r.value);
+      return Number.isFinite(v) ? v : Number.NaN;
     });
     const canceledPoints = s
-      .filter(r => r.bucket === "CANCELED")
+      .filter(r => (r?.bucket ?? r?.status ?? "") === "CANCELED")
       .map(r => ({ x: r.date, y: 0, bucket: r.bucket, status: r.status }));
 
     chTrain.data.labels = labels;
@@ -12921,14 +12940,16 @@ document.addEventListener('DOMContentLoaded', () => {
       chTrain.data.datasets[0].label = "Retard max (min)";
     }
     chTrain.data.datasets[0].data = points;
+    chTrain.data.datasets[0].hidden = points.every(v => Number.isNaN(v));
     chTrain.data.datasets[1].data = canceledPoints;
     chTrain.update();
 
     let on=0, del=0, part=0, can=0;
     for (const r of s){
-      if (r.bucket === "CANCELED") can++;
-      else if (r.bucket === "PARTIAL") part++;
-      else if (r.bucket === "DELAYED") del++;
+      const b = r?.bucket ?? r?.status ?? "NO_DATA";
+      if (b === "CANCELED") can++;
+      else if (b === "PARTIAL") part++;
+      else if (b === "DELAYED") del++;
       else on++;
     }
     chTrainDonut.data.datasets[0].data = [on, del, part, can];
