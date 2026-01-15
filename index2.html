@@ -12156,20 +12156,43 @@ document.addEventListener('DOMContentLoaded', () => {
     setTrendView(initial);
   }
 
-  function statusFlags(statusRaw){
+  function statusFlags(statusRaw, extra){
     const s = String(statusRaw || "").trim().toUpperCase();
     const isCanceled =
       s === "CANCELED" || s === "CANCELLED" ||
-      s.includes("CANCELED") || s.includes("CANCELLED");
+      s.includes("CANCELED") || s.includes("CANCELLED") ||
+      s.includes("SUPPR") || s.includes("ANNUL");
     const isPartial =
       s === "PARTIAL_CANCELLATION" ||
       s === "PARTIALLY_CANCELED" ||
       s === "PARTIALLY_CANCELLED" ||
       (s.includes("PARTIAL") && (s.includes("CANCEL") || s.includes("CANCELL"))) ||
-      s.includes("PARTIAL_CANCELLATION");
+      s.includes("PARTIAL_CANCELLATION") ||
+      (s.includes("PART") && s.includes("SUPPR"));
     const isDelayedFlag = (s === "DELAYED" || s.includes("DELAY"));
-    return { isCanceled, isPartial, isDelayedFlag, s };
-  }
+    const extraObj = (extra && typeof extra === "object") ? extra : {};
+    const extraCanceled = Boolean(
+      extraObj.cancelled ||
+      extraObj.canceled ||
+      extraObj.cancel ||
+      extraObj.supprime ||
+      extraObj.suppressed ||
+      extraObj.annule
+    );
+    const extraPartial = Boolean(
+      extraObj.partial ||
+      extraObj.partial_canceled ||
+      extraObj.partial_cancelled ||
+      extraObj.partial_cancellation
+    );
+
+    return {
+      isCanceled: isCanceled || extraCanceled,
+      isPartial: isPartial || extraPartial,
+      isDelayedFlag,
+      s
+    };
+  }  
 
   function maxDelayFromStops(stops){
     let m = 0;
@@ -12541,7 +12564,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     for (const trainNum of Object.keys(trains)){
       const t = trains[trainNum] || {};
-      const { isCanceled, isPartial, isDelayedFlag } = statusFlags(t.status);
+      const { isCanceled, isPartial, isDelayedFlag } = statusFlags(t.status, t);
       const maxDelay = maxDelayFromStops(t.stops);
       const isDelayed = (!isCanceled && !isPartial) && (isDelayedFlag || maxDelay > 0);
 
@@ -12583,7 +12606,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
       total += 1;
 
-      const { isCanceled, isPartial } = statusFlags(t.status);
+      const { isCanceled, isPartial } = statusFlags(t.status, t);
       const delayAtStop = Number(stops[stopName] || 0);
       const isDelayedAtStop = (!isCanceled && !isPartial) && Number.isFinite(delayAtStop) && delayAtStop > 0;
 
@@ -12615,7 +12638,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const t = raw.trains?.[trainId];
     if (!t) return null;
 
-    const { isCanceled, isPartial, isDelayedFlag, s } = statusFlags(t.status);
+    const { isCanceled, isPartial, isDelayedFlag, s } = statusFlags(t.status, t);
 
     let value = 0;
     let hasStop = false;
@@ -12669,7 +12692,7 @@ document.addEventListener('DOMContentLoaded', () => {
       const trains = raw?.trains || {};
       for (const trainNum of Object.keys(trains)){
         const t = trains[trainNum] || {};
-        const { isCanceled, isPartial } = statusFlags(t.status);
+        const { isCanceled, isPartial } = statusFlags(t.status, t);
         const maxDelay = maxDelayFromStops(t.stops);
         const entry = map.get(trainNum) || { trainNo: trainNum, cancelled7: 0, partial7: 0, delayMin7: 0 };
         if (isCanceled) entry.cancelled7 += 1;
