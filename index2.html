@@ -4688,6 +4688,8 @@ body.modal-open{ overflow:hidden; }
 .fav-train{ font-weight: 900; color:#fff; }
 .fav-meta{ margin-top: 8px; color:#b9c8d8; font-size:.95rem; }
 .fav-line{ margin-top: 8px; color:#e6f7ff; font-size:.95rem; line-height: 1.35; }
+.fav-cause{ margin-top: 6px; color:#ffd7a6; font-size:.82rem; line-height:1.25; opacity:.95; }
+.fav-stats{ margin-top: 6px; color:#bfefff; font-size:.78rem; line-height:1.25; opacity:.9; white-space: nowrap; overflow:hidden; text-overflow: ellipsis; }
 @media (max-width: 768px){ .fav-grid{ grid-template-columns: 1fr; } }
 
 </style>
@@ -4991,7 +4993,7 @@ function renderRowsChunked(htmlRows, tbody, chunk=200){
 <!-- Widget Favoris Matin / Soir (visible si connecté) -->
 <section id="favTrainsWidget" class="fav-widget" style="display:none; position:relative; z-index:2;">
   <div class="fav-head">
-    <div class="fav-title">⭐ Mes trains favoris</div>
+    <div class="fav-title">⭐ Mes bétaillères favorites</div>
     <button id="favOpenPrefs" class="fav-btn" type="button">Modifier</button>
   </div>
 
@@ -5003,6 +5005,8 @@ function renderRowsChunked(htmlRows, tbody, chunk=200){
       </div>
       <div class="fav-meta" id="favMetaAM">—</div>
       <div class="fav-line" id="favLineAM"></div>
+      <div class="fav-cause" id="favCauseAM"></div>
+      <div class="fav-stats" id="favStatsAM"></div>
     </article>
 
     <article class="fav-card" id="favCardPM">
@@ -5012,6 +5016,8 @@ function renderRowsChunked(htmlRows, tbody, chunk=200){
       </div>
       <div class="fav-meta" id="favMetaPM">—</div>
       <div class="fav-line" id="favLinePM"></div>
+      <div class="fav-cause" id="favCausePM"></div>
+      <div class="fav-stats" id="favStatsPM"></div>
     </article>
   </div>
 </section>
@@ -14271,6 +14277,8 @@ function scheduleWeatherAfterTableSettled(){
     if (!trainId) {
       meta.textContent = 'Choisis un train dans Préférences.';
       line.textContent = '';
+      renderDisruptionCause(kind, '');
+      renderQuickStats(kind, trainId, '');
       return;
     }
 
@@ -14292,6 +14300,8 @@ function scheduleWeatherAfterTableSettled(){
       const mins = Math.max(0, (st.dep0 ?? st.now) - st.now);
       meta.textContent = `⏳ Départ dans ${mins} min • ${origin} → ${dest}`;
       line.textContent = `Départ théorique ${depTxt} • Arrivée ${arrTxt}`;
+      renderDisruptionCause(kind, payload?.cause);
+      renderQuickStats(kind, trainId, st.state);
       return;
     }
 
@@ -14308,19 +14318,93 @@ function scheduleWeatherAfterTableSettled(){
       line.textContent = next.length
         ? `Prochains: ${next.map(x => `${x.name} ${minToClock(x.t)}`).join(' • ')}`
         : `Départ ${depTxt} • Arrivée ${arrTxt}`;
+      renderDisruptionCause(kind, payload?.cause);
+      renderQuickStats(kind, trainId, st.state);
       return;
     }
 
     if (st.state === 'after') {
       meta.textContent = `⚪ Terminé aujourd’hui • ${origin} → ${dest}`;
       line.textContent = `Départ ${depTxt} • Arrivée ${arrTxt}`;
+      renderDisruptionCause(kind, payload?.cause);
+      renderQuickStats(kind, trainId, st.state);
       return;
     }
 
     meta.textContent = 'ℹ️ Données disponibles.';
     line.textContent = `${origin} → ${dest}`;
+    renderDisruptionCause(kind, payload?.cause);
+    renderQuickStats(kind, trainId, st.state);
   };
 
+
+
+  // --- Mini-stats (30j) pour favoris (compact) ---
+  let favStatsSummary = null;
+  let favStatsLoading = null;
+
+  const loadFavStatsSummary = async () => {
+    if (favStatsSummary) return favStatsSummary;
+    if (favStatsLoading) return favStatsLoading;
+    favStatsLoading = (async () => {
+      try {
+        const r = await fetch('/stats/fav_summary.json', { cache: 'no-store' });
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        const j = await r.json();
+        favStatsSummary = (j && typeof j === 'object') ? j : {};
+      } catch (e) {
+        favStatsSummary = {};
+      }
+      return favStatsSummary;
+    })();
+    return favStatsLoading;
+  };
+
+  const renderQuickStats = (kind, trainId, trainState) => {
+    const el = document.getElementById(kind === 'AM' ? 'favStatsAM' : 'favStatsPM');
+    if (!el) return;
+
+    // On masque quand le temps réel est la priorité
+    if (trainState === 'running') { el.textContent = ''; return; }
+
+    const s = (favStatsSummary || {})[String(trainId)];
+    if (!s) { el.textContent = ''; return; }
+
+    const pct = Math.round(Number(s.p_on_time || s.punctuality || 0) * 100);
+    const avg = Number(s.avg_delay || s.avgDelay || 0);
+    const sup = Math.round(Number(s.p_canceled || s.pCanceled || 0) * 100);
+
+    // Une seule ligne, compacte
+    el.textContent = `📊 30j : ${pct}% ≤5 min • +${avg.toFixed(1)} min • ${sup}% suppr.`;
+  };
+
+  const renderDisruptionCause = (kind, causeText) => {
+    const el = document.getElementById(kind === 'AM' ? 'favCauseAM' : 'favCausePM');
+    if (!el) return;
+    const t = String(causeText || '').trim();
+    if (!t) { el.textContent = ''; return; }
+    // Compact et lisible
+    el.textContent = `⚠️ ${t}`;
+  };
+
+  const pickFirstDisruptionCause = (res) => {
+    const disruptions = res?.disruptions || [];
+    if (!Array.isArray(disruptions) || !disruptions.length) return '';
+
+    // Prend la première cause "humaine" disponible
+    for (const d of disruptions) {
+      const msg = d?.messages?.[0]?.text?.trim();
+      if (msg) return msg;
+      const cause = d?.cause?.trim();
+      if (cause) return cause;
+      const effect = d?.severity?.effect;
+      if (effect === 'MODIFIED_SERVICE') return 'Parcours / arrêts modifiés';
+      if (effect === 'SIGNIFICANT_DELAYS') return 'Retards importants (cause non précisée)';
+      if (effect === 'REDUCED_SERVICE') return 'Suppression partielle (cause non précisée)';
+      if (effect === 'CANCELLATION' || effect === 'NO_SERVICE') return 'Train supprimé (cause non précisée)';
+    }
+    return '';
+  };
   const fetchTrainToday = async (selectionKey) => {
     const ymd = luxYmdToday();
     if (!/^\d{5,6}$/.test(String(selectionKey))) return { error: 'Format invalide' };
@@ -14333,9 +14417,12 @@ function scheduleWeatherAfterTableSettled(){
     const response = await fetchJSON(url);
     if (!response?.ok) return { error: 'Non prévu (ou API KO)' };
 
-    const train = response?.data?.vehicle_journeys?.[0];
+    const res = response?.data;
+    const train = res?.vehicle_journeys?.[0];
     if (!train) return { error: 'Non prévu' };
-    return { train, source: 'SNCF' };
+
+    const cause = pickFirstDisruptionCause(res);
+    return { train, source: 'SNCF', cause };
   };
 
   let favWidgetTimer = null;
@@ -14351,6 +14438,9 @@ function scheduleWeatherAfterTableSettled(){
     }
 
     root.style.display = 'block';
+
+    // charge (si dispo) les micro-stats 30j en une seule requête
+    try { await loadFavStatsSummary(); } catch(e) {}
 
     const prefs = window.lbPrefsCache || null;
     const favAM = (prefs?.favoriteMorningTrain || '').trim();
