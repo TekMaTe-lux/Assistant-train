@@ -5209,6 +5209,14 @@ function renderRowsChunked(htmlRows, tbody, chunk=200){
           <div class="stats-canvas"><canvas id="statsChVolumes"></canvas></div>
         </div>
 
+        <div class="stats-card" style="grid-column:span 3">
+          <div class="head">
+            <div class="title">Ponctualité par tranches horaires</div>
+            <div class="meta" id="statsMetaByHour">—</div>
+          </div>
+          <div class="stats-canvas"><canvas id="statsChByHour"></canvas></div>
+        </div>
+
         <div class="stats-card" style="grid-column:span 2">
           <div class="head">
             <div class="title">Répartition (jour sélectionné)</div>
@@ -12285,7 +12293,7 @@ document.addEventListener('DOMContentLoaded', () => {
     return "LT5";
   }
 
-  let chPct, chVolumes, chDonut, chHist;
+  let chPct, chVolumes, chDonut, chHist, chByHour;
   let chRing7, chRingYesterday, chDonutYesterday;
   let chTrain, chTrainDonut;
   let chStopTrains, chStopVolumes, chStopPct;
@@ -12373,6 +12381,20 @@ document.addEventListener('DOMContentLoaded', () => {
           scales:{
             x:{ grid:{ color: gridColor }, ticks:{ color: tickColor } },
             y:{ beginAtZero:true, grid:{ color: gridColor }, ticks:{ color: tickColor } }
+          }
+        }
+      });
+    }
+    if (!chByHour){
+      chByHour = new Chart($("statsChByHour"), {
+        type: "bar",
+        data: { labels: [], datasets: [{ label:"Ponctualité", data: [], backgroundColor: [] }] },
+        options: {
+          responsive:true,
+          maintainAspectRatio:false,
+          scales:{
+            x:{ grid:{ color: gridColor }, ticks:{ color: tickColor } },
+            y:{ beginAtZero:true, max:100, grid:{ color: gridColor }, ticks:{ color: tickColor, callback: (v)=>`${v}%` } }
           }
         }
       });
@@ -12702,6 +12724,182 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     series.sort((a,b)=>a.date.localeCompare(b.date));
     return { from, to, days: series.length, series };
+  }
+
+  function parseHHMMSS_toMinutes(value){
+    if (value == null) return null;
+    const str = String(value).trim();
+    if (!str) return null;
+    const parts = str.split(":");
+    if (parts.length < 2) return null;
+    const h = Number(parts[0]);
+    const m = Number(parts[1]);
+    const s = Number(parts[2] || 0);
+    if (!Number.isFinite(h) || !Number.isFinite(m) || !Number.isFinite(s)) return null;
+    return (h * 60) + m + Math.floor(s / 60);
+  }
+
+  function getTripIdFromRawTrain(trainNo, rawTrain, ymd){
+    const candidates = new Set();
+    const add = (val) => {
+      if (!val) return;
+      const id = String(val).trim();
+      if (id) candidates.add(id);
+    };
+    add(rawTrain?.trip_id);
+    add(rawTrain?.tripId);
+    add(rawTrain?.tripID);
+    add(rawTrain?.gtfs_trip_id);
+    const nestedTrip = rawTrain?.trip;
+    if (nestedTrip && typeof nestedTrip === "object"){
+      add(nestedTrip.trip_id);
+      add(nestedTrip.id);
+    }
+    if (Array.isArray(rawTrain?.trip_ids)) rawTrain.trip_ids.forEach(add);
+    if (Array.isArray(rawTrain?.tripIds)) rawTrain.tripIds.forEach(add);
+
+    const directTripIds = Array.from(candidates).filter(id => GTFS.tripById?.has(id));
+    if (ymd && directTripIds.length){
+      const match = directTripIds.find(id => serviceActiveForDate(id, ymd));
+      if (match) return match;
+    }
+    if (directTripIds.length) return directTripIds[0];
+
+    const rawNumber = trainNo || rawTrain?.train_number || rawTrain?.trainNumber;
+    const normalized = extractTrainNumber(String(rawNumber || ""));
+    if (!normalized) return null;
+    ensureTripsByNumberIndex();
+    const tripIds = GTFS._tripsByNumber?.get(normalized) || [];
+    const uniqueTripIds = Array.from(new Set(tripIds));
+    if (ymd && uniqueTripIds.length){
+      const match = uniqueTripIds.find(id => serviceActiveForDate(id, ymd));
+      if (match) return match;
+    }
+    return uniqueTripIds[0] || null;
+  }
+
+  function getReferenceTimeMinutesForTrip(tripId, refStopName){
+    if (!tripId) return null;
+    if (!GTFS.tripById?.has(tripId)) return null;
+    if (!Array.isArray(GTFS.stopTimes)) return null;
+    const stopIds = getIdsForName(refStopName);
+    if (!stopIds || !stopIds.size) return null;
+    ensureStopTimesByTripIndex();
+    const stopTimes = GTFS._stopTimesByTrip?.get(tripId) || [];
+    let best = null;
+    for (const st of stopTimes){
+      if (!stopIds.has(st.stop_id)) continue;
+      const candidate = parseHHMMSS_toMinutes(st.arrival_time || st.departure_time);
+      if (candidate == null) continue;
+      if (best == null || candidate < best) best = candidate;
+    }
+    return best;
+  }
+
+  const HOUR_SLICES = [
+    { label: "04–06", start: 4 * 60, end: 6 * 60 },
+    { label: "06–09", start: 6 * 60, end: 9 * 60 },
+    { label: "09–16", start: 9 * 60, end: 16 * 60 },
+    { label: "16–19", start: 16 * 60, end: 19 * 60 },
+    { label: "19–22", start: 19 * 60, end: 22 * 60 },
+    { label: "22–04", start: 22 * 60, end: 4 * 60 }
+  ];
+
+  function sliceForMinutes(minutes){
+    if (!Number.isFinite(minutes)) return null;
+    const normalized = ((minutes % 1440) + 1440) % 1440;
+    for (const slice of HOUR_SLICES){
+      if (slice.start < slice.end){
+        if (normalized >= slice.start && normalized < slice.end) return slice;
+      } else {
+        if (normalized >= slice.start || normalized < slice.end) return slice;
+      }
+    }
+    return null;
+  }
+
+  function computePunctualityByHourSlices(rawDays, range, refStopName){
+    const slices = HOUR_SLICES.map(slice => ({ ...slice, total: 0, onTime: 0 }));
+    const sliceByLabel = new Map(slices.map(slice => [slice.label, slice]));
+    const from = range?.from || "";
+    const to = range?.to || "";
+
+    for (const raw of rawDays || []){
+      const date = raw?.date;
+      if (!date) continue;
+      if (from && date < from) continue;
+      if (to && date > to) continue;
+      const ymd = date.replace(/-/g, "");
+      const trains = raw?.trains || {};
+      for (const trainNo of Object.keys(trains)){
+        const t = trains[trainNo] || {};
+        const tripId = getTripIdFromRawTrain(trainNo, t, ymd);
+        if (!tripId) continue;
+        const refMinutes = getReferenceTimeMinutesForTrip(tripId, refStopName);
+        if (refMinutes == null) continue;
+        const slice = sliceForMinutes(refMinutes);
+        if (!slice) continue;
+        const sliceEntry = sliceByLabel.get(slice.label);
+        if (!sliceEntry) continue;
+
+        const { isCanceled, isPartial, isDelayedFlag } = statusFlags(t.status, t);
+        const maxDelay = maxDelayFromStops(t.stops);
+        const isDelayed = (!isCanceled && !isPartial) && (isDelayedFlag || maxDelay > 0);
+        const isOnTime = !isCanceled && !isPartial && !isDelayed;
+
+        sliceEntry.total += 1;
+        if (isOnTime) sliceEntry.onTime += 1;
+      }
+    }
+
+    const data = slices.map(s => s.total ? (s.onTime / s.total) * 100 : 0);
+    const totals = slices.map(s => s.total);
+    const totalTrains = totals.reduce((a,b)=>a+b,0);
+    const onTimeTrains = slices.reduce((a,b)=>a+b.onTime,0);
+    return { slices, data, totals, totalTrains, onTimeTrains };
+  }
+
+  async function renderPunctualityByHourSlices(rawDays, range, refStopName){
+    const meta = $("statsMetaByHour");
+    if (!chByHour || !meta) return;
+    if (!Array.isArray(rawDays) || !rawDays.length){
+      chByHour.data.labels = [];
+      chByHour.data.datasets[0].data = [];
+      chByHour.update();
+      meta.textContent = "Données brutes indisponibles";
+      return;
+    }
+    if (!GTFS.tripById || !Array.isArray(GTFS.stopTimes)){
+      try {
+        await ensureGTFSLoaded();
+      } catch (err){
+        chByHour.data.labels = [];
+        chByHour.data.datasets[0].data = [];
+        chByHour.update();
+        meta.textContent = "Données GTFS indisponibles";
+        return;
+      }
+    }
+    if (!GTFS.tripById || !Array.isArray(GTFS.stopTimes)){
+      chByHour.data.labels = [];
+      chByHour.data.datasets[0].data = [];
+      chByHour.update();
+      meta.textContent = "Données GTFS indisponibles";
+      return;
+    }
+
+    const result = computePunctualityByHourSlices(rawDays, range, refStopName);
+    const labels = HOUR_SLICES.map(slice => {
+      if (slice.label === "06–09" || slice.label === "16–19") return `${slice.label} ⭐`;
+      return slice.label;
+    });
+    chByHour.data.labels = labels;
+    chByHour.data.datasets[0].data = result.data.map(v => Number.isFinite(v) ? Number(v.toFixed(1)) : 0);
+    chByHour.data.datasets[0].backgroundColor = result.data.map(score => colorForPunctuality(score));
+    chByHour.update();
+
+    const pct = result.totalTrains ? (result.onTimeTrains / result.totalTrains) * 100 : 0;
+    meta.textContent = `${refStopName} · ${fmtInt(result.totalTrains)} trains analysés · ${fmtPct(pct)} à l’heure`;
   }
 
   function computeTrainDailyFromRaw(raw, trainId, optStopName){
@@ -13151,6 +13349,7 @@ document.addEventListener('DOMContentLoaded', () => {
       renderHist(dayData);
       renderLists(dayData);
       renderExpress(range, dayData, rawDays);
+      await renderPunctualityByHourSlices(rawDays, range, "Metz");
 
       $("statsStatus").textContent = "OK ✅";
     }catch(e){
