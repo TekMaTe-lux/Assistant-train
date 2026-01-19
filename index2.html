@@ -14433,28 +14433,66 @@ function scheduleWeatherAfterTableSettled(){
     return null;
   };
 
-  const buildDelaysByStopLine = (train, nowMin, thresholdMin = 5) => {
+  const buildDelaysByStopLine = (payload, nowMin, thresholdMin = 5) => {
+    const train = payload?.train;
     const stopTimes = train?.stop_times || [];
+    const impacted = payload?.impacted || null;
+
+    const toHHMM = (t) => {
+      if (!t) return null;
+      const s = String(t).replace(/[^0-9]/g, '');
+      if (s.length >= 4) return s.slice(0,4);
+      return null;
+    };
+    const hhmmToMin = (hhmm) => {
+      if (!hhmm || hhmm.length < 4) return null;
+      const h = parseInt(hhmm.slice(0,2), 10);
+      const m = parseInt(hhmm.slice(2,4), 10);
+      if (!Number.isFinite(h) || !Number.isFinite(m)) return null;
+      return h*60 + m;
+    };
+    const diffMin = (base, amended) => {
+      const b = hhmmToMin(toHHMM(base));
+      const a = hhmmToMin(toHHMM(amended));
+      if (b == null || a == null) return null;
+      return a - b;
+    };
+
     const hits = [];
 
     for (const st of stopTimes) {
       const name = st?.stop_point?.name;
+      const id = st?.stop_point?.id;
       const t = hhmmRawToMin(st?.arrival_time || st?.departure_time);
       if (!name || t == null) continue;
-      // on affiche surtout les arrêts à venir
-      if (nowMin != null && t < nowMin) continue;
+      if (nowMin != null && t < nowMin) continue; // arrêts à venir
 
-      const d = stopDelayMin(st);
+      let d = null;
+
+      // 1) priorité: impacted (comme ton tableau principal)
+      if (impacted && id && impacted[id]) {
+        const imp = impacted[id];
+        const dm = (imp?.delay_minutes !== undefined && imp?.delay_minutes !== null) ? Number(imp.delay_minutes) : null;
+        if (Number.isFinite(dm)) d = dm;
+        if (d == null) {
+          d = diffMin(imp?.base_departure_time || imp?.base_arrival_time,
+                     imp?.amended_departure_time || imp?.amended_arrival_time);
+        }
+      }
+
+      // 2) fallback: champs éventuels sur stop_times
+      if (d == null) d = stopDelayMin(st);
+
       if (d == null) continue;
       if (d >= thresholdMin) hits.push({ name, d, t });
     }
 
     if (!hits.length) return '';
 
-    // 4 arrêts max pour rester compact
+    hits.sort((a,b)=>a.t-b.t);
     const shown = hits.slice(0, 4);
     const more = hits.length > 4 ? ' • …' : '';
-    return `Retards: ${shown.map(x => `${x.name} +${x.d}`).join(' • ')}${more}`;
+    return `Retards: ${shown.map(x => `${x.name} +${Math.round(x.d)}`).join(' • ')}${more}`;
   };
 
   const inferRealtimeStatusFromDisruptions = (payload) => {
@@ -14542,7 +14580,7 @@ function scheduleWeatherAfterTableSettled(){
     if (st.state === 'running') {
       meta.textContent = `🟢 En circulation • ${origin} → ${dest}`;
       // Retards >= +5 min aux arrêts concernés (si l'API fournit les infos)
-      const delaysLine = buildDelaysByStopLine(train, st.now, 5);
+      const delaysLine = buildDelaysByStopLine(payload, st.now, 5);
 
       if (delaysLine) {
         line.textContent = delaysLine;
