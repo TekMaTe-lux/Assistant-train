@@ -5118,7 +5118,7 @@ function renderRowsChunked(htmlRows, tbody, chunk=200){
 
         <article class="stats-express-card" data-punctuality-card="yesterday">
           <div class="head">
-            <h3>Ponctualité (hier)</h3>
+            <h3>Ponctualité (jour)</h3>
             <div class="meta" id="statsExpressYesterday">—</div>
           </div>
           <div class="stats-express-canvas"><canvas id="statsRingYesterday"></canvas></div>
@@ -5126,8 +5126,8 @@ function renderRowsChunked(htmlRows, tbody, chunk=200){
         
         <article class="stats-express-card">
           <div class="head">
-            <h3>Statut des trains (hier)</h3>
-            <div class="meta" id="statsExpressYesterday">—</div>
+            <h3>Statut des trains (jour)</h3>
+            <div class="meta" id="statsExpressDayStatus">—</div>
           </div>
           <div class="stats-express-canvas"><canvas id="statsDonutYesterday"></canvas></div>
           <div class="stats-express-legend" id="statsExpressLegend"></div>
@@ -13108,9 +13108,9 @@ document.addEventListener('DOMContentLoaded', () => {
     pillList($("statsLpartial"), ap);
   }
 
-  function renderExpress(range, dayData, rawDays){
+  function renderExpress(expressRange, dayData, rawDays){
     ensureExpressCharts();
-    const series = (range?.series || []).slice().sort((a,b)=>a.date.localeCompare(b.date));
+    const series = (expressRange?.series || []).slice().sort((a,b)=>a.date.localeCompare(b.date));
     const last7Series = series.slice(-7);
     const onTimeSeries = last7Series.map(d => 100 - Number(d.pct_not_on_time || 0));
     const avgOnTime = onTimeSeries.length
@@ -13124,11 +13124,13 @@ document.addEventListener('DOMContentLoaded', () => {
     const dayOnTime = Math.max(0, dayTotal - dayDelayed - dayCanceled - dayPartial);
     const dayOnTimePct = dayTotal ? (dayOnTime / dayTotal) * 100 : 0;
 
-    const last7Start = last7Series[0]?.date || range?.from;
-    const last7End = last7Series[last7Series.length - 1]?.date || range?.to;
+    const last7Start = last7Series[0]?.date || expressRange?.from;
+    const last7End = last7Series[last7Series.length - 1]?.date || expressRange?.to;
     $("statsExpressRange").textContent = last7Start && last7End ? `${last7Start} → ${last7End}` : "—";
-    const fallbackYesterday = range?.to || new Date(Date.now() - 86400000).toISOString().slice(0, 10);
-    $("statsExpressYesterday").textContent = dayData?.date || fallbackYesterday || "—";
+    const fallbackDay = expressRange?.to || new Date(Date.now() - 86400000).toISOString().slice(0, 10);
+    const dayLabel = dayData?.date || fallbackDay || "—";
+    $("statsExpressYesterday").textContent = dayLabel;
+    $("statsExpressDayStatus").textContent = dayLabel;
 
     const ring7Color = colorForPunctuality(avgOnTime);
     chRing7.data.datasets[0].data = [avgOnTime, Math.max(0, 100 - avgOnTime)];
@@ -13376,24 +13378,33 @@ document.addEventListener('DOMContentLoaded', () => {
     const to = clampDateStr($("statsTo").value);
     const day = clampDateStr($("statsDay").value);
     try{
-      let range, dayData;
-      [range, dayData] = await Promise.all([
+      const expressRangeInfo = getLastDaysRange(7);
+      const dayRequest = day || expressRangeInfo.to;
+      let range, dayData, expressRange;
+      [range, dayData, expressRange] = await Promise.all([
         loadRangeAPI(from, to),
-        loadDayAPI(day)
+        loadDayAPI(dayRequest),
+        loadRangeAPI(expressRangeInfo.from, expressRangeInfo.to)
       ]);
       let rawDays = [];
+      let rawDaysWeek = [];
       try{
         rawDays = await getRawRange(from, to);
         if (rawDays.length) fillStatsListsFromRaw(rawDays);
       }catch (e){
         rawDays = [];
       }
+      try{
+        rawDaysWeek = await getRawRange(expressRangeInfo.from, expressRangeInfo.to);
+      }catch (e){
+        rawDaysWeek = [];
+      }
 
       renderRange(range);
       renderKpi(dayData);
       renderHist(dayData);
       renderLists(dayData);
-      renderExpress(range, dayData, rawDays);
+      renderExpress(expressRange, dayData, rawDaysWeek);
       renderCustomPunctuality(range);
       const stopNameGlobal = String($("statsStopGlobal")?.value || "").trim();
       const stopRefName = stopNameGlobal || "Metz";
@@ -13496,6 +13507,15 @@ document.addEventListener('DOMContentLoaded', () => {
     if (!range) return;
     $("statsFrom").value = range.from;
     $("statsTo").value = range.to;
+  }
+
+  function getLastDaysRange(days){
+    const end = new Date(Date.now() - 86400000);
+    const start = new Date(end.getTime() - (days - 1) * 86400000);
+    return {
+      from: start.toISOString().slice(0,10),
+      to: end.toISOString().slice(0,10)
+    };
   }
 
   $("statsBtnLoad").addEventListener("click", refreshAllGlobal);
