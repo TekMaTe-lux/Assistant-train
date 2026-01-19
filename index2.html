@@ -4688,8 +4688,25 @@ body.modal-open{ overflow:hidden; }
 .fav-train{ font-weight: 900; color:#fff; }
 .fav-meta{ margin-top: 8px; color:#b9c8d8; font-size:.95rem; }
 .fav-line{ margin-top: 8px; color:#e6f7ff; font-size:.95rem; line-height: 1.35; }
-.fav-cause{ margin-top: 6px; color:#ffd7a6; font-size:.82rem; line-height:1.25; opacity:.95; }
-.fav-stats{ margin-top: 6px; color:#bfefff; font-size:.78rem; line-height:1.25; opacity:.9; white-space: nowrap; overflow:hidden; text-overflow: ellipsis; }
+
+.fav-cause{
+  margin-top: 6px;
+  font-size: 0.78rem;
+  color: rgba(255, 200, 120, 0.95);
+  opacity: 0.95;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.fav-stats{
+  margin-top: 4px;
+  font-size: 0.78rem;
+  color: #bfefff;
+  opacity: 0.9;
+  white-space: nowrap;
+}
+
 @media (max-width: 768px){ .fav-grid{ grid-template-columns: 1fr; } }
 
 </style>
@@ -14199,6 +14216,69 @@ function scheduleWeatherAfterTableSettled(){
 
 
   // ===== Widget Favoris Matin/Soir =====
+
+  // --- Quick stats favoris (réutilise /api/stats/gtfs/rawrange déjà utilisé dans la console Stats) ---
+  const FAV_QUICK_STATS_CACHE = new Map();
+  async function getFavQuickStatsLine(trainId){
+    if (!trainId) return '';
+    // 30 derniers jours (glissants) — même logique que tes stats (J-1 inclus)
+    const r = (typeof getLastDaysRange === 'function') ? getLastDaysRange(30) : null;
+    if (!r?.from || !r?.to) return '';
+
+    const key = `${trainId}|${r.from}|${r.to}`;
+    if (FAV_QUICK_STATS_CACHE.has(key)) return FAV_QUICK_STATS_CACHE.get(key);
+
+    // getRawRange + computeTrainSeriesFromRawDays existent déjà dans ce fichier (console Stats)
+    if (typeof getRawRange !== 'function' || typeof computeTrainSeriesFromRawDays !== 'function') return '';
+
+    let rawDays = [];
+    try {
+      rawDays = await getRawRange(r.from, r.to);
+    } catch(e){
+      rawDays = [];
+    }
+    if (!Array.isArray(rawDays) || !rawDays.length){
+      FAV_QUICK_STATS_CACHE.set(key, '');
+      return '';
+    }
+
+    const range = computeTrainSeriesFromRawDays(rawDays, r.from, r.to, String(trainId), null);
+    const s = (range?.series || []).slice();
+    if (!s.length){
+      FAV_QUICK_STATS_CACHE.set(key, '');
+      return '';
+    }
+
+    // PONCTUALITÉ = ≤ 5 min (comme tes bins 5–9 / 10–19 / ...)
+    let total = 0, onTime5 = 0, canceled = 0, partial = 0, delayed5 = 0;
+    let sumDelay = 0, countDelay = 0;
+
+    for (const d of s){
+      total += 1;
+      const b = d.bucket;
+      if (b === 'CANCELED'){ canceled += 1; continue; }
+      if (b === 'PARTIAL'){ partial += 1; continue; }
+
+      const val = Number(d.value || 0);
+      if (Number.isFinite(val) && val >= 5){
+        delayed5 += 1;
+        sumDelay += val;
+        countDelay += 1;
+      } else {
+        onTime5 += 1;
+      }
+    }
+
+    const pct = total ? Math.round((onTime5 / total) * 100) : 0;
+    const avg = countDelay ? (sumDelay / countDelay) : 0;
+    const pctSup = total ? Math.round((canceled / total) * 100) : 0;
+
+    const line = `📊 30j : ${pct}% ≤5 min • +${avg.toFixed(1)} min • ${pctSup}% suppr.`;
+    FAV_QUICK_STATS_CACHE.set(key, line);
+    return line;
+  }
+
+
   const luxYmdToday = () => new Date().toLocaleDateString('en-CA', { timeZone: 'Europe/Luxembourg' });
 
   const hhmmRawToMin = (raw) => {
@@ -14270,15 +14350,18 @@ function scheduleWeatherAfterTableSettled(){
     const title = document.getElementById(kind === 'AM' ? 'favTrainAM' : 'favTrainPM');
     const meta  = document.getElementById(kind === 'AM' ? 'favMetaAM'  : 'favMetaPM');
     const line  = document.getElementById(kind === 'AM' ? 'favLineAM'  : 'favLinePM');
+    const causeEl = document.getElementById(kind === 'AM' ? 'favCauseAM' : 'favCausePM');
+    const statsEl = document.getElementById(kind === 'AM' ? 'favStatsAM' : 'favStatsPM');
     if (!title || !meta || !line) return;
+    if (causeEl) causeEl.textContent = '';
+    if (statsEl) statsEl.textContent = '';
+
 
     title.textContent = trainId || '—';
 
     if (!trainId) {
       meta.textContent = 'Choisis un train dans Préférences.';
       line.textContent = '';
-      renderDisruptionCause(kind, '');
-      renderQuickStats(kind, trainId, '');
       return;
     }
 
@@ -14296,12 +14379,18 @@ function scheduleWeatherAfterTableSettled(){
     const depTxt = minToClock(st.dep0);
     const arrTxt = minToClock(st.arrLast);
 
+    // cause temps réel (si dispo)
+    if (causeEl && payload?.causeText){
+      causeEl.textContent = `⚠️ ${payload.causeText}`;
+    }
+
     if (st.state === 'before') {
       const mins = Math.max(0, (st.dep0 ?? st.now) - st.now);
       meta.textContent = `⏳ Départ dans ${mins} min • ${origin} → ${dest}`;
       line.textContent = `Départ théorique ${depTxt} • Arrivée ${arrTxt}`;
-      renderDisruptionCause(kind, payload?.cause);
-      renderQuickStats(kind, trainId, st.state);
+      if (statsEl){
+        getFavQuickStatsLine(trainId).then(s=>{ if (statsEl && st.state !== 'running') statsEl.textContent = s || ''; }).catch(()=>{});
+      }
       return;
     }
 
@@ -14318,93 +14407,26 @@ function scheduleWeatherAfterTableSettled(){
       line.textContent = next.length
         ? `Prochains: ${next.map(x => `${x.name} ${minToClock(x.t)}`).join(' • ')}`
         : `Départ ${depTxt} • Arrivée ${arrTxt}`;
-      renderDisruptionCause(kind, payload?.cause);
-      renderQuickStats(kind, trainId, st.state);
+      if (statsEl) statsEl.textContent = '';
       return;
     }
 
     if (st.state === 'after') {
       meta.textContent = `⚪ Terminé aujourd’hui • ${origin} → ${dest}`;
       line.textContent = `Départ ${depTxt} • Arrivée ${arrTxt}`;
-      renderDisruptionCause(kind, payload?.cause);
-      renderQuickStats(kind, trainId, st.state);
+      if (statsEl){
+        getFavQuickStatsLine(trainId).then(s=>{ if (statsEl) statsEl.textContent = s || ''; }).catch(()=>{});
+      }
       return;
     }
 
     meta.textContent = 'ℹ️ Données disponibles.';
     line.textContent = `${origin} → ${dest}`;
-    renderDisruptionCause(kind, payload?.cause);
-    renderQuickStats(kind, trainId, st.state);
-  };
-
-
-
-  // --- Mini-stats (30j) pour favoris (compact) ---
-  let favStatsSummary = null;
-  let favStatsLoading = null;
-
-  const loadFavStatsSummary = async () => {
-    if (favStatsSummary) return favStatsSummary;
-    if (favStatsLoading) return favStatsLoading;
-    favStatsLoading = (async () => {
-      try {
-        const r = await fetch('/stats/fav_summary.json', { cache: 'no-store' });
-        if (!r.ok) throw new Error('HTTP ' + r.status);
-        const j = await r.json();
-        favStatsSummary = (j && typeof j === 'object') ? j : {};
-      } catch (e) {
-        favStatsSummary = {};
-      }
-      return favStatsSummary;
-    })();
-    return favStatsLoading;
-  };
-
-  const renderQuickStats = (kind, trainId, trainState) => {
-    const el = document.getElementById(kind === 'AM' ? 'favStatsAM' : 'favStatsPM');
-    if (!el) return;
-
-    // On masque quand le temps réel est la priorité
-    if (trainState === 'running') { el.textContent = ''; return; }
-
-    const s = (favStatsSummary || {})[String(trainId)];
-    if (!s) { el.textContent = ''; return; }
-
-    const pct = Math.round(Number(s.p_on_time || s.punctuality || 0) * 100);
-    const avg = Number(s.avg_delay || s.avgDelay || 0);
-    const sup = Math.round(Number(s.p_canceled || s.pCanceled || 0) * 100);
-
-    // Une seule ligne, compacte
-    el.textContent = `📊 30j : ${pct}% ≤5 min • +${avg.toFixed(1)} min • ${sup}% suppr.`;
-  };
-
-  const renderDisruptionCause = (kind, causeText) => {
-    const el = document.getElementById(kind === 'AM' ? 'favCauseAM' : 'favCausePM');
-    if (!el) return;
-    const t = String(causeText || '').trim();
-    if (!t) { el.textContent = ''; return; }
-    // Compact et lisible
-    el.textContent = `⚠️ ${t}`;
-  };
-
-  const pickFirstDisruptionCause = (res) => {
-    const disruptions = res?.disruptions || [];
-    if (!Array.isArray(disruptions) || !disruptions.length) return '';
-
-    // Prend la première cause "humaine" disponible
-    for (const d of disruptions) {
-      const msg = d?.messages?.[0]?.text?.trim();
-      if (msg) return msg;
-      const cause = d?.cause?.trim();
-      if (cause) return cause;
-      const effect = d?.severity?.effect;
-      if (effect === 'MODIFIED_SERVICE') return 'Parcours / arrêts modifiés';
-      if (effect === 'SIGNIFICANT_DELAYS') return 'Retards importants (cause non précisée)';
-      if (effect === 'REDUCED_SERVICE') return 'Suppression partielle (cause non précisée)';
-      if (effect === 'CANCELLATION' || effect === 'NO_SERVICE') return 'Train supprimé (cause non précisée)';
+    if (statsEl){
+      getFavQuickStatsLine(trainId).then(s=>{ if (statsEl && st.state !== 'running') statsEl.textContent = s || ''; }).catch(()=>{});
     }
-    return '';
   };
+
   const fetchTrainToday = async (selectionKey) => {
     const ymd = luxYmdToday();
     if (!/^\d{5,6}$/.test(String(selectionKey))) return { error: 'Format invalide' };
@@ -14417,12 +14439,28 @@ function scheduleWeatherAfterTableSettled(){
     const response = await fetchJSON(url);
     if (!response?.ok) return { error: 'Non prévu (ou API KO)' };
 
-    const res = response?.data;
-    const train = res?.vehicle_journeys?.[0];
+    const train = response?.data?.vehicle_journeys?.[0];
     if (!train) return { error: 'Non prévu' };
+    // Extraire une cause lisible si dispo (perturbations temps réel)
+    const disruptions = response?.data?.disruptions || [];
+    const causes = [];
+    for (const d of disruptions){
+      const c = (d && typeof d.cause === 'string') ? d.cause.trim() : '';
+      if (c) causes.push(c);
+      const msgs = d?.messages || [];
+      for (const m of msgs){
+        const t = (m && typeof m.text === 'string') ? m.text.trim() : '';
+        if (t) causes.push(t);
+      }
+    }
+    const uniq = [];
+    for (const c of causes){
+      if (!c) continue;
+      if (!uniq.includes(c)) uniq.push(c);
+    }
+    const causeText = uniq.slice(0,2).join(' • ');
 
-    const cause = pickFirstDisruptionCause(res);
-    return { train, source: 'SNCF', cause };
+    return { train, source: 'SNCF', disruptions, causeText };
   };
 
   let favWidgetTimer = null;
@@ -14438,9 +14476,6 @@ function scheduleWeatherAfterTableSettled(){
     }
 
     root.style.display = 'block';
-
-    // charge (si dispo) les micro-stats 30j en une seule requête
-    try { await loadFavStatsSummary(); } catch(e) {}
 
     const prefs = window.lbPrefsCache || null;
     const favAM = (prefs?.favoriteMorningTrain || '').trim();
