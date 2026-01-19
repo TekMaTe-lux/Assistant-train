@@ -4453,7 +4453,8 @@ body.modal-open{ overflow:hidden; }
     display:none;
   }
   .stats-shell[data-punctuality-mode="7d"] .stats-express-card[data-punctuality-card="7d"],
-  .stats-shell[data-punctuality-mode="yesterday"] .stats-express-card[data-punctuality-card="yesterday"]{
+  .stats-shell[data-punctuality-mode="yesterday"] .stats-express-card[data-punctuality-card="yesterday"],
+  .stats-shell[data-punctuality-mode="month"] .stats-express-card[data-punctuality-card="month"]{
     display:flex;
   }
   .stats-trend-delta{
@@ -5079,6 +5080,7 @@ function renderRowsChunked(htmlRows, tbody, chunk=200){
         <div class="stats-range" role="group" aria-label="Sélection ponctualité">
           <button class="active" id="statsPunctuality7d" type="button">7 jours</button>
           <button id="statsPunctualityYesterday" type="button">Hier</button>
+          <button id="statsPunctualityMonth" type="button">Mois</button>
         </div>
       </div>
 
@@ -5097,6 +5099,14 @@ function renderRowsChunked(htmlRows, tbody, chunk=200){
             <div class="meta" id="statsExpressYesterday">—</div>
           </div>
           <div class="stats-express-canvas"><canvas id="statsRingYesterday"></canvas></div>
+        </article>
+
+        <article class="stats-express-card" data-punctuality-card="month">
+          <div class="head">
+            <h3>Ponctualité (mois)</h3>
+            <div class="meta" id="statsExpressMonth">—</div>
+          </div>
+          <div class="stats-express-canvas"><canvas id="statsRingMonth"></canvas></div>
         </article>
 
         <article class="stats-express-card">
@@ -5169,6 +5179,7 @@ function renderRowsChunked(htmlRows, tbody, chunk=200){
         <input id="statsStopGlobal" class="stats-input" list="statsStopList" placeholder="ex: Metz" />
       </div>
 
+      <button id="statsBtnMonth" class="stats-button secondary" type="button">Mois</button>
       <button id="statsBtnLoad" class="stats-button">Charger</button>
 
       <div class="stats-status" id="statsStatus">Prêt ✅</div>
@@ -12205,15 +12216,18 @@ document.addEventListener('DOMContentLoaded', () => {
 
   const statsPunctuality7d = $("statsPunctuality7d");
   const statsPunctualityYesterday = $("statsPunctualityYesterday");
+  const statsPunctualityMonth = $("statsPunctualityMonth");
   const setPunctualityMode = (mode) => {
     if (!statsRoot) return;
     statsRoot.dataset.punctualityMode = mode;
     if (statsPunctuality7d) statsPunctuality7d.classList.toggle("active", mode === "7d");
     if (statsPunctualityYesterday) statsPunctualityYesterday.classList.toggle("active", mode === "yesterday");
+    if (statsPunctualityMonth) statsPunctualityMonth.classList.toggle("active", mode === "month");
   };
-  if (statsPunctuality7d && statsPunctualityYesterday){
+  if (statsPunctuality7d && statsPunctualityYesterday && statsPunctualityMonth){
     statsPunctuality7d.addEventListener("click", () => setPunctualityMode("7d"));
     statsPunctualityYesterday.addEventListener("click", () => setPunctualityMode("yesterday"));
+    statsPunctualityMonth.addEventListener("click", () => setPunctualityMode("month"));
   }
 
   const trendCard = document.querySelector("[data-trend-card]");
@@ -12293,7 +12307,7 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   let chPct, chVolumes, chHist, chByHour;
-  let chRing7, chRingYesterday, chDonutYesterday;
+  let chRing7, chRingYesterday, chRingMonth, chDonutYesterday;
   let chTrain, chTrainDonut;
   let chStopTrains, chStopVolumes, chStopPct;
   const statsPalette = {
@@ -12316,6 +12330,13 @@ document.addEventListener('DOMContentLoaded', () => {
   function ensureExpressCharts(){
     if (!chRing7){
       chRing7 = new Chart($("statsRing7"), {
+        type: "doughnut",
+        data: { labels: ["Ponctualité","Reste"], datasets: [{ data:[0,100], backgroundColor:[statsPalette.onTime, ringRestColor], borderWidth:0, cutout:"74%" }] },
+        options: { responsive:true, maintainAspectRatio:false, plugins:{ legend:{ display:false }, tooltip:{ enabled:false }, centerText:{ lineGap:18, lines:[] } } }
+      });
+    }
+    if (!chRingMonth){
+      chRingMonth = new Chart($("statsRingMonth"), {
         type: "doughnut",
         data: { labels: ["Ponctualité","Reste"], datasets: [{ data:[0,100], backgroundColor:[statsPalette.onTime, ringRestColor], borderWidth:0, cutout:"74%" }] },
         options: { responsive:true, maintainAspectRatio:false, plugins:{ legend:{ display:false }, tooltip:{ enabled:false }, centerText:{ lineGap:18, lines:[] } } }
@@ -13030,12 +13051,18 @@ document.addEventListener('DOMContentLoaded', () => {
     pillList($("statsLpartial"), ap);
   }
 
-  function renderExpress(range, dayData, rawDays){
+  function renderExpress(range, dayData, rawDays, monthRange){
     ensureExpressCharts();
     const series = (range?.series || []).slice().sort((a,b)=>a.date.localeCompare(b.date));
     const onTimeSeries = series.map(d => 100 - Number(d.pct_not_on_time || 0));
     const avgOnTime = onTimeSeries.length
       ? onTimeSeries.reduce((a,b)=>a+b,0) / onTimeSeries.length
+      : 0;
+
+    const monthSeries = (monthRange?.series || []).slice().sort((a,b)=>a.date.localeCompare(b.date));
+    const monthOnTimeSeries = monthSeries.map(d => 100 - Number(d.pct_not_on_time || 0));
+    const monthAvgOnTime = monthOnTimeSeries.length
+      ? monthOnTimeSeries.reduce((a,b)=>a+b,0) / monthOnTimeSeries.length
       : 0;
 
     const dayTotal = Number(dayData?.total_trains || 0);
@@ -13048,6 +13075,7 @@ document.addEventListener('DOMContentLoaded', () => {
     $("statsExpressRange").textContent = range?.from && range?.to ? `${range.from} → ${range.to}` : "—";
     const fallbackYesterday = range?.to || new Date(Date.now() - 86400000).toISOString().slice(0, 10);
     $("statsExpressYesterday").textContent = dayData?.date || fallbackYesterday || "—";
+    $("statsExpressMonth").textContent = monthRange?.from && monthRange?.to ? `${monthRange.from} → ${monthRange.to}` : "—";
 
     const ring7Color = colorForPunctuality(avgOnTime);
     chRing7.data.datasets[0].data = [avgOnTime, Math.max(0, 100 - avgOnTime)];
@@ -13064,6 +13092,14 @@ document.addEventListener('DOMContentLoaded', () => {
       { text: fmtPctShort(dayOnTimePct), font: '900 34px Orbitron, system-ui', color: '#e8fbff' }
     ];
     chRingYesterday.update();
+
+    const ringMonthColor = colorForPunctuality(monthAvgOnTime);
+    chRingMonth.data.datasets[0].data = [monthAvgOnTime, Math.max(0, 100 - monthAvgOnTime)];
+    chRingMonth.data.datasets[0].backgroundColor = [ringMonthColor, ringRestColor];
+    chRingMonth.options.plugins.centerText.lines = [
+      { text: fmtPctShort(monthAvgOnTime), font: '900 34px Orbitron, system-ui', color: '#e8fbff' }
+    ];
+    chRingMonth.update();
 
     chDonutYesterday.data.datasets[0].data = [dayOnTime, dayDelayed, dayPartial, dayCanceled];
     chDonutYesterday.options.plugins.centerText.lines = [
@@ -13295,8 +13331,15 @@ document.addEventListener('DOMContentLoaded', () => {
     const to = clampDateStr($("statsTo").value);
     const day = clampDateStr($("statsDay").value);
     try{
-      let range, dayData;
-      [range, dayData] = await Promise.all([ loadRangeAPI(from, to), loadDayAPI(day) ]);
+      const baseDayStr = day || new Date().toISOString().slice(0,10);
+      const monthBaseDate = new Date(baseDayStr + "T00:00:00");
+      const monthRangeInfo = getMonthRangeFromDate(monthBaseDate) || getMonthRangeFromDate(new Date());
+      let range, dayData, monthRange;
+      [range, dayData, monthRange] = await Promise.all([
+        loadRangeAPI(from, to),
+        loadDayAPI(day),
+        monthRangeInfo ? loadRangeAPI(monthRangeInfo.from, monthRangeInfo.to) : Promise.resolve(null)
+      ]);
       let rawDays = [];
       try{
         rawDays = await getRawRange(from, to);
@@ -13309,7 +13352,7 @@ document.addEventListener('DOMContentLoaded', () => {
       renderKpi(dayData);
       renderHist(dayData);
       renderLists(dayData);
-      renderExpress(range, dayData, rawDays);
+      renderExpress(range, dayData, rawDays, monthRange);
       const stopNameGlobal = String($("statsStopGlobal")?.value || "").trim();
       const stopRefName = stopNameGlobal || "Metz";
       await renderPunctualityByHourSlices(rawDays, range, stopRefName);
@@ -13392,6 +13435,32 @@ document.addEventListener('DOMContentLoaded', () => {
     $("statsTo").value = iso;
   }
 
+  function getMonthRangeFromDate(dateObj){
+    if (!(dateObj instanceof Date) || Number.isNaN(dateObj.getTime())) return null;
+    const y = dateObj.getFullYear();
+    const m = dateObj.getMonth();
+    const from = new Date(y, m, 1);
+    const to = new Date(y, m + 1, 0);
+    return {
+      from: from.toISOString().slice(0,10),
+      to: to.toISOString().slice(0,10)
+    };
+  }
+
+  function setMonthRangeInputs(){
+    const baseStr = clampDateStr($("statsDay").value) || new Date().toISOString().slice(0,10);
+    const baseDate = new Date(baseStr + "T00:00:00");
+    const range = getMonthRangeFromDate(baseDate);
+    if (!range) return;
+    $("statsFrom").value = range.from;
+    $("statsTo").value = range.to;
+  }
+
+  $("statsBtnLoad").addEventListener("click", refreshAllGlobal);
+  $("statsBtnMonth").addEventListener("click", () => {
+    setMonthRangeInputs();
+    refreshAllGlobal();
+  });
   $("statsBtnLoad").addEventListener("click", refreshAllGlobal);
   $("statsBtnTrainRun").addEventListener("click", runTrain);
   $("statsBtnStopRun").addEventListener("click", runStop);
