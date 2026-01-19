@@ -12325,7 +12325,7 @@ document.addEventListener('DOMContentLoaded', () => {
       if (value >= 0 && value <= 2359) {
         const h = Math.floor(value / 100);
         const m = value % 100;
-        if (h >= 0 && h < 24 && m >= 0 && m < 60) return h * 60 + m;
+        if (h >= 0 && m >= 0 && m < 60) return ((h % 24) * 60) + m;
       }
       return null;
     }
@@ -12402,7 +12402,46 @@ document.addEventListener('DOMContentLoaded', () => {
       }
     }
     return null;
-  } 
+  }
+  async function getScheduledTrainMinute(trainNumber, rawDate){
+    if (!trainNumber) return null;
+    const normalized = extractTrainNumber(trainNumber);
+    if (!normalized) return null;
+    const ymd = (typeof rawDate === "string" && /^\d{4}-\d{2}-\d{2}$/.test(rawDate))
+      ? rawDate.replace(/-/g, "")
+      : null;
+    const cacheKey = `${normalized}|${ymd || "na"}`;
+    if (!window.__statsHourlyGtfsCache) window.__statsHourlyGtfsCache = new Map();
+    if (window.__statsHourlyGtfsCache.has(cacheKey)) return window.__statsHourlyGtfsCache.get(cacheKey);
+    try{
+      await ensureGTFSLoaded();
+    }catch (err){
+      window.__statsHourlyGtfsCache.set(cacheKey, null);
+      return null;
+    }
+    ensureTripsByNumberIndex();
+    ensureStopTimesByTripIndex();
+    const tripIds = GTFS._tripsByNumber?.get(normalized);
+    if (!tripIds || !tripIds.length) {
+      window.__statsHourlyGtfsCache.set(cacheKey, null);
+      return null;
+    }
+    let chosenTripId = null;
+    if (ymd) {
+      chosenTripId = tripIds.find(id => serviceActiveForDate(id, ymd));
+    }
+    if (!chosenTripId) chosenTripId = tripIds[0];
+    const stopRows = GTFS._stopTimesByTrip?.get(chosenTripId) || [];
+    const firstStop = stopRows.find(row => row?.departure_time || row?.arrival_time) || null;
+    if (!firstStop) {
+      window.__statsHourlyGtfsCache.set(cacheKey, null);
+      return null;
+    }
+    const rawTime = firstStop.departure_time || firstStop.arrival_time;
+    const minutes = parseTimeToMinutes(rawTime);
+    window.__statsHourlyGtfsCache.set(cacheKey, minutes);
+    return minutes;
+  }
 
   function setStatsTab(which){
     const map = {
@@ -13134,13 +13173,16 @@ document.addEventListener('DOMContentLoaded', () => {
     { key: "22-00", label: "22h–00h", start: 22, end: 24, hint: "Fin de service" }
   ];
 
-  function buildHourlyBuckets(rawDays){
+  async function buildHourlyBuckets(rawDays){
     const buckets = HOURLY_BUCKETS_DEF.map((b) => ({ ...b, total: 0, notOnTime: 0, pct: null }));
     for (const raw of rawDays || []) {
       const trains = raw?.trains || {};
       for (const trainNum of Object.keys(trains)) {
         const t = trains[trainNum] || {};
-        const minutes = extractTrainMinute(t);
+        let minutes = extractTrainMinute(t);
+        if (minutes == null) {
+          minutes = await getScheduledTrainMinute(trainNum, raw?.date);
+        }
         if (minutes == null) continue;
         const hour = Math.floor(minutes / 60);
         if (hour < 5 || hour >= 24) continue;
@@ -13202,9 +13244,9 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }
 
-  function renderHourly(rawDays, from, to){
+  async function renderHourly(rawDays, from, to){
     ensureCharts();
-    statsHourlyBuckets = buildHourlyBuckets(rawDays);
+    statsHourlyBuckets = await buildHourlyBuckets(rawDays);
     const rangeLabel = (from && to) ? `${from} → ${to}` : "—";
     $("statsHourlyRange").textContent = rangeLabel;
     renderHourlySummary(statsHourlyBuckets);
@@ -13537,7 +13579,7 @@ document.addEventListener('DOMContentLoaded', () => {
       renderHist(dayData);
       renderLists(dayData);
       renderExpress(range, dayData, rawDays);
-      renderHourly(rawDays, from, to);
+      await renderHourly(rawDays, from, to);
 
       $("statsStatus").textContent = "OK ✅";
     }catch(e){
