@@ -13664,6 +13664,13 @@ document.addEventListener('DOMContentLoaded', () => {
   ensureExpressCharts();
   setStatsTab("global");
   setPunctualityMode("7d");
+
+  // Expose stats helpers for other widgets (favoris quick-stats)
+  window.__lbStats = window.__lbStats || {};
+  window.__lbStats.getLastDaysRange = getLastDaysRange;
+  window.__lbStats.getRawRange = getRawRange;
+  window.__lbStats.computeTrainSeriesFromRawDays = computeTrainSeriesFromRawDays;
+
   refreshAllGlobal();
 });
 </script>
@@ -14222,18 +14229,20 @@ function scheduleWeatherAfterTableSettled(){
   async function getFavQuickStatsLine(trainId){
     if (!trainId) return '';
     // 30 derniers jours (glissants) — même logique que tes stats (J-1 inclus)
-    const r = (typeof getLastDaysRange === 'function') ? getLastDaysRange(30) : null;
+    const r = (window.__lbStats && typeof window.__lbStats.getLastDaysRange === 'function') ? window.__lbStats.getLastDaysRange(30) : null;
     if (!r?.from || !r?.to) return '';
 
     const key = `${trainId}|${r.from}|${r.to}`;
     if (FAV_QUICK_STATS_CACHE.has(key)) return FAV_QUICK_STATS_CACHE.get(key);
 
     // getRawRange + computeTrainSeriesFromRawDays existent déjà dans ce fichier (console Stats)
-    if (typeof getRawRange !== 'function' || typeof computeTrainSeriesFromRawDays !== 'function') return '';
+    const getRawRangeFn = window.__lbStats && window.__lbStats.getRawRange;
+    const computeFn = window.__lbStats && window.__lbStats.computeTrainSeriesFromRawDays;
+    if (typeof getRawRangeFn !== 'function' || typeof computeFn !== 'function') return '';
 
     let rawDays = [];
     try {
-      rawDays = await getRawRange(r.from, r.to);
+      rawDays = await getRawRangeFn(r.from, r.to);
     } catch(e){
       rawDays = [];
     }
@@ -14242,7 +14251,7 @@ function scheduleWeatherAfterTableSettled(){
       return '';
     }
 
-    const range = computeTrainSeriesFromRawDays(rawDays, r.from, r.to, String(trainId), null);
+    const range = computeFn(rawDays, r.from, r.to, String(trainId), null);
     const s = (range?.series || []).slice();
     if (!s.length){
       FAV_QUICK_STATS_CACHE.set(key, '');
