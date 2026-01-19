@@ -14351,6 +14351,75 @@ function scheduleWeatherAfterTableSettled(){
     return { state: 'unknown', dep0, arrLast, now, stopTimes };
   };
 
+  // --- Retards temps réel par arrêt (>= thresholdMin) ---
+  const parseNavitiaDateTime = (dt) => {
+    // "YYYYMMDDTHHMMSS" -> ms UTC (uniquement pour diff)
+    if (!dt || typeof dt !== 'string') return null;
+    const m = dt.match(/^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})$/);
+    if (!m) return null;
+    const [, Y, Mo, D, h, mi, s] = m;
+    return Date.UTC(+Y, +Mo - 1, +D, +h, +mi, +s);
+  };
+
+  const stopDelayMin = (st) => {
+    // 1) cas direct en secondes
+    const sd = Number(st?.departure_delay);
+    const sa = Number(st?.arrival_delay);
+    if (Number.isFinite(sd)) return Math.round(sd / 60);
+    if (Number.isFinite(sa)) return Math.round(sa / 60);
+
+    // 2) cas base_*_date_time vs *_date_time
+    const depReal = parseNavitiaDateTime(st?.departure_date_time);
+    const depBase = parseNavitiaDateTime(st?.base_departure_date_time);
+    if (depReal != null && depBase != null) return Math.round((depReal - depBase) / 60000);
+
+    const arrReal = parseNavitiaDateTime(st?.arrival_date_time);
+    const arrBase = parseNavitiaDateTime(st?.base_arrival_date_time);
+    if (arrReal != null && arrBase != null) return Math.round((arrReal - arrBase) / 60000);
+
+    return null;
+  };
+
+  const buildDelaysByStopLine = (train, nowMin, thresholdMin = 5) => {
+    const stopTimes = train?.stop_times || [];
+    const hits = [];
+
+    for (const st of stopTimes) {
+      const name = st?.stop_point?.name;
+      const t = hhmmRawToMin(st?.arrival_time || st?.departure_time);
+      if (!name || t == null) continue;
+      // on affiche surtout les arrêts à venir
+      if (nowMin != null && t < nowMin) continue;
+
+      const d = stopDelayMin(st);
+      if (d == null) continue;
+      if (d >= thresholdMin) hits.push({ name, d, t });
+    }
+
+    if (!hits.length) return '';
+
+    // 4 arrêts max pour rester compact
+    const shown = hits.slice(0, 4);
+    const more = hits.length > 4 ? ' • …' : '';
+    return `Retards: ${shown.map(x => `${x.name} +${x.d}`).join(' • ')}${more}`;
+  };
+
+  const inferRealtimeStatusFromDisruptions = (payload) => {
+    const disruptions = payload?.disruptions || [];
+    let hasDelay = false;
+    for (const d of disruptions) {
+      const eff = String(d?.severity?.effect || d?.severity?.name || d?.severity?.id || '').toLowerCase();
+      if (!eff) continue;
+      if (eff.includes('no_service') || eff.includes('cancel') || eff.includes('suppression') || eff.includes('stops_canceled')) {
+        return 'canceled';
+      }
+      if (eff.includes('delay') || eff.includes('delays') || eff.includes('significant')) {
+        hasDelay = true;
+      }
+    }
+    return hasDelay ? 'delayed' : null;
+  };
+
   const renderFavCard = (kind, trainId, payload) => {
     const title = document.getElementById(kind === 'AM' ? 'favTrainAM' : 'favTrainPM');
     const meta  = document.getElementById(kind === 'AM' ? 'favMetaAM'  : 'favMetaPM');
@@ -14389,6 +14458,17 @@ function scheduleWeatherAfterTableSettled(){
       causeEl.textContent = `⚠️ ${payload.causeText}`;
     }
 
+    // Si les disruptions indiquent une suppression, on l'affiche prioritairement
+    const rtStatus = inferRealtimeStatusFromDisruptions(payload);
+    if (rtStatus === 'canceled') {
+      meta.textContent = `❌ Supprimé • ${origin} → ${dest}`;
+      line.textContent = `Départ ${depTxt} • Arrivée ${arrTxt}`;
+      if (statsEl){
+        getFavQuickStatsLine(trainId).then(s=>{ if (statsEl) statsEl.innerHTML = s || ''; }).catch(()=>{});
+      }
+      return;
+    }
+
     if (st.state === 'before') {
       const mins = Math.max(0, (st.dep0 ?? st.now) - st.now);
       meta.textContent = `⏳ Départ dans ${mins} min • ${origin} → ${dest}`;
@@ -14401,17 +14481,24 @@ function scheduleWeatherAfterTableSettled(){
 
     if (st.state === 'running') {
       meta.textContent = `🟢 En circulation • ${origin} → ${dest}`;
-      const next = (st.stopTimes || [])
-        .map(s => ({
-          name: s.stop_point?.name || '',
-          t: hhmmRawToMin(s.arrival_time || s.departure_time)
-        }))
-        .filter(x => x.t != null && x.t >= st.now)
-        .slice(0, 3);
+      // Retards >= +5 min aux arrêts concernés (si l'API fournit les infos)
+      const delaysLine = buildDelaysByStopLine(train, st.now, 5);
 
-      line.textContent = next.length
-        ? `Prochains: ${next.map(x => `${x.name} ${minToClock(x.t)}`).join(' • ')}`
-        : `Départ ${depTxt} • Arrivée ${arrTxt}`;
+      if (delaysLine) {
+        line.textContent = delaysLine;
+      } else {
+        const next = (st.stopTimes || [])
+          .map(s => ({
+            name: s.stop_point?.name || '',
+            t: hhmmRawToMin(s.arrival_time || s.departure_time)
+          }))
+          .filter(x => x.t != null && x.t >= st.now)
+          .slice(0, 3);
+
+        line.textContent = next.length
+          ? `Prochains: ${next.map(x => `${x.name} ${minToClock(x.t)}`).join(' • ')}`
+          : `Départ ${depTxt} • Arrivée ${arrTxt}`;
+      }
       if (statsEl) statsEl.innerHTML = '';
       return;
     }
