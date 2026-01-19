@@ -5226,14 +5226,6 @@ function renderRowsChunked(htmlRows, tbody, chunk=200){
 
         <div class="stats-card" style="grid-column:span 2">
           <div class="head">
-            <div class="title">Répartition (jour sélectionné)</div>
-            <div class="meta" id="statsMetaDay">—</div>
-          </div>
-          <div class="stats-canvas"><canvas id="statsChDonut"></canvas></div>
-        </div>
-
-        <div class="stats-card" style="grid-column:span 2">
-          <div class="head">
             <div class="title">Histogramme retards (jour)</div>
             <div class="meta">5–9 / 10–19 / 20–39 / ≥40</div>
           </div>
@@ -12300,7 +12292,7 @@ document.addEventListener('DOMContentLoaded', () => {
     return "LT5";
   }
 
-  let chPct, chVolumes, chDonut, chHist, chByHour;
+  let chPct, chVolumes, chHist, chByHour;
   let chRing7, chRingYesterday, chDonutYesterday;
   let chTrain, chTrainDonut;
   let chStopTrains, chStopVolumes, chStopPct;
@@ -12395,7 +12387,10 @@ document.addEventListener('DOMContentLoaded', () => {
     if (!chByHour){
       chByHour = new Chart($("statsChByHour"), {
         type: "bar",
-        data: { labels: [], datasets: [{ label:"Ponctualité", data: [], backgroundColor: [] }] },
+        data: { labels: [], datasets: [
+          { label:"Ponctualité", data: [], backgroundColor: [] },
+          { label:"Moyenne", type:"line", data: [], borderColor: statsPalette.neutral, pointRadius:0, tension:0, borderWidth:2 }
+        ] },
         options: {
           responsive:true,
           maintainAspectRatio:false,
@@ -12406,34 +12401,6 @@ document.addEventListener('DOMContentLoaded', () => {
         }
       });
     }
-    if (!chDonut){
-  chDonut = new Chart($("statsChDonut"), {
-    type: "doughnut",
-    data: {
-      labels: ["À l’heure","Retardés","Partiels","Supprimés"],
-      datasets: [{
-        data: [0,0,0,0],
-        backgroundColor: [
-          statsPalette.onTime,
-          statsPalette.delayed,
-          statsPalette.partial,
-          statsPalette.canceled
-        ],
-        borderWidth: 2,
-        borderColor: "rgba(5,13,24,0.8)",
-        cutout: "62%"
-      }]
-    },
-    options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      plugins: {
-        legend: { labels: { color: tickColor } },
-        centerText: { lineGap: 16, lines: [] }
-      }
-    }
-  });
-}
     if (!chHist){
       chHist = new Chart($("statsChHist"), {
         type: "bar",
@@ -12903,10 +12870,11 @@ document.addEventListener('DOMContentLoaded', () => {
     chByHour.data.labels = labels;
     chByHour.data.datasets[0].data = result.data.map(v => Number.isFinite(v) ? Number(v.toFixed(1)) : 0);
     chByHour.data.datasets[0].backgroundColor = result.data.map(score => colorForPunctuality(score));
+    const avgValue = result.totalTrains ? (result.onTimeTrains / result.totalTrains) * 100 : 0;
+    chByHour.data.datasets[1].data = labels.map(() => Number(avgValue.toFixed(1)));
     chByHour.update();
 
-    const pct = result.totalTrains ? (result.onTimeTrains / result.totalTrains) * 100 : 0;
-    meta.textContent = `${refStopName} · ${fmtInt(result.totalTrains)} trains analysés · ${fmtPct(pct)} à l’heure`;
+    meta.textContent = `${refStopName} · ${fmtInt(result.totalTrains)} trains analysés · ${fmtPct(avgValue)} à l’heure`;
   }
 
   function computeTrainDailyFromRaw(raw, trainId, optStopName){
@@ -13030,19 +12998,6 @@ document.addEventListener('DOMContentLoaded', () => {
     chVolumes.update();
 
     $("statsMetaRange").textContent = `${range.from} → ${range.to} (jours présents: ${range.days})`;
-  }
-
-  function renderDonut(day){
-    const onTime = (day.total_trains||0) - (day.delayed_trains||0) - (day.canceled_trains||0) - (day.partial_canceled_trains||0);
-    chDonut.data.datasets[0].data = [Math.max(0,onTime), day.delayed_trains||0, day.partial_canceled_trains||0, day.canceled_trains||0];
-    const dayDate = day.date || "—";
-    const totalTrains = Number(day.total_trains || 0);
-    chDonut.options.plugins.centerText.lines = [
-      { text: dayDate, font: '700 12px Orbitron, system-ui', color: '#89d9ff' },
-      { text: `${totalTrains} trains`, font: '900 24px Orbitron, system-ui', color: '#e8fbff' }
-    ];
-    chDonut.update();
-    $("statsMetaDay").textContent = day.date || "—";
   }
 
   function renderHist(day){
@@ -13352,7 +13307,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
       renderRange(range);
       renderKpi(dayData);
-      renderDonut(dayData);
       renderHist(dayData);
       renderLists(dayData);
       renderExpress(range, dayData, rawDays);
