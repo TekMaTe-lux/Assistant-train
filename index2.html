@@ -14228,24 +14228,23 @@ function scheduleWeatherAfterTableSettled(){
   const FAV_QUICK_STATS_CACHE = new Map();
   async function getFavQuickStatsLine(trainId){
     if (!trainId) return '';
-    // 30 derniers jours (glissants) — même logique que tes stats (J-1 inclus)
-    const r = (window.__lbStats && typeof window.__lbStats.getLastDaysRange === 'function') ? window.__lbStats.getLastDaysRange(30) : null;
+
+    // 10 derniers jours (glissants)
+    const r = (window.__lbStats && typeof window.__lbStats.getLastDaysRange === 'function')
+      ? window.__lbStats.getLastDaysRange(10)
+      : null;
     if (!r?.from || !r?.to) return '';
 
-    const key = `${trainId}|${r.from}|${r.to}`;
+    const key = `${trainId}|${r.from}|${r.to}|v2`;
     if (FAV_QUICK_STATS_CACHE.has(key)) return FAV_QUICK_STATS_CACHE.get(key);
 
-    // getRawRange + computeTrainSeriesFromRawDays existent déjà dans ce fichier (console Stats)
     const getRawRangeFn = window.__lbStats && window.__lbStats.getRawRange;
     const computeFn = window.__lbStats && window.__lbStats.computeTrainSeriesFromRawDays;
     if (typeof getRawRangeFn !== 'function' || typeof computeFn !== 'function') return '';
 
     let rawDays = [];
-    try {
-      rawDays = await getRawRangeFn(r.from, r.to);
-    } catch(e){
-      rawDays = [];
-    }
+    try { rawDays = await getRawRangeFn(r.from, r.to); } catch(e){ rawDays = []; }
+
     if (!Array.isArray(rawDays) || !rawDays.length){
       FAV_QUICK_STATS_CACHE.set(key, '');
       return '';
@@ -14258,31 +14257,24 @@ function scheduleWeatherAfterTableSettled(){
       return '';
     }
 
-    // PONCTUALITÉ = ≤ 5 min (comme tes bins 5–9 / 10–19 / ...)
-    let total = 0, onTime5 = 0, canceled = 0, partial = 0, delayed5 = 0;
-    let sumDelay = 0, countDelay = 0;
-
+    // On compte les statuts (même buckets que tes stats)
+    let onTime = 0, delayed = 0, canceled = 0, partial = 0;
     for (const d of s){
-      total += 1;
-      const b = d.bucket;
-      if (b === 'CANCELED'){ canceled += 1; continue; }
-      if (b === 'PARTIAL'){ partial += 1; continue; }
-
-      const val = Number(d.value || 0);
-      if (Number.isFinite(val) && val >= 5){
-        delayed5 += 1;
-        sumDelay += val;
-        countDelay += 1;
-      } else {
-        onTime5 += 1;
-      }
+      const b = String(d.bucket || '');
+      if (b === 'ON_TIME') onTime += 1;
+      else if (b === 'DELAYED') delayed += 1;
+      else if (b === 'CANCELED') canceled += 1;
+      else if (b === 'PARTIAL') partial += 1;
+      // autres buckets ignorés
     }
 
-    const pct = total ? Math.round((onTime5 / total) * 100) : 0;
-    const avg = countDelay ? (sumDelay / countDelay) : 0;
-    const pctSup = total ? Math.round((canceled / total) * 100) : 0;
+    // Ligne compacte (avec les classes couleurs déjà utilisées dans Statistiques)
+    const line = `📊 10j : `
+      + `<span class="stats-status-on-time">✅ ${onTime}</span>`
+      + ` • <span class="stats-status-delayed">⏰ ${delayed}</span>`
+      + ` • <span class="stats-status-canceled">❌ ${canceled}</span>`
+      + ` • <span class="stats-status-partial">🟠 ${partial}</span>`;
 
-    const line = `📊 30j : ${pct}% ≤5 min • +${avg.toFixed(1)} min • ${pctSup}% suppr.`;
     FAV_QUICK_STATS_CACHE.set(key, line);
     return line;
   }
@@ -14363,7 +14355,7 @@ function scheduleWeatherAfterTableSettled(){
     const statsEl = document.getElementById(kind === 'AM' ? 'favStatsAM' : 'favStatsPM');
     if (!title || !meta || !line) return;
     if (causeEl) causeEl.textContent = '';
-    if (statsEl) statsEl.textContent = '';
+    if (statsEl) statsEl.innerHTML = '';
 
 
     title.textContent = trainId || '—';
@@ -14398,7 +14390,7 @@ function scheduleWeatherAfterTableSettled(){
       meta.textContent = `⏳ Départ dans ${mins} min • ${origin} → ${dest}`;
       line.textContent = `Départ théorique ${depTxt} • Arrivée ${arrTxt}`;
       if (statsEl){
-        getFavQuickStatsLine(trainId).then(s=>{ if (statsEl && st.state !== 'running') statsEl.textContent = s || ''; }).catch(()=>{});
+        getFavQuickStatsLine(trainId).then(s=>{ if (statsEl && st.state !== 'running') statsEl.innerHTML = s || ''; }).catch(()=>{});
       }
       return;
     }
@@ -14416,7 +14408,7 @@ function scheduleWeatherAfterTableSettled(){
       line.textContent = next.length
         ? `Prochains: ${next.map(x => `${x.name} ${minToClock(x.t)}`).join(' • ')}`
         : `Départ ${depTxt} • Arrivée ${arrTxt}`;
-      if (statsEl) statsEl.textContent = '';
+      if (statsEl) statsEl.innerHTML = '';
       return;
     }
 
@@ -14424,7 +14416,7 @@ function scheduleWeatherAfterTableSettled(){
       meta.textContent = `⚪ Terminé aujourd’hui • ${origin} → ${dest}`;
       line.textContent = `Départ ${depTxt} • Arrivée ${arrTxt}`;
       if (statsEl){
-        getFavQuickStatsLine(trainId).then(s=>{ if (statsEl) statsEl.textContent = s || ''; }).catch(()=>{});
+        getFavQuickStatsLine(trainId).then(s=>{ if (statsEl) statsEl.innerHTML = s || ''; }).catch(()=>{});
       }
       return;
     }
@@ -14432,7 +14424,7 @@ function scheduleWeatherAfterTableSettled(){
     meta.textContent = 'ℹ️ Données disponibles.';
     line.textContent = `${origin} → ${dest}`;
     if (statsEl){
-      getFavQuickStatsLine(trainId).then(s=>{ if (statsEl && st.state !== 'running') statsEl.textContent = s || ''; }).catch(()=>{});
+      getFavQuickStatsLine(trainId).then(s=>{ if (statsEl && st.state !== 'running') statsEl.innerHTML = s || ''; }).catch(()=>{});
     }
   };
 
