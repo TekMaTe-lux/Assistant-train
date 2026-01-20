@@ -14958,6 +14958,170 @@ function getGtfsDelayForStop(trainNumber, stopName){
 
 
   // Calcule un retard global (max) en minutes pour un train (SNCF impacted/stop_times + merge GTFS)
+  
+
+  // ===== Favoris compact : progression + prochains arrêts (compact au-dessus, expand = tous) =====
+  function clamp01(x){ return Math.max(0, Math.min(1, x)); }
+
+  function fmtTime(plannedMin, amendedMin, isDeleted=false){
+    const plannedTxt = (plannedMin != null) ? minToClock(plannedMin) : '—';
+    const rtTxt = (amendedMin != null) ? minToClock(amendedMin) : null;
+
+    if (isDeleted){
+      return `<span class="fav-time fav-time-planned is-strike deleted">${plannedTxt}</span>`+
+             `<span style="margin-left:8px;color:#ff6b6b;font-weight:900;">supprimé</span>`;
+    }
+
+    if (rtTxt && plannedMin != null && amendedMin != null && amendedMin !== plannedMin){
+      return `<span class="fav-time fav-time-planned is-strike">${plannedTxt}</span> `+
+             `<span class="fav-time fav-time-rt delay">${rtTxt}</span>`;
+    }
+    return `<span class="fav-time fav-time-planned">${plannedTxt}</span>`;
+  }
+
+  function computeProgressPct(depMin, arrEffMin, nowMin){
+    if (depMin == null || arrEffMin == null || nowMin == null) return 0;
+    const total = Math.max(1, arrEffMin - depMin);
+    return Math.round(clamp01((nowMin - depMin) / total) * 100);
+  }
+
+  function buildFavStopRows(payload, trainNumber){
+    const train = payload?.train || null;
+    const stopTimes = train?.stop_times || [];
+    const impacted = payload?.impacted || {};
+    const voiesMap = (typeof getVoiesForTrain === 'function') ? getVoiesForTrain(trainNumber) : null;
+
+    const toHHMM = (t) => {
+      if (!t) return null;
+      const s = String(t).replace(/[^0-9]/g, '');
+      return s.length >= 4 ? s.slice(0,4) : null;
+    };
+    const hhmmToMin = (hhmm) => {
+      if (!hhmm || hhmm.length < 4) return null;
+      const h = parseInt(hhmm.slice(0,2),10), m = parseInt(hhmm.slice(2,4),10);
+      return (Number.isFinite(h) && Number.isFinite(m)) ? (h*60+m) : null;
+    };
+    const diffMin = (base, amended) => {
+      const b = hhmmToMin(toHHMM(base));
+      const a = hhmmToMin(toHHMM(amended));
+      if (b == null || a == null) return null;
+      return a - b;
+    };
+
+    const rows = [];
+    for (const st of stopTimes){
+      const name = st?.stop_point?.name || '';
+      const stopId = st?.stop_point?.id || '';
+      if (!name) continue;
+
+      const isLast = (st === stopTimes[stopTimes.length-1]);
+      const plannedRaw = isLast ? (st.arrival_time || st.departure_time) : (st.departure_time || st.arrival_time);
+      const plannedMin = hhmmRawToMin(plannedRaw);
+      if (plannedMin == null) continue;
+
+      const imp = (stopId && impacted) ? (impacted[stopId] || null) : null;
+      const departureDeleted = imp?.departure_status === 'deleted';
+      const arrivalDeleted   = imp?.arrival_status === 'deleted';
+      const isDeleted = (departureDeleted && arrivalDeleted) || (imp?.stop_time_effect === 'deleted');
+
+      let delayMin = null;
+      let amendedMin = null;
+      let amendedHHMM = null;
+      let baseHHMM = null;
+
+      if (imp){
+        const dm = (imp?.delay_minutes !== undefined && imp?.delay_minutes !== null) ? Number(imp.delay_minutes) : null;
+        if (Number.isFinite(dm)) delayMin = dm;
+
+        amendedHHMM = isLast
+          ? (imp?.amended_arrival_time || imp?.amended_departure_time)
+          : (imp?.amended_departure_time || imp?.amended_arrival_time);
+
+        baseHHMM = isLast
+          ? (imp?.base_arrival_time || imp?.base_departure_time)
+          : (imp?.base_departure_time || imp?.base_arrival_time);
+
+        amendedMin = hhmmToMin(toHHMM(amendedHHMM));
+        if (delayMin == null) delayMin = diffMin(baseHHMM || plannedRaw, amendedHHMM);
+      }
+
+      if (delayMin == null) delayMin = stopDelayMin(st);
+
+      const gtfsDelay = getGtfsDelayForStop(trainNumber, name);
+      if (gtfsDelay != null) delayMin = pickGtfsDelay(delayMin, gtfsDelay);
+
+      if (amendedMin == null && delayMin != null && Number.isFinite(delayMin) && delayMin > 0){
+        amendedMin = plannedMin + delayMin;
+        if (amendedMin >= 24*60) amendedMin = amendedMin % (24*60);
+      }
+
+      const effectiveMin = (amendedMin != null) ? amendedMin : plannedMin;
+
+      let voieLabel = null;
+      if (voiesMap && typeof resolveVoieForStop === 'function'){
+        const candidates = [];
+        if (baseHHMM) candidates.push(baseHHMM);
+        if (amendedHHMM) candidates.push(amendedHHMM);
+        if (plannedRaw) candidates.push(plannedRaw);
+        voieLabel = resolveVoieForStop({ voiesMap, stopName: name, baseTimeRaw: plannedRaw, timeCandidates: candidates });
+      }
+
+      rows.push({ name, plannedMin, amendedMin, effectiveMin, voieLabel, isDeleted });
+    }
+
+    rows.sort((a,b)=>a.effectiveMin-b.effectiveMin);
+    return rows;
+  }
+
+  function buildFavStopsDetails(payload, trainNumber, nowMin){
+    const rows = buildFavStopRows(payload, trainNumber);
+    if (!rows.length) return '';
+
+    let next = rows.find(r => (nowMin == null || r.effectiveMin >= nowMin) && !r.isDeleted);
+    if (!next) next = rows.find(r => (nowMin == null || r.effectiveMin >= nowMin)) || rows[rows.length-1];
+
+    let terminus = [...rows].reverse().find(r => !r.isDeleted) || rows[rows.length-1];
+
+    const rowHtml = (r) => {
+      const voie = r.voieLabel ? String(r.voieLabel) : '';
+      const voieBadge = voie
+        ? `<span class="voie-badge" style="margin-left:auto;">${escapeHtml(formatVoieLabel ? formatVoieLabel(voie) : voie)}</span>`
+        : '';
+      const deletedCls = r.isDeleted ? ' deleted' : '';
+      const pastStyle = (nowMin != null && r.effectiveMin < nowMin) ? 'opacity:.55;' : '';
+      const stopStyle = r.isDeleted ? 'color:#ff9a9a;text-decoration:line-through;' : '';
+      return `
+        <div class="fav-next-row${deletedCls}" style="display:flex;gap:10px;align-items:baseline;flex-wrap:wrap;${pastStyle}">
+          <span class="fav-stop${deletedCls}" style="min-width:10ch;font-weight:800;${stopStyle}">${escapeHtml(r.name)}</span>
+          <span>${fmtTime(r.plannedMin, r.amendedMin, r.isDeleted)}</span>
+          ${voieBadge}
+        </div>`;
+    };
+
+    // Compact au-dessus : next + terminus
+    const compact = (next.name === terminus.name)
+      ? rowHtml(next)
+      : rowHtml(next) + rowHtml(terminus);
+
+    const expanded = rows.map(r => rowHtml(r)).join('');
+
+    return `
+      <div class="fav-box fav-box-info" style="margin-top:10px;">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;opacity:.95;">
+          <span style="font-weight:900;">➜ Prochains arrêts</span>
+        </div>
+        ${compact}
+      </div>
+
+      <details class="fav-details" style="margin-top:10px;">
+        <summary class="fav-details-summary" style="cursor:pointer;user-select:none;opacity:.95;">Voir tous les arrêts</summary>
+        <div class="fav-box fav-box-info" style="margin-top:8px;">
+          ${expanded}
+        </div>
+      </details>
+    `;
+  }
+
   function computeMaxDelayMin(payload, trainNumber){
     const train = payload?.train || null;
     const stopTimes = train?.stop_times || [];
@@ -15040,7 +15204,6 @@ function getGtfsDelayForStop(trainNumber, stopName){
     const statsEl = document.getElementById(kind === 'AM' ? 'favStatsAM' : 'favStatsPM');
     const card    = document.getElementById(kind === 'AM' ? 'favCardAM'  : 'favCardPM');
 
-    // mémorise l'état ouvert/fermé (évite de se refermer à chaque refresh)
     if (statsEl && !statsEl.__lbBound){
       statsEl.__lbBound = true;
       statsEl.addEventListener('toggle', ()=>{ if (statsEl.open) statsEl.setAttribute('data-user-opened','1'); });
@@ -15048,21 +15211,18 @@ function getGtfsDelayForStop(trainNumber, stopName){
 
     if (!title || !meta || !line) return;
 
-    // reset visuel
     if (card) card.classList.remove('is-canceled');
     title.textContent = trainId || '—';
-    if (causeEl) { causeEl.innerHTML = ''; causeEl.style.display = 'none'; }
-    meta.textContent = '';
-    line.textContent = '';
+    meta.innerHTML = '';
+    line.innerHTML = '';
+    if (causeEl){ causeEl.innerHTML = ''; causeEl.style.display = 'none'; }
 
-    // rien de sélectionné
     if (!trainId){
       meta.textContent = '➡️ Choisis un train dans tes préférences.';
       if (statsEl){ statsEl.open = false; }
       return;
     }
 
-    // erreur API
     if (payload?.error){
       meta.textContent = `🚫 ${payload.error}`;
       if (statsEl){
@@ -15080,10 +15240,15 @@ function getGtfsDelayForStop(trainNumber, stopName){
 
     const st = computeWidgetState(train);
     const stopTimes = st.stopTimes || [];
+    const origin = stopTimes[0]?.stop_point?.name || '—';
+    const dest   = stopTimes[stopTimes.length-1]?.stop_point?.name || '—';
 
-    // === Correctif LIVE : ne pas marquer "Arrivé" si le train est juste en retard ===
-    // computeWidgetState() se base sur l'horaire théorique. Ici on prolonge la fenêtre "running"
-    // jusqu'à l'heure d'arrivée attendue = arrivée théorique + retard max (SNCF/GTFS).
+    const depTxt = (st.dep0 != null) ? minToClock(st.dep0) : '—';
+    const arrTxt = (st.arrLast != null) ? minToClock(st.arrLast) : '—';
+
+    const rtStatus = inferRealtimeStatusFromDisruptions(payload);
+    const causeText = (payload?.causeText || '').trim();
+
     const maxDelay = computeMaxDelayMin(payload, trainId);
     const effectiveArrLast = (st.arrLast != null && maxDelay != null && Number.isFinite(maxDelay) && maxDelay > 0)
       ? (st.arrLast + maxDelay)
@@ -15096,20 +15261,21 @@ function getGtfsDelayForStop(trainNumber, stopName){
       else if (st.now > effectiveArrLast) widgetState = 'after';
     }
 
-    const origin = stopTimes[0]?.stop_point?.name || '—';
-    const dest   = stopTimes[stopTimes.length-1]?.stop_point?.name || '—';
-    const depTxt = (st.dep0 != null) ? minToClock(st.dep0) : '—';
-    const arrTxt = (st.arrLast != null) ? minToClock(st.arrLast) : '—';
-
-    // perturbations / suppression temps réel
-    const rtStatus = inferRealtimeStatusFromDisruptions(payload);
-    const causeText = (payload?.causeText || '').trim();
-
+    // SUPPRIME
     if (rtStatus === 'canceled') {
       if (card) card.classList.add('is-canceled');
-      meta.innerHTML = `<span class="fav-cancel-badge">✖ BÉTAILLÈRE SUPPRIMÉE</span> <span style="opacity:.9;">• ${escapeHtml(origin)} → ${escapeHtml(dest)}</span>`;
-      line.innerHTML = `<div class="fav-cause">⚠️ ${escapeHtml(causeText || 'Suppression signalée')}</div>`;
-
+      meta.innerHTML = `
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;">
+          <div style="font-size:1.18rem;font-weight:900;opacity:.96">${escapeHtml(origin)} → ${escapeHtml(dest)}</div>
+          <span class="fav-cancel-badge">✖ SUPPRIMÉ</span>
+        </div>
+        <div style="margin-top:6px;opacity:.9;">${escapeHtml(depTxt)} → ${escapeHtml(arrTxt)}</div>
+      `;
+      if (causeText && causeEl){
+        causeEl.style.display = '';
+        causeEl.innerHTML = `<div class="fav-box fav-box-warn"><div class="fav-box-body" style="color:#ff9a9a;font-weight:900;">${escapeHtml(causeText)}</div></div>`;
+      }
+      line.innerHTML = '';
       if (statsEl){
         renderFavStats(kind, trainId).catch(()=>{});
         if (!statsEl.hasAttribute('data-user-opened')) statsEl.open = false;
@@ -15117,123 +15283,74 @@ function getGtfsDelayForStop(trainNumber, stopName){
       return;
     }
 
-    if (widgetState === 'before') {
-      const mins = Math.max(0, (st.dep0 ?? st.now) - st.now);
-      meta.textContent = `⏳ Départ dans : ${formatDurationHM(mins)}`;
-      line.textContent = `${origin} ${depTxt} → ${dest} ${arrTxt}`;
-      if (causeEl){ causeEl.innerHTML = ''; causeEl.style.display = 'none'; }
-      if (statsEl){
-        renderFavStats(kind, trainId).catch(()=>{});
+    // suppression partielle ?
+    const firstId = stopTimes[0]?.stop_point?.id || null;
+    const lastId  = stopTimes[stopTimes.length-1]?.stop_point?.id || null;
+    const isPartial = Boolean((payload?.newStart && firstId && payload.newStart !== firstId) || (payload?.newEnd && lastId && payload.newEnd !== lastId));
+    let hasDeletedStop = false;
+    try {
+      for (const s of (stopTimes||[])){
+        const sid = s?.stop_point?.id;
+        const imp = sid ? (payload?.impacted?.[sid] || null) : null;
+        const departureDeleted = imp?.departure_status === 'deleted';
+        const arrivalDeleted   = imp?.arrival_status === 'deleted';
+        if ((departureDeleted && arrivalDeleted) || imp?.stop_time_effect === 'deleted'){ hasDeletedStop = true; break; }
       }
-      return;
+    } catch(e) {}
+    const isPartialAny = isPartial || hasDeletedStop;
+
+    // horaires : uniquement barré + estimé
+    let timesHtml = `${escapeHtml(depTxt)} → ${escapeHtml(arrTxt)}`;
+    if (st.arrLast != null && effectiveArrLast != null && effectiveArrLast !== st.arrLast){
+      timesHtml = `${escapeHtml(depTxt)} → <span class="fav-time fav-time-planned is-strike">${escapeHtml(arrTxt)}</span> <span class="fav-time fav-time-rt delay">${escapeHtml(minToClock(effectiveArrLast))}</span>`;
     }
 
-    if (widgetState === 'running') {
-      // maxDelay déjà calculé plus haut (SNCF/GTFS)
+    const liveBadge = (widgetState === 'running')
+      ? `<span style="margin-left:auto; padding:4px 10px; border-radius:999px; border:1px solid rgba(0,255,180,.35); background:rgba(0,255,180,.10); color:#7dffd6; font-weight:900;">LIVE</span>`
+      : '';
 
-      // Suppression partielle (même principe que le tableau temps réel)
-      const firstId = stopTimes[0]?.stop_point?.id || null;
-      const lastId  = stopTimes[stopTimes.length-1]?.stop_point?.id || null;
-      const isPartial = Boolean((payload?.newStart && firstId && payload.newStart !== firstId) || (payload?.newEnd && lastId && payload.newEnd !== lastId));
-      // ou arrêt supprimé explicitement dans les impacts
-      let hasDeletedStop = false;
-      try {
-        for (const s of (stopTimes||[])){
-          const sid = s?.stop_point?.id;
-          const imp = sid ? (payload?.impacted?.[sid] || null) : null;
-          const departureDeleted = imp?.departure_status === 'deleted';
-          const arrivalDeleted   = imp?.arrival_status === 'deleted';
-          if ((departureDeleted && arrivalDeleted) || imp?.stop_time_effect === 'deleted'){ hasDeletedStop = true; break; }
-        }
-      } catch(e) {}
-      const isPartialAny = isPartial || hasDeletedStop;
-      if (isPartialAny) {
-        meta.textContent = `🟠 Suppression partielle • ${origin} → ${dest}`;
-      } else if (maxDelay != null && maxDelay >= 5) {
-        meta.textContent = `🟠 En circulation (retardé) • ${origin} → ${dest}`;
-      } else {
-        meta.textContent = `🟢 En circulation • ${origin} → ${dest}`;
-      }
+    const partialBadge = isPartialAny
+      ? `<span style="padding:4px 10px;border-radius:999px;border:1px solid rgba(255,80,80,.40); background:rgba(255,80,80,.12); color:#ff9a9a; font-weight:900;">SUPPRESSION PARTIELLE</span>`
+      : '';
 
-      // Affiche la cause uniquement pendant le live (pas apres arrivee)
-      if (causeEl){
-        if (causeText){
-          causeEl.style.display = '';
-          causeEl.innerHTML = `<div class="fav-box fav-box-warn"><div class="fav-box-title">⚠️ Perturbation</div><div class="fav-box-body">${escapeHtml(causeText)}</div></div>`;
-        } else {
-          causeEl.innerHTML = '';
-          causeEl.style.display = 'none';
-        }
-      }
+    meta.innerHTML = `
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+        <div style="font-size:1.18rem;font-weight:900;opacity:.96;">${escapeHtml(origin)} → ${escapeHtml(dest)}</div>
+        ${partialBadge}
+        ${liveBadge}
+      </div>
+      <div style="margin-top:6px;font-size:1.55rem;font-weight:900;letter-spacing:.01em;">${timesHtml}</div>
+    `;
 
-      // Affichage explicite "prévu" vs "estimé" (retard) — utile surtout pour l'arrivée.
-      // On réutilise les classes déjà existantes (.fav-time-planned.is-strike / .fav-time-rt.delay).
-      let arrivalInfoHtml = '';
-      if (st.arrLast != null && effectiveArrLast != null && effectiveArrLast !== st.arrLast) {
-        const baseArr = minToClock(st.arrLast);
-        const estArr  = minToClock(effectiveArrLast);
-        const d = Math.max(1, Math.round(effectiveArrLast - st.arrLast));
-        arrivalInfoHtml = `
-          <div class="fav-box fav-box-info" style="margin-top:8px;">
-            <div class="fav-box-title">🕒 Arrivée</div>
-            <div class="fav-box-body">
-              <span class="fav-time fav-time-planned is-strike">${escapeHtml(baseArr)}</span>
-              <span class="fav-time fav-time-rt delay">${escapeHtml(estArr)}</span>
-              <span class="fav-delay-pill">+${d} min</span>
-            </div>
-          </div>`;
-      }
-
-      // Option A: prochains arrêts + retards live (avec affichage de la cause si dispo)
-      const nextHtml = buildNextStopsHtml(payload, trainId, st.now, 3, 5);
-      if (nextHtml) {
-        line.innerHTML = `${arrivalInfoHtml}${nextHtml}`;
-      } else {
-        const next = (stopTimes || [])
-          .map(s => ({
-            name: s.stop_point?.name || '',
-            t: hhmmRawToMin(s.arrival_time || s.departure_time)
-          }))
-          .filter(x => x.t != null && x.t >= st.now)
-          .slice(0, 3);
-        if (next.length) {
-          line.innerHTML = `${arrivalInfoHtml}<div class="fav-next"><div class="fav-next-title">⏱️ Prochains arrêts :</div>${next.map(x => `<div class="fav-next-row"><span class="fav-stop">${escapeHtml(x.name)}</span><span class="fav-time">${escapeHtml(minToClock(x.t))}</span></div>`).join('')}</div>`;
-        } else {
-          line.innerHTML = `${arrivalInfoHtml}<div class="fav-next"><div class="fav-next-row"><span class="fav-route">${escapeHtml(origin)} → ${escapeHtml(dest)}</span></div><div class="fav-next-row">Départ ${escapeHtml(depTxt)} • Arrivée ${escapeHtml(arrTxt)}</div></div>`;
-        }
-      }
-
-      if (statsEl){
-        renderFavStats(kind, trainId).catch(()=>{});
-        if (!statsEl.hasAttribute('data-user-opened')) statsEl.open = false;
-      }
-      return;
+    // Cause (1 ligne)
+    const isDelayed = (maxDelay != null && Number.isFinite(maxDelay) && maxDelay >= 1);
+    if ((isDelayed || isPartialAny) && causeText && causeEl){
+      causeEl.style.display = '';
+      causeEl.innerHTML = `<div class="fav-box fav-box-warn"><div class="fav-box-body" style="color:#ffb36b;font-weight:800;">${escapeHtml(causeText)}</div></div>`;
+    } else if (causeEl){
+      causeEl.innerHTML = '';
+      causeEl.style.display = 'none';
     }
 
-    if (widgetState === 'after') {
-      if (causeEl){ causeEl.innerHTML = ''; causeEl.style.display = 'none'; }
-      // Si le train a eu du retard, on l'affiche explicitement (prévu vs constaté/estimé)
-      let arrivedHtml = '';
-      if (st.arrLast != null && effectiveArrLast != null && effectiveArrLast !== st.arrLast) {
-        const baseArr = minToClock(st.arrLast);
-        const realArr = minToClock(effectiveArrLast);
-        const d = Math.max(1, Math.round(effectiveArrLast - st.arrLast));
-        arrivedHtml = `Arrivé : <span class="fav-time fav-time-planned is-strike">${escapeHtml(baseArr)}</span> <span class="fav-time fav-time-rt delay">${escapeHtml(realArr)}</span> <span class="fav-delay-pill">+${d} min</span><br>`;
-      }
-      meta.textContent = `Arrivé`;
-      line.innerHTML = `${arrivedHtml}Prochain : demain<br>${escapeHtml(origin)} ${depTxt} → ${escapeHtml(dest)} ${arrTxt}`;
-      if (statsEl){
-        renderFavStats(kind, trainId).catch(()=>{});
-      }
-      return;
-    }
+    // Progression (visuel)
+    const pct = (widgetState === 'before') ? 0 : (widgetState === 'after' ? 100 : computeProgressPct(st.dep0, effectiveArrLast, st.now));
+    const progressHtml = `
+      <div style="margin:12px 0 10px 0;">
+        <div style="height:6px;border-radius:999px;overflow:hidden;background:rgba(255,255,255,.08);box-shadow:inset 0 0 0 1px rgba(0,255,255,.12);">
+          <div style="height:100%;width:${pct}%;background:rgba(0,255,255,.85);box-shadow:0 0 12px rgba(0,255,255,.35);border-radius:999px;transition:width .6s ease;"></div>
+        </div>
+      </div>
+    `;
 
-    meta.textContent = 'ℹ️ Données disponibles.';
-    line.textContent = `${origin} → ${dest}`;
+    const stopsHtml = buildFavStopsDetails(payload, trainId, st.now);
+    line.innerHTML = progressHtml + (stopsHtml || '');
+
     if (statsEl){
       renderFavStats(kind, trainId).catch(()=>{});
+      if (!statsEl.hasAttribute('data-user-opened')) statsEl.open = false;
     }
   };
+
 
   const fetchTrainToday = async (selectionKey) => {
     const ymd = luxYmdToday();
