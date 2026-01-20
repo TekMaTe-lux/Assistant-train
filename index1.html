@@ -6171,20 +6171,58 @@ function normalizeVoiesPayload(data){
   return out;
 }
 
-async function loadVoiesByTrain({ forceFresh = false } = {}){
+async function loadVoiesByTrain({ forceFresh = false, onlyIfChanged = false } = {}){
+  // onlyIfChanged: si true, on ne rebuild la Map que si le contenu a changé (ETag/hash)
   if (forceFresh) voiesByTrainPromise = null;
   if (voiesByTrainPromise) return voiesByTrainPromise;
 
   voiesByTrainPromise = (async () => {
     try {
-      const url = 'https://vps.labetaillere.fr/gtfs/voies_by_train.json' + (forceFresh ? `?t=${Date.now()}` : '');
-      const res = await fetch(url, { cache: 'no-store' });
+      const baseUrl = 'https://vps.labetaillere.fr/gtfs/voies_by_train.json';
+      const url = baseUrl + (forceFresh ? `?t=${Date.now()}` : '');
+
+      // On récupère le body en texte pour pouvoir comparer sans parser si identique
+      const res = await fetch(url, {
+        cache: 'no-store',
+        headers: (window.__voiesEtag && onlyIfChanged && !forceFresh) ? { 'If-None-Match': window.__voiesEtag } : {}
+      });
+
+      // 304 -> rien n'a changé
+      if (res.status === 304) {
+        window.__voiesLastChanged = false;
+        // garde la Map existante
+        return (window.voiesByTrainMap instanceof Map) ? window.voiesByTrainMap : new Map();
+      }
+
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const json = await res.json();
+
+      const etag = res.headers.get('etag');
+      if (etag) window.__voiesEtag = etag;
+
+      const text = await res.text();
+      // Signature légère (djb2) pour éviter de reparser si identique
+      let sig = 5381;
+      for (let i = 0; i < text.length; i++) {
+        sig = ((sig << 5) + sig) + text.charCodeAt(i);
+        sig = sig >>> 0;
+      }
+      sig = String(sig);
+
+      if (onlyIfChanged && !forceFresh && window.__voiesSig && window.__voiesSig == sig) {
+        window.__voiesLastChanged = false;
+        // Ne rebuild pas la Map
+        return (window.voiesByTrainMap instanceof Map) ? window.voiesByTrainMap : new Map();
+      }
+
+      window.__voiesSig = sig;
+      const json = JSON.parse(text);
       window.voiesByTrainMap = normalizeVoiesPayload(json);
+      window.__voiesLastChanged = true;
       return window.voiesByTrainMap;
+
     } catch (err) {
       console.warn('[Voies] Chargement échoué', err?.message || err);
+      window.__voiesLastChanged = false;
       window.voiesByTrainMap = new Map();
       return window.voiesByTrainMap;
     }
@@ -15268,9 +15306,9 @@ function getGtfsDelayForStop(trainNumber, stopName){
       try { await loadGtfsRetards({ forceFresh: false }); } catch(e) {}
     }
 
-    // S'assurer que les voies (quais) sont chargées (même source que le tableau)
-    if ((typeof loadVoiesByTrain === 'function') && (!(window.voiesByTrainMap instanceof Map) || !window.voiesByTrainMap.size)) {
-      try { await loadVoiesByTrain({ forceFresh: false }); } catch(e) {}
+    // S'assurer que les voies (quais) sont à jour (live léger)
+    if (typeof loadVoiesByTrain === 'function') {
+      try { await loadVoiesByTrain({ forceFresh: false, onlyIfChanged: true }); } catch(e) {}
     }
 
     const prefs = window.lbPrefsCache || null;
@@ -16057,51 +16095,80 @@ function getGtfsDelayForStop(trainNumber, stopName){
 </script>
 
 
-<!-- ===================== AUTO-REFRESH (table + GTFS-RT) ===================== -->
+<!-- ===================== LIVE (GTFS-RT + VOIES) ===================== -->
 <script>
 (function(){
-  const REFRESH_EVERY_MS = 60 * 1000; // 60s
-  let timer = null;
+  // Retards: plus fréquent, mais application in-place (faible coût)
+  const RETARDS_MS = 30 * 1000; // 30s
+  // Voies: moins fréquent + onlyIfChanged (évite de reparser si identique)
+  const VOIES_MS   = 60 * 1000; // 60s
+
+  let tRetards = null;
+  let tVoies = null;
 
   function hasTrainTable(){
     return !!document.querySelector('#trainInfo table');
   }
 
-  async function tick(){
-    try {
-      // Pause si onglet caché
-      if (document.hidden) return;
+  function canLive(){
+    if (document.hidden) return false;
+    if (typeof isSelectedDateToday === 'function' && !isSelectedDateToday()) return false;
+    return true;
+  }
 
-      // 1) Refresh GTFS-RT (non bloquant)
+  async function tickRetards(){
+    try {
+      if (!canLive()) return;
       if (typeof loadGtfsRetards === 'function') {
+        // Ton code applique déjà les retards au tableau courant si présent.
         await loadGtfsRetards({ forceFresh: false });
       }
+    } catch(e){}
+  }
 
-      // 2) Refresh tableau principal si affiché ET date = aujourd'hui
+  async function tickVoies(){
+    try {
+      if (!canLive()) return;
+      if (typeof loadVoiesByTrain !== 'function') return;
+
+      // Recharge léger: onlyIfChanged -> si identique, pas de rebuild Map
+      await loadVoiesByTrain({ forceFresh: false, onlyIfChanged: true });
+      const changed = !!window.__voiesLastChanged;
+
+      // Si rien n'a changé, on ne touche pas au DOM
+      if (!changed) return;
+
+      // Si un tableau est affiché, on regénère UNE FOIS (pour réinjecter les voies)
       if (!hasTrainTable()) return;
-      if (typeof isSelectedDateToday === 'function' && !isSelectedDateToday()) return;
       if (window.__mainTableBusy) return;
 
-      // Relance la génération via le bouton (rejoue la dernière sélection)
       const btn = document.getElementById('loadTrains');
       if (btn) btn.click();
 
-    } catch (e) {
-      // silence
-    }
+      // Met aussi à jour les favoris (ils affichent des voies)
+      if (typeof window.updateFavoriteWidgetFromPrefs === 'function') {
+        window.updateFavoriteWidgetFromPrefs().catch(() => {});
+      }
+
+    } catch(e){}
   }
 
   function start(){
-    if (timer) return;
-    timer = setInterval(tick, REFRESH_EVERY_MS);
+    if (!tRetards) tRetards = setInterval(tickRetards, RETARDS_MS);
+    if (!tVoies)   tVoies   = setInterval(tickVoies,   VOIES_MS);
   }
   function stop(){
-    if (!timer) return;
-    clearInterval(timer);
-    timer = null;
+    if (tRetards){ clearInterval(tRetards); tRetards = null; }
+    if (tVoies){   clearInterval(tVoies);   tVoies   = null; }
   }
 
-  window.addEventListener('load', start);
+  window.addEventListener('load', () => {
+    start();
+    // 1ère synchro immédiate
+    tickRetards();
+    tickVoies();
+  });
+
   document.addEventListener('visibilitychange', () => {
     if (document.hidden) stop();
     else start();
