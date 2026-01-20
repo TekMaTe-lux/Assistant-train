@@ -3263,6 +3263,32 @@ function sanitizeCflStationName(name){
   const trainMarkers = new Map();
   const trainCowById = new Map();
   const trainDataById = new Map();
+
+
+  // --- Perf: éviter de recréer l'icône et de déplacer le marker si rien n'a changé ---
+  const trainIconSigById = new Map();
+
+  function shouldMoveMarker(oldLatLng, lat, lon){
+    if (!oldLatLng) return true;
+    const dLat = Math.abs(oldLatLng.lat - lat);
+    const dLon = Math.abs(oldLatLng.lng - lon);
+    // ~25-30m: assez pour éviter de spammer Leaflet quand ça bouge très peu
+    return (dLat + dLon) > 0.00025;
+  }
+
+  function trainIconSignature(train){
+    // Signature stable: si elle ne change pas, inutile de recréer l'icône.
+    const delayInfo = trainFilters.showDelays ? (train.delayInfo || computeTrainDelayInfo(train)) : null;
+    const glyph = glyphForTrain(train, delayInfo);
+    const displayNum = train.number || train.headsign || train.id;
+    const badgeLabel = (trainFilters.showDelays && delayInfo) ? (delayInfo.label || '') : '';
+    const badgeClass = (trainFilters.showDelays && delayInfo) ? (delayInfo.badgeClass || '') : '';
+    const title = (trainFilters.showDelays && delayInfo) ? (delayInfo.title || '') : '';
+    const cancelled = (trainFilters.showDelays && delayInfo && delayInfo.severity === 'cancelled') ? '1' : '0';
+    const brandClass = train.branding?.className || '';
+    return `${glyph}|${displayNum}|${badgeLabel}|${badgeClass}|${title}|${cancelled}|${brandClass}`;
+  }
+
     // ---------- Remontée des trains visibles vers le VPS (carte/seen-tails) ----------
 
   // Endpoint FastAPI sur ton VPS
@@ -4075,7 +4101,7 @@ const mapContainerEl = map.getContainer();
     tripProgressFillEl.style.width = '0%';
     tripProgressTextEl.textContent = '';
 
-    const events = computeStationEvents(station);
+    const events = computeStationEventsCached(station);
     if (events.length){
       tripStopsTitleEl.classList.remove('hidden');
       tripStopsTitleEl.textContent = `Trains observés (${events.length})`;
@@ -4195,6 +4221,26 @@ const mapContainerEl = map.getContainer();
 
     events.sort((a,b)=>a.focusSec - b.focusSec);
     return events.slice(0, 8);
+  }
+
+  // --- Perf: cache du panneau gare (évite de rescanner tous les trains à chaque refresh) ---
+  const stationEventsCache = new Map(); // key -> { at:number, events:Array }
+
+  function stationCacheKey(station){
+    if (!station) return 'null';
+    return station.id || station.label || JSON.stringify(Array.from(station.stopSet || station.stopIds || []));
+  }
+
+  function computeStationEventsCached(station){
+    const key = stationCacheKey(station);
+    const nowMs = Date.now();
+    const cached = stationEventsCache.get(key);
+    if (cached && (nowMs - cached.at) < 15_000){ // 15s
+      return cached.events;
+    }
+    const events = computeStationEvents(station);
+    stationEventsCache.set(key, { at: nowMs, events });
+    return events;
   }
 
   function prepareStationMetadata(){
@@ -5981,8 +6027,16 @@ function stationNameMatchesKeywords(name, keywords){
 
       if (trainMarkers.has(t.id)){
         const marker = trainMarkers.get(t.id);
-        marker.setLatLng([t.lat, t.lon]);
-        marker.setIcon(iconForTrain(t));
+        const old = marker.getLatLng();
+        if (shouldMoveMarker(old, t.lat, t.lon)) marker.setLatLng([t.lat, t.lon]);
+
+        // Ne recrée l'icône que si son contenu visuel a changé
+        const sig = trainIconSignature(t);
+        if (trainIconSigById.get(t.id) !== sig){
+          marker.setIcon(iconForTrain(t));
+          trainIconSigById.set(t.id, sig);
+        }
+
         marker.setZIndexOffset(1000); // passer devant les couches vectorielles
         if (marker.getPopup()) marker.unbindPopup();
       } else {
@@ -5994,6 +6048,7 @@ function stationNameMatchesKeywords(name, keywords){
         });
         layer.addLayer(m);
         trainMarkers.set(t.id, m);
+        trainIconSigById.set(t.id, trainIconSignature(t));
       }
     }
 
@@ -6033,6 +6088,19 @@ function stationNameMatchesKeywords(name, keywords){
     }
   }
 
+
+
+  // --- Perf: pause des refresh / rendu quand l'onglet est en arrière-plan ---
+  let refreshPaused = document.hidden;
+  document.addEventListener('visibilitychange', () => {
+    refreshPaused = document.hidden;
+  });
+
+  async function guardedRefresh(fn){
+    if (refreshPaused) return;
+    return fn();
+  }
+
   // ---------- Boucle ----------
   let periodMs = 10000, nextTick = performance.now();
   const periodEl = document.getElementById('period'), hzEl=document.getElementById('hz'), smoothEl=document.getElementById('smooth');
@@ -6040,6 +6108,11 @@ function stationNameMatchesKeywords(name, keywords){
 
   function tick(){ renderTrains(trainsAt(nowSecLocal())); }
   function loop(ts){
+    if (refreshPaused){
+      // On garde l'animation frame pour repartir vite, mais on évite CPU/rendu.
+      requestAnimationFrame(loop);
+      return;
+    }
     if (ts >= nextTick){ tick(); nextTick = ts + periodMs; }
     if (smoothEl.checked) tick();
     requestAnimationFrame(loop);
@@ -6074,7 +6147,7 @@ function stationNameMatchesKeywords(name, keywords){
     gtfsPromise.finally(()=>{
       if (gtfsRtRefreshTimer == null){
         gtfsRtRefreshTimer = setInterval(()=>{
-          loadGtfsRetards({ forceFresh: true }).catch(err => {
+          guardedRefresh(() => loadGtfsRetards({ forceFresh: true })).catch(err => {
             console.warn('[GTFS-RT] rafraîchissement en échec', err);
             setRealtimeSourceError('gtfs', trainDelayLastUpdated ? 'rafraîchissement en échec' : 'indisponibles');
           });
@@ -6084,7 +6157,7 @@ function stationNameMatchesKeywords(name, keywords){
     hafasPromise.finally(()=>{
       if (hafasRefreshTimer == null){
         hafasRefreshTimer = setInterval(()=>{
-          loadHafasDelays().catch(err => {
+          guardedRefresh(() => loadHafasDelays()).catch(err => {
             console.warn('[HAFAS] rafraîchissement en échec', err);
             setRealtimeSourceError('hafas', 'rafraîchissement en échec');
           });
@@ -6094,7 +6167,7 @@ function stationNameMatchesKeywords(name, keywords){
     sncfPromise.finally(()=>{
       if (sncfRefreshTimer == null){
         sncfRefreshTimer = setInterval(()=>{
-          loadSncfRealtime({ forceFresh: true }).catch(err => {
+          guardedRefresh(() => loadSncfRealtime({ forceFresh: true })).catch(err => {
             console.warn('[SNCF] rafraîchissement en échec', err);
             const hadData = realtimeSources.sncf.lastUpdated != null;
             setRealtimeSourceError('sncf', hadData ? 'rafraîchissement en échec' : 'indisponibles');
@@ -6105,7 +6178,7 @@ function stationNameMatchesKeywords(name, keywords){
     sncfStatusPromise.finally(()=>{
       if (sncfStatusRefreshTimer == null){
         sncfStatusRefreshTimer = setInterval(()=>{
-          loadSncfStatus().catch(err => console.warn('[SNCF] statut indisponible', err));
+          guardedRefresh(() => loadSncfStatus()).catch(err => console.warn('[SNCF] statut indisponible', err));
         }, SNCF_RT_STATUS_REFRESH_INTERVAL_MS);
       }
     });
