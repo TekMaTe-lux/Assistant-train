@@ -5012,7 +5012,20 @@ function renderRowsChunked(htmlRows, tbody, chunk=200){
                 text{ font-size:118px; }
                 .stroke,.glow{ stroke-width:2.2; }
               }
-            </style>
+            
+/* Favoris: arrêt supprimé (suppression partielle) */
+.fav-stop.deleted, .fav-time.deleted {
+  color: #ff6b6b;
+}
+.fav-time.deleted.is-strike {
+  text-decoration: line-through;
+  opacity: 0.9;
+}
+.fav-delay-pill.canceled {
+  border-color: rgba(239,68,68,0.6);
+  color: #ff6b6b;
+}
+</style>
           </defs>
 
           <!-- Texte centré pile au milieu du viewBox compact -->
@@ -5357,20 +5370,9 @@ function renderRowsChunked(htmlRows, tbody, chunk=200){
         </div>
       </div>
 
-      <div class="actions-main">
-        <button id="btnProposer" class="refresh-btn proposer-btn" type="button">Rechercher</button>
-      </div>
-    </div>
-  </details>
-
-  <!-- 3) OPTIONS AVANCÉES -->
-  <details id="advancedOptions" class="console-section">
-    <summary class="section-summary">
-      <span class="section-icon" aria-hidden="true">🛠️</span>
-      <span class="section-title">Options avancées</span>
-    </summary>
-    <div class="section-content">
-      <div class="filters-row filters-transfer">
+      
+      <!-- Options (ex-Options avancées) -->
+<div class="filters-row filters-transfer">
         <div class="filter-item" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
           <label for="allowTransfer" style="display:flex;align-items:center;gap:8px;">
             <input id="allowTransfer" type="checkbox" checked>
@@ -5395,8 +5397,12 @@ function renderRowsChunked(htmlRows, tbody, chunk=200){
           </div>
         </div>
       </div>
+    
+<div class="actions-main">
+        <button id="btnProposer" class="refresh-btn proposer-btn" type="button">Rechercher</button>
+      </div>
     </div>
-</details>
+  </details>
 
   <!-- 4) STATISTIQUES -->
     <details id="statsConsole" class="console-section">
@@ -14719,7 +14725,9 @@ function getGtfsDelayForStop(trainNumber, stopName){
   return null;
 }
 
+
   // Prochains arrêts (Option A): affiche l'heure prévue et, si retard >= seuil, l'heure temps réel en orange (avec l'heure prévue barrée).
+  // + Support suppression partielle (arrêt supprimé) : même rendu que le tableau (rouge + barré + label "supprimé").
   function buildNextStopsHtml(payload, trainNumber, nowMin, limit=3, thresholdMin=5){
     const train = payload?.train || null;
     const stopTimes = train?.stop_times || [];
@@ -14753,49 +14761,67 @@ function getGtfsDelayForStop(trainNumber, stopName){
     for (const st of stopTimes){
       const name = st?.stop_point?.name || '';
       const stopId = st?.stop_point?.id || '';
-      if (!name) continue;      const isLast = (st === stopTimes[stopTimes.length - 1]);
+      if (!name) continue;
+
+      const isLast = (st === stopTimes[stopTimes.length - 1]);
       const plannedRaw = isLast ? (st.arrival_time || st.departure_time) : (st.departure_time || st.arrival_time);
       const plannedMin = hhmmRawToMin(plannedRaw);
       if (plannedMin == null) continue;
 
+      // impact : par id si possible, sinon par nom (cas added)
+      const imp = (stopId && impacted) ? (impacted[stopId] || null) : null;
+      const impByName = (!imp && impacted) ? (Object.values(impacted).find(x => x?.stop_point?.name === name) || null) : null;
+      const impAny = imp || impByName;
+
+      const departureDeleted = impAny?.departure_status === 'deleted';
+      const arrivalDeleted   = impAny?.arrival_status === 'deleted';
+      const isStopDeleted    = (departureDeleted && arrivalDeleted) || (impAny?.stop_time_effect === 'deleted');
+
       let delayMin = null;
       let amendedMin = null;
 
-      const imp = (stopId && impacted) ? impacted[stopId] : null;
-      if (imp){
-        const dm = (imp?.delay_minutes !== undefined && imp?.delay_minutes !== null) ? Number(imp.delay_minutes) : null;
-        if (Number.isFinite(dm)) delayMin = dm;        const amendedHHMM = isLast ? (imp?.amended_arrival_time || imp?.amended_departure_time) : (imp?.amended_departure_time || imp?.amended_arrival_time);
-        const baseHHMM = isLast ? (imp?.base_arrival_time || imp?.base_departure_time) : (imp?.base_departure_time || imp?.base_arrival_time) || plannedRaw;
+      let amendedHHMM = null;
+      let baseHHMM = null;
+
+      if (impAny){
+        const dm = (impAny?.delay_minutes !== undefined && impAny?.delay_minutes !== null) ? Number(impAny.delay_minutes) : null;
+        if (Number.isFinite(dm)) delayMin = dm;
+
+        amendedHHMM = isLast
+          ? (impAny?.amended_arrival_time || impAny?.amended_departure_time)
+          : (impAny?.amended_departure_time || impAny?.amended_arrival_time);
+
+        baseHHMM = isLast
+          ? (impAny?.base_arrival_time || impAny?.base_departure_time)
+          : (impAny?.base_departure_time || impAny?.base_arrival_time);
+
         amendedMin = hhmmToMin(toHHMM(amendedHHMM));
-        if (delayMin == null) delayMin = diffMin(baseHHMM, amendedHHMM);
+        if (delayMin == null) delayMin = diffMin(baseHHMM || plannedRaw, amendedHHMM);
       }
 
       if (delayMin == null) delayMin = stopDelayMin(st);
 
-      // 3) merge avec GTFS-RT (même logique que le tableau): on garde le "pire" retard
+      // merge avec GTFS-RT (même logique que le tableau): on garde le "pire" retard
       const gtfsDelay = getGtfsDelayForStop(trainNumber, name);
       if (gtfsDelay != null) delayMin = pickGtfsDelay(delayMin, gtfsDelay);
 
       // si on a un retard (GTFS ou impacted) mais pas d'heure amendée, on peut dériver une heure temps réel
-      // (utile quand SNCF ne fournit pas amended_* mais GTFS donne +X)
       if (amendedMin == null && delayMin != null && Number.isFinite(Number(delayMin)) && Number(delayMin) > 0){
         amendedMin = plannedMin + Number(delayMin);
-        // wrap 24h
         if (amendedMin >= 24*60) amendedMin = amendedMin % (24*60);
       }
 
       // arrêt à venir: on filtre sur l'heure effective (amended si dispo)
       const effectiveMin = (amendedMin != null) ? amendedMin : plannedMin;
       if (nowMin != null && effectiveMin < nowMin) continue;
+
       // Voie (si dispo) : résolue à partir de l'heure base / amendée (même logique que le tableau)
       let voieLabel = null;
       if (voiesMap && (typeof resolveVoieForStop === 'function')) {
         const candidates = [];
-        // base/amended brut si dispo
-        if (typeof baseHHMM !== 'undefined' && baseHHMM) candidates.push(baseHHMM);
-        if (typeof amendedHHMM !== 'undefined' && amendedHHMM) candidates.push(amendedHHMM);
+        if (baseHHMM) candidates.push(baseHHMM);
+        if (amendedHHMM) candidates.push(amendedHHMM);
         if (plannedRaw) candidates.push(plannedRaw);
-        // dériver HHMM depuis amendedMin si besoin (ex: GTFS uniquement)
         if (amendedMin != null) {
           const hh = Math.floor(amendedMin / 60) % 24;
           const mm = amendedMin % 60;
@@ -14804,7 +14830,7 @@ function getGtfsDelayForStop(trainNumber, stopName){
         voieLabel = resolveVoieForStop({ voiesMap, stopName: name, baseTimeRaw: plannedRaw, timeCandidates: candidates });
       }
 
-      rows.push({ name, plannedMin, amendedMin, delayMin, effectiveMin, voieLabel });
+      rows.push({ name, plannedMin, amendedMin, delayMin, effectiveMin, voieLabel, isStopDeleted });
     }
 
     if (!rows.length) return '';
@@ -14817,15 +14843,25 @@ function getGtfsDelayForStop(trainNumber, stopName){
 
     for (const r of shown){
       const plannedTxt = minToClock(r.plannedMin);
-      const hasDelay = (r.delayMin != null && Number.isFinite(r.delayMin) && r.delayMin >= thresholdMin);
-      const rtTxt = (r.amendedMin != null) ? minToClock(r.amendedMin) : null;
+      const hasDelay = (!r.isStopDeleted) && (r.delayMin != null && Number.isFinite(r.delayMin) && r.delayMin >= thresholdMin);
+      const rtTxt = (!r.isStopDeleted && r.amendedMin != null) ? minToClock(r.amendedMin) : null;
 
       // voie (quai) : même badge que le tableau
       const voie = r.voieLabel ? String(r.voieLabel) : '';
       const plannedDisp = (voie && typeof formatClockWithVoie === 'function') ? formatClockWithVoie(plannedTxt, voie) : plannedTxt;
       const rtDisp = (voie && rtTxt && typeof formatClockWithVoie === 'function') ? formatClockWithVoie(rtTxt, voie) : rtTxt;
 
-      html += '<div class="fav-next-row">• <span class="fav-stop">' + escapeHtml(r.name) + '</span> ';
+      html += '<div class="fav-next-row">• ';
+
+      if (r.isStopDeleted){
+        html += '<span class="fav-stop deleted">' + escapeHtml(r.name) + '</span> ';
+        html += '<span class="fav-time fav-time-planned is-strike deleted">' + plannedDisp + '</span>';
+        html += '<span class="fav-delay-pill canceled">supprimé</span>';
+        html += '</div>';
+        continue;
+      }
+
+      html += '<span class="fav-stop">' + escapeHtml(r.name) + '</span> ';
 
       if (hasDelay && rtTxt){
         html += '<span class="fav-time fav-time-planned is-strike">' + plannedDisp + '</span>';
@@ -15004,7 +15040,26 @@ function getGtfsDelayForStop(trainNumber, stopName){
 
     if (st.state === 'running') {
       const maxDelay = computeMaxDelayMin(payload, trainId);
-      if (maxDelay != null && maxDelay >= 5) {
+
+      // Suppression partielle (même principe que le tableau temps réel)
+      const firstId = stopTimes[0]?.stop_point?.id || null;
+      const lastId  = stopTimes[stopTimes.length-1]?.stop_point?.id || null;
+      const isPartial = Boolean((payload?.newStart && firstId && payload.newStart !== firstId) || (payload?.newEnd && lastId && payload.newEnd !== lastId));
+      // ou arrêt supprimé explicitement dans les impacts
+      let hasDeletedStop = false;
+      try {
+        for (const s of (stopTimes||[])){
+          const sid = s?.stop_point?.id;
+          const imp = sid ? (payload?.impacted?.[sid] || null) : null;
+          const departureDeleted = imp?.departure_status === 'deleted';
+          const arrivalDeleted   = imp?.arrival_status === 'deleted';
+          if ((departureDeleted && arrivalDeleted) || imp?.stop_time_effect === 'deleted'){ hasDeletedStop = true; break; }
+        }
+      } catch(e) {}
+      const isPartialAny = isPartial || hasDeletedStop;
+      if (isPartialAny) {
+        meta.textContent = `🟠 Suppression partielle • ${origin} → ${dest}`;
+      } else if (maxDelay != null && maxDelay >= 5) {
         meta.textContent = `🟠 En circulation (retardé) • ${origin} → ${dest}`;
       } else {
         meta.textContent = `🟢 En circulation • ${origin} → ${dest}`;
