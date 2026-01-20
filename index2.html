@@ -14717,6 +14717,9 @@ function getGtfsDelayForStop(trainNumber, stopName){
     const stopTimes = train?.stop_times || [];
     const impacted = payload?.impacted || {};
 
+    // voies (quais) : même logique que le tableau
+    const voiesMap = (typeof getVoiesForTrain === 'function') ? getVoiesForTrain(trainNumber) : null;
+
     // Helpers locaux (évite les ReferenceError si ces helpers ne sont pas dans le scope global)
     const toHHMM = (t) => {
       if (!t) return null;
@@ -14742,9 +14745,9 @@ function getGtfsDelayForStop(trainNumber, stopName){
     for (const st of stopTimes){
       const name = st?.stop_point?.name || '';
       const stopId = st?.stop_point?.id || '';
-      if (!name) continue;
-
-      const plannedMin = hhmmRawToMin(st.arrival_time || st.departure_time);
+      if (!name) continue;      const isLast = (st === stopTimes[stopTimes.length - 1]);
+      const plannedRaw = isLast ? (st.arrival_time || st.departure_time) : (st.departure_time || st.arrival_time);
+      const plannedMin = hhmmRawToMin(plannedRaw);
       if (plannedMin == null) continue;
 
       let delayMin = null;
@@ -14753,10 +14756,8 @@ function getGtfsDelayForStop(trainNumber, stopName){
       const imp = (stopId && impacted) ? impacted[stopId] : null;
       if (imp){
         const dm = (imp?.delay_minutes !== undefined && imp?.delay_minutes !== null) ? Number(imp.delay_minutes) : null;
-        if (Number.isFinite(dm)) delayMin = dm;
-
-        const amendedHHMM = imp?.amended_departure_time || imp?.amended_arrival_time;
-        const baseHHMM = imp?.base_departure_time || imp?.base_arrival_time;
+        if (Number.isFinite(dm)) delayMin = dm;        const amendedHHMM = isLast ? (imp?.amended_arrival_time || imp?.amended_departure_time) : (imp?.amended_departure_time || imp?.amended_arrival_time);
+        const baseHHMM = isLast ? (imp?.base_arrival_time || imp?.base_departure_time) : (imp?.base_departure_time || imp?.base_arrival_time) || plannedRaw;
         amendedMin = hhmmToMin(toHHMM(amendedHHMM));
         if (delayMin == null) delayMin = diffMin(baseHHMM, amendedHHMM);
       }
@@ -14778,8 +14779,24 @@ function getGtfsDelayForStop(trainNumber, stopName){
       // arrêt à venir: on filtre sur l'heure effective (amended si dispo)
       const effectiveMin = (amendedMin != null) ? amendedMin : plannedMin;
       if (nowMin != null && effectiveMin < nowMin) continue;
+      // Voie (si dispo) : résolue à partir de l'heure base / amendée (même logique que le tableau)
+      let voieLabel = null;
+      if (voiesMap && (typeof resolveVoieForStop === 'function')) {
+        const candidates = [];
+        // base/amended brut si dispo
+        if (typeof baseHHMM !== 'undefined' && baseHHMM) candidates.push(baseHHMM);
+        if (typeof amendedHHMM !== 'undefined' && amendedHHMM) candidates.push(amendedHHMM);
+        if (plannedRaw) candidates.push(plannedRaw);
+        // dériver HHMM depuis amendedMin si besoin (ex: GTFS uniquement)
+        if (amendedMin != null) {
+          const hh = Math.floor(amendedMin / 60) % 24;
+          const mm = amendedMin % 60;
+          candidates.push(String(hh).padStart(2,'0') + String(mm).padStart(2,'0'));
+        }
+        voieLabel = resolveVoieForStop({ voiesMap, stopName: name, baseTimeRaw: plannedRaw, timeCandidates: candidates });
+      }
 
-      rows.push({ name, plannedMin, amendedMin, delayMin, effectiveMin });
+      rows.push({ name, plannedMin, amendedMin, delayMin, effectiveMin, voieLabel });
     }
 
     if (!rows.length) return '';
@@ -14795,17 +14812,22 @@ function getGtfsDelayForStop(trainNumber, stopName){
       const hasDelay = (r.delayMin != null && Number.isFinite(r.delayMin) && r.delayMin >= thresholdMin);
       const rtTxt = (r.amendedMin != null) ? minToClock(r.amendedMin) : null;
 
+      // voie (quai) : même badge que le tableau
+      const voie = r.voieLabel ? String(r.voieLabel) : '';
+      const plannedDisp = (voie && typeof formatClockWithVoie === 'function') ? formatClockWithVoie(plannedTxt, voie) : plannedTxt;
+      const rtDisp = (voie && rtTxt && typeof formatClockWithVoie === 'function') ? formatClockWithVoie(rtTxt, voie) : rtTxt;
+
       html += '<div class="fav-next-row">• <span class="fav-stop">' + escapeHtml(r.name) + '</span> ';
 
       if (hasDelay && rtTxt){
-        html += '<span class="fav-time fav-time-planned is-strike">' + plannedTxt + '</span>';
-        html += '<span class="fav-time fav-time-rt delay">' + rtTxt + '</span>';
+        html += '<span class="fav-time fav-time-planned is-strike">' + plannedDisp + '</span>';
+        html += '<span class="fav-time fav-time-rt delay">' + rtDisp + '</span>';
         html += '<span class="fav-delay-pill">(+' + Math.round(r.delayMin) + ' min)</span>';
       } else if (hasDelay && !rtTxt){
-        html += '<span class="fav-time fav-time-planned">' + plannedTxt + '</span>';
+        html += '<span class="fav-time fav-time-planned">' + plannedDisp + '</span>';
         html += '<span class="fav-delay-pill">(+' + Math.round(r.delayMin) + ' min)</span>';
       } else {
-        html += '<span class="fav-time fav-time-planned">' + plannedTxt + '</span>';
+        html += '<span class="fav-time fav-time-planned">' + plannedDisp + '</span>';
       }
 
       html += '</div>';
@@ -14814,6 +14836,7 @@ function getGtfsDelayForStop(trainNumber, stopName){
     html += '</div></div>';
     return html;
   }
+
 
 
 
