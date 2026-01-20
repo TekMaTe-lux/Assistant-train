@@ -4808,6 +4808,18 @@ body.modal-open{ overflow:hidden; }
 
 @media (max-width: 768px){ .fav-grid{ grid-template-columns: 1fr; } }
 
+
+/* Cause perturbation (favoris) */
+.fav-cause-inline{
+  margin: 6px 0 8px 0;
+  padding: 6px 8px;
+  border-radius: 10px;
+  background: rgba(255, 154, 60, .10);
+  border: 1px solid rgba(255, 154, 60, .22);
+  color: #ffb36b;
+  font-weight: 700;
+}
+
 </style>
   <style>
 @supports (-webkit-touch-callout: none) {
@@ -14716,6 +14728,48 @@ function getGtfsDelayForStop(trainNumber, stopName){
   }
 
 
+
+  // Calcule un retard global (max) en minutes pour un train (SNCF impacted/stop_times + merge GTFS)
+  function computeMaxDelayMin(payload, trainNumber){
+    const train = payload?.train || null;
+    const stopTimes = train?.stop_times || [];
+    const impacted = payload?.impacted || {};
+    let maxDelay = null;
+
+    for (const st of stopTimes){
+      const name = st?.stop_point?.name || '';
+      const stopId = st?.stop_point?.id || '';
+      if (!name) continue;
+
+      let delayMin = null;
+      const imp = (stopId && impacted) ? impacted[stopId] : null;
+      if (imp){
+        const dm = (imp?.delay_minutes !== undefined && imp?.delay_minutes !== null) ? Number(imp.delay_minutes) : null;
+        if (Number.isFinite(dm)) delayMin = dm;
+        if (delayMin == null){
+          const amendedHHMM = imp?.amended_departure_time || imp?.amended_arrival_time;
+          const baseHHMM = imp?.base_departure_time || imp?.base_arrival_time;
+          const d = diffMin(baseHHMM, amendedHHMM);
+          if (d != null) delayMin = d;
+        }
+      }
+
+      if (delayMin == null) delayMin = stopDelayMin(st);
+
+      const gtfsDelay = getGtfsDelayForStop(trainNumber, name);
+      if (gtfsDelay != null) delayMin = pickGtfsDelay(delayMin, gtfsDelay);
+
+      if (delayMin == null || !Number.isFinite(Number(delayMin))) continue;
+      const d = Number(delayMin);
+      if (maxDelay == null) maxDelay = d;
+      else maxDelay = pickGtfsDelay(maxDelay, d);
+    }
+
+    // On n'affiche que les retards positifs
+    if (maxDelay == null || !Number.isFinite(Number(maxDelay))) return null;
+    return Number(maxDelay) > 0 ? Math.round(Number(maxDelay)) : null;
+  }
+
   const inferRealtimeStatusFromDisruptions = (payload) => {
     const disruptions = payload?.disruptions || [];
     let hasDelay = false;
@@ -14819,12 +14873,18 @@ function getGtfsDelayForStop(trainNumber, stopName){
     }
 
     if (st.state === 'running') {
-      meta.textContent = `🟢 En circulation • ${origin} → ${dest}`;
+      const maxDelay = computeMaxDelayMin(payload, trainId);
+      if (maxDelay != null && maxDelay >= 5) {
+        meta.textContent = `🟠 En circulation +${maxDelay} min • ${origin} → ${dest}`;
+      } else {
+        meta.textContent = `🟢 En circulation • ${origin} → ${dest}`;
+      }
 
-      // Option A: prochains arrêts + retards live
+      // Option A: prochains arrêts + retards live (avec affichage de la cause si dispo)
       const nextHtml = buildNextStopsHtml(payload, trainId, st.now, 3, 5);
+      const causeHtml = payload?.causeText ? `<div class="fav-cause-inline">⚠️ ${escapeHtml(payload.causeText)}</div>` : '';
       if (nextHtml) {
-        line.innerHTML = nextHtml;
+        line.innerHTML = causeHtml + nextHtml;
       } else {
         const next = (stopTimes || [])
           .map(s => ({
