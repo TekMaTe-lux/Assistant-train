@@ -6009,8 +6009,12 @@ function renderRowsChunked(htmlRows, tbody, chunk=200){
   </div>
 </div>
 
-</body> 
-  
+
+
+
+
+
+
   <script>
 window.__IS_IOS__ = /iPad|iPhone|iPod/.test(navigator.userAgent)
   || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
@@ -10473,8 +10477,27 @@ function vpsVehicleJourneyUrl(date, num) {
 }
 
 // Fetch JSON + lecture du header X-Cache (HIT/MISS/REFRESH) pour debug
-async function fetchJSON(url) {
-  const r = await fetch(url, { credentials: 'omit' });
+async function fetchJSON(url, { timeoutMs = 15000 } = {}) {
+  // Guard léger: nos appels temps-réel doivent passer par le VPS
+  try {
+    const u = String(url || '');
+    const isRealtime = /\/sncf\//.test(u) && /vehicle_journey\//.test(u);
+    if (isRealtime && !u.startsWith('https://vps.labetaillere.fr/')) {
+      throw new Error('URL interdit (court-circuit proxy): ' + u);
+    }
+  } catch(e) {
+    console.warn('[fetchJSON] Guard:', e.message || e);
+    return { ok:false, status:0, data:null, cache:null, error: String(e.message||e) };
+  }
+
+  const controller = new AbortController();
+  const t = setTimeout(() => controller.abort(), timeoutMs);
+  let r;
+  try {
+    r = await fetch(url, { credentials: 'omit', signal: controller.signal });
+  } finally {
+    clearTimeout(t);
+  }
   const data = await r.json().catch(() => null);
   const cache = r.headers.get('x-cache');
   if (cache) console.debug('[SNCF]', cache, url);
@@ -10695,6 +10718,13 @@ function addManualTrain(){
 
   // Bouton “Générer le tableau”
   $('#loadTrains').off('click').on('click', async function () {
+    // Empêche les doubles générations (clics rapides + auto-refresh)
+    if (window.__mainTableBusy) return;
+    window.__mainTableBusy = true;
+    window.__lastMainTableAction = Date.now();
+
+    try {
+
     closeSelectionModal({ restoreFocus:false });
     if (typeof cancelWeatherFetch === 'function') cancelWeatherFetch();
     mainTableRendered = true;
@@ -11522,8 +11552,13 @@ scheduleWeatherAfterTableSettled();
     setTimeout(tryApplyGtfsToCurrentTable, 0);
       } finally {
       GTFSLoadingUI.hide();
+
     }
     // ===== FIN handler "#loadTrains"
+
+    } finally {
+      window.__mainTableBusy = false;
+    }
   });
 
   // Bouton "Actualiser les données" : refetch FRESH puis régénère
@@ -15976,5 +16011,59 @@ function getGtfsDelayForStop(trainNumber, stopName){
   }
 })();
 </script>
+
+
+<!-- ===================== AUTO-REFRESH (table + GTFS-RT) ===================== -->
+<script>
+(function(){
+  const REFRESH_EVERY_MS = 60 * 1000; // 60s
+  let timer = null;
+
+  function hasTrainTable(){
+    return !!document.querySelector('#trainInfo table');
+  }
+
+  async function tick(){
+    try {
+      // Pause si onglet caché
+      if (document.hidden) return;
+
+      // 1) Refresh GTFS-RT (non bloquant)
+      if (typeof loadGtfsRetards === 'function') {
+        await loadGtfsRetards({ forceFresh: false });
+      }
+
+      // 2) Refresh tableau principal si affiché ET date = aujourd'hui
+      if (!hasTrainTable()) return;
+      if (typeof isSelectedDateToday === 'function' && !isSelectedDateToday()) return;
+      if (window.__mainTableBusy) return;
+
+      // Relance la génération via le bouton (rejoue la dernière sélection)
+      const btn = document.getElementById('loadTrains');
+      if (btn) btn.click();
+
+    } catch (e) {
+      // silence
+    }
+  }
+
+  function start(){
+    if (timer) return;
+    timer = setInterval(tick, REFRESH_EVERY_MS);
+  }
+  function stop(){
+    if (!timer) return;
+    clearInterval(timer);
+    timer = null;
+  }
+
+  window.addEventListener('load', start);
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) stop();
+    else start();
+  });
+})();
+</script>
+
 </body>
 </html>
