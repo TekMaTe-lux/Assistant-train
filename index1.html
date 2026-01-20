@@ -15042,6 +15042,22 @@ function getGtfsDelayForStop(trainNumber, stopName){
 
     const st = computeWidgetState(train);
     const stopTimes = st.stopTimes || [];
+
+    // === Correctif LIVE : ne pas marquer "Arrivé" si le train est juste en retard ===
+    // computeWidgetState() se base sur l'horaire théorique. Ici on prolonge la fenêtre "running"
+    // jusqu'à l'heure d'arrivée attendue = arrivée théorique + retard max (SNCF/GTFS).
+    const maxDelay = computeMaxDelayMin(payload, trainId);
+    const effectiveArrLast = (st.arrLast != null && maxDelay != null && Number.isFinite(maxDelay) && maxDelay > 0)
+      ? (st.arrLast + maxDelay)
+      : st.arrLast;
+
+    let widgetState = st.state;
+    if (st.dep0 != null && effectiveArrLast != null && st.now != null) {
+      if (st.now < st.dep0) widgetState = 'before';
+      else if (st.now >= st.dep0 && st.now <= effectiveArrLast) widgetState = 'running';
+      else if (st.now > effectiveArrLast) widgetState = 'after';
+    }
+
     const origin = stopTimes[0]?.stop_point?.name || '—';
     const dest   = stopTimes[stopTimes.length-1]?.stop_point?.name || '—';
     const depTxt = (st.dep0 != null) ? minToClock(st.dep0) : '—';
@@ -15063,7 +15079,7 @@ function getGtfsDelayForStop(trainNumber, stopName){
       return;
     }
 
-    if (st.state === 'before') {
+    if (widgetState === 'before') {
       const mins = Math.max(0, (st.dep0 ?? st.now) - st.now);
       meta.textContent = `⏳ Départ dans : ${formatDurationHM(mins)}`;
       line.textContent = `${origin} ${depTxt} → ${dest} ${arrTxt}`;
@@ -15074,8 +15090,8 @@ function getGtfsDelayForStop(trainNumber, stopName){
       return;
     }
 
-    if (st.state === 'running') {
-      const maxDelay = computeMaxDelayMin(payload, trainId);
+    if (widgetState === 'running') {
+      // maxDelay déjà calculé plus haut (SNCF/GTFS)
 
       // Suppression partielle (même principe que le tableau temps réel)
       const firstId = stopTimes[0]?.stop_point?.id || null;
@@ -15112,10 +15128,28 @@ function getGtfsDelayForStop(trainNumber, stopName){
         }
       }
 
+      // Affichage explicite "prévu" vs "estimé" (retard) — utile surtout pour l'arrivée.
+      // On réutilise les classes déjà existantes (.fav-time-planned.is-strike / .fav-time-rt.delay).
+      let arrivalInfoHtml = '';
+      if (st.arrLast != null && effectiveArrLast != null && effectiveArrLast !== st.arrLast) {
+        const baseArr = minToClock(st.arrLast);
+        const estArr  = minToClock(effectiveArrLast);
+        const d = Math.max(1, Math.round(effectiveArrLast - st.arrLast));
+        arrivalInfoHtml = `
+          <div class="fav-box fav-box-info" style="margin-top:8px;">
+            <div class="fav-box-title">🕒 Arrivée</div>
+            <div class="fav-box-body">
+              <span class="fav-time fav-time-planned is-strike">${escapeHtml(baseArr)}</span>
+              <span class="fav-time fav-time-rt delay">${escapeHtml(estArr)}</span>
+              <span class="fav-delay-pill">+${d} min</span>
+            </div>
+          </div>`;
+      }
+
       // Option A: prochains arrêts + retards live (avec affichage de la cause si dispo)
       const nextHtml = buildNextStopsHtml(payload, trainId, st.now, 3, 5);
       if (nextHtml) {
-        line.innerHTML = nextHtml;
+        line.innerHTML = `${arrivalInfoHtml}${nextHtml}`;
       } else {
         const next = (stopTimes || [])
           .map(s => ({
@@ -15124,9 +15158,11 @@ function getGtfsDelayForStop(trainNumber, stopName){
           }))
           .filter(x => x.t != null && x.t >= st.now)
           .slice(0, 3);
-        line.textContent = next.length
-          ? `Prochains: ${next.map(x => `${x.name} ${minToClock(x.t)}`).join(' • ')}`
-          : `Départ ${depTxt} • Arrivée ${arrTxt}`;
+        if (next.length) {
+          line.innerHTML = `${arrivalInfoHtml}<div class="fav-next"><div class="fav-next-title">⏱️ Prochains arrêts :</div>${next.map(x => `<div class="fav-next-row"><span class="fav-stop">${escapeHtml(x.name)}</span><span class="fav-time">${escapeHtml(minToClock(x.t))}</span></div>`).join('')}</div>`;
+        } else {
+          line.innerHTML = `${arrivalInfoHtml}<div class="fav-next"><div class="fav-next-row"><span class="fav-route">${escapeHtml(origin)} → ${escapeHtml(dest)}</span></div><div class="fav-next-row">Départ ${escapeHtml(depTxt)} • Arrivée ${escapeHtml(arrTxt)}</div></div>`;
+        }
       }
 
       if (statsEl){
@@ -15136,10 +15172,18 @@ function getGtfsDelayForStop(trainNumber, stopName){
       return;
     }
 
-    if (st.state === 'after') {
+    if (widgetState === 'after') {
       if (causeEl){ causeEl.innerHTML = ''; causeEl.style.display = 'none'; }
+      // Si le train a eu du retard, on l'affiche explicitement (prévu vs constaté/estimé)
+      let arrivedHtml = '';
+      if (st.arrLast != null && effectiveArrLast != null && effectiveArrLast !== st.arrLast) {
+        const baseArr = minToClock(st.arrLast);
+        const realArr = minToClock(effectiveArrLast);
+        const d = Math.max(1, Math.round(effectiveArrLast - st.arrLast));
+        arrivedHtml = `Arrivé : <span class="fav-time fav-time-planned is-strike">${escapeHtml(baseArr)}</span> <span class="fav-time fav-time-rt delay">${escapeHtml(realArr)}</span> <span class="fav-delay-pill">+${d} min</span><br>`;
+      }
       meta.textContent = `Arrivé`;
-      line.innerHTML = `Prochain : demain<br>${escapeHtml(origin)} ${depTxt} → ${escapeHtml(dest)} ${arrTxt}`;
+      line.innerHTML = `${arrivedHtml}Prochain : demain<br>${escapeHtml(origin)} ${depTxt} → ${escapeHtml(dest)} ${arrTxt}`;
       if (statsEl){
         renderFavStats(kind, trainId).catch(()=>{});
       }
