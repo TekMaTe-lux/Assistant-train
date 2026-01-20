@@ -14733,25 +14733,79 @@ function getGtfsDelayForStop(trainNumber, stopName){
   };
 
   const renderFavCard = (kind, trainId, payload) => {
-    const title = document.getElementById(kind === 'AM' ? 'favTrainAM' : 'favTrainPM');
-    const meta  = document.getElementById(kind === 'AM' ? 'favMetaAM'  : 'favMetaPM');
-    const line  = document.getElementById(kind === 'AM' ? 'favLineAM'  : 'favLinePM');
+    const title   = document.getElementById(kind === 'AM' ? 'favTrainAM' : 'favTrainPM');
+    const meta    = document.getElementById(kind === 'AM' ? 'favMetaAM'  : 'favMetaPM');
+    const line    = document.getElementById(kind === 'AM' ? 'favLineAM'  : 'favLinePM');
     const causeEl = document.getElementById(kind === 'AM' ? 'favCauseAM' : 'favCausePM');
     const statsEl = document.getElementById(kind === 'AM' ? 'favStatsAM' : 'favStatsPM');
+    const card    = document.getElementById(kind === 'AM' ? 'favCardAM'  : 'favCardPM');
+
     // mémorise l'état ouvert/fermé (évite de se refermer à chaque refresh)
     if (statsEl && !statsEl.__lbBound){
       statsEl.__lbBound = true;
       statsEl.addEventListener('toggle', ()=>{ if (statsEl.open) statsEl.setAttribute('data-user-opened','1'); });
     }
-    const card = document.getElementById(kind === 'AM' ? 'favCardAM' : 'favCardPM');
+
     if (!title || !meta || !line) return;
-    if (causeEl) causeEl.textContent = '';
-          // Stats: affichées via un bandeau repliable (n'encombre pas la vue)
+
+    // reset visuel
+    if (card) card.classList.remove('is-canceled');
+    title.textContent = trainId || '—';
+    if (causeEl) { causeEl.textContent = ''; causeEl.style.display = ''; }
+    meta.textContent = '';
+    line.textContent = '';
+
+    // rien de sélectionné
+    if (!trainId){
+      meta.textContent = '➡️ Choisis un train dans tes préférences.';
+      if (statsEl){ statsEl.open = false; }
+      return;
+    }
+
+    // erreur API
+    if (payload?.error){
+      meta.textContent = `🚫 ${payload.error}`;
       if (statsEl){
         renderFavStats(kind, trainId).catch(()=>{});
         if (!statsEl.hasAttribute('data-user-opened')) statsEl.open = false;
       }
       return;
+    }
+
+    const train = payload?.train;
+    if (!train){
+      meta.textContent = '🚫 Données indisponibles.';
+      return;
+    }
+
+    const st = computeWidgetState(train);
+    const stopTimes = st.stopTimes || [];
+    const origin = stopTimes[0]?.stop_point?.name || '—';
+    const dest   = stopTimes[stopTimes.length-1]?.stop_point?.name || '—';
+    const depTxt = (st.dep0 != null) ? minToClock(st.dep0) : '—';
+    const arrTxt = (st.arrLast != null) ? minToClock(st.arrLast) : '—';
+
+    // perturbations / suppression temps réel
+    const rtStatus = inferRealtimeStatusFromDisruptions(payload);
+    const causeText = (payload?.causeText || '').trim();
+
+    if (rtStatus === 'canceled') {
+      if (card) card.classList.add('is-canceled');
+      meta.innerHTML = `<span class="fav-cancel-badge">✖ BÉTAILLÈRE SUPPRIMÉE</span> <span style="opacity:.9;">• ${escapeHtml(origin)} → ${escapeHtml(dest)}</span>`;
+      line.innerHTML = `<div class="fav-cause">⚠️ ${escapeHtml(causeText || 'Suppression signalée')}</div>`;
+
+      if (statsEl){
+        renderFavStats(kind, trainId).catch(()=>{});
+        if (!statsEl.hasAttribute('data-user-opened')) statsEl.open = false;
+      }
+      return;
+    }
+
+    // si retard signalé / cause dispo
+    if (causeText && causeEl){
+      causeEl.textContent = causeText;
+      // style simple: orange uniquement si retard détecté
+      if (rtStatus === 'delayed') causeEl.style.color = 'var(--warn, #ffb14a)';
     }
 
     if (st.state === 'before') {
@@ -14767,28 +14821,23 @@ function getGtfsDelayForStop(trainNumber, stopName){
     if (st.state === 'running') {
       meta.textContent = `🟢 En circulation • ${origin} → ${dest}`;
 
-      // Option A: on affiche les prochains arrêts, avec retard live (>= +5 min) directement après l'horaire prévu.
-      // - horaire prévu barré (gris)
-      // - horaire temps réel en orange + (+X min)
+      // Option A: prochains arrêts + retards live
       const nextHtml = buildNextStopsHtml(payload, trainId, st.now, 3, 5);
       if (nextHtml) {
         line.innerHTML = nextHtml;
       } else {
-        // fallback simple si on n'a pas assez d'infos
-        const next = (st.stopTimes || [])
+        const next = (stopTimes || [])
           .map(s => ({
             name: s.stop_point?.name || '',
             t: hhmmRawToMin(s.arrival_time || s.departure_time)
           }))
           .filter(x => x.t != null && x.t >= st.now)
           .slice(0, 3);
-
         line.textContent = next.length
           ? `Prochains: ${next.map(x => `${x.name} ${minToClock(x.t)}`).join(' • ')}`
           : `Départ ${depTxt} • Arrivée ${arrTxt}`;
       }
 
-      // Stats: affichées via un bandeau repliable (n'encombre pas la vue)
       if (statsEl){
         renderFavStats(kind, trainId).catch(()=>{});
         if (!statsEl.hasAttribute('data-user-opened')) statsEl.open = false;
