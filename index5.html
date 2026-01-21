@@ -9439,8 +9439,6 @@ function escapeHtml(str){
   })[ch] || ch);
 }
 
-function escapeAttr(str){ return escapeHtml(str); }
-
 async function buildGtfsFallbackResult(number, { ymd } = {}){
   const normalized = extractTrainNumber(number);
   if (!normalized) return null;
@@ -11374,7 +11372,6 @@ const stopHasSchedule = (result, stopName) => {
         const baseClock = ft(base);
         const baseWithVoie = base ? formatClockWithVoie(baseClock, voieLabel) : '';
 
-        const baseHtml = base ? `<span class=\"base-time\" data-train-number=\"${escapeAttr(num)}\" data-stop-name=\"${escapeAttr(stopName)}\" data-base-time=\"${escapeAttr(base)}\">${baseWithVoie || baseClock}</span>` : '';
         // statuts
         const departureDeleted = imp?.departure_status === 'deleted';
         const arrivalDeleted   = imp?.arrival_status === 'deleted';
@@ -11410,7 +11407,7 @@ const stopHasSchedule = (result, stopName) => {
           continue;
         }
 
-        let content = baseHtml || baseClock;
+        let content = baseWithVoie || baseClock;
 
         const isFirstStop = stopName === result.train.stop_times[0]?.stop_point?.name;
         const isLastStop  = stopName === result.train.stop_times[result.train.stop_times.length - 1]?.stop_point?.name;
@@ -11429,9 +11426,9 @@ const stopHasSchedule = (result, stopName) => {
           const hasAmended = !!amended;
           const hasBase = !!base;
           const diffMinutes = (hasAmended && hasBase) ? dl(base, amended) : null;
-          const mainTimeRaw = hasAmended && (!hasBase || diffMinutes !== 0) ? ft(amended) : (baseHtml || baseClock);
+          const mainTimeRaw = hasAmended && (!hasBase || diffMinutes !== 0) ? ft(amended) : (baseWithVoie || baseClock);
           const baseStrike = (hasAmended && hasBase && diffMinutes > 0)
-            ? `<span class="delay-strike">${baseHtml || baseClock}</span><br>`
+            ? `<span class="delay-strike">${baseWithVoie || baseClock}</span><br>`
             : '';
           content = `${baseStrike}<span class="new-start">${mainTimeRaw}</span>`;   
         } else if (
@@ -11441,12 +11438,12 @@ const stopHasSchedule = (result, stopName) => {
         ) {
           content = `<span class="deleted">${content}</span>`;
         } else if (amended && dl(base, amended) > 0) {
-          content = `<span class="delay-strike">${baseHtml || baseClock}</span><br><span class="delayed">${ft(amended)}</span>`;
+          content = `<span class="delay-strike">${baseWithVoie || baseClock}</span><br><span class="delayed">${ft(amended)}</span>`;
           } else if (hasDelayFromImpact) {
           const roundedDelay = Math.round(delayFromImpactRaw);
           const fallbackClock = base ? computeRetardedTime(base, delayFromImpactRaw) : null;
           const delayLabel = fallbackClock ? fallbackClock : `+${roundedDelay} min`;
-          const baseStrike = base ? `<span class="delay-strike">${baseHtml || baseClock}</span><br>` : '';
+          const baseStrike = base ? `<span class="delay-strike">${baseWithVoie || baseClock}</span><br>` : '';
           content = `${baseStrike}<span class="delayed">${delayLabel}</span>`;
         } else if (isFirstStop || isLastStop) {
           content = `<strong>${content}</strong>`;
@@ -16517,7 +16514,31 @@ function getGtfsDelayForStop(trainNumber, stopName){
     return true;
   }
 
-  async function tickRetards(){
+  async 
+  // --- Live refresh anti-flash (voies) ---
+  function smartRefreshMainTableForVoies(){
+    const btn = document.getElementById('loadTrains');
+    if (!btn) return;
+
+    // Préserve le scroll du conteneur tableau si possible
+    const container = document.getElementById('trainInfo') || document.scrollingElement || document.documentElement;
+    const prevScrollTop = container ? container.scrollTop : null;
+
+    // Marqueur: auto-refresh (permet d'éventuels guards ailleurs)
+    window.__autoVoiesRefresh = true;
+
+    // Déclenche la régénération existante (tu as déjà toute la logique de réinjection des voies dans le rendu)
+    try { btn.click(); } catch(e) {}
+
+    // Restaure scroll après paint (2 rafales pour être sûr)
+    setTimeout(() => {
+      try {
+        if (container && prevScrollTop != null) container.scrollTop = prevScrollTop;
+      } catch(e){}
+      window.__autoVoiesRefresh = false;
+    }, 120);
+  }
+async function tickRetards(){
     try {
       if (!canLive()) return;
       if (typeof loadGtfsRetards === 'function') {
@@ -16526,48 +16547,8 @@ function getGtfsDelayForStop(trainNumber, stopName){
       }
     } catch(e){}
   }
-  // Mise à jour IN-PLACE des voies (pas de rebuild -> pas de flash)
-  function updateVoiesInTrainTable(){
-    const host = document.getElementById('trainInfo');
-    const table = host ? host.querySelector('table') : null;
-    if (!table) return;
 
-    const nodes = table.querySelectorAll('span.base-time[data-train-number][data-stop-name][data-base-time]');
-    for (const el of nodes){
-      const trainNumber = el.getAttribute('data-train-number') || '';
-      const stopName = el.getAttribute('data-stop-name') || '';
-      const base = el.getAttribute('data-base-time') || '';
-      if (!trainNumber || !stopName || !base) continue;
-
-      const voiesMap = (typeof getVoiesForTrain === 'function') ? getVoiesForTrain(trainNumber) : (window.voiesByTrainMap || null);
-      let voieLabel = null;
-
-      try{
-        if (voiesMap && typeof resolveVoieForStop === 'function'){
-          voieLabel = resolveVoieForStop({
-            voiesMap,
-            stopName,
-            baseTimeRaw: base,
-            timeCandidates: [base]
-          });
-        }
-        if (!voieLabel && typeof resolveCflVoieForStop === 'function'){
-          voieLabel = resolveCflVoieForStop({ voiesMap: window.cflVoiesByTrainMap || voiesMap, stopName });
-        }
-      } catch(e){ voieLabel = null; }
-
-      const baseClock = (typeof ft === 'function') ? ft(base) : base;
-      if (voieLabel && typeof formatClockWithVoie === 'function'){
-        el.innerHTML = formatClockWithVoie(baseClock, voieLabel);
-      } else {
-        el.textContent = baseClock;
-      }
-    }
-  }
-
-
-
-  async function tickVoies(){
+  async async function tickVoies(){
     try {
       if (!canLive()) return;
       if (typeof loadVoiesByTrain !== 'function') return;
@@ -16579,11 +16560,11 @@ function getGtfsDelayForStop(trainNumber, stopName){
       // Si rien n'a changé, on ne touche pas au DOM
       if (!changed) return;
 
-      // Si un tableau est affiché, on met à jour IN-PLACE (pas de flash)
+      // Si un tableau est affiché, on regénère UNE FOIS (pour réinjecter les voies)
       if (!hasTrainTable()) return;
       if (window.__mainTableBusy) return;
-
-      if (typeof updateVoiesInTrainTable === 'function') updateVoiesInTrainTable();
+      // Auto-update voies: éviter F5. On tente un refresh doux du tableau si présent.
+      smartRefreshMainTableForVoies();
 
       // Met aussi à jour les favoris (ils affichent des voies)
       if (typeof window.updateFavoriteWidgetFromPrefs === 'function') {
@@ -16594,8 +16575,8 @@ function getGtfsDelayForStop(trainNumber, stopName){
   }
 
   function start(){
-    if (!tRetards) tRetards = setInterval(tickRetards, RETARDS_MS);
-    if (!tVoies)   tVoies   = setInterval(tickVoies,   VOIES_MS);
+    if (!tRetards) tRetards = setInterval(() => { tickRetards().catch(()=>{}); }, RETARDS_MS);
+    if (!tVoies)   tVoies   = setInterval(() => { tickVoies().catch(()=>{}); }, VOIES_MS);
   }
   function stop(){
     if (tRetards){ clearInterval(tRetards); tRetards = null; }
@@ -16605,8 +16586,8 @@ function getGtfsDelayForStop(trainNumber, stopName){
   window.addEventListener('load', () => {
     start();
     // 1ère synchro immédiate
-    tickRetards();
-    tickVoies();
+    tickRetards().catch(()=>{});
+    tickVoies().catch(()=>{});
   });
 
   document.addEventListener('visibilitychange', () => {
