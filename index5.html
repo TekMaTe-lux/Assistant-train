@@ -4733,30 +4733,80 @@ body.modal-open{ overflow:hidden; }
 .fav-pct{ font-weight:900; }
 .fav-details-body{ padding:8px 10px; border-top: 1px solid rgba(255,255,255,.08); font-size:.82rem; color: rgba(210,240,255,.92); line-height:1.35; }
 
-/* ===== Favoris compact : lisibilité mobile + horaires en colonne dans les détails ===== */
-.fav-next-row{ display:flex; gap:10px; align-items:baseline; flex-wrap:wrap; }
+/* ===== Favoris compact : lisibilité mobile + anti-débordement ===== */
+.fav-next-row{
+  display:flex;
+  align-items:center;
+  gap:10px;
+  min-width:0;
+}
 
-.fav-stopwrap{display:inline-flex;align-items:center;gap:8px;min-width:0;flex:1 1 auto;overflow:hidden;}
-.fav-stopwrap.deleted{color:#ff9a9a;}
-.fav-timecell{margin-left:auto;white-space:nowrap;text-align:right;}
-
-.fav-stopwrap{ display:inline-flex; align-items:center; gap:8px; min-width:0; flex:1 1 auto; overflow:hidden; }
-.fav-timecell{ margin-left:auto; text-align:right; white-space:nowrap; }
+/* 3 colonnes : heure / texte / voie */
+.fav-timecell{
+  flex:0 0 6.2ch;
+  min-width:6.2ch;
+  white-space:nowrap;
+  text-align:left;
+}
+.fav-stopwrap{
+  flex:1 1 auto;
+  min-width:0;
+  display:flex;
+  align-items:center;
+  gap:8px;
+  overflow:hidden;
+}
+.fav-stop{
+  min-width:0;
+  font-weight:800;
+  display:inline-block;
+  white-space:nowrap;
+  overflow:hidden;
+  text-overflow:ellipsis;
+}
+.fav-voiecell{
+  flex:0 0 auto;
+  white-space:nowrap;
+}
 .fav-stopwrap .voie-badge{ margin-left:0 !important; }
 
-.fav-next-row.is-past{ opacity:.55; }
-.fav-stop{ min-width:10ch; font-weight:800; }
+.fav-stopwrap.deleted{ color:#ff9a9a; }
 .fav-next-row.deleted .fav-stop{ color:#ff9a9a; text-decoration:line-through; }
+.fav-next-row.is-past{ opacity:.55; }
 
-.fav-time-wrap{ display:inline-flex; gap:8px; align-items:baseline; }
+.fav-time-wrap{ display:inline-flex; gap:8px; align-items:baseline; white-space:nowrap; }
 .fav-time-rt.delay{ color:#ffb36b; font-weight:900; }
 .fav-time-planned.is-strike{ text-decoration:line-through; opacity:.75; }
 .fav-time-rt.deleted-label{ margin-left:8px; color:#ff6b6b; font-weight:900; }
 
 /* Détails : horaires l'un sous l'autre */
 .fav-stops-expanded .fav-next-row{ align-items:flex-start; }
-.fav-stops-expanded .fav-time-wrap{ display:flex; flex-direction:column; gap:2px; line-height:1.05; }
-.fav-stops-expanded .fav-time-planned{ opacity:.92; }
+.fav-stops-expanded .fav-time-wrap{
+  display:flex;
+  flex-direction:column;
+  gap:2px;
+  align-items:flex-start;
+}
+.fav-stops-expanded .fav-stop{
+  white-space:normal;
+  overflow:visible;
+  text-overflow:clip;
+}
+
+/* Mobile : compacter les tailles inline (évite le wrap + débordements) */
+@media (max-width: 480px){
+  .fav-widget, .fav-card{ max-width:100%; overflow:hidden; }
+  .fav-tag{ font-size:.78rem; padding:3px 9px; }
+  .fav-train{ font-size:1.25rem; }
+  .fav-meta{ font-size:.88rem; }
+  .fav-line{ font-size:.88rem; }
+  .fav-details-summary{ font-size:.78rem; }
+
+  /* Override des tailles mises en inline dans le JS */
+  .fav-meta div[style*="font-size:1.18rem"]{ font-size:1.02rem !important; }
+  .fav-meta div[style*="font-size:1.55rem"]{ font-size:1.28rem !important; letter-spacing:0 !important; }
+}
+
 
 /* Compact : tout sur une ligne (même sur mobile) */
 .fav-stops-compact .fav-next-row{ flex-wrap:nowrap; }
@@ -6491,18 +6541,6 @@ function resolveVoieForStop({ voiesMap, stopName, baseTimeRaw, timeCandidates })
   }
   return null;
 }
-
-function resolveUnifiedVoie({ voiesMap, cflVoiesMap, stopName, baseTimeRaw, timeCandidates }){
-  let voie = null;
-  if (voiesMap && typeof resolveVoieForStop === 'function'){
-    voie = resolveVoieForStop({ voiesMap, stopName, baseTimeRaw, timeCandidates });
-  }
-  if (!voie && cflVoiesMap && typeof resolveCflVoieForStop === 'function'){
-    voie = resolveCflVoieForStop({ voiesMap: cflVoiesMap, stopName });
-  }
-  return voie;
-}
-
 
 function formatVoieLabel(raw){
   const val = String(raw || '').trim();
@@ -15067,7 +15105,7 @@ function getGtfsDelayForStop(trainNumber, stopName){
 
       // Voie (si dispo) : résolue à partir de l'heure base / amendée (même logique que le tableau)
       let voieLabel = null;
-      if ((voiesMap instanceof Map) || (payload?.cflVoies instanceof Map) || (payload?.voies instanceof Map)) {
+      if (voiesMap && (typeof resolveVoieForStop === 'function')) {
         const candidates = [];
         if (baseHHMM) candidates.push(baseHHMM);
         if (amendedHHMM) candidates.push(amendedHHMM);
@@ -15077,8 +15115,15 @@ function getGtfsDelayForStop(trainNumber, stopName){
           const mm = amendedMin % 60;
           candidates.push(String(hh).padStart(2,'0') + String(mm).padStart(2,'0'));
         }  
-        
-        voieLabel = resolveUnifiedVoie({ voiesMap, cflVoiesMap: (payload?.cflVoies || payload?.voies || voiesMap), stopName: name, baseTimeRaw: plannedRaw, timeCandidates: candidates });
+        if (amendedMin != null) {
+          const hh = Math.floor(amendedMin / 60) % 24;
+          const mm = amendedMin % 60;
+          candidates.push(String(hh).padStart(2,'0') + String(mm).padStart(2,'0'));
+        }
+        voieLabel = resolveVoieForStop({ voiesMap, stopName: name, baseTimeRaw: plannedRaw, timeCandidates: candidates });
+      }
+	if (!voieLabel && cflVoiesMap && typeof resolveCflVoieForStop === 'function') {
+        voieLabel = resolveCflVoieForStop({ voiesMap: cflVoiesMap, stopName: name });
       }
 
       rows.push({ name, plannedMin, amendedMin, delayMin, effectiveMin, voieLabel, isStopDeleted });
@@ -15195,6 +15240,7 @@ function getGtfsDelayForStop(trainNumber, stopName){
     const stopTimes = train?.stop_times || [];
     const impacted = payload?.impacted || {};
     const voiesMap = (typeof getVoiesForTrain === 'function') ? getVoiesForTrain(trainNumber) : null;
+	const cflVoiesMap = (typeof getCflVoiesForTrain === 'function') ? getCflVoiesForTrain(trainNumber) : null;
 
     const toHHMM = (t) => {
       if (!t) return null;
@@ -15263,7 +15309,7 @@ function getGtfsDelayForStop(trainNumber, stopName){
       const effectiveMin = (amendedMin != null) ? amendedMin : plannedMin;
 
       let voieLabel = null;
-      if ((voiesMap instanceof Map) || (payload?.cflVoies instanceof Map) || (payload?.voies instanceof Map)) {
+      if (voiesMap && typeof resolveVoieForStop === 'function'){
         const candidates = [
           imp?.base_departure_time,
           imp?.base_arrival_time,
@@ -15280,8 +15326,11 @@ function getGtfsDelayForStop(trainNumber, stopName){
           const mm = amendedMin % 60;
           candidates.push(String(hh).padStart(2,'0') + String(mm).padStart(2,'0'));
         }
-        voieLabel = resolveUnifiedVoie({ voiesMap, cflVoiesMap: (payload?.cflVoies || payload?.voies || voiesMap), stopName: name, baseTimeRaw: plannedRaw, timeCandidates: candidates });
-    }
+        voieLabel = resolveVoieForStop({ voiesMap, stopName: name, baseTimeRaw: plannedRaw, timeCandidates: candidates });
+      }
+      if (!voieLabel && cflVoiesMap && typeof resolveCflVoieForStop === 'function') {
+        voieLabel = resolveCflVoieForStop({ voiesMap: cflVoiesMap, stopName: name });
+      }
 
       rows.push({ name, plannedMin, amendedMin, effectiveMin, voieLabel, isDeleted });
     }
@@ -15475,21 +15524,32 @@ function getGtfsDelayForStop(trainNumber, stopName){
     const origin = stopTimes[0]?.stop_point?.name || '—';
     const dest   = stopTimes[stopTimes.length-1]?.stop_point?.name || '—';
 
-    const depTxt = (st.dep0 != null) ? minToClock(st.dep0) : '—';
-    const arrTxt = (st.arrLast != null) ? minToClock(st.arrLast) : '—';
+    const stopRows = buildFavStopRows(payload, trainId);
+    const firstRow = stopRows[0] || null;
+    const lastRow = stopRows[stopRows.length - 1] || null;
+
+    const plannedDepMin = (firstRow && firstRow.plannedMin != null) ? firstRow.plannedMin : st.dep0;
+    const amendedDepMin = (firstRow && firstRow.amendedMin != null) ? firstRow.amendedMin : null;
+    const depDeleted = Boolean(firstRow && firstRow.isDeleted);
+
+    const plannedArrMin = (lastRow && lastRow.plannedMin != null) ? lastRow.plannedMin : st.arrLast;
+    const amendedArrMin = (lastRow && lastRow.amendedMin != null) ? lastRow.amendedMin : null;
+    const arrDeleted = Boolean(lastRow && lastRow.isDeleted);
+
+    const depTxt = (plannedDepMin != null) ? minToClock(plannedDepMin) : '—';
+    const arrTxt = (plannedArrMin != null) ? minToClock(plannedArrMin) : '—';
 
     const rtStatus = inferRealtimeStatusFromDisruptions(payload);
     const causeText = (payload?.causeText || '').trim();
 
     const maxDelay = computeMaxDelayMin(payload, trainId);
-    const effectiveArrLast = (st.arrLast != null && maxDelay != null && Number.isFinite(maxDelay) && maxDelay > 0)
-      ? (st.arrLast + maxDelay)
-      : st.arrLast;
+    const effectiveDepMin = (amendedDepMin != null) ? amendedDepMin : plannedDepMin;
+    const effectiveArrLast = (amendedArrMin != null) ? amendedArrMin : plannedArrMin;
 
     let widgetState = st.state;
-    if (st.dep0 != null && effectiveArrLast != null && st.now != null) {
-      if (st.now < st.dep0) widgetState = 'before';
-      else if (st.now >= st.dep0 && st.now <= effectiveArrLast) widgetState = 'running';
+    if (effectiveDepMin != null && effectiveArrLast != null && st.now != null) {
+      if (st.now < effectiveDepMin) widgetState = 'before';
+      else if (st.now >= effectiveDepMin && st.now <= effectiveArrLast) widgetState = 'running';
       else if (st.now > effectiveArrLast) widgetState = 'after';
     }
 	const stateBadge = buildWidgetStateBadge(widgetState);  
@@ -15538,11 +15598,18 @@ function getGtfsDelayForStop(trainNumber, stopName){
     } catch(e) {}
     const isPartialAny = isPartial || hasDeletedStop;
 
-    // horaires : uniquement barré + estimé
-    let timesHtml = `${escapeHtml(depTxt)} → ${escapeHtml(arrTxt)}`;
-    if (st.arrLast != null && effectiveArrLast != null && effectiveArrLast !== st.arrLast){
-      timesHtml = `${escapeHtml(depTxt)} → <span class="fav-time fav-time-planned is-strike">${escapeHtml(arrTxt)}</span> <span class="fav-time fav-time-rt delay">${escapeHtml(minToClock(effectiveArrLast))}</span>`;
-    }
+    const formatHeaderTime = (plannedMin, amendedMin, isDeleted) => {
+      const plannedTxt = (plannedMin != null) ? minToClock(plannedMin) : '—';
+      if (isDeleted) {
+        return `<span class="fav-time fav-time-planned is-strike deleted">${escapeHtml(plannedTxt)}</span> <span class="fav-time fav-time-rt deleted-label">supprimé</span>`;
+      }
+      if (plannedMin != null && amendedMin != null && amendedMin !== plannedMin) {
+        return `<span class="fav-time fav-time-planned is-strike">${escapeHtml(plannedTxt)}</span> <span class="fav-time fav-time-rt delay">${escapeHtml(minToClock(amendedMin))}</span>`;
+      }
+      return `<span class="fav-time fav-time-planned">${escapeHtml(plannedTxt)}</span>`;
+    };
+
+    let timesHtml = `${formatHeaderTime(plannedDepMin, amendedDepMin, depDeleted)} → ${formatHeaderTime(plannedArrMin, amendedArrMin, arrDeleted)}`;
 
     meta.innerHTML = `
       <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
@@ -15565,7 +15632,7 @@ function getGtfsDelayForStop(trainNumber, stopName){
     }
 
     // Progression (visuel)
-    const pct = (widgetState === 'before') ? 0 : (widgetState === 'after' ? 100 : computeProgressPct(st.dep0, effectiveArrLast, st.now));
+    const pct = (widgetState === 'before') ? 0 : (widgetState === 'after' ? 100 : computeProgressPct(effectiveDepMin, effectiveArrLast, st.now));
     const progressHtml = `
       <div style="margin:12px 0 10px 0;">
         <div style="height:6px;border-radius:999px;overflow:hidden;background:rgba(255,255,255,.08);box-shadow:inset 0 0 0 1px rgba(0,255,255,.12);">
@@ -15659,6 +15726,9 @@ function getGtfsDelayForStop(trainNumber, stopName){
     // S'assurer que les voies (quais) sont à jour (live léger)
     if (typeof loadVoiesByTrain === 'function') {
       try { await loadVoiesByTrain({ forceFresh: false, onlyIfChanged: true }); } catch(e) {}
+    }
+	if (typeof loadCflVoiesByTrain === 'function') {
+      try { await loadCflVoiesByTrain({ forceFresh: false }); } catch(e) {}
     }
 
     const prefs = window.lbPrefsCache || null;
