@@ -15467,21 +15467,32 @@ function getGtfsDelayForStop(trainNumber, stopName){
     const origin = stopTimes[0]?.stop_point?.name || '—';
     const dest   = stopTimes[stopTimes.length-1]?.stop_point?.name || '—';
 
-    const depTxt = (st.dep0 != null) ? minToClock(st.dep0) : '—';
-    const arrTxt = (st.arrLast != null) ? minToClock(st.arrLast) : '—';
+    const stopRows = buildFavStopRows(payload, trainId);
+    const firstRow = stopRows[0] || null;
+    const lastRow = stopRows[stopRows.length - 1] || null;
+
+    const plannedDepMin = (firstRow && firstRow.plannedMin != null) ? firstRow.plannedMin : st.dep0;
+    const amendedDepMin = (firstRow && firstRow.amendedMin != null) ? firstRow.amendedMin : null;
+    const depDeleted = Boolean(firstRow && firstRow.isDeleted);
+
+    const plannedArrMin = (lastRow && lastRow.plannedMin != null) ? lastRow.plannedMin : st.arrLast;
+    const amendedArrMin = (lastRow && lastRow.amendedMin != null) ? lastRow.amendedMin : null;
+    const arrDeleted = Boolean(lastRow && lastRow.isDeleted);
+
+    const depTxt = (plannedDepMin != null) ? minToClock(plannedDepMin) : '—';
+    const arrTxt = (plannedArrMin != null) ? minToClock(plannedArrMin) : '—';
 
     const rtStatus = inferRealtimeStatusFromDisruptions(payload);
     const causeText = (payload?.causeText || '').trim();
 
     const maxDelay = computeMaxDelayMin(payload, trainId);
-    const effectiveArrLast = (st.arrLast != null && maxDelay != null && Number.isFinite(maxDelay) && maxDelay > 0)
-      ? (st.arrLast + maxDelay)
-      : st.arrLast;
+    const effectiveDepMin = (amendedDepMin != null) ? amendedDepMin : plannedDepMin;
+    const effectiveArrLast = (amendedArrMin != null) ? amendedArrMin : plannedArrMin;
 
     let widgetState = st.state;
-    if (st.dep0 != null && effectiveArrLast != null && st.now != null) {
-      if (st.now < st.dep0) widgetState = 'before';
-      else if (st.now >= st.dep0 && st.now <= effectiveArrLast) widgetState = 'running';
+    if (effectiveDepMin != null && effectiveArrLast != null && st.now != null) {
+      if (st.now < effectiveDepMin) widgetState = 'before';
+      else if (st.now >= effectiveDepMin && st.now <= effectiveArrLast) widgetState = 'running';
       else if (st.now > effectiveArrLast) widgetState = 'after';
     }
 	const stateBadge = buildWidgetStateBadge(widgetState);  
@@ -15530,11 +15541,18 @@ function getGtfsDelayForStop(trainNumber, stopName){
     } catch(e) {}
     const isPartialAny = isPartial || hasDeletedStop;
 
-    // horaires : uniquement barré + estimé
-    let timesHtml = `${escapeHtml(depTxt)} → ${escapeHtml(arrTxt)}`;
-    if (st.arrLast != null && effectiveArrLast != null && effectiveArrLast !== st.arrLast){
-      timesHtml = `${escapeHtml(depTxt)} → <span class="fav-time fav-time-planned is-strike">${escapeHtml(arrTxt)}</span> <span class="fav-time fav-time-rt delay">${escapeHtml(minToClock(effectiveArrLast))}</span>`;
-    }
+    const formatHeaderTime = (plannedMin, amendedMin, isDeleted) => {
+      const plannedTxt = (plannedMin != null) ? minToClock(plannedMin) : '—';
+      if (isDeleted) {
+        return `<span class="fav-time fav-time-planned is-strike deleted">${escapeHtml(plannedTxt)}</span> <span class="fav-time fav-time-rt deleted-label">supprimé</span>`;
+      }
+      if (plannedMin != null && amendedMin != null && amendedMin !== plannedMin) {
+        return `<span class="fav-time fav-time-planned is-strike">${escapeHtml(plannedTxt)}</span> <span class="fav-time fav-time-rt delay">${escapeHtml(minToClock(amendedMin))}</span>`;
+      }
+      return `<span class="fav-time fav-time-planned">${escapeHtml(plannedTxt)}</span>`;
+    };
+
+    let timesHtml = `${formatHeaderTime(plannedDepMin, amendedDepMin, depDeleted)} → ${formatHeaderTime(plannedArrMin, amendedArrMin, arrDeleted)}`;
 
     meta.innerHTML = `
       <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
@@ -15557,7 +15575,7 @@ function getGtfsDelayForStop(trainNumber, stopName){
     }
 
     // Progression (visuel)
-    const pct = (widgetState === 'before') ? 0 : (widgetState === 'after' ? 100 : computeProgressPct(st.dep0, effectiveArrLast, st.now));
+    const pct = (widgetState === 'before') ? 0 : (widgetState === 'after' ? 100 : computeProgressPct(effectiveDepMin, effectiveArrLast, st.now));
     const progressHtml = `
       <div style="margin:12px 0 10px 0;">
         <div style="height:6px;border-radius:999px;overflow:hidden;background:rgba(255,255,255,.08);box-shadow:inset 0 0 0 1px rgba(0,255,255,.12);">
