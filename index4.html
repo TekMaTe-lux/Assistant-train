@@ -4678,6 +4678,18 @@ body.modal-open{ overflow:hidden; }
   padding: 10px;
 }
 .fav-card-head{ display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap; }
+.fav-train-block{
+  display:flex;
+  flex-direction:column;
+  align-items:flex-end;
+  gap:6px;
+  min-width:0;
+}
+.fav-train-badge{
+  display:flex;
+  justify-content:flex-end;
+  width:100%;
+}
 .fav-tag{
   font-size: .85rem;
   font-weight: 900;
@@ -4689,7 +4701,11 @@ body.modal-open{ overflow:hidden; }
 .fav-train{ font-weight: 900; color:#fff; }
 .fav-meta{ margin-top: 8px; color:#b9c8d8; font-size:.95rem; overflow-wrap:anywhere; }
 .fav-line{ margin-top: 8px; color:#e6f7ff; font-size:.95rem; line-height: 1.35; overflow-wrap:anywhere; }
-
+.fav-next-train{
+  margin: 6px 0 2px 0;
+  font-weight: 800;
+  color: rgba(226,247,255,.95);
+}
 
 .fav-cause{
   margin-top: 6px;
@@ -4766,6 +4782,7 @@ body.modal-open{ overflow:hidden; }
   .fav-btn{ width:100%; text-align:center; padding:8px 12px; }
   .fav-head{ align-items:flex-start; }
   .fav-state-badge{ font-size:.72rem; padding:4px 8px; }
+  .fav-train-block{ align-items:flex-end; }
 
   /* route + horaires plus compacts */
   .fav-meta{ font-size:.90rem; }
@@ -5341,7 +5358,10 @@ function renderRowsChunked(htmlRows, tbody, chunk=200){
     <article class="fav-card" id="favCardAM">
       <div class="fav-card-head">
         <div class="fav-tag">Matin</div>
-        <div class="fav-train" id="favTrainAM">—</div>
+        <div class="fav-train-block">
+          <div class="fav-train" id="favTrainAM">—</div>
+          <div class="fav-train-badge" id="favStateAM"></div>
+        </div>
       </div>
       <div class="fav-meta" id="favMetaAM">—</div>
       <div class="fav-line" id="favLineAM"></div>
@@ -5355,7 +5375,10 @@ function renderRowsChunked(htmlRows, tbody, chunk=200){
     <article class="fav-card" id="favCardPM">
       <div class="fav-card-head">
         <div class="fav-tag">Soir</div>
-        <div class="fav-train" id="favTrainPM">—</div>
+        <div class="fav-train-block">
+          <div class="fav-train" id="favTrainPM">—</div>
+          <div class="fav-train-badge" id="favStatePM"></div>
+        </div>
       </div>
       <div class="fav-meta" id="favMetaPM">—</div>
       <div class="fav-line" id="favLinePM"></div>
@@ -14791,9 +14814,9 @@ function scheduleWeatherAfterTableSettled(){
 
  const buildWidgetStateBadge = (state) => {
     const labels = {
-      before: 'Avant live',
+      before: 'A VENIR',
       running: 'Live',
-      after: 'Après live',
+      after: 'ARRIVÉ'
       unknown: 'Hors plage'
     };
     const classMap = {
@@ -15135,6 +15158,25 @@ function getGtfsDelayForStop(trainNumber, stopName){
     return Math.round(clamp01((nowMin - depMin) / total) * 100);
   }
 
+  function buildNextTrainInfo(widgetState, st){
+    if (!st || st.now == null) return '';
+    if (widgetState === 'before' && st.dep0 != null){
+      const diff = Math.max(0, st.dep0 - st.now);
+      const h = Math.floor(diff / 60);
+      const m = diff % 60;
+      const hh = String(h).padStart(2, '0');
+      const mm = String(m).padStart(2, '0');
+      return `<div class="fav-next-train">→ Prochain : Dans ${hh}h${mm}</div>`;
+    }
+    if (widgetState === 'after'){
+      return `<div class="fav-next-train">→ Prochain : Demain</div>`;
+    }
+    if (widgetState === 'unknown'){
+      return `<div class="fav-next-train">→ Prochain : —</div>`;
+    }
+    return '';
+  }
+
   function buildFavStopRows(payload, trainNumber){
     const train = payload?.train || null;
     const stopTimes = train?.stop_times || [];
@@ -15351,6 +15393,7 @@ function getGtfsDelayForStop(trainNumber, stopName){
 
   const renderFavCard = (kind, trainId, payload) => {
     const title   = document.getElementById(kind === 'AM' ? 'favTrainAM' : 'favTrainPM');
+	const badgeEl = document.getElementById(kind === 'AM' ? 'favStateAM' : 'favStatePM');
     const meta    = document.getElementById(kind === 'AM' ? 'favMetaAM'  : 'favMetaPM');
     const line    = document.getElementById(kind === 'AM' ? 'favLineAM'  : 'favLinePM');
     const causeEl = document.getElementById(kind === 'AM' ? 'favCauseAM' : 'favCausePM');
@@ -15366,6 +15409,7 @@ function getGtfsDelayForStop(trainNumber, stopName){
 
     if (card) card.classList.remove('is-canceled');
     title.textContent = trainId || '—';
+	if (badgeEl) badgeEl.innerHTML = '';
     meta.innerHTML = '';
     line.innerHTML = '';
     if (causeEl){ causeEl.innerHTML = ''; causeEl.style.display = 'none'; }
@@ -15414,6 +15458,7 @@ function getGtfsDelayForStop(trainNumber, stopName){
       else if (st.now > effectiveArrLast) widgetState = 'after';
     }
 	const stateBadge = buildWidgetStateBadge(widgetState);  
+	if (badgeEl) badgeEl.innerHTML = stateBadge;
 
     // SUPPRIME
     if (rtStatus === 'canceled') {
@@ -15423,13 +15468,10 @@ function getGtfsDelayForStop(trainNumber, stopName){
       else if (canceledAfterLiveMin != null && st.now != null && st.now > canceledAfterLiveMin) canceledState = 'after';
       else if (st.now != null) canceledState = 'running';
       if (card) card.classList.add('is-canceled');
+	  if (badgeEl) badgeEl.innerHTML = `${buildWidgetStateBadge(canceledState)} <span class="fav-cancel-badge">✖ SUPPRIMÉ</span>`;
       meta.innerHTML = `
         <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;">
           <div style="font-size:1.18rem;font-weight:900;opacity:.96">${escapeHtml(origin)} → ${escapeHtml(dest)}</div>
-          <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:flex-end;">
-            ${buildWidgetStateBadge(canceledState)}
-            <span class="fav-cancel-badge">✖ SUPPRIMÉ</span>
-          </div>
         </div>
         <div style="margin-top:6px;opacity:.9;">${escapeHtml(depTxt)} → ${escapeHtml(arrTxt)}</div>
       `;
@@ -15467,15 +15509,10 @@ function getGtfsDelayForStop(trainNumber, stopName){
       timesHtml = `${escapeHtml(depTxt)} → <span class="fav-time fav-time-planned is-strike">${escapeHtml(arrTxt)}</span> <span class="fav-time fav-time-rt delay">${escapeHtml(minToClock(effectiveArrLast))}</span>`;
     }
 
-    const partialBadge = isPartialAny
-      ? `<span style="padding:4px 10px;border-radius:999px;border:1px solid rgba(255,80,80,.40); background:rgba(255,80,80,.12); color:#ff9a9a; font-weight:900;">SUPPRESSION PARTIELLE</span>`
-      : '';
-
     meta.innerHTML = `
       <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
         <div style="font-size:1.18rem;font-weight:900;opacity:.96;">${escapeHtml(origin)} → ${escapeHtml(dest)}</div>
-        ${partialBadge}
-        ${stateBadge}
+        ${isPartialAny ? `<span style="padding:4px 10px;border-radius:999px;border:1px solid rgba(255,80,80,.40); background:rgba(255,80,80,.12); color:#ff9a9a; font-weight:900;">SUPPRESSION PARTIELLE</span>` : ''}
       </div>
       <div style="margin-top:6px;font-size:1.55rem;font-weight:900;letter-spacing:.01em;">${timesHtml}</div>
     `;
@@ -15502,8 +15539,9 @@ function getGtfsDelayForStop(trainNumber, stopName){
       </div>
     `;
 
-    const stopsHtml = (widgetState === 'running') ? buildFavStopsDetails(payload, trainId, st.now) : '';
-    line.innerHTML = (causeHtml || '') + progressHtml + (stopsHtml || '');
+    const nextTrainHtml = buildNextTrainInfo(widgetState, st);
+	const stopsHtml = (widgetState === 'running') ? buildFavStopsDetails(payload, trainId, st.now) : '';
+    line.innerHTML = (causeHtml || '') + progressHtml + (nextTrainHtml || '') + (stopsHtml || '');
 
     if (statsEl){
       renderFavStats(kind, trainId).catch(()=>{});
