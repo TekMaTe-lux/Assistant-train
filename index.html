@@ -16560,28 +16560,95 @@ function getGtfsDelayForStop(trainNumber, stopName){
     return true;
   }
 
-  // --- Live refresh anti-flash (voies) ---
-  function smartRefreshMainTableForVoies(){
-    const btn = document.getElementById('loadTrains');
-    if (!btn) return;
+  // --- Live refresh in-place (voies) ---
+  function updateVoiesInTable(){
+    const table = document.querySelector('#trainInfo table');
+    if (!table) return;
 
-    // Préserve le scroll du conteneur tableau si possible
-    const container = document.getElementById('trainInfo') || document.scrollingElement || document.documentElement;
-    const prevScrollTop = container ? container.scrollTop : null;
+    const headRow = table.querySelector('thead tr:first-child');
+    if (!headRow) return;
 
-    // Marqueur: auto-refresh (permet d'éventuels guards ailleurs)
-    window.__autoVoiesRefresh = true;
+    const headerThs = Array.from(headRow.querySelectorAll('th[data-train-number]'));
+    if (!headerThs.length) return;
 
-    // Déclenche la régénération existante (tu as déjà toute la logique de réinjection des voies dans le rendu)
-    try { btn.click(); } catch(e) {}
+    const headerNumbers = headerThs.map(th => (th.dataset.trainNumber || '').trim()).filter(Boolean);
+    if (!headerNumbers.length) return;
 
-    // Restaure scroll après paint (2 rafales pour être sûr)
-    setTimeout(() => {
-      try {
-        if (container && prevScrollTop != null) container.scrollTop = prevScrollTop;
-      } catch(e){}
-      window.__autoVoiesRefresh = false;
-    }, 120);
+    const tbody = table.tBodies && table.tBodies[0];
+    const bodyRows = tbody ? Array.from(tbody.rows) : Array.from(table.querySelectorAll('tbody tr'));
+    if (!bodyRows.length) return;
+
+    const updateCellVoie = (cell, baseTimeRaw, voieLabel) => {
+      if (!cell || !baseTimeRaw) return;
+      const baseClock = (typeof ft === 'function') ? ft(baseTimeRaw) : baseTimeRaw;
+      const baseWithVoie = voieLabel ? formatClockWithVoie(baseClock, voieLabel) : baseClock;
+
+      const delayStrike = cell.querySelector('.delay-strike');
+      if (delayStrike) {
+        delayStrike.innerHTML = baseWithVoie;
+        return;
+      }
+
+      const strong = cell.querySelector('strong');
+      if (strong) {
+        strong.innerHTML = baseWithVoie;
+        return;
+      }
+
+      const deleted = cell.querySelector('.deleted');
+      if (deleted) {
+        const deletedStrong = deleted.querySelector('strong');
+        if (deletedStrong) {
+          deletedStrong.innerHTML = baseWithVoie;
+        } else if (!deleted.querySelector('.delayed')) {
+          deleted.innerHTML = baseWithVoie;
+        }
+        return;
+      }
+
+      if (!cell.querySelector('.delayed')) {
+        cell.innerHTML = baseWithVoie;
+      }
+    };
+
+    for (const row of bodyRows) {
+      if (!row) continue;
+      const stopName =
+        row.dataset.gare ||
+        row.querySelector('.gare-label')?.textContent?.trim() ||
+        row.cells?.[0]?.textContent?.trim() ||
+        '';
+      if (!stopName) continue;
+
+      for (let i = 0; i < headerNumbers.length; i++) {
+        const trainNumber = headerNumbers[i];
+        const cell = row.cells?.[i + 1];
+        if (!trainNumber || !cell) continue;
+
+        const baseTimeRaw = cell.dataset?.baseTime || cell.getAttribute?.('data-base-time');
+        if (!baseTimeRaw) continue;
+
+        const voies = (typeof getVoiesForTrain === 'function') ? getVoiesForTrain(trainNumber) : null;
+        const cflVoies = (typeof getCflVoiesForTrain === 'function') ? getCflVoiesForTrain(trainNumber) : null;
+        const voieTimeCandidates = [baseTimeRaw];
+        let voieLabel = null;
+
+        if (typeof resolveVoieForStop === 'function') {
+          voieLabel = resolveVoieForStop({
+            voiesMap: voies,
+            stopName,
+            baseTimeRaw,
+            timeCandidates: voieTimeCandidates
+          });
+        }
+
+        if (!voieLabel && typeof resolveCflVoieForStop === 'function') {
+          voieLabel = resolveCflVoieForStop({ voiesMap: cflVoies || voies, stopName });
+        }
+
+        updateCellVoie(cell, baseTimeRaw, voieLabel);
+      }
+    }
   }
 
   async function tickRetards(){
@@ -16606,12 +16673,11 @@ function getGtfsDelayForStop(trainNumber, stopName){
       // Si rien n'a changé, on ne touche pas au DOM
       if (!changed) return;
 
-      // Si un tableau est affiché, on regénère UNE FOIS (pour réinjecter les voies)
+      // Si un tableau est affiché, mise à jour in-place des voies.
       if (!hasTrainTable()) return;
       if (window.__mainTableBusy) return;
 
-      // Auto-update voies: éviter F5. On tente un refresh doux du tableau si présent.
-      smartRefreshMainTableForVoies();
+      updateVoiesInTable();
 
       // Met aussi à jour les favoris (ils affichent des voies)
       if (typeof window.updateFavoriteWidgetFromPrefs === 'function') {
