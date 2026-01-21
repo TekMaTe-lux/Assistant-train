@@ -4654,6 +4654,7 @@ body.modal-open{ overflow:hidden; }
   justify-content: space-between;
   gap: 10px;
   margin-bottom: 10px;
+  flex-wrap: wrap;
 }
 .fav-title{
   font-weight: 800;
@@ -4676,7 +4677,7 @@ body.modal-open{ overflow:hidden; }
   background: rgba(3,8,18,.55);
   padding: 10px;
 }
-.fav-card-head{ display:flex; align-items:center; justify-content:space-between; gap:10px; }
+.fav-card-head{ display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap; }
 .fav-tag{
   font-size: .85rem;
   font-weight: 900;
@@ -4686,8 +4687,9 @@ body.modal-open{ overflow:hidden; }
   color: #0ff;
 }
 .fav-train{ font-weight: 900; color:#fff; }
-.fav-meta{ margin-top: 8px; color:#b9c8d8; font-size:.95rem; }
-.fav-line{ margin-top: 8px; color:#e6f7ff; font-size:.95rem; line-height: 1.35; }
+.fav-meta{ margin-top: 8px; color:#b9c8d8; font-size:.95rem; overflow-wrap:anywhere; }
+.fav-line{ margin-top: 8px; color:#e6f7ff; font-size:.95rem; line-height: 1.35; overflow-wrap:anywhere; }
+
 
 .fav-cause{
   margin-top: 6px;
@@ -4760,6 +4762,10 @@ body.modal-open{ overflow:hidden; }
   .fav-card{ padding:12px; }
   .fav-tag{ font-size:.80rem; }
   .fav-train{ font-size:1rem; }
+  .fav-title{ font-size:1.05rem; }
+  .fav-btn{ width:100%; text-align:center; padding:8px 12px; }
+  .fav-head{ align-items:flex-start; }
+  .fav-state-badge{ font-size:.72rem; padding:4px 8px; }
 
   /* route + horaires plus compacts */
   .fav-meta{ font-size:.90rem; }
@@ -4861,9 +4867,36 @@ body.modal-open{ overflow:hidden; }
   text-transform: uppercase;
 }
 
-
-
-
+.fav-state-badge{
+  display:inline-flex;
+  align-items:center;
+  padding: 5px 10px;
+  border-radius: 999px;
+  font-weight: 900;
+  letter-spacing: .02em;
+  text-transform: uppercase;
+  font-size: .78rem;
+}
+.fav-state-before{
+  border: 1px solid rgba(59,130,246,.45);
+  background: rgba(59,130,246,.12);
+  color: #93c5fd;
+}
+.fav-state-live{
+  border: 1px solid rgba(34,197,94,.45);
+  background: rgba(34,197,94,.12);
+  color: #86efac;
+}
+.fav-state-after{
+  border: 1px solid rgba(148,163,184,.45);
+  background: rgba(148,163,184,.14);
+  color: #e2e8f0;
+}
+.fav-state-unknown{
+  border: 1px solid rgba(148,163,184,.3);
+  background: rgba(148,163,184,.08);
+  color: rgba(226,232,240,.85);
+}
 
 /* --- Encadres (cause / prochains arrets) style site --- */
 .fav-box{margin-top:8px;padding:8px 10px;border-radius:12px;border:1px solid rgba(0,255,255,.14);background:rgba(0,0,0,.22);box-shadow: inset 0 0 0 1px rgba(255,255,255,.04);}
@@ -14756,6 +14789,24 @@ function scheduleWeatherAfterTableSettled(){
     return { state: 'unknown', dep0, arrLast, now, stopTimes };
   };
 
+ const buildWidgetStateBadge = (state) => {
+    const labels = {
+      before: 'Avant live',
+      running: 'Live',
+      after: 'Après live',
+      unknown: 'Hors plage'
+    };
+    const classMap = {
+      before: 'before',
+      running: 'live',
+      after: 'after',
+      unknown: 'unknown'
+    };
+    const label = labels[state] || labels.unknown;
+    const cls = classMap[state] || classMap.unknown;
+    return `<span class="fav-state-badge fav-state-${cls}">${label}</span>`;
+  };	
+
   // --- Retards temps réel par arrêt (>= thresholdMin) ---
   const parseNavitiaDateTime = (dt) => {
     // "YYYYMMDDTHHMMSS" -> ms UTC (uniquement pour diff)
@@ -15362,14 +15413,23 @@ function getGtfsDelayForStop(trainNumber, stopName){
       else if (st.now >= st.dep0 && st.now <= effectiveArrLast) widgetState = 'running';
       else if (st.now > effectiveArrLast) widgetState = 'after';
     }
+	const stateBadge = buildWidgetStateBadge(widgetState);  
 
     // SUPPRIME
     if (rtStatus === 'canceled') {
+	  const canceledAfterLiveMin = (st.arrLast != null) ? (st.arrLast + 5) : null;
+      let canceledState = widgetState;
+      if (st.dep0 != null && st.now != null && st.now < st.dep0) canceledState = 'before';
+      else if (canceledAfterLiveMin != null && st.now != null && st.now > canceledAfterLiveMin) canceledState = 'after';
+      else if (st.now != null) canceledState = 'running';
       if (card) card.classList.add('is-canceled');
       meta.innerHTML = `
         <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;">
           <div style="font-size:1.18rem;font-weight:900;opacity:.96">${escapeHtml(origin)} → ${escapeHtml(dest)}</div>
-          <span class="fav-cancel-badge">✖ SUPPRIMÉ</span>
+          <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:flex-end;">
+            ${buildWidgetStateBadge(canceledState)}
+            <span class="fav-cancel-badge">✖ SUPPRIMÉ</span>
+          </div>
         </div>
         <div style="margin-top:6px;opacity:.9;">${escapeHtml(depTxt)} → ${escapeHtml(arrTxt)}</div>
       `;
@@ -15407,10 +15467,6 @@ function getGtfsDelayForStop(trainNumber, stopName){
       timesHtml = `${escapeHtml(depTxt)} → <span class="fav-time fav-time-planned is-strike">${escapeHtml(arrTxt)}</span> <span class="fav-time fav-time-rt delay">${escapeHtml(minToClock(effectiveArrLast))}</span>`;
     }
 
-    const liveBadge = (widgetState === 'running')
-      ? `<span style="margin-left:auto; padding:4px 10px; border-radius:999px; border:1px solid rgba(0,255,180,.35); background:rgba(0,255,180,.10); color:#7dffd6; font-weight:900;">LIVE</span>`
-      : '';
-
     const partialBadge = isPartialAny
       ? `<span style="padding:4px 10px;border-radius:999px;border:1px solid rgba(255,80,80,.40); background:rgba(255,80,80,.12); color:#ff9a9a; font-weight:900;">SUPPRESSION PARTIELLE</span>`
       : '';
@@ -15419,7 +15475,7 @@ function getGtfsDelayForStop(trainNumber, stopName){
       <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
         <div style="font-size:1.18rem;font-weight:900;opacity:.96;">${escapeHtml(origin)} → ${escapeHtml(dest)}</div>
         ${partialBadge}
-        ${liveBadge}
+        ${stateBadge}
       </div>
       <div style="margin-top:6px;font-size:1.55rem;font-weight:900;letter-spacing:.01em;">${timesHtml}</div>
     `;
