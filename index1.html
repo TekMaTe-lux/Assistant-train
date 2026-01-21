@@ -6507,6 +6507,8 @@ function resolveCflVoieForStop({ voiesMap, stopName }){
 
 function resolveVoieForStop({ voiesMap, stopName, baseTimeRaw, timeCandidates }){
   if (!(voiesMap instanceof Map) || !stopName) return null;
+
+  // (1) Match strict: stop + heure (comportement actuel)
   const candidates = Array.isArray(timeCandidates) ? timeCandidates : [baseTimeRaw];
   for (const raw of candidates) {
     if (!raw) continue;
@@ -6517,7 +6519,51 @@ function resolveVoieForStop({ voiesMap, stopName, baseTimeRaw, timeCandidates })
     const voie = voiesMap.get(key);
     if (voie) return voie;
   }
-  return null;
+
+  // (2) Fallback "secours": match sur le stop uniquement (ignore l'heure)
+  // Utile quand le flux des voies est décalé de quelques minutes vs Navitia (ex: 88526)
+  const stopNorm = normalizeVoiesTrainKey(stopName);
+  if (!stopNorm) return null;
+
+  const parseMin = (hhmm) => {
+    const m = /^([0-2]\d):([0-5]\d)$/.exec(String(hhmm || '').trim());
+    if (!m) return null;
+    return (parseInt(m[1], 10) * 60) + parseInt(m[2], 10);
+  };
+
+  // heure "référence" pour choisir la voie la plus proche si plusieurs entrées pour le même stop
+  let refMin = null;
+  for (const raw of candidates) {
+    const t = normalizeVoiesBaseTime(raw);
+    const mm = parseMin(t);
+    if (mm != null) { refMin = mm; break; }
+  }
+
+  let bestVoie = null;
+  let bestDiff = Infinity;
+
+  for (const [k, v] of voiesMap.entries()){
+    // k est du type "pagnysurmoselle|14:06"
+    if (typeof k !== 'string') continue;
+    if (!k.startsWith(stopNorm + '|')) continue;
+
+    if (refMin == null) {
+      // Pas de référence horaire -> 1ère voie trouvée
+      return v || null;
+    }
+
+    const hhmm = k.slice((stopNorm + '|').length);
+    const km = parseMin(hhmm);
+    if (km == null) continue;
+
+    const diff = Math.abs(km - refMin);
+    if (diff < bestDiff){
+      bestDiff = diff;
+      bestVoie = v || null;
+    }
+  }
+
+  return bestVoie;
 }
 
 function formatVoieLabel(raw){
@@ -16496,10 +16542,10 @@ function getGtfsDelayForStop(trainNumber, stopName){
 <!-- ===================== LIVE (GTFS-RT + VOIES) ===================== -->
 <script>
 (function(){
-  // Retards: plus fréquent, mais application in-place (faible coût)
-  const RETARDS_MS = 30 * 1000; // 30s
-  // Voies: moins fréquent + onlyIfChanged (évite de reparser si identique)
-  const VOIES_MS   = 60 * 1000; // 60s
+  // Retards: fréquent, application in-place (faible coût)
+  const RETARDS_MS = 20 * 1000; // 20s
+  // Voies: assez fréquent + onlyIfChanged (évite de reparser si identique)
+  const VOIES_MS   = 30 * 1000; // 30s
 
   let tRetards = null;
   let tVoies = null;
@@ -16514,41 +16560,150 @@ function getGtfsDelayForStop(trainNumber, stopName){
     return true;
   }
 
-  async 
-  // --- Live refresh anti-flash (voies) ---
-  function smartRefreshMainTableForVoies(){
-    const btn = document.getElementById('loadTrains');
-    if (!btn) return;
+  function computeVoieLabelForCell(trainNumber, stopName, baseRaw){
+    if (!trainNumber || !stopName || !baseRaw) return null;
 
-    // Préserve le scroll du conteneur tableau si possible
-    const container = document.getElementById('trainInfo') || document.scrollingElement || document.documentElement;
-    const prevScrollTop = container ? container.scrollTop : null;
+    const voiesMap = (typeof getVoiesForTrain === 'function') ? getVoiesForTrain(trainNumber) : null;
+    const cflVoiesMap = (typeof getCflVoiesForTrain === 'function') ? getCflVoiesForTrain(trainNumber) : null;
 
-    // Marqueur: auto-refresh (permet d'éventuels guards ailleurs)
-    window.__autoVoiesRefresh = true;
+    const candidates = [];
+    try {
+      candidates.push(baseRaw);
+      if (typeof ft === 'function') {
+        const bc = ft(baseRaw);
+        if (bc) candidates.push(bc);
+      }
+      if (typeof normalizeVoiesBaseTime === 'function') {
+        const bn = normalizeVoiesBaseTime(baseRaw);
+        if (bn) candidates.push(bn);
+      }
+    } catch(e) {}
 
-    // Déclenche la régénération existante (tu as déjà toute la logique de réinjection des voies dans le rendu)
-    try { btn.click(); } catch(e) {}
-
-    // Restaure scroll après paint (2 rafales pour être sûr)
-    setTimeout(() => {
-      try {
-        if (container && prevScrollTop != null) container.scrollTop = prevScrollTop;
-      } catch(e){}
-      window.__autoVoiesRefresh = false;
-    }, 120);
+    let voieLabel = null;
+    try {
+      if (voiesMap && typeof resolveVoieForStop === 'function') {
+        voieLabel = resolveVoieForStop({ voiesMap, stopName, baseTimeRaw: baseRaw, timeCandidates: candidates });
+      }
+      if (!voieLabel && cflVoiesMap && typeof resolveCflVoieForStop === 'function') {
+        voieLabel = resolveCflVoieForStop({ voiesMap: cflVoiesMap, stopName });
+      }
+    } catch(e) {}
+    return voieLabel || null;
   }
-async function tickRetards(){
+
+  function applyVoieToCell(td, voieLabel){
+    if (!td) return;
+
+    // Ne touche pas aux cellules supprimées / vides
+    if (td.classList && (td.classList.contains('deleted') || td.querySelector('.deleted'))) return;
+
+    const label = voieLabel ? String(voieLabel) : '';
+    const formatted = (label && typeof formatVoieLabel === 'function') ? formatVoieLabel(label) : label;
+
+    const info = td.querySelector('.voie-info');
+    const badge = td.querySelector('.voie-badge');
+
+    // Supprimer si plus de voie
+    if (!formatted){
+      if (badge) badge.remove();
+      // dé-wrap voie-info si présent
+      if (info){
+        const frag = document.createDocumentFragment();
+        Array.from(info.childNodes).forEach(n => {
+          if (n.nodeType === 1 && n.classList && n.classList.contains('voie-badge')) return;
+          frag.appendChild(n.cloneNode(true));
+        });
+        info.replaceWith(frag);
+      }
+      return;
+    }
+
+    // Mettre à jour si badge déjà là
+    if (badge){
+      if (badge.textContent !== formatted) badge.textContent = formatted;
+      return;
+    }
+
+    // Ajouter un badge : on l’accroche à l’heure de base (delay-strike/strong si présent)
+    const target = td.querySelector('.delay-strike') || td.querySelector('strong') || info || null;
+    const b = document.createElement('span');
+    b.className = 'voie-badge';
+    b.textContent = formatted;
+
+    if (target){
+      // Si la cellule n'a pas de wrapper voie-info, on le crée pour rester cohérent
+      if (!target.classList || !target.classList.contains('voie-info')) {
+        // Si target est un span contenant déjà l’heure, on peut juste append le badge
+        target.appendChild(b);
+      } else {
+        target.appendChild(b);
+      }
+      return;
+    }
+
+    // Fallback (rare) : wrap le 1er noeud
+    const wrapper = document.createElement('span');
+    wrapper.className = 'voie-info';
+    const first = td.firstChild;
+    if (first) wrapper.appendChild(first);
+    wrapper.appendChild(b);
+    td.insertBefore(wrapper, td.firstChild);
+  }
+
+  function applyVoiesToCurrentTable(){
+    const table = document.querySelector('#trainInfo table');
+    if (!table) return;
+
+    const headRow = table.querySelector('thead tr:first-child');
+    if (!headRow) return;
+
+    const headerThs = Array.from(headRow.querySelectorAll('th[data-train-number]'));
+    if (!headerThs.length) return;
+
+    // Colonnes trains dans l’ordre du tbody (col 1 = gare, puis trains)
+    const trainNumbers = headerThs
+      .map(th => (th.dataset.trainNumber || '').trim())
+      .map(n => (typeof nettoyerNumeroTrain === 'function' ? nettoyerNumeroTrain(n) : n))
+      .filter(Boolean);
+
+    const tbody = table.tBodies && table.tBodies[0];
+    const rows = tbody ? Array.from(tbody.rows) : Array.from(table.querySelectorAll('tbody tr'));
+    if (!rows.length) return;
+
+    for (const row of rows){
+      const stopName = row.dataset.gare || row.getAttribute('data-gare') || null;
+      if (!stopName) continue;
+
+      // tds : [0]=gare, [i+1]=trainNumbers[i]
+      const tds = Array.from(row.cells || row.querySelectorAll('td'));
+      for (let i=0; i<trainNumbers.length; i++){
+        const td = tds[i+1];
+        if (!td) continue;
+
+        const baseRaw = td.getAttribute('data-base-time') || (td.dataset ? td.dataset.baseTime : null);
+        if (!baseRaw) continue;
+
+        const voieLabel = computeVoieLabelForCell(trainNumbers[i], stopName, baseRaw);
+        applyVoieToCell(td, voieLabel);
+      }
+    }
+  }
+
+  async function tickRetards(){
     try {
       if (!canLive()) return;
       if (typeof loadGtfsRetards === 'function') {
-        // Ton code applique déjà les retards au tableau courant si présent.
+        // Le code existant applique déjà les retards au tableau courant si présent.
         await loadGtfsRetards({ forceFresh: false });
+      }
+      // Favoris: rafraîchit aussi l’état "retard/supprimé" sans F5
+      if (typeof window.updateFavoriteWidgetFromPrefs === 'function') {
+        window.updateFavoriteWidgetFromPrefs().catch(() => {});
       }
     } catch(e){}
   }
 
-  async async function tickVoies(){
+  async function tickVoies(){
     try {
       if (!canLive()) return;
       if (typeof loadVoiesByTrain !== 'function') return;
@@ -16560,17 +16715,13 @@ async function tickRetards(){
       // Si rien n'a changé, on ne touche pas au DOM
       if (!changed) return;
 
-      // Si un tableau est affiché, on regénère UNE FOIS (pour réinjecter les voies)
-      if (!hasTrainTable()) return;
-      if (window.__mainTableBusy) return;
-      // Auto-update voies: éviter F5. On tente un refresh doux du tableau si présent.
-      smartRefreshMainTableForVoies();
+      // Tableau: mise à jour IN-PLACE (plus de regen => plus de flash)
+      if (hasTrainTable()) applyVoiesToCurrentTable();
 
-      // Met aussi à jour les favoris (ils affichent des voies)
+      // Favoris (ils affichent des voies)
       if (typeof window.updateFavoriteWidgetFromPrefs === 'function') {
         window.updateFavoriteWidgetFromPrefs().catch(() => {});
       }
-
     } catch(e){}
   }
 
@@ -16578,6 +16729,7 @@ async function tickRetards(){
     if (!tRetards) tRetards = setInterval(() => { tickRetards().catch(()=>{}); }, RETARDS_MS);
     if (!tVoies)   tVoies   = setInterval(() => { tickVoies().catch(()=>{}); }, VOIES_MS);
   }
+
   function stop(){
     if (tRetards){ clearInterval(tRetards); tRetards = null; }
     if (tVoies){   clearInterval(tVoies);   tVoies   = null; }
@@ -16596,6 +16748,7 @@ async function tickRetards(){
   });
 })();
 </script>
+
 
 </body>
 </html>
