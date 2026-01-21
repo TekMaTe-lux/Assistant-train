@@ -6507,6 +6507,8 @@ function resolveCflVoieForStop({ voiesMap, stopName }){
 
 function resolveVoieForStop({ voiesMap, stopName, baseTimeRaw, timeCandidates }){
   if (!(voiesMap instanceof Map) || !stopName) return null;
+
+  // (1) Match strict: stop + heure (comportement actuel)
   const candidates = Array.isArray(timeCandidates) ? timeCandidates : [baseTimeRaw];
   for (const raw of candidates) {
     if (!raw) continue;
@@ -6517,7 +6519,51 @@ function resolveVoieForStop({ voiesMap, stopName, baseTimeRaw, timeCandidates })
     const voie = voiesMap.get(key);
     if (voie) return voie;
   }
-  return null;
+
+  // (2) Fallback "secours": match sur le stop uniquement (ignore l'heure)
+  // Utile quand le flux des voies est décalé de quelques minutes vs Navitia (ex: 88526)
+  const stopNorm = normalizeVoiesTrainKey(stopName);
+  if (!stopNorm) return null;
+
+  const parseMin = (hhmm) => {
+    const m = /^([0-2]\d):([0-5]\d)$/.exec(String(hhmm || '').trim());
+    if (!m) return null;
+    return (parseInt(m[1], 10) * 60) + parseInt(m[2], 10);
+  };
+
+  // heure "référence" pour choisir la voie la plus proche si plusieurs entrées pour le même stop
+  let refMin = null;
+  for (const raw of candidates) {
+    const t = normalizeVoiesBaseTime(raw);
+    const mm = parseMin(t);
+    if (mm != null) { refMin = mm; break; }
+  }
+
+  let bestVoie = null;
+  let bestDiff = Infinity;
+
+  for (const [k, v] of voiesMap.entries()){
+    // k est du type "pagnysurmoselle|14:06"
+    if (typeof k !== 'string') continue;
+    if (!k.startsWith(stopNorm + '|')) continue;
+
+    if (refMin == null) {
+      // Pas de référence horaire -> 1ère voie trouvée
+      return v || null;
+    }
+
+    const hhmm = k.slice((stopNorm + '|').length);
+    const km = parseMin(hhmm);
+    if (km == null) continue;
+
+    const diff = Math.abs(km - refMin);
+    if (diff < bestDiff){
+      bestDiff = diff;
+      bestVoie = v || null;
+    }
+  }
+
+  return bestVoie;
 }
 
 function formatVoieLabel(raw){
