@@ -3244,6 +3244,7 @@ function sanitizeCflStationName(name){
   const tripsById = new Map();              // (optionnel) trip_id -> {route_id, headsign, service_id}
   const routesById = new Map();             // (optionnel) route_id -> {route_short_name, route_long_name}
   let activeServiceIds = null;              // Set<string> services actifs aujourd'hui (calendar/calendar_dates)
+  let activeServiceFilterNote = '';
 
   // ---------- Leaflet ----------
   const map = L.map('map').setView([49.2, 6.15], 9);
@@ -4846,6 +4847,23 @@ function setLayerGroupVisibility(group, visible){
 
       activeServiceIds = combinedActiveServiceIds && combinedActiveServiceIds.size ? combinedActiveServiceIds : null;
       if (activeServiceIds && !tripsById.size) activeServiceIds = null;
+      activeServiceFilterNote = '';
+      if (activeServiceIds && !tripsById.size){
+        activeServiceIds = null;
+        activeServiceFilterNote = 'calendrier ignoré (trips manquants)';
+      }
+      if (activeServiceIds && tripsById.size){
+        let matchedTrips = 0;
+        for (const trip of tripsById.values()){
+          if (!trip?.service_id) continue;
+          if (activeServiceIds.has(trip.service_id)) matchedTrips++;
+        }
+        const coverageRatio = matchedTrips / tripsById.size;
+        if (matchedTrips === 0 || (matchedTrips < 12 && coverageRatio < 0.25)){
+          activeServiceIds = null;
+          activeServiceFilterNote = 'calendrier ignoré (couverture faible)';
+        }
+      }
 
       rebuildStaticMergeData();
       prepareStationMetadata();
@@ -4856,7 +4874,11 @@ function setLayerGroupVisibility(group, visible){
       if (cflStopsAdded || cflTripsAdded){
         statusMsg += ` (CFL +${cflStopsAdded} gares, +${cflTripsAdded} trips)`;
       }
-      if (activeServiceIds) statusMsg += ', ' + activeServiceIds.size + ' services actifs aujourd\'hui';
+      if (activeServiceIds){
+        statusMsg += ', ' + activeServiceIds.size + ' services actifs aujourd\'hui';
+      } else if (activeServiceFilterNote){
+        statusMsg += `, ${activeServiceFilterNote}`;
+      }
       setStatus(statusMsg + '.');
     } catch(e){
       setStatus('Erreur chargement GTFS: '+e.message, true);
