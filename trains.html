@@ -1,0 +1,509 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>La Bétaillère — Générateur JSON trains (GTFS + Compo)</title>
+  <style>
+    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;margin:0;background:#0b0f18;color:#e8eefc}
+    header{padding:18px 16px;border-bottom:1px solid rgba(255,255,255,.08);background:#0a0e16;position:sticky;top:0}
+    h1{margin:0;font-size:18px;letter-spacing:.3px}
+    main{padding:16px;max-width:980px;margin:0 auto}
+    .card{background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.08);border-radius:14px;padding:14px;margin:12px 0}
+    label{display:block;font-size:12px;opacity:.85;margin:10px 0 6px}
+    input,select,button,textarea{
+      width:100%;box-sizing:border-box;border-radius:12px;border:1px solid rgba(255,255,255,.14);
+      background:rgba(0,0,0,.25);color:#e8eefc;padding:10px 12px;font-size:14px;outline:none
+    }
+    button{cursor:pointer;font-weight:700;background:linear-gradient(180deg,rgba(76,175,80,.25),rgba(76,175,80,.12))}
+    button:disabled{opacity:.5;cursor:not-allowed}
+    .row{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+    .row3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px}
+    .small{font-size:12px;opacity:.8;line-height:1.35}
+    .log{white-space:pre-wrap;font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;font-size:12px;
+      background:rgba(0,0,0,.25);border:1px solid rgba(255,255,255,.12);border-radius:12px;padding:10px;min-height:120px}
+    .pill{display:inline-block;padding:2px 8px;border-radius:999px;border:1px solid rgba(255,255,255,.14);font-size:12px;opacity:.9}
+    .ok{color:#8bff9a;border-color:rgba(139,255,154,.35)}
+    .warn{color:#ffd38b;border-color:rgba(255,211,139,.35)}
+    .bad{color:#ff8b8b;border-color:rgba(255,139,139,.35)}
+    a{color:#a8c7ff}
+  </style>
+</head>
+<body>
+<header>
+  <h1>🐂 La Bétaillère — Générateur <span class="pill">resolved_trains_YYYY-MM-DD.json</span></h1>
+</header>
+
+<main>
+  <div class="card">
+    <div class="row">
+      <div>
+        <label>Date (Luxembourg)</label>
+        <input id="ymd" type="date"/>
+      </div>
+      <div>
+        <label>Corridor (filtre de gares)</label>
+        <select id="corridor">
+          <option value="BER">#BER Nancy–Metz–Thionville–Lux</option>
+          <option value="ALL">Tout (attention lourd)</option>
+        </select>
+      </div>
+    </div>
+
+    <label>Base GTFS statique (testée dans l’ordre)</label>
+    <textarea id="bases" rows="5"></textarea>
+    <div class="small">
+      Astuce : laisse les bases par défaut (comme ton site). Si tu as tes .txt sur le VPS, ajoute une ligne du type :
+      <span class="pill">https://vps.labetaillere.fr/gtfs/</span>
+      (avec les fichiers <code>stops.txt</code>, <code>trips.txt</code>, <code>stop_times.txt</code>, <code>calendar.txt</code>, <code>calendar_dates.txt</code>).
+    </div>
+
+    <div class="row3" style="margin-top:12px">
+      <button id="btnTest">🔎 Tester les bases</button>
+      <button id="btnGenerate">⚙️ Générer & télécharger le JSON</button>
+      <button id="btnSample">✨ Aperçu (10 trains)</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="small">
+      <span class="pill ok">OK</span> = base trouvée & fichiers chargés •
+      <span class="pill warn">WARN</span> = base trouvée mais partielle •
+      <span class="pill bad">ERR</span> = aucun GTFS accessible (souvent CORS ou URL).
+    </div>
+    <div id="status" class="small" style="margin:10px 0"></div>
+    <div id="log" class="log"></div>
+  </div>
+</main>
+
+<script>
+/* =========================
+   CONFIG / DEFAULT BASES
+   ========================= */
+function defaultBases(){
+  // Basé sur ton index: data/, Assistant-train/data/, GitHub raw, jsDelivr. :contentReference[oaicite:1]{index=1}
+  const here = location.href;
+  const u = (rel)=> new URL(rel, here).href;
+  return [
+    u('data/'),
+    u('Assistant-train/data/'),
+    'https://raw.githubusercontent.com/TekMaTe-lux/Assistant-train/main/Assistant-train/data/',
+    'https://cdn.jsdelivr.net/gh/TekMaTe-lux/Assistant-train@main/Assistant-train/data/'
+    // Tu peux ajouter ton VPS ici dans l’UI.
+  ];
+}
+
+const GTFS_FILES = ['stops.txt','trips.txt','stop_times.txt','calendar.txt','calendar_dates.txt'];
+
+// Compotrains: tu peux le laisser ici (relatif), ou mettre une URL complète VPS/GitHub.
+const COMPO_URL_DEFAULT = new URL('Compotrains.json', location.href).href;
+
+/* =========================
+   UI helpers
+   ========================= */
+const $ = (id)=>document.getElementById(id);
+function setStatus(html){ $('status').innerHTML = html; }
+function logLine(msg){
+  const el = $('log');
+  el.textContent += (el.textContent ? '\n' : '') + msg;
+}
+function clearLog(){ $('log').textContent=''; }
+function ymdLuxToday(){
+  // Simple: date locale navigateur OK pour test
+  const d = new Date();
+  const y = d.getFullYear();
+  const m = String(d.getMonth()+1).padStart(2,'0');
+  const da = String(d.getDate()).padStart(2,'0');
+  return `${y}-${m}-${da}`;
+}
+function compactYMD(ymd){ return String(ymd||'').replace(/-/g,''); }
+function downloadJSON(obj, filename){
+  const blob = new Blob([JSON.stringify(obj, null, 2)], {type:'application/json;charset=utf-8'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = filename;
+  document.body.appendChild(a);
+  a.click(); a.remove();
+  setTimeout(()=>URL.revokeObjectURL(url), 2000);
+}
+
+/* =========================
+   CSV parser (stream-safe simple)
+   ========================= */
+function parseCSV(text){
+  // Parser CSV simple (supporte guillemets)
+  const rows = [];
+  let i=0, field='', row=[], inQ=false;
+  const pushField=()=>{ row.push(field); field=''; };
+  const pushRow=()=>{ rows.push(row); row=[]; };
+  const s = text.replace(/^\uFEFF/,'');
+  while (i < s.length){
+    const ch = s[i];
+    if (inQ){
+      if (ch === '"'){
+        if (s[i+1] === '"'){ field+='"'; i+=2; continue; }
+        inQ=false; i++; continue;
+      }
+      field+=ch; i++; continue;
+    } else {
+      if (ch === '"'){ inQ=true; i++; continue; }
+      if (ch === ','){ pushField(); i++; continue; }
+      if (ch === '\r'){
+        pushField(); pushRow();
+        if (s[i+1] === '\n') i+=2; else i++;
+        continue;
+      }
+      if (ch === '\n'){ pushField(); pushRow(); i++; continue; }
+      field+=ch; i++; continue;
+    }
+  }
+  if (field.length || row.length){ pushField(); }
+  if (row.length) pushRow();
+  const header = rows.shift() || [];
+  const out = [];
+  for (const r of rows){
+    if (!r.length) continue;
+    const obj = {};
+    for (let k=0;k<header.length;k++){
+      obj[header[k]] = (r[k] ?? '');
+    }
+    out.push(obj);
+  }
+  return out;
+}
+
+/* =========================
+   Fetch & pick best base
+   ========================= */
+async function fetchText(url){
+  const res = await fetch(url, {cache:'no-store'});
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return await res.text();
+}
+
+async function tryBase(base){
+  const data = {};
+  for (const f of GTFS_FILES){
+    const url = base + f;
+    const txt = await fetchText(url);
+    data[f] = parseCSV(txt);
+  }
+  return data;
+}
+
+async function pickWorkingBase(bases){
+  let lastErr = null;
+  for (const b of bases){
+    try {
+      logLine(`→ test base: ${b}`);
+      const gtfs = await tryBase(b);
+      logLine(`✅ OK: ${b} (fichiers: ${GTFS_FILES.join(', ')})`);
+      return { base: b, gtfs };
+    } catch (e){
+      lastErr = e;
+      logLine(`✖ fail: ${b} :: ${e?.message || e}`);
+    }
+  }
+  throw lastErr || new Error('Aucune base GTFS accessible');
+}
+
+/* =========================
+   Core logic: resolved trains
+   ========================= */
+function extractTrainNumber(trip){
+  const candidates = [
+    trip.trip_short_name,
+    trip.trip_headsign,
+    trip.trip_id
+  ].filter(Boolean).map(String);
+  for (const s of candidates){
+    const m = s.match(/(?:^|[^0-9])(8\d{4,5})(?!\d)/);
+    if (m) return m[1];
+  }
+  return null;
+}
+
+function unitsToWagons(units){
+  // 3 wagons par unité (ton choix)
+  if (units === 'UM') return 6;
+  if (units === 'UM3') return 9;
+  return 3; // US / inconnu
+}
+
+function buildStopNameById(stops){
+  const map = new Map();
+  for (const s of stops){
+    if (s.stop_id && s.stop_name) map.set(s.stop_id, s.stop_name);
+  }
+  return map;
+}
+
+function buildStopTimesByTrip(stopTimes){
+  const map = new Map();
+  for (const st of stopTimes){
+    const tid = st.trip_id;
+    if (!tid) continue;
+    if (!map.has(tid)) map.set(tid, []);
+    map.get(tid).push(st);
+  }
+  for (const [tid, list] of map){
+    list.sort((a,b)=>Number(a.stop_sequence||0)-Number(b.stop_sequence||0));
+  }
+  return map;
+}
+
+function buildCalendarIndex(calendar, calendarDates){
+  const cal = new Map(); // service_id -> obj
+  for (const c of calendar){
+    if (c.service_id) cal.set(c.service_id, c);
+  }
+  const add = new Map(); // service_id -> Set(YYYYMMDD)
+  const rem = new Map(); // service_id -> Set(YYYYMMDD)
+  for (const cd of calendarDates){
+    const sid = cd.service_id;
+    const dt = cd.date;
+    const ex = cd.exception_type;
+    if (!sid || !dt || !ex) continue;
+    if (ex === '1'){
+      if (!add.has(sid)) add.set(sid, new Set());
+      add.get(sid).add(dt);
+    } else if (ex === '2'){
+      if (!rem.has(sid)) rem.set(sid, new Set());
+      rem.get(sid).add(dt);
+    }
+  }
+  return { cal, add, rem };
+}
+
+function serviceActiveOnDate(service_id, ymd, calIdx){
+  if (!service_id) return false;
+  if (calIdx.rem.get(service_id)?.has(ymd)) return false;
+  if (calIdx.add.get(service_id)?.has(ymd)) return true;
+
+  const c = calIdx.cal.get(service_id);
+  if (!c) return false;
+
+  const start = c.start_date, end = c.end_date;
+  if (start && ymd < start) return false;
+  if (end && ymd > end) return false;
+
+  // day-of-week: monday..sunday
+  const d = new Date(ymd.slice(0,4)+'-'+ymd.slice(4,6)+'-'+ymd.slice(6,8));
+  const dow = d.getDay(); // 0=Sun
+  const key = dow===0 ? 'sunday'
+            : dow===1 ? 'monday'
+            : dow===2 ? 'tuesday'
+            : dow===3 ? 'wednesday'
+            : dow===4 ? 'thursday'
+            : dow===5 ? 'friday'
+            : 'saturday';
+  return String(c[key]||'0') === '1';
+}
+
+function isBerStop(name){
+  const n = (name||'').toLowerCase();
+  return n.includes('nancy') || n.includes('metz') || n.includes('thionville') || n.includes('luxembourg');
+}
+
+function inferDirection(stopNames){
+  // Très simple: si Nancy avant Luxembourg => Nancy→Lux, si inverse => Lux→Nancy
+  const idxNancy = stopNames.findIndex(n => (n||'').toLowerCase().includes('nancy'));
+  const idxLux = stopNames.findIndex(n => (n||'').toLowerCase().includes('luxembourg'));
+  if (idxNancy >= 0 && idxLux >= 0){
+    return (idxNancy < idxLux) ? 'NNY_LUX' : 'LUX_NNY';
+  }
+  // fallback
+  return null;
+}
+
+async function loadCompoData(url){
+  const res = await fetch(url, {cache:'no-store'});
+  if (!res.ok) throw new Error(`Compo HTTP ${res.status}`);
+  return await res.json();
+}
+
+function normalizeCompoValue(v){
+  const s = String(v||'').trim().toUpperCase();
+  if (s === 'UM' || s === 'UM3' || s === 'US') return s;
+  return 'US';
+}
+
+function pickUnitsForTrain(compoData, trainNo, dirKey){
+  const entry = compoData?.[trainNo];
+  if (!entry || !dirKey) return 'US';
+  const v = entry[dirKey] ?? entry[String(dirKey)] ?? '';
+  return normalizeCompoValue(v);
+}
+
+function hhmmssToHHMM(t){
+  if (!t) return null;
+  const s = String(t).trim();
+  // GTFS peut être HH:MM:SS
+  const m = s.match(/^(\d{1,2}):(\d{2})/);
+  if (!m) return null;
+  const hh = String(m[1]).padStart(2,'0');
+  const mm = m[2];
+  return `${hh}:${mm}`;
+}
+
+async function buildResolvedJSON({ bases, ymdISO, corridor }){
+  const ymd = compactYMD(ymdISO);
+
+  const { base, gtfs } = await pickWorkingBase(bases);
+
+  // load compo near same folder by default
+  let compoUrl = COMPO_URL_DEFAULT;
+  let compoData = {};
+  try {
+    compoData = await loadCompoData(compoUrl);
+    logLine(`✅ Compo chargée: ${compoUrl}`);
+  } catch (e){
+    logLine(`⚠️ Compo non chargée (${compoUrl}) -> fallback US. (${e?.message||e})`);
+    compoData = {};
+  }
+
+  const stopsById = buildStopNameById(gtfs['stops.txt']);
+  const stopTimesByTrip = buildStopTimesByTrip(gtfs['stop_times.txt']);
+  const calIdx = buildCalendarIndex(gtfs['calendar.txt'], gtfs['calendar_dates.txt']);
+
+  const out = {
+    date: ymdISO,
+    generatedAt: new Date().toISOString(),
+    source: { gtfsBase: base, compo: compoUrl },
+    trains: {}
+  };
+
+  // Parcours trips actifs du jour
+  for (const trip of gtfs['trips.txt']){
+    if (!serviceActiveOnDate(trip.service_id, ymd, calIdx)) continue;
+
+    const trainNo = extractTrainNumber(trip);
+    if (!trainNo) continue;
+
+    const seq = stopTimesByTrip.get(trip.trip_id);
+    if (!seq || !seq.length) continue;
+
+    // stops -> noms + heures
+    const stopNamesAll = [];
+    const stopsObj = {};
+    for (const st of seq){
+      const name = stopsById.get(st.stop_id) || '';
+      if (!name) continue;
+      stopNamesAll.push(name);
+
+      if (corridor === 'BER'){
+        if (!isBerStop(name)) continue;
+      }
+      const hhmm = hhmmssToHHMM(st.departure_time || st.arrival_time);
+      if (!hhmm) continue;
+      // On garde le 1er horaire rencontré pour ce nom
+      if (stopsObj[name] == null) stopsObj[name] = hhmm;
+    }
+
+    // Filtre corridor: si BER, exige au moins 2 stops BER
+    const stopsKeys = Object.keys(stopsObj);
+    if (corridor === 'BER' && stopsKeys.length < 2) continue;
+
+    // Direction déduite
+    const dirKey = inferDirection(stopNamesAll);
+    const dirLabel = (dirKey === 'NNY_LUX') ? 'Nancy→Lux' : (dirKey === 'LUX_NNY' ? 'Lux→Nancy' : '—');
+
+    // Units + wagons
+    const units = pickUnitsForTrain(compoData, trainNo, dirKey);
+    const wagons = unitsToWagons(units);
+
+    // Dédup : si plusieurs trips portent le même numéro, on garde celui avec le plus de stops corridor
+    const prev = out.trains[trainNo];
+    const currentScore = stopsKeys.length;
+    const prevScore = prev ? Object.keys(prev.stops || {}).length : -1;
+    if (!prev || currentScore > prevScore){
+      out.trains[trainNo] = {
+        trip_id: trip.trip_id,
+        direction: dirLabel,
+        dirKey: dirKey || null,
+        units,
+        wagons,
+        stops: stopsObj
+      };
+    }
+  }
+
+  return out;
+}
+
+/* =========================
+   UI actions
+   ========================= */
+function getBasesFromUI(){
+  return $('bases').value.split('\n').map(s=>s.trim()).filter(Boolean).map(b => b.endsWith('/') ? b : (b + '/'));
+}
+
+function setBusy(on){
+  $('btnTest').disabled = on;
+  $('btnGenerate').disabled = on;
+  $('btnSample').disabled = on;
+}
+
+$('ymd').value = ymdLuxToday();
+$('bases').value = defaultBases().join('\n');
+
+$('btnTest').addEventListener('click', async ()=>{
+  clearLog();
+  setStatus('Test en cours…');
+  setBusy(true);
+  try {
+    const bases = getBasesFromUI();
+    await pickWorkingBase(bases);
+    setStatus('<span class="pill ok">OK</span> Une base GTFS fonctionne. Tu peux générer.');
+  } catch (e){
+    setStatus('<span class="pill bad">ERR</span> Aucune base GTFS accessible. Regarde le log (CORS/URL/fichiers).');
+  } finally {
+    setBusy(false);
+  }
+});
+
+$('btnSample').addEventListener('click', async ()=>{
+  clearLog();
+  setStatus('Aperçu en cours…');
+  setBusy(true);
+  try{
+    const bases = getBasesFromUI();
+    const ymdISO = $('ymd').value;
+    const corridor = $('corridor').value;
+    const out = await buildResolvedJSON({ bases, ymdISO, corridor });
+    const keys = Object.keys(out.trains || {});
+    const sample = keys.slice(0, 10).reduce((acc,k)=>{ acc[k]=out.trains[k]; return acc; },{});
+    logLine('--- APERÇU 10 TRAINS ---');
+    logLine(JSON.stringify({ date: out.date, trains: sample }, null, 2));
+    setStatus(`<span class="pill ok">OK</span> Aperçu généré (${keys.length} trains au total).`);
+  } catch(e){
+    logLine('Erreur: ' + (e?.message||e));
+    setStatus('<span class="pill bad">ERR</span> Impossible de générer l’aperçu.');
+  } finally {
+    setBusy(false);
+  }
+});
+
+$('btnGenerate').addEventListener('click', async ()=>{
+  clearLog();
+  setStatus('Génération en cours…');
+  setBusy(true);
+  try{
+    const bases = getBasesFromUI();
+    const ymdISO = $('ymd').value;
+    const corridor = $('corridor').value;
+    const out = await buildResolvedJSON({ bases, ymdISO, corridor });
+    const count = Object.keys(out.trains||{}).length;
+    const filename = `resolved_trains_${ymdISO}.json`;
+    downloadJSON(out, filename);
+    setStatus(`<span class="pill ok">OK</span> ${filename} téléchargé (${count} trains).`);
+  } catch(e){
+    logLine('Erreur: ' + (e?.message||e));
+    setStatus('<span class="pill bad">ERR</span> Génération impossible. Vérifie le log (souvent CORS ou base GTFS).');
+  } finally {
+    setBusy(false);
+  }
+});
+</script>
+</body>
+</html>
