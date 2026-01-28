@@ -4660,18 +4660,6 @@ function setLayerGroupVisibility(group, visible){
     'bettembourg',
     'luxembourg'
   ].map(normalizeStationName);
-
-  const AXIS_STOP_CODES = new Set([
-    // codes UIC / SNCF (les 8 chiffres apparaissent dans stop_id/parent_station type StopPoint:OCETrain TER-87141002)
-    '87141002', // Nancy
-    '87141820', // Pagny-sur-Moselle (selon GTFS)
-    '87192039', // Metz-Ville
-    '87192080', // Thionville
-    '87192401', // Hettange-Grande
-    '87192427', // Bettembourg (côté SNCF GTFS parfois)
-    '82001000', // Luxembourg (code UIC)
-    '82001200'  // Howald / variantes
-  ]);
   const EXCLUDED_TRAIN_NUMBERS = new Set(['44700']);
   const EXCLUDED_TRAIN_NUMBER_PREFIXES = ['447'];
   const CORE_TGV_STOP_KEYWORDS = ['metz','nancy','thionville','luxembourg'].map(normalizeStationName);
@@ -4826,8 +4814,9 @@ function setLayerGroupVisibility(group, visible){
       const trips = await tripsPromise;
       if (Array.isArray(trips)){
         for (const t of trips){
-         if (axisTripIds.size && !axisTripIds.has(t.trip_id)) continue;
-          tripsById.set(t.trip_id, { route_id:t.route_id, headsign:t.trip_headsign, service_id:t.service_id, trip_short_name:t.trip_short_name });
+          // [PATCH] disabled axisTripIds filter to show all trips consistently
+          // if (axisTripIds.size && !axisTripIds.has(t.trip_id)) continue;
+tripsById.set(t.trip_id, { route_id:t.route_id, headsign:t.trip_headsign, service_id:t.service_id, trip_short_name:t.trip_short_name });
           if (t.route_id) axisRouteIds.add(t.route_id);
         }
       }
@@ -5143,19 +5132,11 @@ function stationNameMatchesKeywords(name, keywords){
   // ---------- Filtre sillon & service du jour ----------
   function tripPassesAxis(seq, lookup = stopsById){
     if (!Array.isArray(seq) || seq.length < 2) return false;
-
     let hits = 0;
     for (const stop of seq){
       const meta = lookup.get(stop.stop_id);
-      if (!meta) continue;
-
-      // 1) match par nom (ancienne logique)
-      const byName = meta.name && stationNameMatchesKeywords(meta.name, AXIS_STOP_KEYWORDS);
-
-      // 2) match par codes (plus robuste quand les libellés changent)
-      const byCode = stopMetaMatchesStationCodes(meta, AXIS_STOP_CODES, lookup);
-
-      if (byName || byCode){
+      if (!meta || !meta.name) continue;
+      if (stationNameMatchesKeywords(meta.name, AXIS_STOP_KEYWORDS)){
         hits++;
         if (hits >= 2) return true;
       }
@@ -5175,8 +5156,9 @@ function stationNameMatchesKeywords(name, keywords){
     const items=[];
     for (const [trip_id, seq] of stopTimesByTrip.entries()){
       if (seq.length<2) continue;
-      if (!tripPassesAxis(seq)) continue;
-      if (!serviceAllowed(trip_id)) continue;
+      // [PATCH] disabled axis filter (tripPassesAxis) so all trains can appear (local/GitHub consistent)
+      // if (!tripPassesAxis(seq)) continue;
+if (!serviceAllowed(trip_id)) continue;
 
       const trip = tripsById.get(trip_id) || {};
       const route = routesById.get(trip.route_id) || {};
@@ -5206,7 +5188,10 @@ function stationNameMatchesKeywords(name, keywords){
       const endPlanned = lastStop?.arrival ?? lastStop?.departure;
       const startEffective = realtimeProfile?.startRealtime ?? startPlanned;
       const endEffective = realtimeProfile?.endRealtime ?? endPlanned;
-      if (startEffective==null || endEffective==null || nowSec<startEffective || nowSec>endEffective) continue;
+      if (startEffective==null || endEffective==null) continue;
+      const isInWindow = (nowSec>=startEffective && nowSec<=endEffective);
+      // [PATCH] do not drop trains solely because they are not in-window; they may still be useful to show
+      // if (!isInWindow && !realtimeProfile) continue;
       const totalSpan = endEffective - startEffective;
       const tripProgress = totalSpan > 0 ? (nowSec - startEffective) / totalSpan : null;
       const headsign = (()=>{
@@ -5379,8 +5364,65 @@ function stationNameMatchesKeywords(name, keywords){
           numberList,
           delayNumberKeys
         });
+        positioned = true;
         break;
       }
+
+      // [PATCH] Fallback positioning: if the train is valid but no segment could be interpolated,
+      // place it on the last known stop (or first stop) so it still appears on the map.
+      if (!positioned){
+        // choose a reference stop based on time if available
+        let refStop = null;
+        // try last stop with time <= nowSec
+        for (let j=seq.length-1;j>=0;j--){
+          const st = seq[j];
+          const ps = realtimeProfile?.stops?.[j];
+          const t = (ps?.arrivalRealtime ?? ps?.departureRealtime ?? st.arrival ?? st.departure);
+          if (t!=null && t<=nowSec){ refStop = st; break; }
+        }
+        if (!refStop) refStop = seq[0];
+
+        const refMeta = stopsById.get(refStop.stop_id);
+        if (refMeta){
+          const displayForList = branding.displayNumber || numberDisplay || rawNumber || null;
+          const numberList = displayForList ? [displayForList] : [];
+          const delayNumberKeys = [];
+          if (numberKey != null) delayNumberKeys.push(String(numberKey));
+          items.push({
+            trip_id,
+            route_short_name: route.short || '',
+            route_long_name: route.long || '',
+            headsign,
+            from: seq[0]?.stop_id || '',
+            to: seq[seq.length-1]?.stop_id || '',
+            etaSec: null,
+            lat: refMeta.lat,
+            lon: refMeta.lon,
+            route_id: trip.route_id,
+            number: numberDisplay,
+            numberRaw: rawNumber || null,
+            numberDigits: branding.digits || null,
+            numberKey,
+            branding,
+            startSec: startEffective,
+            endSec: endEffective,
+            scheduledStartSec: startPlanned,
+            scheduledEndSec: endPlanned,
+            progress: isInWindow ? tripProgress : null,
+            segmentIndex: null,
+            segmentProgress: null,
+            nowSec,
+            stopsCount: seq.length,
+            currentDelaySec: realtimeProfile?.startDelaySec ?? 0,
+            source,
+            numberList,
+            delayNumberKeys,
+            fallback: true
+          });
+          positioned = true;
+        }
+      }
+
     }
     return mergeTrainsByNumber(mergeCrossBorderTrains(items));
   }
