@@ -3051,13 +3051,6 @@ const WEEKDAY_FIELDS = ['sunday','monday','tuesday','wednesday','thursday','frid
     return { ymd:`${y}${m}${day}`, weekday:WEEKDAY_FIELDS[d.getDay()] };
   }
 
-  function normalizeYmdLike(value){
-    if (value == null) return null;
-    const digits = String(value).replace(/\D/g, '');
-    if (digits.length >= 8) return digits.slice(0, 8);
-    return null;
-  }
-
   function computeActiveServiceSet(calendarRows, calendarDateRows){
     const hasCalendar = Array.isArray(calendarRows) && calendarRows.length;
     const hasDates = Array.isArray(calendarDateRows) && calendarDateRows.length;
@@ -3071,12 +3064,9 @@ const WEEKDAY_FIELDS = ['sunday','monday','tuesday','wednesday','thursday','frid
         if (!row) continue;
         const svc = row.service_id;
         if (!svc) continue;
-
-        const start = normalizeYmdLike(row.start_date);
-        const end = normalizeYmdLike(row.end_date);
+        const start=row.start_date, end=row.end_date;
         if (start && start > ymd) continue;
         if (end && end < ymd) continue;
-
         const runs = row[weekday];
         if (runs === '1' || runs === 1) active.add(svc);
       }
@@ -3084,10 +3074,7 @@ const WEEKDAY_FIELDS = ['sunday','monday','tuesday','wednesday','thursday','frid
 
     if (hasDates){
       for (const row of calendarDateRows){
-        if (!row) continue;
-        const date = normalizeYmdLike(row.date);
-        if (!date || date !== ymd) continue;
-
+        if (!row || row.date !== ymd) continue;
         const svc = row.service_id;
         if (!svc) continue;
         const type = String(row.exception_type);
@@ -4673,6 +4660,18 @@ function setLayerGroupVisibility(group, visible){
     'bettembourg',
     'luxembourg'
   ].map(normalizeStationName);
+
+  const AXIS_STOP_CODES = new Set([
+    // codes UIC / SNCF (les 8 chiffres apparaissent dans stop_id/parent_station type StopPoint:OCETrain TER-87141002)
+    '87141002', // Nancy
+    '87141820', // Pagny-sur-Moselle (selon GTFS)
+    '87192039', // Metz-Ville
+    '87192080', // Thionville
+    '87192401', // Hettange-Grande
+    '87192427', // Bettembourg (côté SNCF GTFS parfois)
+    '82001000', // Luxembourg (code UIC)
+    '82001200'  // Howald / variantes
+  ]);
   const EXCLUDED_TRAIN_NUMBERS = new Set(['44700']);
   const EXCLUDED_TRAIN_NUMBER_PREFIXES = ['447'];
   const CORE_TGV_STOP_KEYWORDS = ['metz','nancy','thionville','luxembourg'].map(normalizeStationName);
@@ -5144,11 +5143,19 @@ function stationNameMatchesKeywords(name, keywords){
   // ---------- Filtre sillon & service du jour ----------
   function tripPassesAxis(seq, lookup = stopsById){
     if (!Array.isArray(seq) || seq.length < 2) return false;
+
     let hits = 0;
     for (const stop of seq){
       const meta = lookup.get(stop.stop_id);
-      if (!meta || !meta.name) continue;
-      if (stationNameMatchesKeywords(meta.name, AXIS_STOP_KEYWORDS)){
+      if (!meta) continue;
+
+      // 1) match par nom (ancienne logique)
+      const byName = meta.name && stationNameMatchesKeywords(meta.name, AXIS_STOP_KEYWORDS);
+
+      // 2) match par codes (plus robuste quand les libellés changent)
+      const byCode = stopMetaMatchesStationCodes(meta, AXIS_STOP_CODES, lookup);
+
+      if (byName || byCode){
         hits++;
         if (hits >= 2) return true;
       }
