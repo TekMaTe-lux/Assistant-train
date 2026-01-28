@@ -3,10 +3,10 @@
 <head>
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
-  <title>La Bétaillère — Générateur JSON trains (GTFS + Compo)</title>
+  <title>La Bétaillère — Générateur JSON (GTFS static + compo)</title>
   <style>
     body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;margin:0;background:#0b0f18;color:#e8eefc}
-    header{padding:18px 16px;border-bottom:1px solid rgba(255,255,255,.08);background:#0a0e16;position:sticky;top:0}
+    header{padding:18px 16px;border-bottom:1px solid rgba(255,255,255,.08);background:#0a0e16;position:sticky;top:0;z-index:10}
     h1{margin:0;font-size:18px;letter-spacing:.3px}
     main{padding:16px;max-width:980px;margin:0 auto}
     .card{background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.08);border-radius:14px;padding:14px;margin:12px 0}
@@ -21,12 +21,12 @@
     .row3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px}
     .small{font-size:12px;opacity:.8;line-height:1.35}
     .log{white-space:pre-wrap;font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;font-size:12px;
-      background:rgba(0,0,0,.25);border:1px solid rgba(255,255,255,.12);border-radius:12px;padding:10px;min-height:120px}
+      background:rgba(0,0,0,.25);border:1px solid rgba(255,255,255,.12);border-radius:12px;padding:10px;min-height:140px}
     .pill{display:inline-block;padding:2px 8px;border-radius:999px;border:1px solid rgba(255,255,255,.14);font-size:12px;opacity:.9}
     .ok{color:#8bff9a;border-color:rgba(139,255,154,.35)}
     .warn{color:#ffd38b;border-color:rgba(255,211,139,.35)}
     .bad{color:#ff8b8b;border-color:rgba(255,139,139,.35)}
-    a{color:#a8c7ff}
+    code{background:rgba(255,255,255,.08);padding:1px 6px;border-radius:6px}
   </style>
 </head>
 <body>
@@ -45,17 +45,20 @@
         <label>Corridor (filtre de gares)</label>
         <select id="corridor">
           <option value="BER">#BER Nancy–Metz–Thionville–Lux</option>
-          <option value="ALL">Tout (attention lourd)</option>
+          <option value="ALL">Tout (plus lourd)</option>
         </select>
       </div>
     </div>
 
     <label>Base GTFS statique (testée dans l’ordre)</label>
     <textarea id="bases" rows="5"></textarea>
-    <div class="small">
-      Astuce : laisse les bases par défaut (comme ton site). Si tu as tes .txt sur le VPS, ajoute une ligne du type :
-      <span class="pill">https://vps.labetaillere.fr/gtfs/</span>
-      (avec les fichiers <code>stops.txt</code>, <code>trips.txt</code>, <code>stop_times.txt</code>, <code>calendar.txt</code>, <code>calendar_dates.txt</code>).
+
+    <label>URL Compotrains.json (optionnel mais recommandé)</label>
+    <input id="compoUrl" type="text"/>
+
+    <div class="small" style="margin-top:10px">
+      Ce générateur fonctionne <b>sans calendar.txt</b> (ton GTFS utilise <code>calendar_dates.txt</code>).<br/>
+      Fichiers requis dans chaque base : <code>stops.txt</code>, <code>trips.txt</code>, <code>stop_times.txt</code>, <code>calendar_dates.txt</code>.
     </div>
 
     <div class="row3" style="margin-top:12px">
@@ -68,8 +71,8 @@
   <div class="card">
     <div class="small">
       <span class="pill ok">OK</span> = base trouvée & fichiers chargés •
-      <span class="pill warn">WARN</span> = base trouvée mais partielle •
-      <span class="pill bad">ERR</span> = aucun GTFS accessible (souvent CORS ou URL).
+      <span class="pill warn">WARN</span> = base trouvée mais compo absente (fallback US) •
+      <span class="pill bad">ERR</span> = aucun GTFS accessible (URL/CORS/fichiers).
     </div>
     <div id="status" class="small" style="margin:10px 0"></div>
     <div id="log" class="log"></div>
@@ -78,13 +81,13 @@
 
 <script>
 /* =========================
-   CONFIG / DEFAULT BASES
+   DEFAULT BASES (inclut ton VPS en premier)
    ========================= */
 function defaultBases(){
   const here = location.href;
   const u = (rel)=> new URL(rel, here).href;
   return [
-    'https://vps.labetaillere.fr/gtfs/static/', // ✅ TON VPS
+    'https://vps.labetaillere.fr/gtfs/static/',  // ✅ TON VPS (validé)
     u('data/'),
     u('Assistant-train/data/'),
     'https://raw.githubusercontent.com/TekMaTe-lux/Assistant-train/main/Assistant-train/data/',
@@ -92,23 +95,17 @@ function defaultBases(){
   ];
 }
 
-const GTFS_FILES = ['stops.txt','trips.txt','stop_times.txt','calendar.txt','calendar_dates.txt'];
-
-// Compotrains: tu peux le laisser ici (relatif), ou mettre une URL complète VPS/GitHub.
-const COMPO_URL_DEFAULT = new URL('Compotrains.json', location.href).href;
+// ✅ TON GTFS: pas de calendar.txt
+const GTFS_FILES_REQUIRED = ['stops.txt','trips.txt','stop_times.txt','calendar_dates.txt'];
 
 /* =========================
    UI helpers
    ========================= */
 const $ = (id)=>document.getElementById(id);
 function setStatus(html){ $('status').innerHTML = html; }
-function logLine(msg){
-  const el = $('log');
-  el.textContent += (el.textContent ? '\n' : '') + msg;
-}
+function logLine(msg){ $('log').textContent += ($('log').textContent ? '\n' : '') + msg; }
 function clearLog(){ $('log').textContent=''; }
-function ymdLuxToday(){
-  // Simple: date locale navigateur OK pour test
+function ymdToday(){
   const d = new Date();
   const y = d.getFullYear();
   const m = String(d.getMonth()+1).padStart(2,'0');
@@ -125,12 +122,16 @@ function downloadJSON(obj, filename){
   a.click(); a.remove();
   setTimeout(()=>URL.revokeObjectURL(url), 2000);
 }
+function setBusy(on){
+  $('btnTest').disabled = on;
+  $('btnGenerate').disabled = on;
+  $('btnSample').disabled = on;
+}
 
 /* =========================
-   CSV parser (stream-safe simple)
+   CSV parser (support guillemets)
    ========================= */
 function parseCSV(text){
-  // Parser CSV simple (supporte guillemets)
   const rows = [];
   let i=0, field='', row=[], inQ=false;
   const pushField=()=>{ row.push(field); field=''; };
@@ -158,6 +159,7 @@ function parseCSV(text){
   }
   if (field.length || row.length){ pushField(); }
   if (row.length) pushRow();
+
   const header = rows.shift() || [];
   const out = [];
   for (const r of rows){
@@ -171,19 +173,19 @@ function parseCSV(text){
   return out;
 }
 
-/* =========================
-   Fetch & pick best base
-   ========================= */
 async function fetchText(url){
   const res = await fetch(url, {cache:'no-store'});
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   return await res.text();
 }
 
+/* =========================
+   Base picker (log fichier par fichier)
+   ========================= */
 async function tryBase(base){
   const data = {};
   const errors = [];
-  for (const f of GTFS_FILES){
+  for (const f of GTFS_FILES_REQUIRED){
     const url = base + f;
     try{
       const txt = await fetchText(url);
@@ -196,20 +198,21 @@ async function tryBase(base){
   }
   if (errors.length){
     const msg = errors.map(x => `${x.file}: ${x.err}`).join(' | ');
-    throw new Error(`Base partielle: ${msg}`);
+    throw new Error(`Base incomplète: ${msg}`);
   }
   return data;
 }
 
 async function pickWorkingBase(bases){
   let lastErr = null;
-  for (const b of bases){
-    try {
+  for (const bRaw of bases){
+    const b = bRaw.endsWith('/') ? bRaw : (bRaw + '/');
+    try{
       logLine(`→ test base: ${b}`);
       const gtfs = await tryBase(b);
-      logLine(`✅ OK: ${b} (fichiers: ${GTFS_FILES.join(', ')})`);
+      logLine(`✅ OK: ${b}`);
       return { base: b, gtfs };
-    } catch (e){
+    } catch(e){
       lastErr = e;
       logLine(`✖ fail: ${b} :: ${e?.message || e}`);
     }
@@ -218,14 +221,10 @@ async function pickWorkingBase(bases){
 }
 
 /* =========================
-   Core logic: resolved trains
+   Core logic
    ========================= */
 function extractTrainNumber(trip){
-  const candidates = [
-    trip.trip_short_name,
-    trip.trip_headsign,
-    trip.trip_id
-  ].filter(Boolean).map(String);
+  const candidates = [trip.trip_short_name, trip.trip_headsign, trip.trip_id].filter(Boolean).map(String);
   for (const s of candidates){
     const m = s.match(/(?:^|[^0-9])(8\d{4,5})(?!\d)/);
     if (m) return m[1];
@@ -234,7 +233,6 @@ function extractTrainNumber(trip){
 }
 
 function unitsToWagons(units){
-  // 3 wagons par unité (ton choix)
   if (units === 'UM') return 6;
   if (units === 'UM3') return 9;
   return 3; // US / inconnu
@@ -262,52 +260,27 @@ function buildStopTimesByTrip(stopTimes){
   return map;
 }
 
-function buildCalendarIndex(calendar, calendarDates){
-  const cal = new Map(); // service_id -> obj
-  for (const c of calendar){
-    if (c.service_id) cal.set(c.service_id, c);
-  }
-  const add = new Map(); // service_id -> Set(YYYYMMDD)
-  const rem = new Map(); // service_id -> Set(YYYYMMDD)
+// ✅ IMPORTANT: sans calendar.txt, on utilise calendar_dates.txt uniquement.
+// On indexe les dates d'exception_type=1 (service actif ce jour-là).
+function buildCalendarDatesActiveIndex(calendarDates){
+  const map = new Map(); // service_id -> Set(YYYYMMDD)
   for (const cd of calendarDates){
     const sid = cd.service_id;
     const dt = cd.date;
     const ex = cd.exception_type;
-    if (!sid || !dt || !ex) continue;
-    if (ex === '1'){
-      if (!add.has(sid)) add.set(sid, new Set());
-      add.get(sid).add(dt);
-    } else if (ex === '2'){
-      if (!rem.has(sid)) rem.set(sid, new Set());
-      rem.get(sid).add(dt);
-    }
+    if (!sid || !dt) continue;
+    if (String(ex) !== '1') continue;
+    if (!map.has(sid)) map.set(sid, new Set());
+    map.get(sid).add(dt);
   }
-  return { cal, add, rem };
+  return map;
 }
 
-function serviceActiveOnDate(service_id, ymd, calIdx){
+function serviceActiveOnDate(service_id, ymd, activeIdx){
   if (!service_id) return false;
-  if (calIdx.rem.get(service_id)?.has(ymd)) return false;
-  if (calIdx.add.get(service_id)?.has(ymd)) return true;
-
-  const c = calIdx.cal.get(service_id);
-  if (!c) return false;
-
-  const start = c.start_date, end = c.end_date;
-  if (start && ymd < start) return false;
-  if (end && ymd > end) return false;
-
-  // day-of-week: monday..sunday
-  const d = new Date(ymd.slice(0,4)+'-'+ymd.slice(4,6)+'-'+ymd.slice(6,8));
-  const dow = d.getDay(); // 0=Sun
-  const key = dow===0 ? 'sunday'
-            : dow===1 ? 'monday'
-            : dow===2 ? 'tuesday'
-            : dow===3 ? 'wednesday'
-            : dow===4 ? 'thursday'
-            : dow===5 ? 'friday'
-            : 'saturday';
-  return String(c[key]||'0') === '1';
+  const set = activeIdx.get(service_id);
+  if (!set) return false;
+  return set.has(ymd);
 }
 
 function isBerStop(name){
@@ -316,13 +289,11 @@ function isBerStop(name){
 }
 
 function inferDirection(stopNames){
-  // Très simple: si Nancy avant Luxembourg => Nancy→Lux, si inverse => Lux→Nancy
   const idxNancy = stopNames.findIndex(n => (n||'').toLowerCase().includes('nancy'));
   const idxLux = stopNames.findIndex(n => (n||'').toLowerCase().includes('luxembourg'));
   if (idxNancy >= 0 && idxLux >= 0){
     return (idxNancy < idxLux) ? 'NNY_LUX' : 'LUX_NNY';
   }
-  // fallback
   return null;
 }
 
@@ -348,7 +319,6 @@ function pickUnitsForTrain(compoData, trainNo, dirKey){
 function hhmmssToHHMM(t){
   if (!t) return null;
   const s = String(t).trim();
-  // GTFS peut être HH:MM:SS
   const m = s.match(/^(\d{1,2}):(\d{2})/);
   if (!m) return null;
   const hh = String(m[1]).padStart(2,'0');
@@ -356,36 +326,41 @@ function hhmmssToHHMM(t){
   return `${hh}:${mm}`;
 }
 
-async function buildResolvedJSON({ bases, ymdISO, corridor }){
+async function buildResolvedJSON({ bases, ymdISO, corridor, compoUrl }){
   const ymd = compactYMD(ymdISO);
 
   const { base, gtfs } = await pickWorkingBase(bases);
 
-  // load compo near same folder by default
-  let compoUrl = COMPO_URL_DEFAULT;
   let compoData = {};
-  try {
-    compoData = await loadCompoData(compoUrl);
-    logLine(`✅ Compo chargée: ${compoUrl}`);
-  } catch (e){
-    logLine(`⚠️ Compo non chargée (${compoUrl}) -> fallback US. (${e?.message||e})`);
+  let compoStatus = 'OK';
+  try{
+    if (compoUrl){
+      compoData = await loadCompoData(compoUrl);
+      logLine(`✅ Compo chargée: ${compoUrl}`);
+    } else {
+      compoStatus = 'NONE';
+      logLine(`⚠️ Compo URL vide -> fallback US.`);
+    }
+  } catch(e){
+    compoStatus = 'NONE';
+    logLine(`⚠️ Compo non chargée -> fallback US. (${e?.message||e})`);
     compoData = {};
   }
 
   const stopsById = buildStopNameById(gtfs['stops.txt']);
   const stopTimesByTrip = buildStopTimesByTrip(gtfs['stop_times.txt']);
-  const calIdx = buildCalendarIndex(gtfs['calendar.txt'], gtfs['calendar_dates.txt']);
+  const activeIdx = buildCalendarDatesActiveIndex(gtfs['calendar_dates.txt']);
 
   const out = {
     date: ymdISO,
     generatedAt: new Date().toISOString(),
-    source: { gtfsBase: base, compo: compoUrl },
+    mode: 'calendar_dates_only',
+    source: { gtfsBase: base, compo: compoUrl || null },
     trains: {}
   };
 
-  // Parcours trips actifs du jour
   for (const trip of gtfs['trips.txt']){
-    if (!serviceActiveOnDate(trip.service_id, ymd, calIdx)) continue;
+    if (!serviceActiveOnDate(trip.service_id, ymd, activeIdx)) continue;
 
     const trainNo = extractTrainNumber(trip);
     if (!trainNo) continue;
@@ -393,42 +368,40 @@ async function buildResolvedJSON({ bases, ymdISO, corridor }){
     const seq = stopTimesByTrip.get(trip.trip_id);
     if (!seq || !seq.length) continue;
 
-    // stops -> noms + heures
     const stopNamesAll = [];
     const stopsObj = {};
+
     for (const st of seq){
       const name = stopsById.get(st.stop_id) || '';
       if (!name) continue;
       stopNamesAll.push(name);
 
-      if (corridor === 'BER'){
-        if (!isBerStop(name)) continue;
-      }
+      if (corridor === 'BER' && !isBerStop(name)) continue;
+
       const hhmm = hhmmssToHHMM(st.departure_time || st.arrival_time);
       if (!hhmm) continue;
-      // On garde le 1er horaire rencontré pour ce nom
+
       if (stopsObj[name] == null) stopsObj[name] = hhmm;
     }
 
-    // Filtre corridor: si BER, exige au moins 2 stops BER
     const stopsKeys = Object.keys(stopsObj);
     if (corridor === 'BER' && stopsKeys.length < 2) continue;
 
-    // Direction déduite
     const dirKey = inferDirection(stopNamesAll);
     const dirLabel = (dirKey === 'NNY_LUX') ? 'Nancy→Lux' : (dirKey === 'LUX_NNY' ? 'Lux→Nancy' : '—');
 
-    // Units + wagons
     const units = pickUnitsForTrain(compoData, trainNo, dirKey);
     const wagons = unitsToWagons(units);
 
-    // Dédup : si plusieurs trips portent le même numéro, on garde celui avec le plus de stops corridor
+    // Dédup (si plusieurs trips = même trainNo), on garde celui avec le plus de stops corridor
     const prev = out.trains[trainNo];
     const currentScore = stopsKeys.length;
     const prevScore = prev ? Object.keys(prev.stops || {}).length : -1;
+
     if (!prev || currentScore > prevScore){
       out.trains[trainNo] = {
         trip_id: trip.trip_id,
+        service_id: trip.service_id,
         direction: dirLabel,
         dirKey: dirKey || null,
         units,
@@ -438,35 +411,36 @@ async function buildResolvedJSON({ bases, ymdISO, corridor }){
     }
   }
 
+  // petit résumé
+  out.summary = {
+    trainsCount: Object.keys(out.trains).length,
+    compo: compoStatus
+  };
+
   return out;
 }
 
 /* =========================
-   UI actions
+   Boot UI
    ========================= */
+$('ymd').value = ymdToday();
+$('bases').value = defaultBases().join('\n');
+$('compoUrl').value = new URL('Compotrains.json', location.href).href;
+
 function getBasesFromUI(){
   return $('bases').value.split('\n').map(s=>s.trim()).filter(Boolean).map(b => b.endsWith('/') ? b : (b + '/'));
 }
 
-function setBusy(on){
-  $('btnTest').disabled = on;
-  $('btnGenerate').disabled = on;
-  $('btnSample').disabled = on;
-}
-
-$('ymd').value = ymdLuxToday();
-$('bases').value = defaultBases().join('\n');
-
 $('btnTest').addEventListener('click', async ()=>{
   clearLog();
-  setStatus('Test en cours…');
   setBusy(true);
-  try {
+  setStatus('Test en cours…');
+  try{
     const bases = getBasesFromUI();
     await pickWorkingBase(bases);
     setStatus('<span class="pill ok">OK</span> Une base GTFS fonctionne. Tu peux générer.');
-  } catch (e){
-    setStatus('<span class="pill bad">ERR</span> Aucune base GTFS accessible. Regarde le log (CORS/URL/fichiers).');
+  } catch(e){
+    setStatus('<span class="pill bad">ERR</span> Aucune base GTFS accessible. Regarde le log (URL/CORS/fichiers).');
   } finally {
     setBusy(false);
   }
@@ -474,17 +448,20 @@ $('btnTest').addEventListener('click', async ()=>{
 
 $('btnSample').addEventListener('click', async ()=>{
   clearLog();
-  setStatus('Aperçu en cours…');
   setBusy(true);
+  setStatus('Aperçu en cours…');
   try{
     const bases = getBasesFromUI();
     const ymdISO = $('ymd').value;
     const corridor = $('corridor').value;
-    const out = await buildResolvedJSON({ bases, ymdISO, corridor });
+    const compoUrl = $('compoUrl').value.trim();
+
+    const out = await buildResolvedJSON({ bases, ymdISO, corridor, compoUrl });
+
     const keys = Object.keys(out.trains || {});
     const sample = keys.slice(0, 10).reduce((acc,k)=>{ acc[k]=out.trains[k]; return acc; },{});
     logLine('--- APERÇU 10 TRAINS ---');
-    logLine(JSON.stringify({ date: out.date, trains: sample }, null, 2));
+    logLine(JSON.stringify({ date: out.date, summary: out.summary, trains: sample }, null, 2));
     setStatus(`<span class="pill ok">OK</span> Aperçu généré (${keys.length} trains au total).`);
   } catch(e){
     logLine('Erreur: ' + (e?.message||e));
@@ -496,20 +473,23 @@ $('btnSample').addEventListener('click', async ()=>{
 
 $('btnGenerate').addEventListener('click', async ()=>{
   clearLog();
-  setStatus('Génération en cours…');
   setBusy(true);
+  setStatus('Génération en cours…');
   try{
     const bases = getBasesFromUI();
     const ymdISO = $('ymd').value;
     const corridor = $('corridor').value;
-    const out = await buildResolvedJSON({ bases, ymdISO, corridor });
-    const count = Object.keys(out.trains||{}).length;
+    const compoUrl = $('compoUrl').value.trim();
+
+    const out = await buildResolvedJSON({ bases, ymdISO, corridor, compoUrl });
+
     const filename = `resolved_trains_${ymdISO}.json`;
     downloadJSON(out, filename);
-    setStatus(`<span class="pill ok">OK</span> ${filename} téléchargé (${count} trains).`);
+
+    setStatus(`<span class="pill ok">OK</span> ${filename} téléchargé (${out.summary?.trainsCount ?? 0} trains).`);
   } catch(e){
     logLine('Erreur: ' + (e?.message||e));
-    setStatus('<span class="pill bad">ERR</span> Génération impossible. Vérifie le log (souvent CORS ou base GTFS).');
+    setStatus('<span class="pill bad">ERR</span> Génération impossible. Vérifie le log.');
   } finally {
     setBusy(false);
   }
