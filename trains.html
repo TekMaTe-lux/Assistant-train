@@ -53,12 +53,25 @@
     <label>Base GTFS statique (testée dans l’ordre)</label>
     <textarea id="bases" rows="5"></textarea>
 
-    <label>URL Compotrains.json (optionnel mais recommandé)</label>
-    <input id="compoUrl" type="text"/>
+    <div class="row">
+      <div>
+        <label>URL Compotrains.json (optionnel mais recommandé)</label>
+        <input id="compoUrl" type="text"/>
+      </div>
+      <div>
+        <label>Politique capacité fallback (si train absent de compo)</label>
+        <select id="capPolicy">
+          <option value="PRUDENT">PRUDENT (UNKNOWN + capacité par défaut)</option>
+          <option value="OPTIMISTE">OPTIMISTE (assume Z24500 UM)</option>
+          <option value="PESSIMISTE">PESSIMISTE (assume Z24500 US)</option>
+        </select>
+      </div>
+    </div>
 
     <div class="small" style="margin-top:10px">
       Ce générateur fonctionne <b>sans calendar.txt</b> (ton GTFS utilise <code>calendar_dates.txt</code>).<br/>
       Fichiers requis dans chaque base : <code>stops.txt</code>, <code>trips.txt</code>, <code>stop_times.txt</code>, <code>calendar_dates.txt</code>.
+      <br/>Ajouts JSON: <code>trainType</code>, <code>capacitySeatsEstimate</code>, <code>capacityConfidence</code>, <code>capacityPolicy</code>.
     </div>
 
     <div class="row3" style="margin-top:12px">
@@ -71,7 +84,7 @@
   <div class="card">
     <div class="small">
       <span class="pill ok">OK</span> = base trouvée & fichiers chargés •
-      <span class="pill warn">WARN</span> = base trouvée mais compo absente (fallback US) •
+      <span class="pill warn">WARN</span> = compo absente ou train absent (fallback capacité) •
       <span class="pill bad">ERR</span> = aucun GTFS accessible (URL/CORS/fichiers).
     </div>
     <div id="status" class="small" style="margin:10px 0"></div>
@@ -232,10 +245,11 @@ function extractTrainNumber(trip){
   return null;
 }
 
+// Ici "wagons" = nombre de caisses (approx OK pour Z24500 US/UM/UM3)
 function unitsToWagons(units){
   if (units === 'UM') return 6;
   if (units === 'UM3') return 9;
-  return 3; // US / inconnu
+  return 3; // US / inconnu (pour Z24500)
 }
 
 function buildStopNameById(stops){
@@ -261,7 +275,6 @@ function buildStopTimesByTrip(stopTimes){
 }
 
 // ✅ IMPORTANT: sans calendar.txt, on utilise calendar_dates.txt uniquement.
-// On indexe les dates d'exception_type=1 (service actif ce jour-là).
 function buildCalendarDatesActiveIndex(calendarDates){
   const map = new Map(); // service_id -> Set(YYYYMMDD)
   for (const cd of calendarDates){
@@ -298,7 +311,7 @@ function inferDirection(stopNames){
 }
 
 async function loadCompoData(url){
-  const res = await fetch(url, {cache:'no-store'});
+  const res = await fetch(url, {cache:'no-store'}); // ✅ prend les MAJ immédiatement
   if (!res.ok) throw new Error(`Compo HTTP ${res.status}`);
   return await res.json();
 }
@@ -316,6 +329,55 @@ function pickUnitsForTrain(compoData, trainNo, dirKey){
   return normalizeCompoValue(v);
 }
 
+function isInCompoFile(compoData, trainNo){
+  return !!(compoData && trainNo && compoData[trainNo]);
+}
+
+/* ====== CAPACITÉ (pour compat fréquentation) ======
+   - Si train présent dans Compotrains.json => on suppose Z24500_2N, seats via units (high)
+   - Sinon => fallback selon policy (low)
+*/
+function estimateSeatsFromUnits(units){
+  // Valeurs "base" à ajuster selon tes retours terrain
+  if (units === 'UM3') return 780;
+  if (units === 'UM')  return 520;
+  return 260; // US
+}
+
+function estimateSeatsFallback(policy){
+  if (policy === 'OPTIMISTE') return { seats: 520, trainType: 'ASSUMED_Z24500_UM' };
+  if (policy === 'PESSIMISTE') return { seats: 260, trainType: 'ASSUMED_Z24500_US' };
+  return { seats: 220, trainType: 'UNKNOWN' }; // PRUDENT
+}
+
+function resolveCapacityAndType({ compoData, trainNo, dirKey, capPolicy }){
+  const inCompo = isInCompoFile(compoData, trainNo);
+
+  if (inCompo){
+    // Ici, ton fichier compo ne décrit que la grammaire US/UM/UM3 => Z24500_2N
+    const units = pickUnitsForTrain(compoData, trainNo, dirKey);
+    return {
+      trainType: 'Z24500_2N',
+      units,
+      wagons: unitsToWagons(units),
+      capacitySeatsEstimate: estimateSeatsFromUnits(units),
+      capacityConfidence: 'high',
+      capacityPolicy: capPolicy
+    };
+  }
+
+  // Train inconnu côté compo => on ne ment pas sur AGC/Z2, on met une capacité fallback
+  const fb = estimateSeatsFallback(capPolicy);
+  return {
+    trainType: fb.trainType,
+    units: null,
+    wagons: null,
+    capacitySeatsEstimate: fb.seats,
+    capacityConfidence: 'low',
+    capacityPolicy: capPolicy
+  };
+}
+
 function hhmmssToHHMM(t){
   if (!t) return null;
   const s = String(t).trim();
@@ -326,7 +388,7 @@ function hhmmssToHHMM(t){
   return `${hh}:${mm}`;
 }
 
-async function buildResolvedJSON({ bases, ymdISO, corridor, compoUrl }){
+async function buildResolvedJSON({ bases, ymdISO, corridor, compoUrl, capPolicy }){
   const ymd = compactYMD(ymdISO);
 
   const { base, gtfs } = await pickWorkingBase(bases);
@@ -339,11 +401,11 @@ async function buildResolvedJSON({ bases, ymdISO, corridor, compoUrl }){
       logLine(`✅ Compo chargée: ${compoUrl}`);
     } else {
       compoStatus = 'NONE';
-      logLine(`⚠️ Compo URL vide -> fallback US.`);
+      logLine(`⚠️ Compo URL vide -> trains hors compo en fallback capacité.`);
     }
   } catch(e){
     compoStatus = 'NONE';
-    logLine(`⚠️ Compo non chargée -> fallback US. (${e?.message||e})`);
+    logLine(`⚠️ Compo non chargée -> trains hors compo en fallback capacité. (${e?.message||e})`);
     compoData = {};
   }
 
@@ -356,6 +418,7 @@ async function buildResolvedJSON({ bases, ymdISO, corridor, compoUrl }){
     generatedAt: new Date().toISOString(),
     mode: 'calendar_dates_only',
     source: { gtfsBase: base, compo: compoUrl || null },
+    capacityPolicy: capPolicy,
     trains: {}
   };
 
@@ -390,8 +453,7 @@ async function buildResolvedJSON({ bases, ymdISO, corridor, compoUrl }){
     const dirKey = inferDirection(stopNamesAll);
     const dirLabel = (dirKey === 'NNY_LUX') ? 'Nancy→Lux' : (dirKey === 'LUX_NNY' ? 'Lux→Nancy' : '—');
 
-    const units = pickUnitsForTrain(compoData, trainNo, dirKey);
-    const wagons = unitsToWagons(units);
+    const cap = resolveCapacityAndType({ compoData, trainNo, dirKey, capPolicy });
 
     // Dédup (si plusieurs trips = même trainNo), on garde celui avec le plus de stops corridor
     const prev = out.trains[trainNo];
@@ -404,17 +466,26 @@ async function buildResolvedJSON({ bases, ymdISO, corridor, compoUrl }){
         service_id: trip.service_id,
         direction: dirLabel,
         dirKey: dirKey || null,
-        units,
-        wagons,
+
+        // Compat / fréquence (toujours présent)
+        trainType: cap.trainType,
+        capacitySeatsEstimate: cap.capacitySeatsEstimate,
+        capacityConfidence: cap.capacityConfidence,
+        capacityPolicy: cap.capacityPolicy,
+
+        // Compo “Z24500” seulement quand on sait
+        units: cap.units,
+        wagons: cap.wagons,
+
         stops: stopsObj
       };
     }
   }
 
-  // petit résumé
   out.summary = {
     trainsCount: Object.keys(out.trains).length,
-    compo: compoStatus
+    compo: compoStatus,
+    capacityPolicy: capPolicy
   };
 
   return out;
@@ -426,6 +497,7 @@ async function buildResolvedJSON({ bases, ymdISO, corridor, compoUrl }){
 $('ymd').value = ymdToday();
 $('bases').value = defaultBases().join('\n');
 $('compoUrl').value = new URL('Compotrains.json', location.href).href;
+$('capPolicy').value = 'PRUDENT';
 
 function getBasesFromUI(){
   return $('bases').value.split('\n').map(s=>s.trim()).filter(Boolean).map(b => b.endsWith('/') ? b : (b + '/'));
@@ -455,8 +527,9 @@ $('btnSample').addEventListener('click', async ()=>{
     const ymdISO = $('ymd').value;
     const corridor = $('corridor').value;
     const compoUrl = $('compoUrl').value.trim();
+    const capPolicy = $('capPolicy').value;
 
-    const out = await buildResolvedJSON({ bases, ymdISO, corridor, compoUrl });
+    const out = await buildResolvedJSON({ bases, ymdISO, corridor, compoUrl, capPolicy });
 
     const keys = Object.keys(out.trains || {});
     const sample = keys.slice(0, 10).reduce((acc,k)=>{ acc[k]=out.trains[k]; return acc; },{});
@@ -480,8 +553,9 @@ $('btnGenerate').addEventListener('click', async ()=>{
     const ymdISO = $('ymd').value;
     const corridor = $('corridor').value;
     const compoUrl = $('compoUrl').value.trim();
+    const capPolicy = $('capPolicy').value;
 
-    const out = await buildResolvedJSON({ bases, ymdISO, corridor, compoUrl });
+    const out = await buildResolvedJSON({ bases, ymdISO, corridor, compoUrl, capPolicy });
 
     const filename = `resolved_trains_${ymdISO}.json`;
     downloadJSON(out, filename);
