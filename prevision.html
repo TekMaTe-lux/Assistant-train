@@ -172,6 +172,30 @@
 
     canvas{ width:100%; max-height:320px; }
 
+    .trainGrid{
+      display:grid;
+      grid-template-columns: 1fr 1fr;
+      gap:12px;
+    }
+    @media (max-width: 980px){
+      .trainGrid{ grid-template-columns: 1fr; }
+    }
+    .trainBox{
+      border:1px solid rgba(38,52,85,.9);
+      background: rgba(14,23,48,.55);
+      border-radius:16px;
+      padding:12px;
+      overflow:auto;
+    }
+    .trainTitle{
+      font-size:12px;
+      color:var(--muted);
+      margin:0 0 8px;
+      letter-spacing:.2px;
+      text-transform: uppercase;
+      font-weight:900;
+    }
+
     /* Train viz */
     #trainVizWrap{
       border:1px solid rgba(38,52,85,.9);
@@ -223,6 +247,31 @@
   <!-- LEFT: controls -->
   <section class="card">
     <h2>Paramètres</h2>
+
+    <label>Train (numéro)</label>
+    <div class="row">
+      <input id="trainNumber" type="text" placeholder="Ex: 88501" />
+      <button id="applyProfile" type="button">Appliquer profil</button>
+    </div>
+    <div class="small">Si le train est connu, on pré-remplit la compo et une demande de base.</div>
+
+    <label>Gare clé (variation avant/après)</label>
+    <select id="stationKey">
+      <option value="nancy">Nancy</option>
+      <option value="metz" selected>Metz</option>
+      <option value="thionville">Thionville</option>
+      <option value="luxembourg">Luxembourg</option>
+    </select>
+
+    <label>Perturbations & événements</label>
+    <div class="row">
+      <label><input id="prevCancelled" type="checkbox" /> Train précédent supprimé</label>
+      <label><input id="lineDisruption" type="checkbox" /> Perturbations / retards</label>
+    </div>
+    <div class="row">
+      <label><input id="shortFormation" type="checkbox" /> Train raccourci (UM→US)</label>
+      <label><input id="eventBoost" type="checkbox" /> Événement local</label>
+    </div>
 
     <label>Heure de départ</label>
     <input id="time" type="time" value="07:20" />
@@ -303,11 +352,11 @@
     <div class="kpi">
       <div class="box">
         <div class="v" id="kpiTotal">—</div>
-        <div class="t">Demande totale estimée</div>
+        <div class="t">Demande estimée (après gare)</div>
       </div>
       <div class="box">
         <div class="v" id="kpiMaxLoad">—</div>
-        <div class="t">Charge max (segment affiché)</div>
+        <div class="t">Charge max (après gare)</div>
       </div>
     </div>
 
@@ -326,7 +375,16 @@
     <h2>Rendu</h2>
 
     <div id="trainVizWrap">
-      <div id="trainViz"></div>
+      <div class="trainGrid">
+        <div class="trainBox">
+          <div class="trainTitle" id="trainTitleBefore">Avant la gare</div>
+          <div id="trainVizBefore"></div>
+        </div>
+        <div class="trainBox">
+          <div class="trainTitle" id="trainTitleAfter">Après la gare</div>
+          <div id="trainVizAfter"></div>
+        </div>
+      </div>
       <div id="trainLegend"></div>
     </div>
 
@@ -522,8 +580,8 @@
   // ---------- SVG train with beveled head+tail ----------
   // head = voiture 1 côté direction
   // tail = dernière voiture côté opposé
-  function renderTrainCarsBeveled({ cars, capPerCar, perCarPassengers, directionLabel }){
-    const el = document.getElementById("trainViz");
+  function renderTrainCarsBeveled({ cars, capPerCar, perCarPassengers, directionLabel, targetId, title }){
+    const el = document.getElementById(targetId);
     const leg = document.getElementById("trainLegend");
     if(!el || !leg) return;
 
@@ -582,7 +640,7 @@
       <text x="10" y="22" fill="rgba(233,238,252,.9)"
             font-family="system-ui, -apple-system, Segoe UI, Roboto, Arial"
             font-size="12" font-weight="900">
-        Schéma rame (${cars} voitures) — sens: ${headOnRight ? "→" : "←"}
+        ${escapeHtml(title)} • ${cars} voitures — sens: ${headOnRight ? "→" : "←"}
       </text>
 
       <!-- rails -->
@@ -665,7 +723,13 @@
     const ctx = document.getElementById("barChart").getContext("2d");
     barChart = new Chart(ctx, {
       type: 'bar',
-      data: { labels: [], datasets: [{ label: "Occupation par voiture — %", data: [] }] },
+      data: {
+        labels: [],
+        datasets: [
+          { label: "Avant gare — %", data: [], backgroundColor: "rgba(59,130,246,.65)" },
+          { label: "Après gare — %", data: [], backgroundColor: "rgba(249,115,22,.75)" }
+        ]
+      },
       options: {
         responsive:true,
         plugins:{ legend:{ labels:{ color:"#e9eefc" } } },
@@ -692,13 +756,71 @@
   luxBias.addEventListener("input", ()=> $("luxBiasVal").textContent = luxBias.value);
   peakDistribution.addEventListener("input", ()=> $("peakDistributionVal").textContent = peakDistribution.value);
 
+  const trainProfiles = {
+    "88501": { cars: 6, baseDemand: 320, direction: "NANCY_LUX", peakBoost: 3.4 }
+  };
+
+  function applyTrainProfile(){
+    const trainNo = ($("trainNumber").value || "").trim();
+    const profile = trainProfiles[trainNo];
+    if(!profile) return;
+    if(profile.cars) $("formation").value = String(profile.cars);
+    if(profile.baseDemand) $("baseDemand").value = String(profile.baseDemand);
+    if(profile.direction) $("direction").value = profile.direction;
+    if(profile.peakBoost) $("peakBoost").value = profile.peakBoost;
+    $("peakBoostVal").textContent = $("peakBoost").value;
+  }
+
+  function formationLabel(cars){
+    if(cars === 3) return "US";
+    if(cars === 6) return "UM";
+    if(cars === 9) return "UM3";
+    return `${cars} voitures`;
+  }
+
+  function stationFactors(station){
+    switch(station){
+      case "nancy": return { before: 0.65, after: 1.0, label: "Nancy" };
+      case "metz": return { before: 0.8, after: 1.35, label: "Metz" };
+      case "thionville": return { before: 0.95, after: 1.15, label: "Thionville" };
+      case "luxembourg": return { before: 1.05, after: 1.22, label: "Luxembourg" };
+      default: return { before: 0.9, after: 1.1, label: "Gare" };
+    }
+  }
+
+  function disruptionFactor(cfg, stage){
+    let factor = 1;
+    if(cfg.prevCancelled) factor += stage === "after" ? 0.35 : 0.20;
+    if(cfg.lineDisruption) factor += stage === "after" ? 0.18 : 0.10;
+    if(cfg.eventBoost) factor += stage === "after" ? 0.22 : 0.12;
+    return factor;
+  }
+
+  function adjustBiasForStation(cfg, station, stage){
+    const copy = { ...cfg };
+    if(stage === "after"){
+      if(station === "metz") copy.metzBiasPct += 12;
+      if(station === "luxembourg") copy.luxBiasPct += 12;
+    }
+    return copy;
+  }
+
   function readCfg(){
+    const carsRaw = parseInt($("formation").value,10);
+    const shortFormation = $("shortFormation").checked;
+    const cars = Math.max(3, carsRaw - (shortFormation ? 3 : 0));
     return {
+      trainNumber: ($("trainNumber").value || "").trim(),
+      stationKey: $("stationKey").value,
+      prevCancelled: $("prevCancelled").checked,
+      lineDisruption: $("lineDisruption").checked,
+      shortFormation,
+      eventBoost: $("eventBoost").checked,
       time: $("time").value || "07:20",
       dayType: $("dayType").value,
       season: $("season").value,
       direction: $("direction").value,
-      cars: parseInt($("formation").value,10),
+      cars,
       capPerCar: parseInt($("capPerCar").value,10) || 160,
       baseDemand: parseInt($("baseDemand").value,10) || 220,
       peakBoost: parseFloat($("peakBoost").value),
@@ -709,51 +831,88 @@
     };
   }
 
-  function render(cfg, res, label){
-    $("kpiTotal").textContent = `${res.total} voyageurs`;
-    $("kpiMaxLoad").textContent = `${Math.round(res.loadPct)}%`;
+  function render(cfg, beforeRes, afterRes, label){
+    $("kpiTotal").textContent = `${afterRes.total} voyageurs`;
+    $("kpiMaxLoad").textContent = `${Math.round(afterRes.loadPct)}%`;
 
-    // chart data
     barChart.data.labels = Array.from({length: cfg.cars}, (_,i)=>`Voiture ${i+1}`);
-    barChart.data.datasets[0].data = res.perCar.map(v => cfg.capPerCar>0 ? Math.round(100*v/cfg.capPerCar) : 0);
+    barChart.data.datasets[0].data = beforeRes.perCar.map(v => cfg.capPerCar>0 ? Math.round(100*v/cfg.capPerCar) : 0);
+    barChart.data.datasets[1].data = afterRes.perCar.map(v => cfg.capPerCar>0 ? Math.round(100*v/cfg.capPerCar) : 0);
     barChart.update();
+
+    const stationLabel = stationFactors(cfg.stationKey).label;
+    const titleBefore = `Avant ${stationLabel}`;
+    const titleAfter = `Après ${stationLabel}`;
+    $("trainTitleBefore").textContent = titleBefore;
+    $("trainTitleAfter").textContent = titleAfter;
 
     renderTrainCarsBeveled({
       cars: cfg.cars,
       capPerCar: cfg.capPerCar,
-      perCarPassengers: res.perCar,
-      directionLabel: cfg.direction
+      perCarPassengers: beforeRes.perCar,
+      directionLabel: cfg.direction,
+      targetId: "trainVizBefore",
+      title: titleBefore
     });
 
-    const pct = res.loadPct;
+    renderTrainCarsBeveled({
+      cars: cfg.cars,
+      capPerCar: cfg.capPerCar,
+      perCarPassengers: afterRes.perCar,
+      directionLabel: cfg.direction,
+      targetId: "trainVizAfter",
+      title: titleAfter
+    });
+
+    const pct = afterRes.loadPct;
     let msg;
     if(pct < 55) msg = "Confort tranquille.";
     else if(pct < 85) msg = "Charge correcte.";
     else if(pct < 105) msg = "Zone orange : debout probable.";
     else msg = "Saturation probable : sardines 2 étages.";
+
+    const trainLabel = cfg.trainNumber ? `Train ${escapeHtml(cfg.trainNumber)}` : "Train";
+    const formation = formationLabel(cfg.cars);
     $("diagnostic").innerHTML =
-      `<b>${label}</b> — Capacité train: <b>${res.capTrain}</b> (= ${cfg.capPerCar}×${cfg.cars}). `
-      + `À bord: <b>${res.onboard}</b>. ${msg}`;
+      `<b>${label}</b> — ${trainLabel} · ${formation} · ${cfg.time} · `
+      + `${cfg.dayType} · ${cfg.season}. `
+      + `Capacité train: <b>${afterRes.capTrain}</b> (= ${cfg.capPerCar}×${cfg.cars}). `
+      + `À bord après gare: <b>${afterRes.onboard}</b>. ${msg}`;
+  }
+
+  function runScenario(cfg, modeLabel, samples){
+    const stationInfo = stationFactors(cfg.stationKey);
+    const beforeCfg = adjustBiasForStation(cfg, cfg.stationKey, "before");
+    const afterCfg = adjustBiasForStation(cfg, cfg.stationKey, "after");
+
+    const beforeFactor = stationInfo.before * disruptionFactor(cfg, "before");
+    const afterFactor = stationInfo.after * disruptionFactor(cfg, "after");
+
+    const beforeSimCfg = { ...beforeCfg, baseDemand: Math.round(cfg.baseDemand * beforeFactor) };
+    const afterSimCfg = { ...afterCfg, baseDemand: Math.round(cfg.baseDemand * afterFactor) };
+
+    const beforeRes = samples ? meanSim(beforeSimCfg, samples) : simulate(beforeSimCfg);
+    const afterRes = samples ? meanSim(afterSimCfg, samples) : simulate(afterSimCfg);
+    render(cfg, beforeRes, afterRes, modeLabel);
   }
 
   $("runOnce").addEventListener("click", ()=>{
     const cfg = readCfg();
-    const r = simulate(cfg);
-    render(cfg, r, "Simulation 1 tirage");
+    runScenario(cfg, "Simulation 1 tirage", null);
   });
 
   $("run100").addEventListener("click", ()=>{
     const cfg = readCfg();
-    const r = meanSim(cfg, 100);
-    render(cfg, r, "Moyenne (100 tirages)");
+    runScenario(cfg, "Moyenne (100 tirages)", 100);
   });
+
+  $("applyProfile").addEventListener("click", applyTrainProfile);
 
   // init
   initChart();
   (() => {
     const cfg = readCfg();
-    const r = meanSim(cfg, 60);
-    render(cfg, r, "Prévisualisation (60 tirages)");
+    runScenario(cfg, "Prévisualisation (60 tirages)", 60);
   })();
 </script>
 </body>
