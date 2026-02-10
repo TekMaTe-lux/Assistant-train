@@ -2615,7 +2615,7 @@ const GTFS_RT_STOP_META_KEYS = new Set([
       : null;
 
     const cancellation = realtimeProfile?.cancellation;
-    if (cancellation){
+    if (cancellation && cancellation.index === 0){
       const stopName = (()=>{
         const idx = cancellation.index;
         if (seq && seq[idx]){
@@ -3620,15 +3620,15 @@ function sanitizeCflStationName(name){
 
     let activeTripId = null;
   let activeStationId = null;
-  let returnToStationId = null;  
+  let returnToStationId = null;
 
   const tripPanelEl = document.getElementById('trip-panel');
   const tripPanelCloseBtn = document.getElementById('trip-panel-close');
-  const tripPanelBackBtn = document.getElementById('trip-panel-back');  
+  const tripPanelBackBtn = document.getElementById('trip-panel-back');
   const tripPanelIconEl = document.getElementById('trip-panel-icon');
   const tripPanelTrainEl = document.getElementById('trip-panel-train');
   const tripPanelSummaryEl = document.getElementById('trip-panel-summary');
-  const stationBoardNowEl = document.getElementById('station-board-now');  
+  const stationBoardNowEl = document.getElementById('station-board-now');
   const tripProgressWrapEl = document.getElementById('trip-progress');
   const tripProgressFillEl = document.getElementById('trip-progress-fill');
   const tripProgressTextEl = document.getElementById('trip-progress-text');
@@ -3936,7 +3936,7 @@ const mapContainerEl = map.getContainer();
       if (id) openTripPanel(id, { fromStationId: activeStationId });
     }
   });
-
+  
   function updateStationBoardNowClock(){
     if (!stationBoardNowEl) return;
     if (!activeStationId || tripPanelEl.classList.contains('hidden')){
@@ -3950,7 +3950,7 @@ const mapContainerEl = map.getContainer();
 
   setInterval(updateStationBoardNowClock, 1000);
 
-  
+
   function hideTripPanel(){
     tripPanelEl.classList.add('hidden');
     document.body.classList.remove('trip-panel-open');
@@ -4133,16 +4133,25 @@ const mapContainerEl = map.getContainer();
       };
     };
     
-    const stops = seq.map((st, idx)=>{
+    const partialCancellationIndex = (cancellationInfo && Number.isInteger(cancellationInfo.index) && cancellationInfo.index > 0)
+      ? cancellationInfo.index
+      : null;
+    const hasPartialTermination = partialCancellationIndex != null && partialCancellationIndex < seq.length;
+    const visibleStopIndices = hasPartialTermination
+      ? Array.from({ length: partialCancellationIndex }, (_, i)=>i)
+      : seq.map((_, i)=>i);
+
+    const stops = visibleStopIndices.map((seqIdx, idx)=>{
+      const st = seq[seqIdx];
       const stopMeta = stopsById.get(st.stop_id);
       const name = stopMeta?.name || st.stop_id;
-      const profileStop = realtimeProfile?.stops?.[idx] || null;
+      const profileStop = realtimeProfile?.stops?.[seqIdx] || null;
       const arrival = st.arrival ?? null;
       const departure = st.departure ?? null;
       const arrivalRt = profileStop?.arrivalRealtime ?? null;
       const departureRt = profileStop?.departureRealtime ?? null;
       const isFirst = idx === 0;
-      const isLast = idx === seq.length - 1;
+      const isLast = idx === visibleStopIndices.length - 1;
       const isStopCancelled = Boolean(profileStop?.cancelled);
       const stopCancelled = Boolean(isStopCancelled || propagateTrainCancellation);
       const timeParts = [];
@@ -4178,6 +4187,7 @@ const mapContainerEl = map.getContainer();
       const label = labelSource?.plannedText || labelSource?.realtimeText || '—';
 
       return {
+        seqIdx,
         name,
         arrival,
         departure,
@@ -4194,7 +4204,10 @@ const mapContainerEl = map.getContainer();
     const startName = stops[0]?.name || '—';
     const endName = stops[stops.length - 1]?.name || '—';
     const plannedStartSec = data.scheduledStartSec ?? realtimeProfile?.startPlanned ?? seq[0]?.departure ?? seq[0]?.arrival ?? null;
-    const plannedEndSec = data.scheduledEndSec ?? realtimeProfile?.endPlanned ?? seq[seq.length - 1]?.arrival ?? seq[seq.length - 1]?.departure ?? null;
+    const displayLastSeqIdx = stops.length ? (stops[stops.length - 1].seqIdx ?? (seq.length - 1)) : (seq.length - 1);
+    const plannedEndSec = hasPartialTermination
+      ? (seq[displayLastSeqIdx]?.arrival ?? seq[displayLastSeqIdx]?.departure ?? null)
+      : (data.scheduledEndSec ?? realtimeProfile?.endPlanned ?? seq[seq.length - 1]?.arrival ?? seq[seq.length - 1]?.departure ?? null);
     const summaryStartTime = plannedStartSec!=null ? fmtHHMM(plannedStartSec) : (stops[0]?.label ?? '—');
     const summaryEndTime = plannedEndSec!=null ? fmtHHMM(plannedEndSec) : (stops[stops.length - 1]?.label ?? '—');
     let summaryHtml = `${escapeHTML(startName)} <strong>${escapeHTML(summaryStartTime)}</strong> → ${escapeHTML(endName)} <strong>${escapeHTML(summaryEndTime)}</strong>`;
@@ -4202,11 +4215,10 @@ const mapContainerEl = map.getContainer();
     if (renderedDelayInfo?.severity === 'cancelled' && cancellationInfo && cancellationInfo.index > 0){
       renderedDelayInfo = null;
     }
-    if (cancellationInfo && cancellationInfo.index != null && cancellationInfo.index < stops.length){
-      if (cancellationInfo.index > 0){
-        const stationLabel = cancellationInfo.station || stops[cancellationInfo.index]?.name || 'cet arrêt';
-        summaryHtml += `<div class="trip-panel-delay delay-cancelled">${escapeHTML(`Supprimé à partir de ${stationLabel}`)}</div>`;
-      }
+    if (hasPartialTermination){
+      const terminalLabel = stops[stops.length - 1]?.name || 'cet arrêt';
+      const stationLabel = cancellationInfo?.station || 'l’arrêt suivant';
+      summaryHtml += `<div class="trip-panel-delay delay-cancelled">${escapeHTML(`Suppression partielle · terminus exceptionnel à ${terminalLabel} (supprimé à partir de ${stationLabel})`)}</div>`;
     }
     if (Array.isArray(data.numberList) && data.numberList.length > 1){
       summaryHtml += `<div class="trip-panel-realtime"><strong>Numéros associés :</strong> ${escapeHTML(data.numberList.join(' / '))}</div>`;
@@ -4215,7 +4227,9 @@ const mapContainerEl = map.getContainer();
     
     if (trainFilters.showDelays){
       const realtimeStartSec = realtimeProfile?.startRealtime ?? data.startSec ?? plannedStartSec;
-      const realtimeEndSec = realtimeProfile?.endRealtime ?? data.endSec ?? plannedEndSec;
+      const realtimeEndSec = hasPartialTermination
+        ? (stops[stops.length - 1]?.arrivalRealtime ?? stops[stops.length - 1]?.departureRealtime ?? plannedEndSec)
+        : (realtimeProfile?.endRealtime ?? data.endSec ?? plannedEndSec);
       const startDiffText = (plannedStartSec!=null && realtimeStartSec!=null) ? formatDelayDiff(realtimeStartSec - plannedStartSec) : '';
       const endDiffText = (plannedEndSec!=null && realtimeEndSec!=null) ? formatDelayDiff(realtimeEndSec - plannedEndSec) : '';
       if ((startDiffText && realtimeStartSec!=null) || (endDiffText && realtimeEndSec!=null)){
@@ -4227,7 +4241,7 @@ const mapContainerEl = map.getContainer();
       }
     }
     if (disruptionText){
-      const disruptionClass = cancellationInfo && cancellationInfo.index != null && cancellationInfo.index < stops.length
+      const disruptionClass = (cancellationInfo && cancellationInfo.index != null)
         ? 'trip-panel-disruption is-cancelled'
         : 'trip-panel-disruption';
       summaryHtml += `<div class="${disruptionClass}">${escapeHTML(disruptionText)}</div>`;
@@ -4299,9 +4313,10 @@ const mapContainerEl = map.getContainer();
           status = 'approaching';
         }
       } else if (data.nowSec!=null){
+        const seqRef = seq[info.seqIdx] || null;
         const ref = info.isFirst
-          ? (info.departureRealtime ?? info.arrivalRealtime ?? seq[idx].departure ?? seq[idx].arrival)
-          : (info.arrivalRealtime ?? info.departureRealtime ?? seq[idx].arrival ?? seq[idx].departure);
+          ? (info.departureRealtime ?? info.arrivalRealtime ?? seqRef?.departure ?? seqRef?.arrival)
+          : (info.arrivalRealtime ?? info.departureRealtime ?? seqRef?.arrival ?? seqRef?.departure);
         if (ref!=null){
           status = data.nowSec >= ref ? 'passed' : 'upcoming';
         }
@@ -4352,6 +4367,7 @@ const mapContainerEl = map.getContainer();
     tripStopsEl.innerHTML = stopsHtml || '<div class="trip-stop"><div class="stop-main"><div class="stop-name">Aucun arrêt disponible</div></div></div>';
   }
 
+
   function normalizeTrackValue(value){
     if (value == null) return null;
     const type = typeof value;
@@ -4398,7 +4414,7 @@ const mapContainerEl = map.getContainer();
         }
       }
     }
-    
+
     const queue = [payload];
     while (queue.length){
       const node = queue.shift();
@@ -4563,6 +4579,7 @@ const mapContainerEl = map.getContainer();
       const planned = mode === 'dep' ? ev.depPlanned : ev.arrPlanned;
       const realtime = mode === 'dep' ? ev.depSec : ev.arrSec;
       const when = realtime ?? planned;
+      if (when == null || !isFinite(when)) continue;
       if (when < now) continue;
       const etaSec = when - now;
       const isImminent = mode === 'dep' && etaSec >= 0 && etaSec <= 60;
@@ -4817,7 +4834,7 @@ const mapContainerEl = map.getContainer();
         const last = seq[seq.length - 1];
         const meta = last ? stopsById.get(last.stop_id) : null;
         return meta?.name || last?.stop_id || null;
-      })();  
+      })();
       const equivalentNumbers = equivalentTrainNumbers(train.numberKey || train.numberDigits || train.number || train.id);
       const equivalenceGroup = Array.from(new Set([
         ...(equivalentNumbers || []),
