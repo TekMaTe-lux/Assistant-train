@@ -162,7 +162,6 @@
     .station-board-state.is-delay{ color:#ffbe84; }
     .station-board-state.is-advance{ color:#8dffa7; }
     .station-board-empty{ padding:12px; color:#9ab1d6; font-size:12px; }
-    .station-board-static{ font-size:11px; color:#88a3c8; padding:4px 8px; border:1px solid #274064; border-radius:999px; display:inline-flex; align-items:center; }
     @media (max-width: 900px){
       .trip-panel.station-board-mode{ width:calc(100% - 18px); }
       .station-board-grid{ grid-template-columns:1fr; }
@@ -4228,8 +4227,8 @@ const mapContainerEl = map.getContainer();
         statusClass,
         stateText,
         place: mode === 'dep'
-          ? (ev.destination || ev.headsign || 'Destination inconnue')
-          : (ev.origin || 'Provenance inconnue')
+          ? (ev.nextStop || ev.headsign || ev.destination || 'Destination inconnue')
+          : (ev.previousStop || ev.origin || 'Provenance inconnue')
       });
     }
     rows.sort((a,b)=>a.when - b.when);
@@ -4251,14 +4250,11 @@ const mapContainerEl = map.getContainer();
       const btnLabel = escapeAttr(`Ouvrir le détail du ${row.ariaLabel || (row.number ? `train ${row.number}` : 'service')}`);
       const statusClass = row.statusClass === 'delay' ? 'is-delay' : row.statusClass === 'advance' ? 'is-advance' : '';
       const trainLabel = row.number ? `Train ${row.number}` : (row.label || row.trainId);
-      const actionHtml = row.isActiveTrain
-        ? `<button type="button" class="station-train-link" data-train-id="${btnId}" aria-label="${btnLabel}">${row.cow}<span>Détails</span></button>`
-        : `<span class="station-board-static">Planifié</span>`;
       return `<tr>
         <td><div class="station-board-state ${statusClass}">${escapeHTML(row.stateText)}</div></td>
         <td><div class="station-board-time">${escapeHTML(realtimeText || '—')}</div><div class="station-board-time-sub">${subText}</div></td>
         <td><div class="station-board-way">${escapeHTML(row.place)}</div><div class="station-board-train">${escapeHTML(trainLabel)}</div></td>
-        <td>${actionHtml}</td>
+        <td><button type="button" class="station-train-link" data-train-id="${btnId}" aria-label="${btnLabel}">${row.cow}<span>Détails</span></button></td>
       </tr>`;
     }).join('');
     const colLabel = mode === 'dep' ? 'Destination' : 'Provenance';
@@ -4304,38 +4300,12 @@ const mapContainerEl = map.getContainer();
 
   function computeStationEvents(station){
     const stopIds = station.stopSet || new Set(station.stopIds || []);
-    const stationNameKeys = new Set();
-    const pushStationName = (name)=>{
-      const norm = normalizeStationName(name);
-      if (norm) stationNameKeys.add(norm);
-    };
-    pushStationName(station.label);
-    if (Array.isArray(station.extraStopNames)){
-      for (const name of station.extraStopNames) pushStationName(name);
-    }
     const now = nowSecLocal();
     const events = [];
 
-    for (const [tripId, seq] of stopTimesByTrip.entries()){
+    for (const [tripId, train] of trainDataById.entries()){
+      const seq = stopTimesByTrip.get(tripId);
       if (!seq || !seq.length) continue;
-      const activeTrain = trainDataById.get(tripId) || null;
-      const tripMeta = tripsById.get(tripId) || {};
-      const routeMeta = tripMeta?.route_id ? (routesById.get(tripMeta.route_id) || {}) : {};
-      const rawNumber = activeTrain?.numberRaw || trainNumberForTrip(tripMeta, routeMeta, tripId);
-      const extractedNumber = extractTrainNumberCandidate(rawNumber) || extractTrainNumberCandidate(tripId);
-      const fallbackTrain = activeTrain || {
-        id: tripId,
-        number: extractedNumber || rawNumber || null,
-        numberRaw: rawNumber || null,
-        numberKey: extractedNumber != null ? normalizeTrainNumberKey(extractedNumber) : null,
-        numberDigits: extractedNumber || null,
-        headsign: tripMeta.headsign || routeMeta.long || routeMeta.short || '',
-        source: tripMeta?.source === 'CFL' ? 'CFL' : 'SNCF',
-        branding: {
-          digits: extractedNumber || null,
-          category: tripMeta?.source === 'CFL' ? 'cfl' : 'sncf'
-        }
-      };
       let target = null;
       let targetIdx = -1;
       for (let i=0;i<seq.length;i++){
@@ -4343,18 +4313,6 @@ const mapContainerEl = map.getContainer();
         if (stopIds.has(st.stop_id)) { target = st; targetIdx = i; break; }
         const meta = stopsById.get(st.stop_id);
         if (meta?.parent_station && stopIds.has(meta.parent_station)){ target = st; targetIdx = i; break; }
-        if (stationNameKeys.size){
-          const stopNameCandidates = [meta?.name, meta?.stop_name, meta?.stop_desc];
-          for (const candidate of stopNameCandidates){
-            const norm = normalizeStationName(candidate);
-            if (norm && stationNameKeys.has(norm)){
-              target = st;
-              targetIdx = i;
-              break;
-            }
-          }
-          if (target) break;
-        }
       }
       if (!target) continue;
 
@@ -4362,8 +4320,8 @@ const mapContainerEl = map.getContainer();
         || computeRealtimeStopData(
           tripId,
           seq,
-          fallbackTrain.numberKey || extractTrainNumberCandidate(fallbackTrain.number) || extractTrainNumberCandidate(tripId),
-          realtimeOptionsForTrain(fallbackTrain)
+          train.numberKey || extractTrainNumberCandidate(train.number) || extractTrainNumberCandidate(tripId),
+          realtimeOptionsForTrain(train)
         );
       const profileStop = targetIdx >= 0 ? realtimeProfile?.stops?.[targetIdx] : null;
 
@@ -4396,13 +4354,13 @@ const mapContainerEl = map.getContainer();
         continue;
       }
 
-      const titleText = formatTrainLabel(fallbackTrain, { includeTrainWord:true, fallbackId:tripId });
-      const ariaLabel = formatTrainAriaLabel(fallbackTrain, tripId);
-      const labelMeta = trainLabelParts(fallbackTrain, tripId);
+      const titleText = formatTrainLabel(train, { includeTrainWord:true, fallbackId:tripId });
+      const ariaLabel = formatTrainAriaLabel(train, tripId);
+      const labelMeta = trainLabelParts(train, tripId);
 
-      const delayInfo = activeTrain?.delayInfo || computeTrainDelayInfo(fallbackTrain);
+      const delayInfo = train.delayInfo || computeTrainDelayInfo(train);
 
-      const disruptionText = findSncfDisruptionForTrain(activeTrain || fallbackTrain);
+      const disruptionText = findSncfDisruptionForTrain(train);
 
       const origin = (()=>{
         const first = seq[0];
@@ -4429,9 +4387,9 @@ const mapContainerEl = map.getContainer();
       
       events.push({
         trainId: tripId,
-        number: fallbackTrain.number,
-        headsign: fallbackTrain.headsign,
-        displayName: fallbackTrain.displayName || fallbackTrain.number || tripId,
+        number: train.number,
+        headsign: train.headsign,
+        displayName: train.displayName || train.number || tripId,
         label: labelMeta.label,
         category: labelMeta.category,
         titleText,
@@ -4443,19 +4401,18 @@ const mapContainerEl = map.getContainer();
         state,
         focusSec,
         diff: focusSec - now,
-        cow: glyphForTrain(activeTrain || fallbackTrain, delayInfo),
+        cow: glyphForTrain(train, delayInfo),
         delayInfo,
         disruptionText,
         origin,
         destination,
         previousStop,
-        nextStop,
-        isActiveTrain: Boolean(activeTrain)
+        nextStop
       });
     }
 
     events.sort((a,b)=>a.focusSec - b.focusSec);
-    return events.slice(0, 24);
+    return events.slice(0, 8);
   }
 
   // --- Perf: cache du panneau gare (évite de rescanner tous les trains à chaque refresh) ---
