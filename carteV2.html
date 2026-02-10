@@ -59,6 +59,8 @@
     .trip-panel{ position:fixed; top:96px; right:18px; width:320px; max-height:calc(100vh - 140px); background:rgba(11,15,26,0.95); border:1px solid #20324b; border-radius:14px; box-shadow:0 18px 36px rgba(0,0,0,0.35); padding:16px; display:flex; flex-direction:column; gap:12px; backdrop-filter:blur(6px); overflow:hidden; z-index:3000; transition:transform 0.26s ease, opacity 0.22s ease; }
     .trip-panel.hidden{ display:none; }
     .trip-panel-header{ display:flex; align-items:center; justify-content:space-between; gap:12px; }
+    .trip-panel-header-right{ display:flex; align-items:center; gap:8px; margin-left:auto; }
+    .station-board-now{ font-size:12px; color:#b9d4f7; font-weight:700; letter-spacing:.03em; padding:4px 8px; border:1px solid #24415f; border-radius:8px; background:rgba(12,23,38,0.7); white-space:nowrap; }
     .trip-panel-body{ display:flex; flex-direction:column; gap:12px; overflow:auto; padding-right:2px; }
     .trip-panel-title{ display:flex; align-items:center; gap:8px; font-weight:700; font-size:16px; }
     .trip-panel-icon{ font-size:20px; filter: drop-shadow(0 0 4px rgba(0,0,0,0.6)); }
@@ -165,6 +167,9 @@
     .station-board-state.is-delay{ color:#ffbe84; }
     .station-board-state.is-advance{ color:#8dffa7; }
     .station-board-empty{ padding:12px; color:#9ab1d6; font-size:12px; }
+    .station-board-time-sub.is-imminent{ color:#a0ff00; font-weight:800; letter-spacing:.02em; }
+    .station-board-row-imminent td{ animation:station-board-blink 0.9s ease-in-out infinite; }
+    @keyframes station-board-blink{ 0%,100%{ opacity:1; } 50%{ opacity:0.45; } }
     @media (max-width: 900px){
       .trip-panel.station-board-mode{ width:calc(100% - 18px); }
       .station-board-grid{ grid-template-columns:1fr; }
@@ -311,7 +316,7 @@
         <span id="trip-panel-icon" class="trip-panel-icon" aria-hidden="true">🐄</span>
         <span id="trip-panel-train">Sélectionnez une bétaillère ou une gare</span>
       </div>
-      <button id="trip-panel-close" class="trip-panel-close" type="button" aria-label="Fermer">×</button>
+      <div class="trip-panel-header-right"><span id="station-board-now" class="station-board-now hidden" aria-live="off"></span><button id="trip-panel-close" class="trip-panel-close" type="button" aria-label="Fermer">×</button></div>
     </div>
     <div class="trip-panel-body">
       <div id="trip-panel-summary" class="trip-panel-summary">Cliquez sur une icône vache ou grange pour afficher le détail.</div>
@@ -3584,6 +3589,7 @@ function sanitizeCflStationName(name){
   const tripPanelIconEl = document.getElementById('trip-panel-icon');
   const tripPanelTrainEl = document.getElementById('trip-panel-train');
   const tripPanelSummaryEl = document.getElementById('trip-panel-summary');
+  const stationBoardNowEl = document.getElementById('station-board-now');  
   const tripProgressWrapEl = document.getElementById('trip-progress');
   const tripProgressFillEl = document.getElementById('trip-progress-fill');
   const tripProgressTextEl = document.getElementById('trip-progress-text');
@@ -3867,6 +3873,20 @@ const mapContainerEl = map.getContainer();
       if (id) openTripPanel(id);
     }
   });
+
+  function updateStationBoardNowClock(){
+    if (!stationBoardNowEl) return;
+    if (!activeStationId || tripPanelEl.classList.contains('hidden')){
+      stationBoardNowEl.textContent = '';
+      stationBoardNowEl.classList.add('hidden');
+      return;
+    }
+    stationBoardNowEl.classList.remove('hidden');
+    stationBoardNowEl.textContent = `Heure actuelle ${new Date().toLocaleTimeString('fr-FR', { hour12:false })}`;
+  }
+
+  setInterval(updateStationBoardNowClock, 1000);
+
   
   function hideTripPanel(){
     tripPanelEl.classList.add('hidden');
@@ -3876,6 +3896,10 @@ const mapContainerEl = map.getContainer();
     tripPanelIconEl.textContent = '🐄';
     tripPanelTrainEl.textContent = 'Sélectionnez une bétaillère ou une gare';
     tripPanelSummaryEl.textContent = 'Cliquez sur une icône vache ou grange pour afficher le détail.';
+    if (stationBoardNowEl){
+      stationBoardNowEl.textContent = '';
+      stationBoardNowEl.classList.add('hidden');
+    }
     tripProgressWrapEl.classList.add('hidden');
     tripProgressFillEl.style.width = '0%';
     tripProgressTextEl.textContent = '';
@@ -4215,7 +4239,13 @@ const mapContainerEl = map.getContainer();
       const realtime = mode === 'dep' ? ev.depSec : ev.arrSec;
       const when = realtime ?? planned;
       if (when == null || !isFinite(when)) continue;
-      if (when < (now - 120)) continue;
+      if (mode === 'dep'){
+        if (when < now) continue;
+      } else if (when < (now - 120)){
+        continue;
+      }
+      const etaSec = when - now;
+      const isImminent = etaSec >= 0 && etaSec <= 60;
       const diffSec = (planned != null && realtime != null) ? (realtime - planned) : 0;
       const diffText = formatDelayDiff(diffSec);
       const statusClass = classifyDelayDiff(diffSec);
@@ -4231,6 +4261,8 @@ const mapContainerEl = map.getContainer();
         diffText,
         statusClass,
         stateText,
+        isImminent,
+        etaSec,
         place: mode === 'dep'
           ? (ev.destination || ev.headsign || 'Destination inconnue')
           : (ev.origin || 'Provenance inconnue')
@@ -4249,25 +4281,27 @@ const mapContainerEl = map.getContainer();
       const realtimeText = row.realtime!=null ? fmtHHMM(row.realtime) : plannedText;
       const diffSuffix = row.diffText ? ` (${escapeHTML(row.diffText)})` : '';
       const isDelayed = plannedText && realtimeText && plannedText !== realtimeText && row.diffSec > 0;
-      const subText = plannedText && realtimeText && plannedText !== realtimeText
-        ? (isDelayed ? `Retard${diffSuffix}` : `Prévu ${escapeHTML(plannedText)}${diffSuffix}`)
-        : (row.diffText ? `${mode === 'dep' ? 'Départ' : 'Arrivée'}${diffSuffix}` : "À l'heure");
+      const imminentText = row.isImminent ? `${mode === 'dep' ? 'Départ' : 'Arrivée'} imminent` : '';
+      const subText = imminentText
+        || (plannedText && realtimeText && plannedText !== realtimeText
+          ? (isDelayed ? `Retard${diffSuffix}` : `Prévu ${escapeHTML(plannedText)}${diffSuffix}`)
+          : (row.diffText ? `${mode === 'dep' ? 'Départ' : 'Arrivée'}${diffSuffix}` : "À l'heure"));
       const timeHtml = isDelayed
         ? `<div class="station-board-time station-board-time--delayed"><span class="station-board-time-planned">${escapeHTML(plannedText)}</span><span class="station-board-time-delayed">${escapeHTML(realtimeText)}</span></div>`
         : `<div class="station-board-time">${escapeHTML(realtimeText || '—')}</div>`;
       const btnId = escapeAttr(row.trainId);
       const btnLabel = escapeAttr(`Ouvrir le détail du ${row.ariaLabel || (row.number ? `train ${row.number}` : 'service')}`);
-      const statusClass = row.statusClass === 'delay' ? 'is-delay' : row.statusClass === 'advance' ? 'is-advance' : '';
       const trainLabel = row.number ? `Train ${row.number}` : (row.label || row.trainId);
-      return `<tr>
-        <td><div class="station-board-state ${statusClass}">${escapeHTML(row.stateText)}</div></td>
-        <td>${timeHtml}<div class="station-board-time-sub">${subText}</div></td>
+      const rowClass = row.isImminent ? ' class="station-board-row-imminent"' : '';
+      const subClass = row.isImminent ? 'station-board-time-sub is-imminent' : 'station-board-time-sub';
+      return `<tr${rowClass}>
+        <td>${timeHtml}<div class="${subClass}">${subText}</div></td>
         <td><div class="station-board-way">${escapeHTML(row.place)}</div><div class="station-board-train">${escapeHTML(trainLabel)}</div></td>
         <td><button type="button" class="station-train-link" data-train-id="${btnId}" aria-label="${btnLabel}">${row.cow}<span>Détails</span></button></td>
       </tr>`;
     }).join('');
     const colLabel = mode === 'dep' ? 'Destination' : 'Provenance';
-    return `<div class="station-board-table-wrap"><table class="station-board-table"><thead><tr><th>État</th><th>Heure</th><th>${colLabel}</th><th></th></tr></thead><tbody>${htmlRows}</tbody></table></div>`;
+    return `<div class="station-board-table-wrap"><table class="station-board-table"><thead><tr><th>Heure</th><th>${colLabel}</th><th></th></tr></thead><tbody>${htmlRows}</tbody></table></div>`;
   }
 
   function renderStationPanel(){
@@ -4281,6 +4315,7 @@ const mapContainerEl = map.getContainer();
     const emoji = station.type === 'major' ? '🏠' : '🏡';
     tripPanelIconEl.textContent = emoji;
     tripPanelTrainEl.textContent = `Gare de ${station.label}`;
+    updateStationBoardNowClock();
 
     const classification = station.type === 'major'
       ? 'Tableau en temps réel — axe Nancy ↔ Luxembourg'
