@@ -4305,9 +4305,46 @@ const mapContainerEl = map.getContainer();
     const now = nowSecLocal();
     const events = [];
 
-    for (const [tripId, train] of trainDataById.entries()){
-      const seq = stopTimesByTrip.get(tripId);
+    for (const [tripId, seq] of stopTimesByTrip.entries()){
       if (!seq || !seq.length) continue;
+      if (!serviceAllowed(tripId)) continue;
+
+      const trip = tripsById.get(tripId) || {};
+      const route = routesById.get(trip.route_id) || {};
+      const rawNumber = trainNumberForTrip(trip, route, tripId);
+      const numberCandidate = extractTrainNumberCandidate(rawNumber);
+      const fallbackNumberCandidate = numberCandidate || extractTrainNumberCandidate(tripId) || null;
+      const numberKeyRaw = fallbackNumberCandidate != null ? String(fallbackNumberCandidate) : null;
+      const numberKey = numberKeyRaw ? normalizeTrainNumberKey(numberKeyRaw) : null;
+      const branding = computeTrainBranding(tripId, trip, route, rawNumber, numberCandidate || fallbackNumberCandidate);
+      const category = branding.category || 'sncf';
+      if ((category === 'sncf' && !trainFilters.showTer)
+        || (category === 'tgv-roi' && !trainFilters.showTgv)
+        || (category === 'cfl' && !trainFilters.showCfl)){
+        continue;
+      }
+
+      const numberDisplay = branding.displayNumber
+        || rawNumber
+        || (numberKey != null ? String(numberKey) : (numberKeyRaw != null ? String(numberKeyRaw) : null));
+      const headsign = (()=>{
+        if (trip.headsign && trip.headsign !== numberDisplay) return trip.headsign;
+        if (route.long && route.long !== numberDisplay) return route.long;
+        if (route.short && route.short !== numberDisplay) return route.short;
+        return '';
+      })();
+      const train = {
+        id: tripId,
+        source: trip?.source === 'CFL' ? 'CFL' : 'SNCF',
+        number: numberDisplay || rawNumber || tripId,
+        numberRaw: rawNumber || null,
+        numberKey,
+        numberDigits: branding.digits || null,
+        delayNumberKeys: numberKey != null ? [String(numberKey)] : [],
+        headsign,
+        branding
+      };
+
       let target = null;
       let targetIdx = -1;
       for (let i=0;i<seq.length;i++){
@@ -4322,7 +4359,7 @@ const mapContainerEl = map.getContainer();
         || computeRealtimeStopData(
           tripId,
           seq,
-          train.numberKey || extractTrainNumberCandidate(train.number) || extractTrainNumberCandidate(tripId),
+          numberKey,
           realtimeOptionsForTrain(train)
         );
       const profileStop = targetIdx >= 0 ? realtimeProfile?.stops?.[targetIdx] : null;
