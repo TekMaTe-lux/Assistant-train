@@ -622,6 +622,14 @@ function escapeHTML(str){
     return order.map(normalizeRealtimeSourceKey);
   }
 
+  function shouldIgnoreHafasCancellationForStop(trainContext, stopMeta, entry){
+    if (!entry || entry.value != null) return false;
+    if (normalizeRealtimeSourceKey(entry.sourceKey || entry.source) !== 'hafas') return false;
+    if (!hasSncfRealtimeAffinity(trainContext)) return false;
+    const network = classifyStopRealtimeNetwork(stopMeta);
+    return network !== 'cfl';
+  }
+
   function classifyStopRealtimeNetwork(stopMeta){
     if (!stopMeta) return null;
     if (stopMeta.source === 'CFL') return 'cfl';
@@ -642,7 +650,7 @@ function escapeHTML(str){
   }
 
   function realtimeOptionsForTrain(train){
-    return { preferredSources: resolvePreferredRealtimeSourceOrder(train) };
+    return { preferredSources: resolvePreferredRealtimeSourceOrder(train), trainContext: train || null };
   }
 
   function getRealtimePerStationMaps(normalizedKey, preferredOrder){
@@ -2881,9 +2889,10 @@ function adaptDelayEntryForStop(entry, stopMeta){
       return null;
     }
     const normalizedKey = normalizeTrainNumberKey(numberKey);
+    const trainContext = options && typeof options === 'object' ? (options.trainContext || null) : null;
     const preferredSources = Array.isArray(options.preferredSources) && options.preferredSources.length
       ? options.preferredSources
-      : resolvePreferredRealtimeSourceOrder(null);
+      : resolvePreferredRealtimeSourceOrder(trainContext || null);
     const perSourceMaps = new Map();
     if (normalizedKey != null){
       const matches = getRealtimePerStationMaps(String(normalizedKey), preferredSources);
@@ -2957,6 +2966,9 @@ function adaptDelayEntryForStop(entry, stopMeta){
       }
       if (!entry) continue;
       if (entry.value == null){
+        if (shouldIgnoreHafasCancellationForStop(trainContext, stopMeta, entry)){
+          continue;
+        }
         const sourceLabel = entry.original || stopMeta?.name || null;
         stops[i].cancelled = true;
         stops[i].delaySource = sourceLabel;
@@ -4500,6 +4512,48 @@ const mapContainerEl = map.getContainer();
     }
   }
 
+  function shouldReplaceStationBoardRowByEquivalence(nextRow, prevRow){
+    if (!prevRow) return true;
+    if (!!prevRow.isCancelled !== !!nextRow.isCancelled) return !nextRow.isCancelled;
+    const prevStops = Number.isFinite(prevRow.routeStopCount) ? prevRow.routeStopCount : -1;
+    const nextStops = Number.isFinite(nextRow.routeStopCount) ? nextRow.routeStopCount : -1;
+    if (nextStops !== prevStops) return nextStops > prevStops;
+    const prevEnd = Number.isFinite(prevRow.routeEndSec) ? prevRow.routeEndSec : -1;
+    const nextEnd = Number.isFinite(nextRow.routeEndSec) ? nextRow.routeEndSec : -1;
+    if (nextEnd !== prevEnd) return nextEnd > prevEnd;
+    const prevHasDest = Boolean(prevRow.destination || prevRow.headsign);
+    const nextHasDest = Boolean(nextRow.destination || nextRow.headsign);
+    if (nextHasDest !== prevHasDest) return nextHasDest;
+    return false;
+  }
+
+  function dedupeEquivalentStationBoardRows(rows, mode){
+    if (!Array.isArray(rows) || rows.length < 2) return rows || [];
+    const deduped = [];
+    const byKey = new Map();
+    for (const row of rows){
+      const canonical = row.stationBoardCanonicalNumber || normalizeTrainNumberKey(row.number || row.trainId);
+      if (!canonical){
+        deduped.push(row);
+        continue;
+      }
+      const bucketSec = Math.round((row.when || 0) / 120);
+      const key = `${mode}|${canonical}|${bucketSec}`;
+      const existingIdx = byKey.get(key);
+      if (existingIdx == null){
+        byKey.set(key, deduped.length);
+        deduped.push(row);
+        continue;
+      }
+      const prev = deduped[existingIdx];
+      if (shouldReplaceStationBoardRowByEquivalence(row, prev)){
+        deduped[existingIdx] = row;
+      }
+    }
+    deduped.sort((a,b)=>a.when - b.when);
+    return deduped;
+  }
+
   function stationBoardRows(events, mode, limit = 8){
     const now = nowSecLocal();
     const rows = [];
@@ -4530,6 +4584,9 @@ const mapContainerEl = map.getContainer();
         isImminent,
         isCancelled: ev.isCancelledAtStation || ev.delayInfo?.severity === 'cancelled',
         partialCancellationStation: ev.partialCancellationStation || null,
+        stationBoardCanonicalNumber: ev.stationBoardCanonicalNumber || null,
+        routeStopCount: ev.routeStopCount,
+        routeEndSec: ev.routeEndSec,
         etaSec,
         track: resolveStationBoardTrack(ev, mode),
         place: mode === 'dep'
@@ -4538,8 +4595,9 @@ const mapContainerEl = map.getContainer();
       });
     }
     rows.sort((a,b)=>a.when - b.when);
-    if (!Number.isFinite(limit) || limit <= 0) return rows;
-    return rows.slice(0, Math.floor(limit));
+    const dedupedRows = dedupeEquivalentStationBoardRows(rows, mode);
+    if (!Number.isFinite(limit) || limit <= 0) return dedupedRows;
+    return dedupedRows.slice(0, Math.floor(limit));
   }
 
   function renderStationBoardTable(rows, mode, totalCount = rows.length){
@@ -4760,6 +4818,13 @@ const mapContainerEl = map.getContainer();
         const meta = last ? stopsById.get(last.stop_id) : null;
         return meta?.name || last?.stop_id || null;
       })();  
+      const equivalentNumbers = equivalentTrainNumbers(train.numberKey || train.numberDigits || train.number || train.id);
+      const equivalenceGroup = Array.from(new Set([
+        ...(equivalentNumbers || []),
+        normalizeTrainNumberKey(train.numberKey || train.numberDigits || train.number || train.id)
+      ].filter(v => v != null).map(v=>String(v)).filter(Boolean))).sort((a,b)=>a.localeCompare(b, undefined, { numeric:true }));
+      const stationBoardCanonicalNumber = equivalenceGroup[0] || null;
+      const routeEndSec = seq[seq.length - 1]?.arrival ?? seq[seq.length - 1]?.departure ?? null;
       events.push({
         trainId: tripId,
         number: train.number,
@@ -4781,6 +4846,9 @@ const mapContainerEl = map.getContainer();
         disruptionText,
         isCancelledAtStation,
         partialCancellationStation: hasPartialCancellationAhead ? cancellationStation : null,
+        stationBoardCanonicalNumber,
+        routeStopCount: seq.length,
+        routeEndSec,
         origin,
         destination,
         stationLabel: station.label || null,
@@ -5750,7 +5818,7 @@ function stationNameMatchesKeywords(name, keywords){
         trip_id,
         seq,
         numberKey,
-        realtimeOptionsForTrain({ source: tripSource })
+        realtimeOptionsForTrain({ source: tripSource, branding:{ category: tripSource === 'CFL' ? 'cfl' : 'sncf' } })
       );
 
       const startPlanned = seq[0].departure ?? seq[0].arrival;
