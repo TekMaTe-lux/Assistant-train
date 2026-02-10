@@ -146,6 +146,27 @@
     .station-time-rt--delay{ color:#ffc48a; }
     .station-time-rt--advance{ color:#9eff9e; }
     .station-time-rt--ontime{ color:#a0ff00; opacity:0.75; }
+    .trip-panel.station-board-mode{ width:min(980px, calc(100vw - 36px)); max-height:calc(100vh - 128px); }
+    .station-board-grid{ display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+    .station-board-block{ border:1px solid #1f3655; border-radius:12px; background:rgba(8,14,24,0.78); overflow:hidden; }
+    .station-board-title{ padding:8px 10px; font-weight:800; letter-spacing:.05em; text-transform:uppercase; font-size:12px; color:#d8ebff; border-bottom:1px solid #1d3048; background:linear-gradient(135deg, rgba(11,32,62,0.92), rgba(10,20,36,0.9)); }
+    .station-board-table-wrap{ max-height:45vh; overflow:auto; }
+    .station-board-table{ width:100%; border-collapse:collapse; font-size:12px; }
+    .station-board-table th{ position:sticky; top:0; z-index:1; text-align:left; background:#0d192a; color:#8fb2dd; font-size:10px; text-transform:uppercase; letter-spacing:.06em; padding:6px 8px; border-bottom:1px solid #1f3249; }
+    .station-board-table td{ padding:8px; border-bottom:1px solid rgba(33,50,75,0.75); vertical-align:middle; }
+    .station-board-time{ font-weight:800; color:#ffef3f; font-size:18px; line-height:1; }
+    .station-board-time-sub{ font-size:10px; color:#90a7c8; margin-top:2px; }
+    .station-board-way{ font-weight:700; color:#e8f4ff; }
+    .station-board-train{ color:#99bee8; font-size:11px; white-space:nowrap; }
+    .station-board-state{ font-weight:700; font-size:11px; text-transform:uppercase; letter-spacing:.02em; color:#a0ff00; }
+    .station-board-state.is-delay{ color:#ffbe84; }
+    .station-board-state.is-advance{ color:#8dffa7; }
+    .station-board-empty{ padding:12px; color:#9ab1d6; font-size:12px; }
+    @media (max-width: 900px){
+      .trip-panel.station-board-mode{ width:calc(100% - 18px); }
+      .station-board-grid{ grid-template-columns:1fr; }
+      .station-board-table-wrap{ max-height:24vh; }
+    }
     .controls-toggle{ position:fixed; right:14px; bottom:14px; z-index:1250; }
     body.lite-ui header,
     body.lite-ui .panel,
@@ -3844,11 +3865,11 @@ const mapContainerEl = map.getContainer();
     }
   });
   
-
   function hideTripPanel(){
     tripPanelEl.classList.add('hidden');
     document.body.classList.remove('trip-panel-open');
     tripPanelEl.classList.remove('cancelled');
+    tripPanelEl.classList.remove('station-board-mode');
     tripPanelIconEl.textContent = '🐄';
     tripPanelTrainEl.textContent = 'Sélectionnez une bétaillère ou une gare';
     tripPanelSummaryEl.textContent = 'Cliquez sur une icône vache ou grange pour afficher le détail.';
@@ -3859,7 +3880,9 @@ const mapContainerEl = map.getContainer();
     tripStopsTitleEl.textContent = 'Gares desservies';
     tripStopsEl.innerHTML = '';
     tripStopsEl.classList.remove('station-mode');
+    tripPanelEl.classList.remove('station-board-mode');
   }
+
 
   function openTripPanel(trainId){
     activeTripId = trainId;
@@ -4179,20 +4202,78 @@ const mapContainerEl = map.getContainer();
     tripStopsEl.innerHTML = stopsHtml || '<div class="trip-stop"><div class="stop-main"><div class="stop-name">Aucun arrêt disponible</div></div></div>';
   }
 
+  function stationBoardRows(events, mode){
+    const now = nowSecLocal();
+    const rows = [];
+    for (const ev of events){
+      const planned = mode === 'dep' ? ev.depPlanned : ev.arrPlanned;
+      const realtime = mode === 'dep' ? ev.depSec : ev.arrSec;
+      const when = realtime ?? planned;
+      if (when == null || !isFinite(when)) continue;
+      if (when < (now - 120)) continue;
+      const diffSec = (planned != null && realtime != null) ? (realtime - planned) : 0;
+      const diffText = formatDelayDiff(diffSec);
+      const statusClass = classifyDelayDiff(diffSec);
+      const baseState = mode === 'dep' ? 'Départ' : 'Arrivée';
+      const stateText = (ev.state === 'En gare' ? 'En gare' : baseState) + (ev.diff!=null && isFinite(ev.diff) ? ` · ${fmtRelative(ev.diff)}` : '');
+      rows.push({
+        ...ev,
+        mode,
+        planned,
+        realtime,
+        when,
+        diffSec,
+        diffText,
+        statusClass,
+        stateText,
+        place: mode === 'dep' ? (ev.destination || 'Destination inconnue') : (ev.origin || 'Provenance inconnue')
+      });
+    }
+    rows.sort((a,b)=>a.when - b.when);
+    return rows.slice(0, 8);
+  }
+
+  function renderStationBoardTable(rows, mode){
+    if (!rows.length){
+      return '<div class="station-board-empty">Aucun train à afficher.</div>';
+    }
+    const htmlRows = rows.map(row=>{
+      const plannedText = row.planned!=null ? fmtHHMM(row.planned) : null;
+      const realtimeText = row.realtime!=null ? fmtHHMM(row.realtime) : plannedText;
+      const diffSuffix = row.diffText ? ` (${escapeHTML(row.diffText)})` : '';
+      const subText = plannedText && realtimeText && plannedText !== realtimeText
+        ? `Prévu ${escapeHTML(plannedText)}${diffSuffix}`
+        : (row.diffText ? `${mode === 'dep' ? 'Départ' : 'Arrivée'}${diffSuffix}` : "À l'heure");
+      const btnId = escapeAttr(row.trainId);
+      const btnLabel = escapeAttr(`Ouvrir le détail du ${row.ariaLabel || (row.number ? `train ${row.number}` : 'service')}`);
+      const statusClass = row.statusClass === 'delay' ? 'is-delay' : row.statusClass === 'advance' ? 'is-advance' : '';
+      const trainLabel = row.number ? `Train ${row.number}` : (row.label || row.trainId);
+      return `<tr>
+        <td><div class="station-board-state ${statusClass}">${escapeHTML(row.stateText)}</div></td>
+        <td><div class="station-board-time">${escapeHTML(realtimeText || '—')}</div><div class="station-board-time-sub">${subText}</div></td>
+        <td><div class="station-board-way">${escapeHTML(row.place)}</div><div class="station-board-train">${escapeHTML(trainLabel)}</div></td>
+        <td><button type="button" class="station-train-link" data-train-id="${btnId}" aria-label="${btnLabel}">${row.cow}<span>Détails</span></button></td>
+      </tr>`;
+    }).join('');
+    const colLabel = mode === 'dep' ? 'Destination' : 'Provenance';
+    return `<div class="station-board-table-wrap"><table class="station-board-table"><thead><tr><th>État</th><th>Heure</th><th>${colLabel}</th><th></th></tr></thead><tbody>${htmlRows}</tbody></table></div>`;
+  }
+
   function renderStationPanel(){
     if (!activeStationId){ hideTripPanel(); return; }
     const station = axisStationsById.get(activeStationId);
     if (!station){ hideTripPanel(); return; }
 
     tripPanelEl.classList.remove('cancelled');
+    tripPanelEl.classList.add('station-board-mode');
     tripStopsEl.classList.add('station-mode');
     const emoji = station.type === 'major' ? '🏠' : '🏡';
     tripPanelIconEl.textContent = emoji;
     tripPanelTrainEl.textContent = `Gare de ${station.label}`;
 
     const classification = station.type === 'major'
-      ? 'Gare principale de l’axe Nancy ↔ Luxembourg'
-      : 'Gare intermédiaire Nancy ↔ Luxembourg';
+      ? 'Tableau en temps réel — axe Nancy ↔ Luxembourg'
+      : 'Tableau local — axe Nancy ↔ Luxembourg';
     const summaryParts = [escapeHTML(classification)];
     if (isFinite(station.lat) && isFinite(station.lon)){
       summaryParts.push(`<span class="muted">(${escapeHTML(station.lat.toFixed(3))} ; ${escapeHTML(station.lon.toFixed(3))})</span>`);
@@ -4204,44 +4285,15 @@ const mapContainerEl = map.getContainer();
     tripProgressTextEl.textContent = '';
 
     const events = computeStationEventsCached(station);
-    if (events.length){
-      tripStopsTitleEl.classList.remove('hidden');
-      tripStopsTitleEl.textContent = `Trains observés (${events.length})`;
-    } else {
-      tripStopsTitleEl.classList.remove('hidden');
-      tripStopsTitleEl.textContent = 'Trains observés';
-    }
+    const departures = stationBoardRows(events, 'dep');
+    const arrivals = stationBoardRows(events, 'arr');
+    const total = departures.length + arrivals.length;
+    tripStopsTitleEl.classList.remove('hidden');
+    tripStopsTitleEl.textContent = `Départs (${departures.length}) · Arrivées (${arrivals.length})` + (total ? ` — ${total} ligne(s)` : '');
 
-    if (!events.length){
-      tripStopsEl.innerHTML = '<div class="station-event empty">Aucun train en approche immédiate.</div>';
-      return;
-    }
-
-    const cards = events.map(ev=>{
-      const title = ev.titleText || (ev.number ? `Train ${ev.number}` : (ev.headsign || ev.displayName || ev.trainId));
-      const subtitle = [];
-      if (ev.headsign && (!ev.number || !title.includes(ev.headsign))){
-        subtitle.push(ev.headsign);
-      } else if (ev.displayName && ev.displayName !== title){
-        subtitle.push(ev.displayName); 
-      }
-      if (ev.delayInfo){
-        subtitle.push(ev.delayInfo.panelText);
-      }
-      if (ev.disruptionText){
-        subtitle.push(ev.disruptionText);
-      }
-      const statusText = ev.state + (ev.diff!=null && isFinite(ev.diff) ? ` · ${fmtRelative(ev.diff)}` : '');
-      const arrLine = renderStationEventTime('Arrivée', ev.arrPlanned, ev.arrSec);
-      const depLine = renderStationEventTime('Départ', ev.depPlanned, ev.depSec);
-      const note = subtitle.length ? `<div class="station-event-note">${escapeHTML(subtitle.join(' — '))}</div>` : '';
-      const times = `<div class="station-event-times">${arrLine}${depLine}</div>`;
-      const btnId = escapeAttr(ev.trainId);
-      const btnLabel = escapeAttr(`Ouvrir le détail du ${ev.ariaLabel || (ev.number ? `train ${ev.number}` : 'service')}`);
-      return `<div class="station-event"><div class="station-event-main"><div class="station-event-title">${escapeHTML(title)}</div><div class="station-event-status">${escapeHTML(statusText)}</div>${times}${note}</div><button type="button" class="station-train-link" data-train-id="${btnId}" aria-label="${btnLabel}">${ev.cow}<span>Détails</span></button></div>`;
-    }).join('');
-
-    tripStopsEl.innerHTML = cards;
+    const depTable = renderStationBoardTable(departures, 'dep');
+    const arrTable = renderStationBoardTable(arrivals, 'arr');
+    tripStopsEl.innerHTML = `<div class="station-board-grid"><section class="station-board-block"><div class="station-board-title">Départs</div>${depTable}</section><section class="station-board-block"><div class="station-board-title">Arrivées</div>${arrTable}</section></div>`;
   }
 
   function computeStationEvents(station){
@@ -4298,6 +4350,17 @@ const mapContainerEl = map.getContainer();
       const delayInfo = train.delayInfo || computeTrainDelayInfo(train);
 
       const disruptionText = findSncfDisruptionForTrain(train);
+
+      const origin = (()=>{
+        const first = seq[0];
+        const meta = first ? stopsById.get(first.stop_id) : null;
+        return meta?.name || first?.stop_id || null;
+      })();
+      const destination = (()=>{
+        const last = seq[seq.length - 1];
+        const meta = last ? stopsById.get(last.stop_id) : null;
+        return meta?.name || last?.stop_id || null;
+      })();
       
       events.push({
         trainId: tripId,
@@ -4317,7 +4380,9 @@ const mapContainerEl = map.getContainer();
         diff: focusSec - now,
         cow: glyphForTrain(train, delayInfo),
         delayInfo,
-        disruptionText
+        disruptionText,
+        origin,
+        destination
       });
     }
 
