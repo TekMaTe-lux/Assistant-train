@@ -60,7 +60,7 @@
     .trip-panel.hidden{ display:none; }
     .trip-panel-header{ display:flex; align-items:center; justify-content:space-between; gap:12px; }
     .trip-panel-header-right{ display:flex; align-items:center; gap:8px; margin-left:auto; }
-    .station-board-now{ font-size:12px; color:#b9d4f7; font-weight:700; letter-spacing:.03em; padding:4px 8px; border:1px solid #24415f; border-radius:8px; background:rgba(12,23,38,0.7); white-space:nowrap; }
+    .station-board-now{ font-size:16px; color:#e8f4ff; font-weight:700; letter-spacing:.01em; padding:0; border:none; background:transparent; white-space:nowrap; line-height:1.2; }
     .trip-panel-body{ display:flex; flex-direction:column; gap:12px; overflow:auto; padding-right:2px; }
     .trip-panel-title{ display:flex; align-items:center; gap:8px; font-weight:700; font-size:16px; }
     .trip-panel-icon{ font-size:20px; filter: drop-shadow(0 0 4px rgba(0,0,0,0.6)); }
@@ -3882,7 +3882,7 @@ const mapContainerEl = map.getContainer();
       return;
     }
     stationBoardNowEl.classList.remove('hidden');
-    stationBoardNowEl.textContent = `Heure actuelle ${new Date().toLocaleTimeString('fr-FR', { hour12:false })}`;
+    stationBoardNowEl.textContent = new Date().toLocaleTimeString('fr-FR', { hour12:false });
   }
 
   setInterval(updateStationBoardNowClock, 1000);
@@ -3937,15 +3937,61 @@ const mapContainerEl = map.getContainer();
     }
   }
 
+  function buildStaticPanelTrainData(tripId){
+    const seq = stopTimesByTrip.get(tripId);
+    if (!seq || !seq.length) return null;
+    const trip = tripsById.get(tripId) || {};
+    const route = routesById.get(trip.route_id) || {};
+    const rawNumber = trainNumberForTrip(trip, route, tripId);
+    const numberCandidate = extractTrainNumberCandidate(rawNumber);
+    const fallbackNumberCandidate = numberCandidate || extractTrainNumberCandidate(tripId) || null;
+    const numberKeyRaw = fallbackNumberCandidate != null ? String(fallbackNumberCandidate) : null;
+    const numberKey = numberKeyRaw ? normalizeTrainNumberKey(numberKeyRaw) : null;
+    const branding = computeTrainBranding(tripId, trip, route, rawNumber, numberCandidate || fallbackNumberCandidate);
+    const numberDisplay = branding.displayNumber
+      || rawNumber
+      || (numberKey != null ? String(numberKey) : (numberKeyRaw != null ? String(numberKeyRaw) : tripId));
+    const headsign = (()=>{
+      if (trip.headsign && trip.headsign !== numberDisplay) return trip.headsign;
+      if (route.long && route.long !== numberDisplay) return route.long;
+      if (route.short && route.short !== numberDisplay) return route.short;
+      return '';
+    })();
+    const startPlanned = seq[0]?.departure ?? seq[0]?.arrival ?? null;
+    const endPlanned = seq[seq.length - 1]?.arrival ?? seq[seq.length - 1]?.departure ?? null;
+    return {
+      id: tripId,
+      source: trip?.source === 'CFL' ? 'CFL' : 'SNCF',
+      number: numberDisplay || tripId,
+      numberRaw: rawNumber || null,
+      numberKey,
+      numberDigits: branding.digits || null,
+      delayNumberKeys: numberKey != null ? [String(numberKey)] : [],
+      headsign,
+      branding,
+      startSec: startPlanned,
+      endSec: endPlanned,
+      scheduledStartSec: startPlanned,
+      scheduledEndSec: endPlanned
+    };
+  }
+
   function renderTripPanel(){
     if (!activeTripId){ hideTripPanel(); return; }
-    const data = trainDataById.get(activeTripId);
+    let data = trainDataById.get(activeTripId);
     if (!data){
-      activeTripId = null;
-      if (!activeStationId) hideTripPanel();
-      return;
+      data = buildStaticPanelTrainData(activeTripId);
+      if (data){
+        trainDataById.set(activeTripId, data);
+      } else {
+        activeTripId = null;
+        if (!activeStationId) hideTripPanel();
+        return;
+      }
     }
 
+    tripPanelSummaryEl.classList.remove('hidden');
+    tripStopsTitleEl.classList.remove('hidden');
     tripStopsEl.classList.remove('station-mode');
     const delayInfo = data.delayInfo || computeTrainDelayInfo(data);
     if (delayInfo && data.delayInfo !== delayInfo) data.delayInfo = delayInfo;
@@ -4317,14 +4363,8 @@ const mapContainerEl = map.getContainer();
     tripPanelTrainEl.textContent = `Gare de ${station.label}`;
     updateStationBoardNowClock();
 
-    const classification = station.type === 'major'
-      ? 'Tableau en temps réel — axe Nancy ↔ Luxembourg'
-      : 'Tableau local — axe Nancy ↔ Luxembourg';
-    const summaryParts = [escapeHTML(classification)];
-    if (isFinite(station.lat) && isFinite(station.lon)){
-      summaryParts.push(`<span class="muted">(${escapeHTML(station.lat.toFixed(3))} ; ${escapeHTML(station.lon.toFixed(3))})</span>`);
-    }
-    tripPanelSummaryEl.innerHTML = summaryParts.join('<br>');
+    tripPanelSummaryEl.classList.add('hidden');
+    tripPanelSummaryEl.textContent = '';
 
     tripProgressWrapEl.classList.add('hidden');
     tripProgressFillEl.style.width = '0%';
@@ -4333,9 +4373,8 @@ const mapContainerEl = map.getContainer();
     const events = computeStationEventsCached(station);
     const departures = stationBoardRows(events, 'dep');
     const arrivals = stationBoardRows(events, 'arr');
-    const total = departures.length + arrivals.length;
-    tripStopsTitleEl.classList.remove('hidden');
-    tripStopsTitleEl.textContent = `Départs (${departures.length}) · Arrivées (${arrivals.length})` + (total ? ` — ${total} ligne(s)` : '');
+    tripStopsTitleEl.classList.add('hidden');
+    tripStopsTitleEl.textContent = '';
 
     const depTable = renderStationBoardTable(departures, 'dep');
     const arrTable = renderStationBoardTable(arrivals, 'arr');
