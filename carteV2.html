@@ -4206,6 +4206,8 @@ const mapContainerEl = map.getContainer();
     const now = nowSecLocal();
     const rows = [];
     for (const ev of events){
+      if (mode === 'dep' && !ev.canDepartFromStation) continue;
+      if (mode === 'arr' && !ev.canArriveAtStation) continue;
       const planned = mode === 'dep' ? ev.depPlanned : ev.arrPlanned;
       const realtime = mode === 'dep' ? ev.depSec : ev.arrSec;
       const when = realtime ?? planned;
@@ -4227,7 +4229,18 @@ const mapContainerEl = map.getContainer();
         statusClass,
         stateText,
         place: mode === 'dep'
-          ? (ev.nextStop || ev.headsign || ev.destination || 'Destination inconnue')
+          ? (()=>{
+            const nextNorm = normalizeStationName(ev.nextStop);
+            const stationNorm = normalizeStationName(ev.stationLabel);
+            const originNorm = normalizeStationName(ev.origin);
+            const shouldUseDestination = ev.isOriginStop
+              || (nextNorm && stationNorm && nextNorm === stationNorm)
+              || (nextNorm && originNorm && nextNorm === originNorm);
+            if (shouldUseDestination){
+              return ev.destination || ev.headsign || ev.nextStop || 'Destination inconnue';
+            }
+            return ev.nextStop || ev.headsign || ev.destination || 'Destination inconnue';
+          })()
           : (ev.previousStop || ev.origin || 'Provenance inconnue')
       });
     }
@@ -4333,6 +4346,8 @@ const mapContainerEl = map.getContainer();
       let focusSec = null;
       const isOriginStop = targetIdx === 0;
       const isTerminusStop = targetIdx === (seq.length - 1);
+      const canDepartFromStation = !isTerminusStop && (depSec != null || depPlanned != null);
+      const canArriveAtStation = !isOriginStop && (arrSec != null || arrPlanned != null);
 
       if (isOriginStop && (depSec != null || depPlanned != null)){
         state = 'Départ';
@@ -4407,12 +4422,17 @@ const mapContainerEl = map.getContainer();
         origin,
         destination,
         previousStop,
-        nextStop
+        nextStop,
+        stationLabel: station.label || null,
+        isOriginStop,
+        isTerminusStop,
+        canDepartFromStation,
+        canArriveAtStation
       });
     }
 
     events.sort((a,b)=>a.focusSec - b.focusSec);
-    return events.slice(0, 8);
+    return events;
   }
 
   // --- Perf: cache du panneau gare (évite de rescanner tous les trains à chaque refresh) ---
