@@ -145,6 +145,10 @@
     .station-train-link{ display:inline-flex; align-items:center; gap:6px; border:1px solid #2a3b55; border-radius:8px; padding:6px 10px; background:rgba(11,15,26,0.8); color:#e0f0ff; font-size:12px; cursor:pointer; text-shadow:0 0 4px #000; }
     .station-train-link:hover{ border-color:#5bd6ff; color:#a0ff00; }
     .station-train-link:focus-visible{ outline:2px solid #a0ff00; outline-offset:2px; }
+    .station-board-actions{ display:flex; flex-direction:column; align-items:flex-end; gap:6px; }
+    .station-board-track{ display:inline-flex; flex-direction:column; align-items:center; justify-content:center; min-width:56px; min-height:42px; border-radius:8px; background:#eef2f7; color:#0b0f1a; font-weight:900; line-height:1.05; box-shadow:inset 0 0 0 1px rgba(8,15,25,0.12); }
+    .station-board-track-label{ font-size:11px; font-weight:700; opacity:0.9; }
+    .station-board-track-value{ font-size:36px; font-weight:900; margin-top:-1px; }
     .station-time-plan{ font-weight:600; color:#d6e6ff; }
     .station-time-rt{ display:inline-block; margin-left:4px; font-size:11px; }
     .station-time-rt--delay{ color:#ffc48a; }
@@ -832,6 +836,14 @@ function escapeHTML(str){
     'https://cdn.jsdelivr.net/gh/TekMaTe-lux/Assistant-train@main/Assistant-train/retards_cfl.json'
   ];
 
+  const VOIES_BY_TRAIN_CANDIDATES = [
+    'https://vps.labetaillere.fr/gtfs/voies_by_train.json',
+    location.origin + location.pathname.replace(/\/[^\/]*$/, '/') + 'voies_by_train.json',
+    'https://raw.githubusercontent.com/TekMaTe-lux/Assistant-train/main/Assistant-train/voies_by_train.json',
+    'https://cdn.jsdelivr.net/gh/TekMaTe-lux/Assistant-train@main/Assistant-train/voies_by_train.json'
+  ];
+  const TRACK_REFRESH_INTERVAL_MS = 120000;
+
   const HAFAS_LOOKAHEAD_MINUTES = 120;
   const HAFAS_REFRESH_INTERVAL_MS = 120000;
   const HAFAS_MAX_JOURNEYS = 20;
@@ -952,6 +964,9 @@ function escapeHTML(str){
   let pendingHafasPromise = null;
   let pendingSncfPromise = null;
   let pendingSncfStatusPromise = null;
+  let trackRefreshTimer = null;
+  let pendingTrackPromise = null;
+  const tracksByTrainNumber = new Map(); // normalized train key -> Array<{stationNorm, depTrack, arrTrack, genericTrack, source}>
 
   function describeRealtimeSource(src){
     if (!src) return '';
@@ -4308,6 +4323,128 @@ const mapContainerEl = map.getContainer();
     tripStopsEl.innerHTML = stopsHtml || '<div class="trip-stop"><div class="stop-main"><div class="stop-name">Aucun arrêt disponible</div></div></div>';
   }
 
+  function normalizeTrackValue(value){
+    if (value == null) return null;
+    const raw = String(value).trim();
+    if (!raw || /^(-+|n\/?a|nc|null|undefined)$/i.test(raw)) return null;
+    const compact = raw.replace(/^voie\s*/i, '').replace(/^track\s*/i, '').trim();
+    return compact || null;
+  }
+
+  function ingestTrackRecord(trainRawKey, payload, sourceLabel){
+    if (!trainRawKey) return;
+    const normalizedKey = normalizeTrainNumberKey(extractTrainNumberCandidate(trainRawKey) ?? trainRawKey);
+    if (normalizedKey == null && normalizedKey !== 0) return;
+    const key = String(normalizedKey);
+    if (!key) return;
+
+    const stationName = payload?.station ?? payload?.gare ?? payload?.stop_name ?? payload?.stop ?? payload?.name ?? null;
+    const stationNorm = stationName ? normalizeStationName(stationName) : null;
+    const depTrack = normalizeTrackValue(payload?.departure_track ?? payload?.dep_track ?? payload?.departure_platform ?? payload?.dep_platform ?? payload?.dep_voie ?? payload?.voie_depart ?? payload?.voie_dep ?? payload?.depVoie ?? payload?.dep);
+    const arrTrack = normalizeTrackValue(payload?.arrival_track ?? payload?.arr_track ?? payload?.arrival_platform ?? payload?.arr_platform ?? payload?.arr_voie ?? payload?.voie_arrivee ?? payload?.voie_arr ?? payload?.arrVoie ?? payload?.arr);
+    const genericTrack = normalizeTrackValue(payload?.track ?? payload?.platform ?? payload?.voie ?? payload?.quai);
+    if (!depTrack && !arrTrack && !genericTrack) return;
+
+    if (!tracksByTrainNumber.has(key)) tracksByTrainNumber.set(key, []);
+    tracksByTrainNumber.get(key).push({ stationNorm, depTrack, arrTrack, genericTrack, source: sourceLabel || '' });
+  }
+
+  function registerTracksFromPayload(payload, sourceLabel){
+    if (!payload) return;
+    const queue = [payload];
+    while (queue.length){
+      const node = queue.shift();
+      if (!node) continue;
+      if (Array.isArray(node)){
+        for (const item of node) queue.push(item);
+        continue;
+      }
+      if (typeof node !== 'object') continue;
+
+      const trainKey = node.train_number ?? node.trainNo ?? node.train ?? node.numero ?? node.num ?? node.trip_number ?? node.tripNo ?? node.id;
+      if (trainKey != null){
+        ingestTrackRecord(trainKey, node, sourceLabel);
+      }
+
+      for (const [key, value] of Object.entries(node)){
+        if (value == null) continue;
+        const candidate = extractTrainNumberCandidate(key);
+        if (candidate != null && typeof value === 'object'){
+          if (Array.isArray(value)){
+            for (const entry of value){
+              if (entry && typeof entry === 'object') ingestTrackRecord(candidate, entry, sourceLabel);
+            }
+          } else {
+            ingestTrackRecord(candidate, value, sourceLabel);
+          }
+          continue;
+        }
+        if (typeof value === 'object') queue.push(value);
+      }
+    }
+  }
+
+  function resolveStationBoardTrack(eventRow, mode){
+    const stationNorm = normalizeStationName(eventRow?.stationLabel || '');
+    const candidateKeys = [];
+    const pushKey = (value)=>{
+      if (value == null) return;
+      const normalized = normalizeTrainNumberKey(extractTrainNumberCandidate(value) ?? value);
+      if (normalized == null && normalized !== 0) return;
+      const key = String(normalized);
+      if (!key || candidateKeys.includes(key)) return;
+      candidateKeys.push(key);
+    };
+    pushKey(eventRow?.number);
+    pushKey(eventRow?.trainId);
+
+    for (const key of candidateKeys){
+      const records = tracksByTrainNumber.get(key);
+      if (!Array.isArray(records) || !records.length) continue;
+      const stationSpecific = stationNorm ? records.find(rec => rec.stationNorm && rec.stationNorm === stationNorm) : null;
+      const record = stationSpecific || records.find(rec => !rec.stationNorm) || records[0];
+      if (!record) continue;
+      const value = mode === 'dep'
+        ? (record.depTrack || record.genericTrack || record.arrTrack)
+        : (record.arrTrack || record.genericTrack || record.depTrack);
+      if (value) return value;
+    }
+    return null;
+  }
+
+  async function loadTrackAssignments(){
+    if (pendingTrackPromise) return pendingTrackPromise;
+    pendingTrackPromise = (async()=>{
+      const withBuster = (u)=> u + (u.includes('?') ? '&' : '?') + 't=' + Date.now();
+      tracksByTrainNumber.clear();
+      const sources = [
+        { label:'voies_by_train', candidates: VOIES_BY_TRAIN_CANDIDATES },
+        { label:'retards_cfl', candidates: HAFAS_PROXY_CANDIDATES }
+      ];
+      for (const source of sources){
+        for (const candidate of source.candidates){
+          if (!candidate) continue;
+          try {
+            const res = await fetchWithTimeoutNoHeaders(withBuster(candidate), 8000);
+            if (!res.ok) continue;
+            const data = await res.json();
+            registerTracksFromPayload(data, source.label);
+            break;
+          } catch(_){ }
+        }
+      }
+      if (activeStationId){
+        stationEventsCache.clear();
+        renderPanel();
+      }
+    })();
+    try {
+      await pendingTrackPromise;
+    } finally {
+      pendingTrackPromise = null;
+    }
+  }
+
   function stationBoardRows(events, mode){
     const now = nowSecLocal();
     const rows = [];
@@ -4337,6 +4474,7 @@ const mapContainerEl = map.getContainer();
         stateText,
         isImminent,
         etaSec,
+        track: resolveStationBoardTrack(ev, mode),
         place: mode === 'dep'
           ? (ev.destination || ev.headsign || 'Destination inconnue')
           : (ev.origin || 'Provenance inconnue')
@@ -4368,10 +4506,13 @@ const mapContainerEl = map.getContainer();
       const trainLabel = row.number ? `Train ${row.number}` : (row.label || row.trainId);
       const rowClass = row.isImminent ? ' class="station-board-row-imminent"' : '';
       const subClass = row.isImminent ? 'station-board-time-sub is-imminent' : 'station-board-time-sub';
+      const trackHtml = row.track
+        ? `<span class="station-board-track" title="Voie ${escapeAttr(row.track)}"><span class="station-board-track-label">Voie</span><span class="station-board-track-value">${escapeHTML(row.track)}</span></span>`
+        : '';
       return `<tr${rowClass}>
         <td><div class="station-board-way">${escapeHTML(row.place)}</div><div class="station-board-train">${escapeHTML(trainLabel)}</div></td>
         <td>${timeHtml}<div class="${subClass}">${subText}</div></td>
-        <td><button type="button" class="station-train-link" data-train-id="${btnId}" aria-label="${btnLabel}">${row.cow}<span>Détails</span></button></td>
+        <td><div class="station-board-actions">${trackHtml}<button type="button" class="station-train-link" data-train-id="${btnId}" aria-label="${btnLabel}">${row.cow}<span>Détails</span></button></div></td>
       </tr>`;
     }).join('');
     const colLabel = mode === 'dep' ? 'Destination' : 'Provenance';
@@ -4544,6 +4685,7 @@ const mapContainerEl = map.getContainer();
         disruptionText,
         origin,
         destination,
+        stationLabel: station.label || null,
         canDepartFromStation,
         canArriveAtStation
       });
@@ -6475,6 +6617,9 @@ function stationNameMatchesKeywords(name, keywords){
       console.error('[HAFAS] échec initial', err);
       setRealtimeSourceError('hafas', 'indisponibles');
     });
+    const tracksPromise = loadTrackAssignments().catch(err => {
+      console.warn('[TRACKS] échec initial', err);
+    });
 
     await Promise.all([
       loadNetworks(),
@@ -6519,6 +6664,13 @@ function stationNameMatchesKeywords(name, keywords){
         sncfStatusRefreshTimer = setInterval(()=>{
           guardedRefresh(() => loadSncfStatus()).catch(err => console.warn('[SNCF] statut indisponible', err));
         }, SNCF_RT_STATUS_REFRESH_INTERVAL_MS);
+      }
+    });
+    tracksPromise.finally(()=>{
+      if (trackRefreshTimer == null){
+        trackRefreshTimer = setInterval(()=>{
+          guardedRefresh(() => loadTrackAssignments()).catch(err => console.warn('[TRACKS] rafraîchissement indisponible', err));
+        }, TRACK_REFRESH_INTERVAL_MS);
       }
     });
   })().catch(e=> setStatus('Erreur initialisation: '+e.message, true));
