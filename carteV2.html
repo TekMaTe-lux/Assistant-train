@@ -61,6 +61,8 @@
     .trip-panel-header{ display:flex; align-items:center; justify-content:space-between; gap:12px; }
     .trip-panel-header-right{ display:flex; align-items:center; gap:8px; margin-left:auto; }
     .station-board-now{ font-size:16px; color:#e8f4ff; font-weight:700; letter-spacing:.01em; padding:0; border:none; background:transparent; white-space:nowrap; line-height:1.2; }
+    .trip-panel-back{ border:1px solid #2a3b55; background:rgba(11,15,26,0.75); color:#dcecff; font-size:12px; font-weight:700; border-radius:8px; padding:5px 9px; cursor:pointer; }
+    .trip-panel-back:hover{ border-color:#5bd6ff; color:#a0ff00; }
     .trip-panel-body{ display:flex; flex-direction:column; gap:12px; overflow:auto; padding-right:2px; }
     .trip-panel-title{ display:flex; align-items:center; gap:8px; font-weight:700; font-size:16px; }
     .trip-panel-icon{ font-size:20px; filter: drop-shadow(0 0 4px rgba(0,0,0,0.6)); }
@@ -316,7 +318,7 @@
         <span id="trip-panel-icon" class="trip-panel-icon" aria-hidden="true">🐄</span>
         <span id="trip-panel-train">Sélectionnez une bétaillère ou une gare</span>
       </div>
-      <div class="trip-panel-header-right"><span id="station-board-now" class="station-board-now hidden" aria-live="off"></span><button id="trip-panel-close" class="trip-panel-close" type="button" aria-label="Fermer">×</button></div>
+      <div class="trip-panel-header-right"><button id="trip-panel-back" class="trip-panel-back hidden" type="button" aria-label="Retour à la gare">← Retour</button><span id="station-board-now" class="station-board-now hidden" aria-live="off"></span><button id="trip-panel-close" class="trip-panel-close" type="button" aria-label="Fermer">×</button></div>
     </div>
     <div class="trip-panel-body">
       <div id="trip-panel-summary" class="trip-panel-summary">Cliquez sur une icône vache ou grange pour afficher le détail.</div>
@@ -3583,9 +3585,11 @@ function sanitizeCflStationName(name){
 
     let activeTripId = null;
   let activeStationId = null;
+  let returnToStationId = null;  
 
   const tripPanelEl = document.getElementById('trip-panel');
   const tripPanelCloseBtn = document.getElementById('trip-panel-close');
+  const tripPanelBackBtn = document.getElementById('trip-panel-back');  
   const tripPanelIconEl = document.getElementById('trip-panel-icon');
   const tripPanelTrainEl = document.getElementById('trip-panel-train');
   const tripPanelSummaryEl = document.getElementById('trip-panel-summary');
@@ -3723,6 +3727,7 @@ function sanitizeCflStationName(name){
   function clearActiveSelection(){
     activeTripId = null;
     activeStationId = null;
+    returnToStationId = null;
   }
 
   function handleTripPanelClose(ev){
@@ -3736,6 +3741,20 @@ function sanitizeCflStationName(name){
 
   tripPanelCloseBtn.addEventListener('click', handleTripPanelClose);
   tripPanelCloseBtn.addEventListener('touchstart', handleTripPanelClose, { passive:false });
+
+  function handleTripPanelBack(ev){
+    if (ev){
+      ev.preventDefault();
+      ev.stopPropagation();
+    }
+    if (!returnToStationId) return;
+    openStationPanel(returnToStationId);
+  }
+
+  if (tripPanelBackBtn){
+    tripPanelBackBtn.addEventListener('click', handleTripPanelBack);
+    tripPanelBackBtn.addEventListener('touchstart', handleTripPanelBack, { passive:false });
+  }
 
   map.on('click', ()=>{  
    if (activeTripId || activeStationId){
@@ -3861,7 +3880,7 @@ const mapContainerEl = map.getContainer();
     if (!btn) return;
     ev.preventDefault();
     const id = btn.getAttribute('data-train-id');
-    if (id) openTripPanel(id);
+    if (id) openTripPanel(id, { fromStationId: activeStationId });
   });
 
   tripStopsEl.addEventListener('keydown', (ev)=>{
@@ -3870,7 +3889,7 @@ const mapContainerEl = map.getContainer();
     if (ev.key === 'Enter' || ev.key === ' '){
       ev.preventDefault();
       const id = btn.getAttribute('data-train-id');
-      if (id) openTripPanel(id);
+      if (id) openTripPanel(id, { fromStationId: activeStationId });
     }
   });
 
@@ -3900,6 +3919,9 @@ const mapContainerEl = map.getContainer();
       stationBoardNowEl.textContent = '';
       stationBoardNowEl.classList.add('hidden');
     }
+    if (tripPanelBackBtn){
+      tripPanelBackBtn.classList.add('hidden');
+    }
     tripProgressWrapEl.classList.add('hidden');
     tripProgressFillEl.style.width = '0%';
     tripProgressTextEl.textContent = '';
@@ -3911,8 +3933,14 @@ const mapContainerEl = map.getContainer();
   }
 
 
-  function openTripPanel(trainId){
+  function openTripPanel(trainId, options = {}){
+    const fromStationId = options?.fromStationId || null;
     activeTripId = trainId;
+    if (fromStationId){
+      returnToStationId = fromStationId;
+    } else if (!activeStationId){
+      returnToStationId = null;
+    }
     activeStationId = null;
     tripPanelEl.classList.remove('hidden');
     document.body.classList.add('trip-panel-open');
@@ -3922,6 +3950,7 @@ const mapContainerEl = map.getContainer();
   function openStationPanel(stationId){
     activeStationId = stationId;
     activeTripId = null;
+    returnToStationId = null;
     tripPanelEl.classList.remove('hidden');
     document.body.classList.add('trip-panel-open');
      renderPanel();
@@ -3993,6 +4022,9 @@ const mapContainerEl = map.getContainer();
     tripPanelSummaryEl.classList.remove('hidden');
     tripStopsTitleEl.classList.remove('hidden');
     tripStopsEl.classList.remove('station-mode');
+    if (tripPanelBackBtn){
+      tripPanelBackBtn.classList.toggle('hidden', !returnToStationId);
+    }
     const delayInfo = data.delayInfo || computeTrainDelayInfo(data);
     if (delayInfo && data.delayInfo !== delayInfo) data.delayInfo = delayInfo;
     
@@ -4352,6 +4384,7 @@ const mapContainerEl = map.getContainer();
 
     tripPanelEl.classList.remove('cancelled');
     tripPanelEl.classList.add('station-board-mode');
+    if (tripPanelBackBtn) tripPanelBackBtn.classList.add('hidden');
     tripStopsEl.classList.add('station-mode');
     const emoji = station.type === 'major' ? '🏠' : '🏡';
     tripPanelIconEl.textContent = emoji;
