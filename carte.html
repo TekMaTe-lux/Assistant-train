@@ -59,6 +59,10 @@
     .trip-panel{ position:fixed; top:96px; right:18px; width:320px; max-height:calc(100vh - 140px); background:rgba(11,15,26,0.95); border:1px solid #20324b; border-radius:14px; box-shadow:0 18px 36px rgba(0,0,0,0.35); padding:16px; display:flex; flex-direction:column; gap:12px; backdrop-filter:blur(6px); overflow:hidden; z-index:3000; transition:transform 0.26s ease, opacity 0.22s ease; }
     .trip-panel.hidden{ display:none; }
     .trip-panel-header{ display:flex; align-items:center; justify-content:space-between; gap:12px; }
+    .trip-panel-header-right{ display:flex; align-items:center; gap:8px; margin-left:auto; }
+    .station-board-now{ font-size:16px; color:#e8f4ff; font-weight:700; letter-spacing:.01em; padding:0; border:none; background:transparent; white-space:nowrap; line-height:1.2; }
+    .trip-panel-back{ border:1px solid #2a3b55; background:rgba(11,15,26,0.75); color:#dcecff; font-size:12px; font-weight:700; border-radius:8px; padding:5px 9px; cursor:pointer; }
+    .trip-panel-back:hover{ border-color:#5bd6ff; color:#a0ff00; }
     .trip-panel-body{ display:flex; flex-direction:column; gap:12px; overflow:auto; padding-right:2px; }
     .trip-panel-title{ display:flex; align-items:center; gap:8px; font-weight:700; font-size:16px; }
     .trip-panel-icon{ font-size:20px; filter: drop-shadow(0 0 4px rgba(0,0,0,0.6)); }
@@ -155,6 +159,9 @@
     .station-board-table th{ position:sticky; top:0; z-index:1; text-align:left; background:#0d192a; color:#8fb2dd; font-size:10px; text-transform:uppercase; letter-spacing:.06em; padding:6px 8px; border-bottom:1px solid #1f3249; }
     .station-board-table td{ padding:8px; border-bottom:1px solid rgba(33,50,75,0.75); vertical-align:middle; }
     .station-board-time{ font-weight:800; color:#ffef3f; font-size:18px; line-height:1; }
+    .station-board-time--delayed{ display:flex; align-items:baseline; gap:8px; }
+    .station-board-time-planned{ color:#ffef3f; text-decoration:line-through; text-decoration-thickness:2px; text-decoration-color:#ffef3f; opacity:0.95; }
+    .station-board-time-delayed{ color:#ff9a3c; font-weight:900; }
     .station-board-time-sub{ font-size:10px; color:#90a7c8; margin-top:2px; }
     .station-board-way{ font-weight:700; color:#e8f4ff; }
     .station-board-train{ color:#99bee8; font-size:11px; white-space:nowrap; }
@@ -162,6 +169,9 @@
     .station-board-state.is-delay{ color:#ffbe84; }
     .station-board-state.is-advance{ color:#8dffa7; }
     .station-board-empty{ padding:12px; color:#9ab1d6; font-size:12px; }
+    .station-board-time-sub.is-imminent{ color:#a0ff00; font-weight:800; letter-spacing:.02em; }
+    .station-board-row-imminent td{ animation:station-board-blink 0.9s ease-in-out infinite; }
+    @keyframes station-board-blink{ 0%,100%{ opacity:1; } 50%{ opacity:0.45; } }
     @media (max-width: 900px){
       .trip-panel.station-board-mode{ width:calc(100% - 18px); }
       .station-board-grid{ grid-template-columns:1fr; }
@@ -246,7 +256,7 @@
 <body>
   <header>
     <div class="header-inner">
-      <a class="brand-link" href="https://x.com/BERNancyMetzLux" target="_blank" rel="noopener">
+      <a class="brand-link" href="https://www.labetaillere.fr" target="_blank" rel="noopener">
         <img class="brand-logo" src="logobetaillere.png" alt="Logo La Bétaillère">
       </a>
       <div class="header-texts">
@@ -308,7 +318,7 @@
         <span id="trip-panel-icon" class="trip-panel-icon" aria-hidden="true">🐄</span>
         <span id="trip-panel-train">Sélectionnez une bétaillère ou une gare</span>
       </div>
-      <button id="trip-panel-close" class="trip-panel-close" type="button" aria-label="Fermer">×</button>
+      <div class="trip-panel-header-right"><button id="trip-panel-back" class="trip-panel-back hidden" type="button" aria-label="Retour à la gare">← Retour</button><span id="station-board-now" class="station-board-now hidden" aria-live="off"></span><button id="trip-panel-close" class="trip-panel-close" type="button" aria-label="Fermer">×</button></div>
     </div>
     <div class="trip-panel-body">
       <div id="trip-panel-summary" class="trip-panel-summary">Cliquez sur une icône vache ou grange pour afficher le détail.</div>
@@ -3575,12 +3585,15 @@ function sanitizeCflStationName(name){
 
     let activeTripId = null;
   let activeStationId = null;
+  let returnToStationId = null;  
 
   const tripPanelEl = document.getElementById('trip-panel');
   const tripPanelCloseBtn = document.getElementById('trip-panel-close');
+  const tripPanelBackBtn = document.getElementById('trip-panel-back');  
   const tripPanelIconEl = document.getElementById('trip-panel-icon');
   const tripPanelTrainEl = document.getElementById('trip-panel-train');
   const tripPanelSummaryEl = document.getElementById('trip-panel-summary');
+  const stationBoardNowEl = document.getElementById('station-board-now');  
   const tripProgressWrapEl = document.getElementById('trip-progress');
   const tripProgressFillEl = document.getElementById('trip-progress-fill');
   const tripProgressTextEl = document.getElementById('trip-progress-text');
@@ -3714,6 +3727,7 @@ function sanitizeCflStationName(name){
   function clearActiveSelection(){
     activeTripId = null;
     activeStationId = null;
+    returnToStationId = null;
   }
 
   function handleTripPanelClose(ev){
@@ -3727,6 +3741,20 @@ function sanitizeCflStationName(name){
 
   tripPanelCloseBtn.addEventListener('click', handleTripPanelClose);
   tripPanelCloseBtn.addEventListener('touchstart', handleTripPanelClose, { passive:false });
+
+  function handleTripPanelBack(ev){
+    if (ev){
+      ev.preventDefault();
+      ev.stopPropagation();
+    }
+    if (!returnToStationId) return;
+    openStationPanel(returnToStationId);
+  }
+
+  if (tripPanelBackBtn){
+    tripPanelBackBtn.addEventListener('click', handleTripPanelBack);
+    tripPanelBackBtn.addEventListener('touchstart', handleTripPanelBack, { passive:false });
+  }
 
   map.on('click', ()=>{  
    if (activeTripId || activeStationId){
@@ -3852,7 +3880,7 @@ const mapContainerEl = map.getContainer();
     if (!btn) return;
     ev.preventDefault();
     const id = btn.getAttribute('data-train-id');
-    if (id) openTripPanel(id);
+    if (id) openTripPanel(id, { fromStationId: activeStationId });
   });
 
   tripStopsEl.addEventListener('keydown', (ev)=>{
@@ -3861,9 +3889,23 @@ const mapContainerEl = map.getContainer();
     if (ev.key === 'Enter' || ev.key === ' '){
       ev.preventDefault();
       const id = btn.getAttribute('data-train-id');
-      if (id) openTripPanel(id);
+      if (id) openTripPanel(id, { fromStationId: activeStationId });
     }
   });
+
+  function updateStationBoardNowClock(){
+    if (!stationBoardNowEl) return;
+    if (!activeStationId || tripPanelEl.classList.contains('hidden')){
+      stationBoardNowEl.textContent = '';
+      stationBoardNowEl.classList.add('hidden');
+      return;
+    }
+    stationBoardNowEl.classList.remove('hidden');
+    stationBoardNowEl.textContent = new Date().toLocaleTimeString('fr-FR', { hour12:false });
+  }
+
+  setInterval(updateStationBoardNowClock, 1000);
+
   
   function hideTripPanel(){
     tripPanelEl.classList.add('hidden');
@@ -3873,6 +3915,13 @@ const mapContainerEl = map.getContainer();
     tripPanelIconEl.textContent = '🐄';
     tripPanelTrainEl.textContent = 'Sélectionnez une bétaillère ou une gare';
     tripPanelSummaryEl.textContent = 'Cliquez sur une icône vache ou grange pour afficher le détail.';
+    if (stationBoardNowEl){
+      stationBoardNowEl.textContent = '';
+      stationBoardNowEl.classList.add('hidden');
+    }
+    if (tripPanelBackBtn){
+      tripPanelBackBtn.classList.add('hidden');
+    }
     tripProgressWrapEl.classList.add('hidden');
     tripProgressFillEl.style.width = '0%';
     tripProgressTextEl.textContent = '';
@@ -3884,8 +3933,14 @@ const mapContainerEl = map.getContainer();
   }
 
 
-  function openTripPanel(trainId){
+  function openTripPanel(trainId, options = {}){
+    const fromStationId = options?.fromStationId || null;
     activeTripId = trainId;
+    if (fromStationId){
+      returnToStationId = fromStationId;
+    } else if (!activeStationId){
+      returnToStationId = null;
+    }
     activeStationId = null;
     tripPanelEl.classList.remove('hidden');
     document.body.classList.add('trip-panel-open');
@@ -3895,6 +3950,7 @@ const mapContainerEl = map.getContainer();
   function openStationPanel(stationId){
     activeStationId = stationId;
     activeTripId = null;
+    returnToStationId = null;
     tripPanelEl.classList.remove('hidden');
     document.body.classList.add('trip-panel-open');
      renderPanel();
@@ -3910,16 +3966,66 @@ const mapContainerEl = map.getContainer();
     }
   }
 
+  function buildStaticPanelTrainData(tripId){
+    const seq = stopTimesByTrip.get(tripId);
+    if (!seq || !seq.length) return null;
+    const trip = tripsById.get(tripId) || {};
+    const route = routesById.get(trip.route_id) || {};
+    const rawNumber = trainNumberForTrip(trip, route, tripId);
+    const numberCandidate = extractTrainNumberCandidate(rawNumber);
+    const fallbackNumberCandidate = numberCandidate || extractTrainNumberCandidate(tripId) || null;
+    const numberKeyRaw = fallbackNumberCandidate != null ? String(fallbackNumberCandidate) : null;
+    const numberKey = numberKeyRaw ? normalizeTrainNumberKey(numberKeyRaw) : null;
+    const branding = computeTrainBranding(tripId, trip, route, rawNumber, numberCandidate || fallbackNumberCandidate);
+    const numberDisplay = branding.displayNumber
+      || rawNumber
+      || (numberKey != null ? String(numberKey) : (numberKeyRaw != null ? String(numberKeyRaw) : tripId));
+    const headsign = (()=>{
+      if (trip.headsign && trip.headsign !== numberDisplay) return trip.headsign;
+      if (route.long && route.long !== numberDisplay) return route.long;
+      if (route.short && route.short !== numberDisplay) return route.short;
+      return '';
+    })();
+    const startPlanned = seq[0]?.departure ?? seq[0]?.arrival ?? null;
+    const endPlanned = seq[seq.length - 1]?.arrival ?? seq[seq.length - 1]?.departure ?? null;
+    return {
+      id: tripId,
+      source: trip?.source === 'CFL' ? 'CFL' : 'SNCF',
+      number: numberDisplay || tripId,
+      numberRaw: rawNumber || null,
+      numberKey,
+      numberDigits: branding.digits || null,
+      delayNumberKeys: numberKey != null ? [String(numberKey)] : [],
+      headsign,
+      branding,
+      startSec: startPlanned,
+      endSec: endPlanned,
+      scheduledStartSec: startPlanned,
+      scheduledEndSec: endPlanned
+    };
+  }
+
   function renderTripPanel(){
     if (!activeTripId){ hideTripPanel(); return; }
-    const data = trainDataById.get(activeTripId);
+    let data = trainDataById.get(activeTripId);
     if (!data){
-      activeTripId = null;
-      if (!activeStationId) hideTripPanel();
-      return;
+      data = buildStaticPanelTrainData(activeTripId);
+      if (data){
+        trainDataById.set(activeTripId, data);
+      } else {
+        activeTripId = null;
+        if (!activeStationId) hideTripPanel();
+        return;
+      }
     }
 
+    tripPanelEl.classList.remove('station-board-mode');
+    tripPanelSummaryEl.classList.remove('hidden');
+    tripStopsTitleEl.classList.remove('hidden');
     tripStopsEl.classList.remove('station-mode');
+    if (tripPanelBackBtn){
+      tripPanelBackBtn.classList.toggle('hidden', !returnToStationId);
+    }
     const delayInfo = data.delayInfo || computeTrainDelayInfo(data);
     if (delayInfo && data.delayInfo !== delayInfo) data.delayInfo = delayInfo;
     
@@ -4206,11 +4312,14 @@ const mapContainerEl = map.getContainer();
     const now = nowSecLocal();
     const rows = [];
     for (const ev of events){
+      if (mode === 'dep' && !ev.canDepartFromStation) continue;
+      if (mode === 'arr' && !ev.canArriveAtStation) continue;
       const planned = mode === 'dep' ? ev.depPlanned : ev.arrPlanned;
       const realtime = mode === 'dep' ? ev.depSec : ev.arrSec;
       const when = realtime ?? planned;
-      if (when == null || !isFinite(when)) continue;
-      if (when < (now - 120)) continue;
+      if (when < now) continue;
+      const etaSec = when - now;
+      const isImminent = mode === 'dep' && etaSec >= 0 && etaSec <= 60;
       const diffSec = (planned != null && realtime != null) ? (realtime - planned) : 0;
       const diffText = formatDelayDiff(diffSec);
       const statusClass = classifyDelayDiff(diffSec);
@@ -4226,9 +4335,11 @@ const mapContainerEl = map.getContainer();
         diffText,
         statusClass,
         stateText,
+        isImminent,
+        etaSec,
         place: mode === 'dep'
-          ? (ev.nextStop || ev.headsign || ev.destination || 'Destination inconnue')
-          : (ev.previousStop || ev.origin || 'Provenance inconnue')
+          ? (ev.destination || ev.headsign || 'Destination inconnue')
+          : (ev.origin || 'Provenance inconnue')
       });
     }
     rows.sort((a,b)=>a.when - b.when);
@@ -4243,22 +4354,28 @@ const mapContainerEl = map.getContainer();
       const plannedText = row.planned!=null ? fmtHHMM(row.planned) : null;
       const realtimeText = row.realtime!=null ? fmtHHMM(row.realtime) : plannedText;
       const diffSuffix = row.diffText ? ` (${escapeHTML(row.diffText)})` : '';
-      const subText = plannedText && realtimeText && plannedText !== realtimeText
-        ? `Prévu ${escapeHTML(plannedText)}${diffSuffix}`
-        : (row.diffText ? `${mode === 'dep' ? 'Départ' : 'Arrivée'}${diffSuffix}` : "À l'heure");
+      const isDelayed = plannedText && realtimeText && plannedText !== realtimeText && row.diffSec > 0;
+      const imminentText = (mode === 'dep' && row.isImminent) ? 'Départ imminent' : '';
+      const subText = imminentText
+        || (plannedText && realtimeText && plannedText !== realtimeText
+          ? (isDelayed ? `Retard${diffSuffix}` : `Prévu ${escapeHTML(plannedText)}${diffSuffix}`)
+          : (row.diffText ? `${mode === 'dep' ? 'Départ' : 'Arrivée'}${diffSuffix}` : "À l'heure"));
+      const timeHtml = isDelayed
+        ? `<div class="station-board-time station-board-time--delayed"><span class="station-board-time-planned">${escapeHTML(plannedText)}</span><span class="station-board-time-delayed">${escapeHTML(realtimeText)}</span></div>`
+        : `<div class="station-board-time">${escapeHTML(realtimeText || '—')}</div>`;
       const btnId = escapeAttr(row.trainId);
       const btnLabel = escapeAttr(`Ouvrir le détail du ${row.ariaLabel || (row.number ? `train ${row.number}` : 'service')}`);
-      const statusClass = row.statusClass === 'delay' ? 'is-delay' : row.statusClass === 'advance' ? 'is-advance' : '';
       const trainLabel = row.number ? `Train ${row.number}` : (row.label || row.trainId);
-      return `<tr>
-        <td><div class="station-board-state ${statusClass}">${escapeHTML(row.stateText)}</div></td>
-        <td><div class="station-board-time">${escapeHTML(realtimeText || '—')}</div><div class="station-board-time-sub">${subText}</div></td>
+      const rowClass = row.isImminent ? ' class="station-board-row-imminent"' : '';
+      const subClass = row.isImminent ? 'station-board-time-sub is-imminent' : 'station-board-time-sub';
+      return `<tr${rowClass}>
         <td><div class="station-board-way">${escapeHTML(row.place)}</div><div class="station-board-train">${escapeHTML(trainLabel)}</div></td>
+        <td>${timeHtml}<div class="${subClass}">${subText}</div></td>
         <td><button type="button" class="station-train-link" data-train-id="${btnId}" aria-label="${btnLabel}">${row.cow}<span>Détails</span></button></td>
       </tr>`;
     }).join('');
     const colLabel = mode === 'dep' ? 'Destination' : 'Provenance';
-    return `<div class="station-board-table-wrap"><table class="station-board-table"><thead><tr><th>État</th><th>Heure</th><th>${colLabel}</th><th></th></tr></thead><tbody>${htmlRows}</tbody></table></div>`;
+    return `<div class="station-board-table-wrap"><table class="station-board-table"><thead><tr><th>${colLabel}</th><th>Heure</th><th></th></tr></thead><tbody>${htmlRows}</tbody></table></div>`;
   }
 
   function renderStationPanel(){
@@ -4268,19 +4385,15 @@ const mapContainerEl = map.getContainer();
 
     tripPanelEl.classList.remove('cancelled');
     tripPanelEl.classList.add('station-board-mode');
+    if (tripPanelBackBtn) tripPanelBackBtn.classList.add('hidden');
     tripStopsEl.classList.add('station-mode');
     const emoji = station.type === 'major' ? '🏠' : '🏡';
     tripPanelIconEl.textContent = emoji;
     tripPanelTrainEl.textContent = `Gare de ${station.label}`;
+    updateStationBoardNowClock();
 
-    const classification = station.type === 'major'
-      ? 'Tableau en temps réel — axe Nancy ↔ Luxembourg'
-      : 'Tableau local — axe Nancy ↔ Luxembourg';
-    const summaryParts = [escapeHTML(classification)];
-    if (isFinite(station.lat) && isFinite(station.lon)){
-      summaryParts.push(`<span class="muted">(${escapeHTML(station.lat.toFixed(3))} ; ${escapeHTML(station.lon.toFixed(3))})</span>`);
-    }
-    tripPanelSummaryEl.innerHTML = summaryParts.join('<br>');
+    tripPanelSummaryEl.classList.add('hidden');
+    tripPanelSummaryEl.textContent = '';
 
     tripProgressWrapEl.classList.add('hidden');
     tripProgressFillEl.style.width = '0%';
@@ -4289,9 +4402,8 @@ const mapContainerEl = map.getContainer();
     const events = computeStationEventsCached(station);
     const departures = stationBoardRows(events, 'dep');
     const arrivals = stationBoardRows(events, 'arr');
-    const total = departures.length + arrivals.length;
-    tripStopsTitleEl.classList.remove('hidden');
-    tripStopsTitleEl.textContent = `Départs (${departures.length}) · Arrivées (${arrivals.length})` + (total ? ` — ${total} ligne(s)` : '');
+    tripStopsTitleEl.classList.add('hidden');
+    tripStopsTitleEl.textContent = '';
 
     const depTable = renderStationBoardTable(departures, 'dep');
     const arrTable = renderStationBoardTable(arrivals, 'arr');
@@ -4303,9 +4415,46 @@ const mapContainerEl = map.getContainer();
     const now = nowSecLocal();
     const events = [];
 
-    for (const [tripId, train] of trainDataById.entries()){
-      const seq = stopTimesByTrip.get(tripId);
+    for (const [tripId, seq] of stopTimesByTrip.entries()){
       if (!seq || !seq.length) continue;
+      if (!serviceAllowed(tripId)) continue;
+
+      const trip = tripsById.get(tripId) || {};
+      const route = routesById.get(trip.route_id) || {};
+      const rawNumber = trainNumberForTrip(trip, route, tripId);
+      const numberCandidate = extractTrainNumberCandidate(rawNumber);
+      const fallbackNumberCandidate = numberCandidate || extractTrainNumberCandidate(tripId) || null;
+      const numberKeyRaw = fallbackNumberCandidate != null ? String(fallbackNumberCandidate) : null;
+      const numberKey = numberKeyRaw ? normalizeTrainNumberKey(numberKeyRaw) : null;
+      const branding = computeTrainBranding(tripId, trip, route, rawNumber, numberCandidate || fallbackNumberCandidate);
+      const category = branding.category || 'sncf';
+      if ((category === 'sncf' && !trainFilters.showTer)
+        || (category === 'tgv-roi' && !trainFilters.showTgv)
+        || (category === 'cfl' && !trainFilters.showCfl)){
+        continue;
+      }
+
+      const numberDisplay = branding.displayNumber
+        || rawNumber
+        || (numberKey != null ? String(numberKey) : (numberKeyRaw != null ? String(numberKeyRaw) : null));
+      const headsign = (()=>{
+        if (trip.headsign && trip.headsign !== numberDisplay) return trip.headsign;
+        if (route.long && route.long !== numberDisplay) return route.long;
+        if (route.short && route.short !== numberDisplay) return route.short;
+        return '';
+      })();
+      const train = {
+        id: tripId,
+        source: trip?.source === 'CFL' ? 'CFL' : 'SNCF',
+        number: numberDisplay || rawNumber || tripId,
+        numberRaw: rawNumber || null,
+        numberKey,
+        numberDigits: branding.digits || null,
+        delayNumberKeys: numberKey != null ? [String(numberKey)] : [],
+        headsign,
+        branding
+      };
+
       let target = null;
       let targetIdx = -1;
       for (let i=0;i<seq.length;i++){
@@ -4320,7 +4469,7 @@ const mapContainerEl = map.getContainer();
         || computeRealtimeStopData(
           tripId,
           seq,
-          train.numberKey || extractTrainNumberCandidate(train.number) || extractTrainNumberCandidate(tripId),
+          numberKey,
           realtimeOptionsForTrain(train)
         );
       const profileStop = targetIdx >= 0 ? realtimeProfile?.stops?.[targetIdx] : null;
@@ -4333,6 +4482,8 @@ const mapContainerEl = map.getContainer();
       let focusSec = null;
       const isOriginStop = targetIdx === 0;
       const isTerminusStop = targetIdx === (seq.length - 1);
+      const canDepartFromStation = !isTerminusStop && (depSec != null || depPlanned != null);
+      const canArriveAtStation = !isOriginStop && (arrSec != null || arrPlanned != null);
 
       if (isOriginStop && (depSec != null || depPlanned != null)){
         state = 'Départ';
@@ -4371,20 +4522,7 @@ const mapContainerEl = map.getContainer();
         const last = seq[seq.length - 1];
         const meta = last ? stopsById.get(last.stop_id) : null;
         return meta?.name || last?.stop_id || null;
-      })();
-      const previousStop = (()=>{
-        if (targetIdx <= 0) return null;
-        const prev = seq[targetIdx - 1];
-        const meta = prev ? stopsById.get(prev.stop_id) : null;
-        return meta?.name || prev?.stop_id || null;
-      })();
-      const nextStop = (()=>{
-        if (targetIdx < 0 || targetIdx >= (seq.length - 1)) return null;
-        const nxt = seq[targetIdx + 1];
-        const meta = nxt ? stopsById.get(nxt.stop_id) : null;
-        return meta?.name || nxt?.stop_id || null;
-      })();
-      
+      })();  
       events.push({
         trainId: tripId,
         number: train.number,
@@ -4406,13 +4544,13 @@ const mapContainerEl = map.getContainer();
         disruptionText,
         origin,
         destination,
-        previousStop,
-        nextStop
+        canDepartFromStation,
+        canArriveAtStation
       });
     }
 
     events.sort((a,b)=>a.focusSec - b.focusSec);
-    return events.slice(0, 8);
+    return events;
   }
 
   // --- Perf: cache du panneau gare (évite de rescanner tous les trains à chaque refresh) ---
