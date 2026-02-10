@@ -178,9 +178,10 @@
     .station-board-state.is-advance{ color:#8dffa7; }
     .station-board-empty{ padding:12px; color:#9ab1d6; font-size:12px; }
     .station-board-time-sub.is-imminent{ color:#a0ff00; font-weight:800; letter-spacing:.02em; }
-.station-board-time-sub.is-cancelled{ color:#ff7f96; font-weight:800; letter-spacing:.03em; text-transform:uppercase; }
-    .station-board-row-cancelled .station-board-way{ text-decoration:line-through; text-decoration-thickness:2px; text-decoration-color:#ff8fa3; opacity:0.92; }
-    .station-board-time.station-board-time--cancelled{ color:#ff9fb0; text-decoration:line-through; text-decoration-thickness:2px; text-decoration-color:#ff9fb0; }    
+    .station-board-time-sub.is-cancelled{ color:#ff4d57; font-weight:800; letter-spacing:.03em; text-transform:uppercase; }
+    .station-board-time-sub.is-partial-cancel{ color:#ffb86b; font-weight:800; letter-spacing:.01em; }
+    .station-board-row-cancelled .station-board-way{ text-decoration:line-through; text-decoration-thickness:2px; text-decoration-color:#ff5e66; opacity:0.92; }
+    .station-board-time.station-board-time--cancelled{ color:#ff5a63; text-decoration:line-through; text-decoration-thickness:2px; text-decoration-color:#ff5a63; }
     .station-board-row-imminent td{ animation:station-board-blink 0.9s ease-in-out infinite; }
     @keyframes station-board-blink{ 0%,100%{ opacity:1; } 50%{ opacity:0.45; } }
     @media (max-width: 900px){
@@ -4527,7 +4528,8 @@ const mapContainerEl = map.getContainer();
         statusClass,
         stateText,
         isImminent,
-        isCancelled: ev.delayInfo?.severity === 'cancelled',
+        isCancelled: ev.isCancelledAtStation || ev.delayInfo?.severity === 'cancelled',
+        partialCancellationStation: ev.partialCancellationStation || null,
         etaSec,
         track: resolveStationBoardTrack(ev, mode),
         place: mode === 'dep'
@@ -4550,10 +4552,15 @@ const mapContainerEl = map.getContainer();
       const diffSuffix = row.diffText ? ` (${escapeHTML(row.diffText)})` : '';
       const isDelayed = plannedText && realtimeText && plannedText !== realtimeText && row.diffSec > 0;
       const isCancelled = !!row.isCancelled;
-      const imminentText = (mode === 'dep' && row.isImminent && !isCancelled) ? 'Départ imminent' : '';
+      const isPartialCancellation = !isCancelled && !!row.partialCancellationStation;
+      const imminentText = (mode === 'dep' && row.isImminent && !isCancelled && !isPartialCancellation) ? 'Départ imminent' : '';
+      const partialText = isPartialCancellation
+        ? `Suppression partielle · à partir de ${escapeHTML(row.partialCancellationStation)}`
+        : '';
       const subText = isCancelled
         ? 'Supprimé'
-        : (imminentText
+        : (partialText
+          || imminentText
           || (plannedText && realtimeText && plannedText !== realtimeText
             ? (isDelayed ? `Retard${diffSuffix}` : `Prévu ${escapeHTML(plannedText)}${diffSuffix}`)
             : (row.diffText ? `${mode === 'dep' ? 'Départ' : 'Arrivée'}${diffSuffix}` : "À l'heure")));
@@ -4570,7 +4577,9 @@ const mapContainerEl = map.getContainer();
         : (row.isImminent ? ' class="station-board-row-imminent"' : '');
       const subClass = row.isCancelled
         ? 'station-board-time-sub is-cancelled'
-        : (row.isImminent ? 'station-board-time-sub is-imminent' : 'station-board-time-sub');
+        : (isPartialCancellation
+          ? 'station-board-time-sub is-partial-cancel'
+          : (row.isImminent ? 'station-board-time-sub is-imminent' : 'station-board-time-sub'));
       const trackHtml = row.track
         ? `<span class="station-board-track" title="Voie ${escapeAttr(row.track)}"><span class="station-board-track-label">Voie</span><span class="station-board-track-value">${escapeHTML(row.track)}</span></span>`
         : '';
@@ -4689,6 +4698,18 @@ const mapContainerEl = map.getContainer();
           realtimeOptionsForTrain(train)
         );
       const profileStop = targetIdx >= 0 ? realtimeProfile?.stops?.[targetIdx] : null;
+      const cancellationInfo = realtimeProfile?.cancellation;
+      const cancellationIndex = Number.isInteger(cancellationInfo?.index) ? cancellationInfo.index : null;
+      const cancellationStation = (()=>{
+        if (cancellationIndex == null || !seq[cancellationIndex]) return cancellationInfo?.station || null;
+        const meta = stopsById.get(seq[cancellationIndex].stop_id);
+        return meta?.name || cancellationInfo?.station || null;
+      })();
+      const isStopCancelled = Boolean(profileStop?.cancelled);
+      const isCancelledAtStation = cancellationIndex != null
+        ? (cancellationIndex === 0 || targetIdx >= cancellationIndex || isStopCancelled)
+        : isStopCancelled;
+      const hasPartialCancellationAhead = cancellationIndex != null && cancellationIndex > targetIdx;
 
       const arrPlanned = target.arrival ?? null;
       const depPlanned = target.departure ?? null;
@@ -4758,6 +4779,8 @@ const mapContainerEl = map.getContainer();
         cow: glyphForTrain(train, delayInfo),
         delayInfo,
         disruptionText,
+        isCancelledAtStation,
+        partialCancellationStation: hasPartialCancellationAhead ? cancellationStation : null,
         origin,
         destination,
         stationLabel: station.label || null,
