@@ -302,11 +302,41 @@ function isBerStop(name){
 }
 
 function inferDirection(stopNames){
-  const idxNancy = stopNames.findIndex(n => (n||'').toLowerCase().includes('nancy'));
-  const idxLux = stopNames.findIndex(n => (n||'').toLowerCase().includes('luxembourg'));
+  const names = (stopNames || []).map(n => String(n||'').toLowerCase());
+
+  const idxNancy = names.findIndex(n => n.includes('nancy'));
+  const idxLux   = names.findIndex(n => n.includes('luxembourg'));
+
+  // ✅ Cas normal : Nancy et Luxembourg présents
   if (idxNancy >= 0 && idxLux >= 0){
     return (idxNancy < idxLux) ? 'NNY_LUX' : 'LUX_NNY';
   }
+
+  // ✅ Fallback robuste pour services tronqués (ex: Bettembourg↔Metz)
+  // On déduit le sens via le premier/dernier arrêt et quelques gares "côté Lux".
+  const first = names[0] || '';
+  const last  = names[names.length - 1] || '';
+
+  const isLuxSide = (s) =>
+    s.includes('luxembourg') ||
+    s.includes('howald') ||
+    s.includes('bettembourg') ||
+    s.includes('hettange') ||
+    s.includes('thionville');
+
+  const isNancySide = (s) =>
+    s.includes('nancy') ||
+    s.includes('frouard') ||
+    s.includes('pompey') ||
+    s.includes('pagny') ||
+    s.includes('pont-à-mousson');
+
+  // Exemples :
+  // - Bettembourg -> Metz = retour (Lux->Nancy) tronqué
+  // - Metz -> Bettembourg = aller (Nancy->Lux) tronqué
+  if (isLuxSide(first) && (isNancySide(last) || last.includes('metz'))) return 'LUX_NNY';
+  if ((isNancySide(first) || first.includes('metz')) && isLuxSide(last)) return 'NNY_LUX';
+
   return null;
 }
 
@@ -372,11 +402,22 @@ function normalizeDirKeyForCompo(dirKeyRaw, directionRaw){
   if (dk === 'LUXMETZNANCY') return 'LuxMetzNancy';
 
   // ✅ mapping des clés internes possibles (ex: NNY_LUX / LUX_NNY)
-  if (dk.includes('NNY') && dk.includes('LUX')) return 'NancyMetzLux';
-  if (dk.includes('LUX') && dk.includes('NNY')) return 'LuxMetzNancy';
+  // IMPORTANT : dk peut contenir à la fois "LUX" et "NNY" dans les 2 sens.
+  // On se base donc sur l'ordre / le préfixe, pas sur un simple includes().
+  if (dk === 'NNY_LUX' || dk === 'NNY-LUX' || dk === 'NANCY_LUX' || dk === 'NANCY-LUX') return 'NancyMetzLux';
+  if (dk === 'LUX_NNY' || dk === 'LUX-NNY' || dk === 'LUX_NANCY' || dk === 'LUX-NANCY') return 'LuxMetzNancy';
+  if (/^LUX/.test(dk)) return 'LuxMetzNancy';
+  if (/^(NNY|NANCY)/.test(dk)) return 'NancyMetzLux';
 
   // ✅ fallback sur le libellé direction (ex: "Nancy→Lux")
-  if (dr.includes('NANCY') && dr.includes('LUX')) return 'NancyMetzLux';
+  // Si la flèche est présente, on respecte l'ordre visuel.
+  if (dr.includes('→') && dr.includes('NANCY') && dr.includes('LUX')){
+    return (dr.indexOf('NANCY') < dr.indexOf('LUX')) ? 'NancyMetzLux' : 'LuxMetzNancy';
+  }
+  if (dr.includes('NANCY') && dr.includes('LUX')){
+    // Sans flèche, on ne peut pas déduire l'ordre : on prend la convention Nancy->Lux
+    return 'NancyMetzLux';
+  }
   if (dr.includes('LUX') && dr.includes('NANCY')) return 'LuxMetzNancy';
 
   return 'NancyMetzLux';
