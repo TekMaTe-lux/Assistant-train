@@ -310,10 +310,51 @@ function inferDirection(stopNames){
   return null;
 }
 
+function normalizeCompoUrl(u){
+  if (!u) return u;
+  try { u = String(u).trim(); } catch { return u; }
+  // Convertit un lien GitHub "blob" en lien RAW
+  // ex: https://github.com/TekMaTe-lux/Assistant-train/blob/main/Compotrains.json
+  //  -> https://raw.githubusercontent.com/TekMaTe-lux/Assistant-train/main/Compotrains.json
+  if (u.includes('github.com/') && u.includes('/blob/')){
+    u = u.replace('https://github.com/', 'https://raw.githubusercontent.com/');
+    u = u.replace('/blob/', '/');
+  }
+  return u;
+}
+
 async function loadCompoData(url){
-  const res = await fetch(url, {cache:'no-store'}); // ✅ prend les MAJ immédiatement
-  if (!res.ok) throw new Error(`Compo HTTP ${res.status}`);
-  return await res.json();
+  const rawDefault = 'https://raw.githubusercontent.com/TekMaTe-lux/Assistant-train/main/Compotrains.json';
+  const jsDelivr = 'https://cdn.jsdelivr.net/gh/TekMaTe-lux/Assistant-train@main/Compotrains.json';
+  const localRel = new URL('Compotrains.json', location.href).href;
+
+  const candidates = [];
+  const push = (x) => { if (x && !candidates.includes(x)) candidates.push(x); };
+
+  push(normalizeCompoUrl(url));
+  push(rawDefault);
+  push(jsDelivr);
+  push(localRel);
+
+  let lastErr = null;
+  for (const u of candidates){
+    try{
+      const res = await fetch(u, {cache:'no-store'}); // ✅ prend les MAJ immédiatement
+      if (!res.ok) throw new Error(`Compo HTTP ${res.status}`);
+      // Certains serveurs peuvent renvoyer du HTML (ex: page GitHub) -> JSON.parse échoue
+      const text = await res.text();
+      try{
+        const json = JSON.parse(text);
+        return json;
+      }catch(parseErr){
+        throw new Error(`Compo non-JSON depuis ${u} (probable lien blob)`);
+      }
+    }catch(e){
+      lastErr = e;
+      // on tente l’URL suivante
+    }
+  }
+  throw lastErr || new Error('Compo introuvable');
 }
 
 function normalizeCompoValue(v){
@@ -322,46 +363,80 @@ function normalizeCompoValue(v){
   return 'US';
 }
 
-function pickUnitsForTrain(compoData, trainNo, dirKey){
-  const entry = compoData?.[trainNo];
-  if (!entry) return 'US';
-  if (typeof entry === 'string'){
-    return normalizeCompoValue(entry);
-  }
-  if (!dirKey) return 'US';
-  const v = entry[dirKey] ?? entry[String(dirKey)] ?? '';
-  return normalizeCompoValue(v);
+function normalizeDirKeyForCompo(dirKeyRaw, directionRaw){
+  const dk = String(dirKeyRaw || '').toUpperCase();
+  const dr = String(directionRaw || '').toUpperCase();
+
+  // ✅ si déjà au bon format
+  if (dk === 'NANCYMETZLUX') return 'NancyMetzLux';
+  if (dk === 'LUXMETZNANCY') return 'LuxMetzNancy';
+
+  // ✅ mapping des clés internes possibles (ex: NNY_LUX / LUX_NNY)
+  if (dk.includes('NNY') && dk.includes('LUX')) return 'NancyMetzLux';
+  if (dk.includes('LUX') && dk.includes('NNY')) return 'LuxMetzNancy';
+
+  // ✅ fallback sur le libellé direction (ex: "Nancy→Lux")
+  if (dr.includes('NANCY') && dr.includes('LUX')) return 'NancyMetzLux';
+  if (dr.includes('LUX') && dr.includes('NANCY')) return 'LuxMetzNancy';
+
+  return 'NancyMetzLux';
 }
 
-function isInCompoFile(compoData, trainNo){
-  return !!(compoData && trainNo && compoData[trainNo]);
+// Supporte 2 structures de Compotrains.json :
+// A) (repo)   compoData["NancyMetzLux"]["88501"] = "UM"
+// B) (ancien) compoData["88501"]["NancyMetzLux"] = "UM"
+function pickUnitsForTrain(compoData, trainNo, dirKeyRaw, directionRaw){
+  if (!compoData || !trainNo) return 'US';
+  const corridorKey = normalizeDirKeyForCompo(dirKeyRaw, directionRaw);
+
+  // A
+  const vA = compoData?.[corridorKey]?.[String(trainNo)];
+  if (vA) return normalizeCompoValue(vA);
+
+  // B
+  const entry = compoData?.[String(trainNo)];
+  if (entry){
+    const vB = entry[corridorKey] ?? entry[String(corridorKey)];
+    if (vB) return normalizeCompoValue(vB);
+  }
+
+  return 'US';
 }
+
+function isInCompoFile(compoData, trainNo, dirKeyRaw, directionRaw){
+  if (!compoData || !trainNo) return false;
+  const corridorKey = normalizeDirKeyForCompo(dirKeyRaw, directionRaw);
+  return !!(compoData?.[corridorKey]?.[String(trainNo)] || compoData?.[String(trainNo)]?.[corridorKey]);
+}
+
 
 /* ====== CAPACITÉ (pour compat fréquentation) ======
    - Si train présent dans Compotrains.json => on suppose Z24500_2N, seats via units (high)
    - Sinon => fallback selon policy (low)
 */
 function estimateSeatsFromUnits(units){
-  // Valeurs "base" à ajuster selon tes retours terrain
+  // ✅ Calibrage demandé (02/2026) :
+  // US = 340 sièges, UM = 680, UM3 = 1020
   if (units === 'UM3') return 1020;
   if (units === 'UM')  return 680;
   return 340; // US
 }
 
 function estimateSeatsFallback(policy){
-  if (policy === 'OPTIMISTE') return { seats: 680, trainType: 'ASSUMED_Z24500_UM' };
-  if (policy === 'PESSIMISTE') return { seats: 340, trainType: 'ASSUMED_Z24500_US' };
+  if (policy === 'OPTIMISTE') return { seats: 520, trainType: 'ASSUMED_Z24500_UM' };
+  if (policy === 'PESSIMISTE') return { seats: 260, trainType: 'ASSUMED_Z24500_US' };
   return { seats: 220, trainType: 'UNKNOWN' }; // PRUDENT
 }
 
-function resolveCapacityAndType({ compoData, trainNo, dirKey, capPolicy }){
-  const inCompo = isInCompoFile(compoData, trainNo);
+function resolveCapacityAndType({ compoData, trainNo, dirKey, direction, capPolicy }){
+  const inCompo = isInCompoFile(compoData, trainNo, dirKey, direction);
 
   if (inCompo){
     // Ici, ton fichier compo ne décrit que la grammaire US/UM/UM3 => Z24500_2N
-    const units = pickUnitsForTrain(compoData, trainNo, dirKey);
+    const units = pickUnitsForTrain(compoData, trainNo, dirKey, direction);
     return {
-      trainType: 'Z24500_2N',
+      // trainType = grammaire compo issue de Compotrains.json (US/UM/UM3)
+      trainType: units,
       units,
       wagons: unitsToWagons(units),
       capacitySeatsEstimate: estimateSeatsFromUnits(units),
@@ -436,33 +511,47 @@ async function buildResolvedJSON({ bases, ymdISO, corridor, compoUrl, capPolicy 
     if (!seq || !seq.length) continue;
 
     const stopNamesAll = [];
-    const stopsObj = {};
+    const stopsAll = {};
+    const stopsBer = {};
 
     for (const st of seq){
       const name = stopsById.get(st.stop_id) || '';
       if (!name) continue;
       stopNamesAll.push(name);
 
-      if (corridor === 'BER' && !isBerStop(name)) continue;
-
       const hhmm = hhmmssToHHMM(st.departure_time || st.arrival_time);
       if (!hhmm) continue;
 
-      if (stopsObj[name] == null) stopsObj[name] = hhmm;
+      // ✅ On garde TOUS les arrêts (affichage complet)
+      if (stopsAll[name] == null) stopsAll[name] = hhmm;
+
+      // ✅ Version corridor pour filtrer / scorer sans perdre les autres gares
+      if (corridor !== 'BER' || isBerStop(name)){
+        if (stopsBer[name] == null) stopsBer[name] = hhmm;
+      }
     }
 
-    const stopsKeys = Object.keys(stopsObj);
-    if (corridor === 'BER' && stopsKeys.length < 2) continue;
+    const berKeys = Object.keys(stopsBer);
+
+    // Filtrage: si corridor BER, on exige au moins 2 arrêts BER, mais on exporte quand même tous les arrêts
+    if (corridor === 'BER' && berKeys.length < 2) continue;
 
     const dirKey = inferDirection(stopNamesAll);
     const dirLabel = (dirKey === 'NNY_LUX') ? 'Nancy→Lux' : (dirKey === 'LUX_NNY' ? 'Lux→Nancy' : '—');
+    // ✅ direction lisible (utilisée pour mapper Compotrains.json)
+    const direction = dirLabel;
 
-    const cap = resolveCapacityAndType({ compoData, trainNo, dirKey, capPolicy });
+
+    const cap = resolveCapacityAndType({ compoData, trainNo, dirKey, direction, capPolicy });
 
     // Dédup (si plusieurs trips = même trainNo), on garde celui avec le plus de stops corridor
     const prev = out.trains[trainNo];
-    const currentScore = stopsKeys.length;
-    const prevScore = prev ? Object.keys(prev.stops || {}).length : -1;
+    const currentScore = (corridor === 'BER')
+      ? Object.keys(stopsBer).length
+      : Object.keys(stopsAll).length;
+    const prevScore = prev
+      ? Object.keys(prev.stops || {}).length
+      : -1;
 
     if (!prev || currentScore > prevScore){
       out.trains[trainNo] = {
@@ -481,7 +570,8 @@ async function buildResolvedJSON({ bases, ymdISO, corridor, compoUrl, capPolicy 
         units: cap.units,
         wagons: cap.wagons,
 
-        stops: stopsObj
+        // stops = tous les arrêts (affichage complet)
+        stops: stopsAll
       };
     }
   }
@@ -500,7 +590,8 @@ async function buildResolvedJSON({ bases, ymdISO, corridor, compoUrl, capPolicy 
    ========================= */
 $('ymd').value = ymdToday();
 $('bases').value = defaultBases().join('\n');
-$('compoUrl').value = new URL('Compotrains.json', location.href).href;
+$('compoUrl').value = 'https://raw.githubusercontent.com/TekMaTe-lux/Assistant-train/main/Compotrains.json';
+// (Astuce) Tu peux aussi coller l’URL GitHub “blob/…” : on la convertit en RAW automatiquement.
 $('capPolicy').value = 'PRUDENT';
 
 function getBasesFromUI(){
