@@ -6906,6 +6906,10 @@ td{font-size:.92rem;}
     .aff-hdr{display:flex;justify-content:space-between;padding:8px 10px;border-bottom:1px solid rgba(15,25,35,.12);font-size:12px;color:rgba(15,25,35,.7)}
     .aff-item{display:flex;justify-content:space-between;gap:8px;padding:8px 10px;border-bottom:1px solid rgba(15,25,35,.08);cursor:pointer}
     .aff-item.active{background:rgba(32,201,151,.10)}
+	.aff-pct{font-weight:700;text-align:right}
+    .aff-wagons{display:inline-flex;align-items:center;gap:3px;margin-top:4px}
+    .aff-wagon{width:10px;height:10px;border-radius:2px;border:1px solid rgba(15,25,35,.25)}
+    .aff-arrow{font-size:10px;color:#5f6f80;margin-left:2px}  
     .aff-evo{margin-top:10px;border:1px solid rgba(15,25,35,.12);border-radius:12px;background:#fff;padding:10px}
     @media(max-width:980px){.aff-grid{grid-template-columns:1fr}}
   </style>
@@ -16993,7 +16997,9 @@ function getGtfsDelayForStop(trainNumber, stopName){
 
     const nextTrainHtml = buildNextTrainInfo(widgetState, st);
 	const stopsHtml = (widgetState === 'running') ? buildFavStopsDetails(payload, trainId, st.now) : '';
-    line.innerHTML = (causeHtml || '') + progressHtml + (nextTrainHtml || '') + (stopsHtml || '');
+    const affInfo = (typeof window.getAffluenceTrainInfo === 'function') ? window.getAffluenceTrainInfo(trainId) : null;
+    const affHtml = affInfo ? `<div class="fav-box" style="margin-top:10px;border:1px solid rgba(0,255,255,.25);background:rgba(0,255,255,.07);"><div class="fav-box-body" style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;"><span style="font-weight:800;color:#dffbff">Affluence: <span style="color:${affInfo.color||'#7ef7ff'}">${Number.isFinite(Number(affInfo.maxPct))?Math.round(Number(affInfo.maxPct)):'—'}%</span>${affInfo.stopLabel?` <span style="opacity:.75">(${escapeHtml(affInfo.stopLabel)})</span>`:''}</span><span>${affInfo.schemaHtml||''}</span></div></div>` : '';
+    line.innerHTML = (causeHtml || '') + (affHtml || '') + progressHtml + (nextTrainHtml || '') + (stopsHtml || '');
 
     if (statsEl){
       renderFavStats(kind, trainId).catch(()=>{});
@@ -18670,6 +18676,51 @@ document.addEventListener('DOMContentLoaded', () => {
   const hhmmToMin=(h)=>{const m=/^\s*(\d{1,2}):(\d{2})\s*$/.exec(h||'');return m?(+m[1])*60+(+m[2]):null;};
   const norm=(js)=>{if(!js||typeof js!=='object')return null;if(js.trains&&typeof js.trains==='object')return js;const ks=Object.keys(js);if(ks.some(k=>/^\d{5,6}$/.test(k)))return {date:js.date||'',trains:js};return null;};
   const esc=(s)=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+  const affBandColor = { green:'#39f78c', yellow:'#ffd166', orange:'#ff8a3d', red:'#ff4d6d', black:'#111' };
+  const pctToBand = (p)=>p==null||!isFinite(p)?'black':p<50?'green':p<70?'yellow':p<85?'orange':p<95?'red':'black';
+  const normBand = (b,p)=>{ const x=String(b||'').toLowerCase(); return affBandColor[x] ? x : pctToBand(p); };
+
+  function wagonSchemaHtml(stop){
+    const bands = Array.isArray(stop?.wagonBand) ? stop.wagonBand : [];
+    const pcts = Array.isArray(stop?.wagonPct) ? stop.wagonPct : [];
+    if (!bands.length && !pcts.length) return '';
+    const n = Math.max(bands.length, pcts.length);
+    let out = '<span class="aff-wagons" aria-label="schéma affluence">';
+    for(let i=0;i<n;i++){
+      const pct = Number(pcts[i]);
+      const band = normBand(bands[i], Number.isFinite(pct)?pct:null);
+      const col = affBandColor[band] || pctToColor(Number.isFinite(pct)?pct:null);
+      out += `<span class="aff-wagon" style="background:${col}" title="W${i+1}: ${Number.isFinite(pct)?pct:'—'}%"></span>`;
+    }
+    out += '<span class="aff-arrow">▶</span></span>';
+    return out;
+  }
+
+  function getAffluenceTrainInfo(trainNum, preferredStopIndex){
+    const t = (affState.data?.trains||{})[String(trainNum||'')];
+    if(!t) return null;
+    const stops = Array.isArray(t.stops) ? t.stops : [];
+    let idx = Number.isFinite(Number(preferredStopIndex)) ? Number(preferredStopIndex) : -1;
+    if (idx < 0 || idx >= stops.length){
+      idx = stops.reduce((best,s,i)=>{
+        const p = Number(s?.globalPct ?? Math.round((Number(s?.globalOcc)||0)*100));
+        const bp = Number(stops[best]?.globalPct ?? Math.round((Number(stops[best]?.globalOcc)||0)*100));
+        return (!Number.isFinite(bp) || p>bp) ? i : best;
+      }, 0);
+    }
+    const stop = stops[idx] || null;
+    const maxPct = Number.isFinite(Number(t?.maxPct)) ? Number(t.maxPct) : null;
+    const color = t?.color || affBandColor[normBand(t?.band, maxPct)] || pctToColor(maxPct);
+    return {
+      maxPct,
+      color,
+      stopLabel: stop ? `${stop.station||stop.name||''}${stop.hhmm?(' • '+stop.hhmm):''}` : '',
+      schemaHtml: wagonSchemaHtml(stop),
+      stopPct: stop ? Number(stop.globalPct ?? Math.round((Number(stop.globalOcc)||0)*100)) : null
+    };
+  }
+  window.getAffluenceTrainInfo = getAffluenceTrainInfo;
+  window.wagonSchemaHtml = wagonSchemaHtml;
 
   function applyAffluenceDots(scope=document){
     const map = affState.maxByTrain || new Map();
@@ -18744,8 +18795,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const obj=affState.byStation.get(station);
     const A=obj.A.filter(fit).slice(0,lim), B=obj.B.filter(fit).slice(0,lim);
     $('affCountA').textContent=`${A.length} train(s)`; $('affCountB').textContent=`${B.length} train(s)`;
-    const mk=(e)=>{const d=document.createElement('div');d.className='aff-item'+(e.trainNum===affState.currentTrain?' active':'');const maxInfo=affState.maxByTrain.get(e.trainNum);const col=maxInfo?.color||pctToColor(maxInfo?.maxPct);d.innerHTML=`<div><b>${esc(e.trainNum)}</b> <span style="color:#667">• ${esc(e.hhmm||'')}</span><div style="font-size:12px;color:#667">${esc(e.origin||'')} → ${esc(e.destination||'')}</div></div><div style="font-weight:700;color:${col}">${(maxInfo?.maxPct ?? e.globalPct)}%</div>`;d.onclick=()=>selectAffTrain(e.trainNum,e.stopIndex);return d;};
-    A.forEach(e=>listA.appendChild(mk(e))); B.forEach(e=>listB.appendChild(mk(e)));
+    const mk=(e)=>{const d=document.createElement('div');d.className='aff-item'+(e.trainNum===affState.currentTrain?' active':'');const maxInfo=affState.maxByTrain.get(e.trainNum);const info=getAffluenceTrainInfo(e.trainNum,e.stopIndex);const col=(info?.color||maxInfo?.color||pctToColor(maxInfo?.maxPct));const pctVal=(info?.maxPct ?? maxInfo?.maxPct ?? e.globalPct);const pct=Number.isFinite(Number(pctVal))?Math.round(Number(pctVal)):'—';const schema=(info?.schemaHtml||'');d.innerHTML=`<div><b>${esc(e.trainNum)}</b> <span style="color:#667">• ${esc(e.hhmm||'')}</span><div style="font-size:12px;color:#667">${esc(e.origin||'')} → ${esc(e.destination||'')}</div></div><div class="aff-pct" style="color:${col}">${pct}%${schema}</div>`;d.onclick=()=>selectAffTrain(e.trainNum,e.stopIndex);return d;};
+	A.forEach(e=>listA.appendChild(mk(e))); B.forEach(e=>listB.appendChild(mk(e)));
   }
 
   function selectAffTrain(num,stopIndex=0){
@@ -18755,9 +18806,10 @@ document.addEventListener('DOMContentLoaded', () => {
     if(!title||!meta||!stops) return;
     if(!t){ title.textContent='—'; meta.textContent=''; stops.innerHTML=''; renderAffLists(); return; }
     title.textContent = `${t.trainNum||affState.currentTrain} • ${t.origin||'—'} (${t.depHHMM||'—'}) → ${t.destination||'—'} (${t.arrHHMM||'—'})`;
-    meta.textContent = `Type: ${t.trainType||'—'} • wagons: ${t.wagons||'—'} • pic: ${t.maxPct??'—'}%`;
+    const selectedStop = (Array.isArray(t.stops)?t.stops:[])[affState.currentStop] || null;
+    meta.innerHTML = `Type: ${t.trainType||'—'} • wagons: ${t.wagons||'—'} • pic: ${t.maxPct??'—'}% ${wagonSchemaHtml(selectedStop)}${selectedStop?` <span style="font-size:11px;color:rgba(15,25,35,.55)">@ ${esc(selectedStop.station||selectedStop.name||'')}</span>`:''}`;
     stops.innerHTML='';
-    (Array.isArray(t.stops)?t.stops:[]).forEach((s,i)=>{const p=s.globalPct??Math.round((Number(s.globalOcc)||0)*100);const col=s.globalColor||pctToColor(p);const row=document.createElement('div');row.style.cssText='display:flex;justify-content:space-between;border-bottom:1px solid rgba(15,25,35,.08);padding:6px 2px;'+(i===affState.currentStop?'background:rgba(32,201,151,.10);':'');row.innerHTML=`<div><b>${esc(s.station||s.name||'')}</b> <span style="color:#667">• ${esc(s.hhmm||'')}</span></div><div style="font-weight:700;color:${col}">${p}%</div>`;row.onclick=()=>{affState.currentStop=i;selectAffTrain(t.trainNum||affState.currentTrain,i)};stops.appendChild(row);});
+    (Array.isArray(t.stops)?t.stops:[]).forEach((s,i)=>{const p=s.globalPct??Math.round((Number(s.globalOcc)||0)*100);const col=s.globalColor||pctToColor(p);const row=document.createElement('div');row.style.cssText='display:flex;justify-content:space-between;border-bottom:1px solid rgba(15,25,35,.08);padding:6px 2px;'+(i===affState.currentStop?'background:rgba(32,201,151,.10);':'');row.innerHTML=`<div><b>${esc(s.station||s.name||'')}</b> <span style="color:#667">• ${esc(s.hhmm||'')}</span></div><div class="aff-pct" style="color:${col}">${p}%${wagonSchemaHtml(s)}</div>`;row.onclick=()=>{affState.currentStop=i;selectAffTrain(t.trainNum||affState.currentTrain,i)};stops.appendChild(row);});
     renderAffLists();
   }
 
@@ -18780,12 +18832,15 @@ document.addEventListener('DOMContentLoaded', () => {
         m.set(n,{maxPct:safePct,peakStop:t?.peakStop||'',color:t?.color||bandToColor[normalizedBand]||pctToColor(safePct)});
       });
       affState.maxByTrain=m;
+	  window.__lbAffluenceData = js;
+      window.__lbAffluenceMaxByTrain = m;	
       rebuildIndexes();
       renderAffLists();
       const station=$('affStationSel')?.value, obj=affState.byStation.get(station), first=(obj?.A?.[0]||obj?.B?.[0]);
       if(first) selectAffTrain(first.trainNum, first.stopIndex);
       if(msg) msg.textContent=`✅ ${dateStr} chargé (${Object.keys(js.trains||{}).length} trains)`;
       applyAffluenceDots(document);
+	  if (typeof window.updateFavoriteWidgetFromPrefs === 'function') window.updateFavoriteWidgetFromPrefs().catch(()=>{});
     }catch(e){ if(msg) msg.textContent=`❌ ${e.message||e}`; }
   }
 
