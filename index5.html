@@ -363,7 +363,7 @@ body {
   max-width: 1200px;
   margin: 0 auto;
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(6, minmax(0, 1fr));
   gap: 8px;
 }
 
@@ -6096,6 +6096,23 @@ td{font-size:.92rem;}
   line-height:1;
 }
 
+/* Keep ALL bottom-nav icons/items on a single row (PC + mobile) */
+.bottom-nav__items{
+  display:grid !important;
+  grid-template-columns: repeat(6, minmax(0, 1fr)) !important;
+  grid-auto-flow: column;
+  gap: 6px;
+}
+.bottom-nav__item{
+  min-width: 0;
+}
+@media (max-width: 720px){
+  .bottom-nav__items{
+    grid-template-columns: repeat(6, minmax(0, 1fr)) !important;
+    gap: 2px !important;
+  }
+}
+
 /* Fav widgets + cards: keep key numbers readable but reduce labels */
 .fav-title, .fav-title-text, .fav-header-title, .widget-title{
   font-size:1.05rem !important;
@@ -6889,9 +6906,21 @@ td{font-size:.92rem;}
     .aff-hdr{display:flex;justify-content:space-between;padding:8px 10px;border-bottom:1px solid rgba(15,25,35,.12);font-size:12px;color:rgba(15,25,35,.7)}
     .aff-item{display:flex;justify-content:space-between;gap:8px;padding:8px 10px;border-bottom:1px solid rgba(15,25,35,.08);cursor:pointer}
     .aff-item.active{background:rgba(32,201,151,.10)}
+	.aff-pct{font-weight:700;text-align:right}
+    .aff-wagons{display:inline-flex;align-items:center;gap:3px;margin-top:4px}
+    .aff-wagon{width:10px;height:10px;border-radius:2px;border:1px solid rgba(15,25,35,.25)}
+    .aff-arrow{font-size:10px;color:#5f6f80;margin-left:2px}  
     .aff-evo{margin-top:10px;border:1px solid rgba(15,25,35,.12);border-radius:12px;background:#fff;padding:10px}
     @media(max-width:980px){.aff-grid{grid-template-columns:1fr}}
-  </style>
+  
+    .aff-chart{
+      background:#fff;
+      border:1px solid rgba(15,25,35,.12);
+      border-radius:14px;
+      padding:10px 12px;
+      box-shadow:0 6px 18px rgba(0,0,0,.06);
+    }
+</style>
   <div class="media-card aff-shell">
     <div class="aff-row">
       <div><label for="affDaySel">Jour (J0 à J+14)</label><select id="affDaySel"></select></div>
@@ -6917,6 +6946,9 @@ td{font-size:.92rem;}
     <div class="aff-evo">
       <div><b id="affTrainTitle">—</b> <span id="affTrainMeta" style="font-size:12px;color:rgba(15,25,35,.62)"></span></div>
       <div id="affStops" style="margin-top:8px"></div>
+      <div class="aff-chart" style="margin-top:12px">
+        <canvas id="affEvolutionChart" height="140"></canvas>
+      </div>
     </div>	
   </div>
 </section>
@@ -16976,7 +17008,9 @@ function getGtfsDelayForStop(trainNumber, stopName){
 
     const nextTrainHtml = buildNextTrainInfo(widgetState, st);
 	const stopsHtml = (widgetState === 'running') ? buildFavStopsDetails(payload, trainId, st.now) : '';
-    line.innerHTML = (causeHtml || '') + progressHtml + (nextTrainHtml || '') + (stopsHtml || '');
+    const affInfo = (typeof window.getAffluenceTrainInfo === 'function') ? window.getAffluenceTrainInfo(trainId) : null;
+    const affHtml = affInfo ? `<div class="fav-box" style="margin-top:10px;border:1px solid rgba(0,255,255,.25);background:rgba(0,255,255,.07);"><div class="fav-box-body" style="display:flex;justify-content:flex-end;align-items:center;gap:10px;flex-wrap:wrap;">${affInfo.schemaHtml||''}</div></div>` : '';
+    line.innerHTML = (causeHtml || '') + (affHtml || '') + progressHtml + (nextTrainHtml || '') + (stopsHtml || '');
 
     if (statsEl){
       renderFavStats(kind, trainId).catch(()=>{});
@@ -18649,30 +18683,87 @@ document.addEventListener('DOMContentLoaded', () => {
   const $ = (id)=>document.getElementById(id);
   const affState = { data:null, byStation:new Map(), stations:[], currentTrain:'', currentStop:0, maxByTrain:new Map() };
 
+  // Chart (évolution du train)
+  let affEvoChart = null;
+
+
   const pctToColor = (p)=>p==null||!isFinite(p)?'#999':p<50?'#24c25a':p<70?'#ffd166':p<85?'#ff8a1a':p<95?'#ff3131':'#111';
   const hhmmToMin=(h)=>{const m=/^\s*(\d{1,2}):(\d{2})\s*$/.exec(h||'');return m?(+m[1])*60+(+m[2]):null;};
   const norm=(js)=>{if(!js||typeof js!=='object')return null;if(js.trains&&typeof js.trains==='object')return js;const ks=Object.keys(js);if(ks.some(k=>/^\d{5,6}$/.test(k)))return {date:js.date||'',trains:js};return null;};
   const esc=(s)=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+  const affBandColor = { green:'#39f78c', yellow:'#ffd166', orange:'#ff8a3d', red:'#ff4d6d', black:'#111' };
+  const pctToBand = (p)=>p==null||!isFinite(p)?'black':p<50?'green':p<70?'yellow':p<85?'orange':p<95?'red':'black';
+  const normBand = (b,p)=>{ const x=String(b||'').toLowerCase(); return affBandColor[x] ? x : pctToBand(p); };
+
+  function wagonSchemaHtml(stop){
+    const bands = Array.isArray(stop?.wagonBand) ? stop.wagonBand : [];
+    const pcts = Array.isArray(stop?.wagonPct) ? stop.wagonPct : [];
+    if (!bands.length && !pcts.length) return '';
+    const n = Math.max(bands.length, pcts.length);
+    let out = '<span class="aff-wagons" aria-label="schéma affluence">';
+    for(let i=0;i<n;i++){
+      const pct = Number(pcts[i]);
+      const band = normBand(bands[i], Number.isFinite(pct)?pct:null);
+      const col = affBandColor[band] || pctToColor(Number.isFinite(pct)?pct:null);
+      out += `<span class="aff-wagon" style="background:${col}" title="W${i+1}: ${Number.isFinite(pct)?pct:'—'}%"></span>`;
+    }
+    out += '<span class="aff-arrow">▶</span></span>';
+    return out;
+  }
+
+  function getAffluenceTrainInfo(trainNum, preferredStopIndex){
+    const t = (affState.data?.trains||{})[String(trainNum||'')];
+    if(!t) return null;
+    const stops = Array.isArray(t.stops) ? t.stops : [];
+    let idx = Number.isFinite(Number(preferredStopIndex)) ? Number(preferredStopIndex) : -1;
+    if (idx < 0 || idx >= stops.length){
+      idx = stops.reduce((best,s,i)=>{
+        const p = Number(s?.globalPct ?? Math.round((Number(s?.globalOcc)||0)*100));
+        const bp = Number(stops[best]?.globalPct ?? Math.round((Number(stops[best]?.globalOcc)||0)*100));
+        return (!Number.isFinite(bp) || p>bp) ? i : best;
+      }, 0);
+    }
+    const stop = stops[idx] || null;
+    const maxPct = Number.isFinite(Number(t?.maxPct)) ? Number(t.maxPct) : null;
+    const color = t?.color || affBandColor[normBand(t?.band, maxPct)] || pctToColor(maxPct);
+    return {
+      maxPct,
+      color,
+      stopLabel: stop ? `${stop.station||stop.name||''}${stop.hhmm?(' • '+stop.hhmm):''}` : '',
+      schemaHtml: wagonSchemaHtml(stop),
+      stopPct: stop ? Number(stop.globalPct ?? Math.round((Number(stop.globalOcc)||0)*100)) : null
+    };
+  }
+  window.getAffluenceTrainInfo = getAffluenceTrainInfo;
+  window.wagonSchemaHtml = wagonSchemaHtml;
 
   function applyAffluenceDots(scope=document){
     const map = affState.maxByTrain || new Map();
     scope.querySelectorAll('#trainInfo th[data-train-number]').forEach(th=>{
-      th.querySelectorAll('.affluence-dot').forEach(n=>n.remove());
       const raw = String(th.dataset.trainNumber||'');
       const num = (raw.match(/\d{5,6}/)||[])[0];
-      if(!num) return;
-      const x = map.get(num);
-	  if(!x || typeof x !== 'object') return;
+      let dot = th.querySelector('.affluence-dot');
 
+	  if(!num || !map.has(num)){
+        if(dot) dot.remove();
+        return;
+      }
+
+      const x = map.get(num) || {};
       const pct = Number(x.maxPct);
-      const dot = document.createElement('span');
-      dot.className='affluence-dot';
-      dot.style.background = x.color || pctToColor(Number.isFinite(pct) ? pct : null);
-      dot.title = `Affluence max prévue: ${Number.isFinite(pct) ? pct : '—'}%${x.peakStop?(' • '+x.peakStop):''}`;
+      const bg = x.color || pctToColor(Number.isFinite(pct) ? pct : null);
+      const title = `Affluence max prévue: ${Number.isFinite(pct) ? pct : '—'}%${x.peakStop?(' • '+x.peakStop):''}`;
 
-      const trainLink = th.querySelector('a.train-link');
-      if (trainLink && trainLink.nextSibling) th.insertBefore(dot, trainLink.nextSibling);
-      else th.appendChild(dot);
+      if(!dot){
+        dot = document.createElement('span');
+        dot.className='affluence-dot';
+        const trainLink = th.querySelector('a.train-link');
+        if (trainLink && trainLink.nextSibling) th.insertBefore(dot, trainLink.nextSibling);
+        else th.appendChild(dot);
+      }
+
+      if(dot.style.background !== bg) dot.style.background = bg;
+      if(dot.title !== title) dot.title = title;
     });
   }
   window.applyAffluenceDots = applyAffluenceDots;
@@ -18719,22 +18810,56 @@ document.addEventListener('DOMContentLoaded', () => {
     const obj=affState.byStation.get(station);
     const A=obj.A.filter(fit).slice(0,lim), B=obj.B.filter(fit).slice(0,lim);
     $('affCountA').textContent=`${A.length} train(s)`; $('affCountB').textContent=`${B.length} train(s)`;
-    const mk=(e)=>{const d=document.createElement('div');d.className='aff-item'+(e.trainNum===affState.currentTrain?' active':'');const maxInfo=affState.maxByTrain.get(e.trainNum);const col=maxInfo?.color||pctToColor(maxInfo?.maxPct);d.innerHTML=`<div><b>${esc(e.trainNum)}</b> <span style="color:#667">• ${esc(e.hhmm||'')}</span><div style="font-size:12px;color:#667">${esc(e.origin||'')} → ${esc(e.destination||'')}</div></div><div style="font-weight:700;color:${col}">${(maxInfo?.maxPct ?? e.globalPct)}%</div>`;d.onclick=()=>selectAffTrain(e.trainNum,e.stopIndex);return d;};
-    A.forEach(e=>listA.appendChild(mk(e))); B.forEach(e=>listB.appendChild(mk(e)));
+    const mk=(e)=>{const d=document.createElement('div');d.className='aff-item'+(e.trainNum===affState.currentTrain?' active':'');const maxInfo=affState.maxByTrain.get(e.trainNum);const info=getAffluenceTrainInfo(e.trainNum,e.stopIndex);const col=(info?.color||maxInfo?.color||pctToColor(maxInfo?.maxPct));const pctVal=(info?.maxPct ?? maxInfo?.maxPct ?? e.globalPct);const pct=Number.isFinite(Number(pctVal))?Math.round(Number(pctVal)):'—';const schema=(info?.schemaHtml||'');d.innerHTML=`<div><b>${esc(e.trainNum)}</b> <span style="color:#667">• ${esc(e.hhmm||'')}</span><div style="font-size:12px;color:#667">${esc(e.origin||'')} → ${esc(e.destination||'')}</div></div><div class="aff-pct" style="color:${col}">${pct}%${schema}</div>`;d.onclick=()=>selectAffTrain(e.trainNum,e.stopIndex);return d;};
+	A.forEach(e=>listA.appendChild(mk(e))); B.forEach(e=>listB.appendChild(mk(e)));
   }
 
-  function selectAffTrain(num,stopIndex=0){
+  
+  function renderAffEvolutionChart(t){
+    try{
+      const canvas = document.getElementById('affEvolutionChart');
+      if (!canvas || !window.Chart) return;
+      const stops = Array.isArray(t?.stops) ? t.stops : [];
+      const labels = stops.map(s => s.station || s.name || '');
+      const vals = stops.map(s => {
+        const p = (s.globalPct != null) ? Number(s.globalPct) : Math.round((Number(s.globalOcc)||0)*100);
+        return Number.isFinite(p) ? p : null;
+      });
+
+      if (affEvoChart) { try{ affEvoChart.destroy(); }catch(e){} affEvoChart = null; }
+
+      affEvoChart = new Chart(canvas, {
+        type: 'line',
+        data: { labels, datasets: [{ data: vals, tension: 0.35, pointRadius: 5, pointHoverRadius: 7 }] },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: { legend: { display: false }, tooltip: { callbacks: { label: (ctx)=> (ctx.parsed?.y!=null? (ctx.parsed.y + '%') : '—') } } },
+          scales: {
+            y: { min: 0, max: 100, ticks: { callback: v => v + '%'} },
+            x: { ticks: { maxRotation: 0, autoSkip: true } }
+          }
+        }
+      });
+    }catch(e){}
+  }
+
+function selectAffTrain(num,stopIndex=0){
     affState.currentTrain=String(num||''); affState.currentStop=stopIndex||0;
     const t=(affState.data?.trains||{})[affState.currentTrain];
     const title=$('affTrainTitle'), meta=$('affTrainMeta'), stops=$('affStops');
     if(!title||!meta||!stops) return;
     if(!t){ title.textContent='—'; meta.textContent=''; stops.innerHTML=''; renderAffLists(); return; }
     title.textContent = `${t.trainNum||affState.currentTrain} • ${t.origin||'—'} (${t.depHHMM||'—'}) → ${t.destination||'—'} (${t.arrHHMM||'—'})`;
-    meta.textContent = `Type: ${t.trainType||'—'} • wagons: ${t.wagons||'—'} • pic: ${t.maxPct??'—'}%`;
+    const selectedStop = (Array.isArray(t.stops)?t.stops:[])[affState.currentStop] || null;
+    meta.innerHTML = `Type: ${t.trainType||'—'} • wagons: ${t.wagons||'—'} • pic: ${t.maxPct??'—'}% ${wagonSchemaHtml(selectedStop)}${selectedStop?` <span style="font-size:11px;color:rgba(15,25,35,.55)">@ ${esc(selectedStop.station||selectedStop.name||'')}</span>`:''}`;
     stops.innerHTML='';
-    (Array.isArray(t.stops)?t.stops:[]).forEach((s,i)=>{const p=s.globalPct??Math.round((Number(s.globalOcc)||0)*100);const col=s.globalColor||pctToColor(p);const row=document.createElement('div');row.style.cssText='display:flex;justify-content:space-between;border-bottom:1px solid rgba(15,25,35,.08);padding:6px 2px;'+(i===affState.currentStop?'background:rgba(32,201,151,.10);':'');row.innerHTML=`<div><b>${esc(s.station||s.name||'')}</b> <span style="color:#667">• ${esc(s.hhmm||'')}</span></div><div style="font-weight:700;color:${col}">${p}%</div>`;row.onclick=()=>{affState.currentStop=i;selectAffTrain(t.trainNum||affState.currentTrain,i)};stops.appendChild(row);});
+    (Array.isArray(t.stops)?t.stops:[]).forEach((s,i)=>{const p=s.globalPct??Math.round((Number(s.globalOcc)||0)*100);const col=s.globalColor||pctToColor(p);const row=document.createElement('div');row.style.cssText='display:flex;justify-content:space-between;border-bottom:1px solid rgba(15,25,35,.08);padding:6px 2px;'+(i===affState.currentStop?'background:rgba(32,201,151,.10);':'');row.innerHTML=`<div><b>${esc(s.station||s.name||'')}</b> <span style="color:#667">• ${esc(s.hhmm||'')}</span></div><div class="aff-pct" style="color:${col}">${p}%${wagonSchemaHtml(s)}</div>`;row.onclick=()=>{affState.currentStop=i;selectAffTrain(t.trainNum||affState.currentTrain,i)};stops.appendChild(row);});
     renderAffLists();
-  }
+  
+    // Graph (évolution)
+    renderAffEvolutionChart(t);
+}
 
   async function loadAffluenceDate(dateStr){
     if(!dateStr) return;
@@ -18749,22 +18874,21 @@ document.addEventListener('DOMContentLoaded', () => {
 	  const bandToColor = { green:'#39f78c', yellow:'#ffd166', orange:'#ff8a3d', red:'#ff4d6d', black:'#111' };
       Object.entries(js.trains||{}).forEach(([num,t])=>{
         const n=(String(num).match(/\d{5,6}/)||[])[0]; if(!n) return;
-        const stopPcts = Array.isArray(t?.stops)
-          ? t.stops.map(s => Number(s.globalPct ?? Math.round((Number(s.globalOcc)||0)*100)) || 0)
-          : [0];
-        const maxPct = Number.isFinite(Number(t?.maxPct))
-          ? Number(t.maxPct)
-          : (Number.isFinite(Number(t?.maxWagonPct)) ? Number(t.maxWagonPct) : Math.max(0, ...stopPcts));
+        const maxPct = Number(t?.maxPct);
+        const safePct = Number.isFinite(maxPct) ? Math.max(0, Math.min(100, Math.round(maxPct))) : null;
         const normalizedBand = String(t?.band || '').toLowerCase();
-        m.set(n,{maxPct,peakStop:t?.peakStop||'',color:t?.color||bandToColor[normalizedBand]||pctToColor(maxPct)});
+        m.set(n,{maxPct:safePct,peakStop:t?.peakStop||'',color:t?.color||bandToColor[normalizedBand]||pctToColor(safePct)});
       });
       affState.maxByTrain=m;
+	  window.__lbAffluenceData = js;
+      window.__lbAffluenceMaxByTrain = m;	
       rebuildIndexes();
       renderAffLists();
       const station=$('affStationSel')?.value, obj=affState.byStation.get(station), first=(obj?.A?.[0]||obj?.B?.[0]);
       if(first) selectAffTrain(first.trainNum, first.stopIndex);
       if(msg) msg.textContent=`✅ ${dateStr} chargé (${Object.keys(js.trains||{}).length} trains)`;
       applyAffluenceDots(document);
+	  if (typeof window.updateFavoriteWidgetFromPrefs === 'function') window.updateFavoriteWidgetFromPrefs().catch(()=>{});
     }catch(e){ if(msg) msg.textContent=`❌ ${e.message||e}`; }
   }
 
@@ -18800,7 +18924,14 @@ document.addEventListener('DOMContentLoaded', () => {
     $('selectionDate')?.addEventListener('change', ()=>setTimeout(refresh,0));
     const obsHost = $('trainInfo');
     if(obsHost){
-      const mo = new MutationObserver(()=>applyAffluenceDots(document));
+      let rafId = 0;
+      const mo = new MutationObserver(()=>{
+        if (rafId) return;
+        rafId = requestAnimationFrame(()=>{
+          rafId = 0;
+          applyAffluenceDots(document);
+        });
+      });
       mo.observe(obsHost,{childList:true,subtree:true});
     }
     setTimeout(refresh,300);
