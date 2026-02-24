@@ -18660,13 +18660,19 @@ document.addEventListener('DOMContentLoaded', () => {
       th.querySelectorAll('.affluence-dot').forEach(n=>n.remove());
       const raw = String(th.dataset.trainNumber||'');
       const num = (raw.match(/\d{5,6}/)||[])[0];
-      if(!num || !map.has(num)) return;
+      if(!num) return;
       const x = map.get(num);
+	  if(!x || typeof x !== 'object') return;
+
+      const pct = Number(x.maxPct);
       const dot = document.createElement('span');
       dot.className='affluence-dot';
-      dot.style.background = x.color || pctToColor(x.maxPct);
-      dot.title = `Affluence max prévue: ${x.maxPct}%${x.peakStop?(' • '+x.peakStop):''}`;
-      th.appendChild(dot);
+      dot.style.background = x.color || pctToColor(Number.isFinite(pct) ? pct : null);
+      dot.title = `Affluence max prévue: ${Number.isFinite(pct) ? pct : '—'}%${x.peakStop?(' • '+x.peakStop):''}`;
+
+      const trainLink = th.querySelector('a.train-link');
+      if (trainLink && trainLink.nextSibling) th.insertBefore(dot, trainLink.nextSibling);
+      else th.appendChild(dot);
     });
   }
   window.applyAffluenceDots = applyAffluenceDots;
@@ -18740,13 +18746,17 @@ document.addEventListener('DOMContentLoaded', () => {
       const js=norm(await r.json()); if(!js) throw new Error('Format JSON non reconnu');
       affState.data=js;
       const m=new Map();
+	  const bandToColor = { green:'#39f78c', yellow:'#ffd166', orange:'#ff8a3d', red:'#ff4d6d', black:'#111' };
       Object.entries(js.trains||{}).forEach(([num,t])=>{
         const n=(String(num).match(/\d{5,6}/)||[])[0]; if(!n) return;
         const stopPcts = Array.isArray(t?.stops)
           ? t.stops.map(s => Number(s.globalPct ?? Math.round((Number(s.globalOcc)||0)*100)) || 0)
           : [0];
-        const maxPct = Number.isFinite(Number(t?.maxPct)) ? Number(t.maxPct) : Math.max(0, ...stopPcts);
-        m.set(n,{maxPct,peakStop:t?.peakStop||'',color:t?.color||pctToColor(maxPct)});
+        const maxPct = Number.isFinite(Number(t?.maxPct))
+          ? Number(t.maxPct)
+          : (Number.isFinite(Number(t?.maxWagonPct)) ? Number(t.maxWagonPct) : Math.max(0, ...stopPcts));
+        const normalizedBand = String(t?.band || '').toLowerCase();
+        m.set(n,{maxPct,peakStop:t?.peakStop||'',color:t?.color||bandToColor[normalizedBand]||pctToColor(maxPct)});
       });
       affState.maxByTrain=m;
       rebuildIndexes();
