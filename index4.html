@@ -6123,10 +6123,6 @@ body{
   .fav-times{ margin-top: 4px; gap: 6px; font-size: .9rem; }
 }
 
-
-/* Hide legacy Meteo station inputs (now unified with Gare favorite Matin/Soir) */
-#lbWxFromStation, #lbWxToStation, label[for="lbWxFromStation"], label[for="lbWxToStation"], #lbWxStations{display:none !important;}
-
 </style>
   <style>
 @supports (-webkit-touch-callout: none) {
@@ -6642,10 +6638,27 @@ td{font-size:.92rem;}
     Par défaut : <b>Metz → Luxembourg</b>.
   </div>
 
-  <div class="prefs-desc" style="opacity:.9;font-size:.9rem;margin:10px 0 12px;">
-    ✅ Les gares utilisées pour <b>Météo</b>, <b>Affluence</b> et tes widgets sont celles définies ci‑dessous :
-    <b>Gare favorite Matin</b> et <b>Gare favorite Soir</b>.
-  </div>
+  <div class="prefs-grid" style="display:grid;grid-template-columns:1fr;gap:10px;">
+    <label style="display:block;">
+      <div style="opacity:.9;font-size:.85rem;margin-bottom:6px;">Départ</div>
+      <input id="lbWxFromStation" list="lbStationsDatalist" placeholder="Ex : Metz"
+             style="width:100%;padding:10px 12px;border-radius:12px;" />
+    </label>
+
+    <label style="display:block;">
+      <div style="opacity:.9;font-size:.85rem;margin-bottom:6px;">Arrivée</div>
+      <input id="lbWxToStation" list="lbStationsDatalist" placeholder="Ex : Luxembourg"
+             style="width:100%;padding:10px 12px;border-radius:12px;" />
+    </label>
+
+    <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-top:2px;">
+      <button id="lbWxSaveLocalBtn" class="btn" type="button" style="padding:10px 14px;border-radius:14px;">
+        Enregistrer
+      </button>
+      <button id="lbWxResetBtn" class="btn" type="button" style="padding:10px 14px;border-radius:14px;opacity:.9;">
+        Réinitialiser (Metz → Luxembourg)
+      </button>
+      <div id="lbWxSaveHint" style="font-size:.85rem;opacity:.85;"></div>
     </div>
   </div>
 </div>
@@ -6670,9 +6683,9 @@ td{font-size:.92rem;}
         <label for="lbFavEvening" style="margin-top:8px;">⭐ Train Favori Soir</label>
         <input id="lbFavEvening" type="text" placeholder="ex: 88730">
         
-        <label for="lbFavFromStation" style="margin-top:12px;">🚉 Gare favorite Matin</label>
+        <label for="lbFavFromStation" style="margin-top:12px;">🚉 Gare favorite (départ)</label>
         <input id="lbFavFromStation" type="text" list="lbStationsList" placeholder="ex: Nancy">
-        <label for="lbFavToStation" style="margin-top:8px;">🚉 Gare favorite Soir</label>
+        <label for="lbFavToStation" style="margin-top:8px;">🚉 Gare favorite (arrivée)</label>
         <input id="lbFavToStation" type="text" list="lbStationsList" placeholder="ex: Luxembourg">
 <small>Astuce : mets un numéro SNCF (5 ou 6 chiffres). Vide = pas de widget pour ce créneau.</small>
       </div>
@@ -16229,8 +16242,6 @@ function scheduleWeatherAfterTableSettled(){
     if (favFrom) favFrom.value = prefs.favoriteFromStation || "";
     if (favTo)   favTo.value   = prefs.favoriteToStation || "";
     window.__lbPreferredAffStation = (prefs.favoriteFromStation || "").trim();
-    window.__lbFavStationMorning = (prefs.favoriteFromStation || "").trim();
-    window.__lbFavStationEvening = (prefs.favoriteToStation || "").trim();
     window.__lbPreferredAffTo = (prefs.favoriteToStation || "").trim();
 
 
@@ -17251,7 +17262,7 @@ function getGtfsDelayForStop(trainNumber, stopName){
 
     const nextTrainHtml = buildNextTrainInfo(widgetState, st);
 	const stopsHtml = (widgetState === 'running') ? buildFavStopsDetails(payload, trainId, st.now) : '';
-    const affInfo = (typeof window.getAffluenceTrainInfo === 'function') ? window.getAffluenceTrainInfo(trainId, (kind==='morning' ? (window.__lbFavStationMorning||window.__lbPreferredAffStation||'') : (window.__lbFavStationEvening||window.__lbPreferredAffStation||''))) : null;
+    const affInfo = (typeof window.getAffluenceTrainInfo === 'function') ? window.getAffluenceTrainInfo(trainId) : null;
     const affHtml = affInfo ? (()=> {
       const depName = affInfo.depStop?.station || affInfo.depStop?.name || '';
       const depTime = affInfo.depStop?.hhmm || affInfo.depStop?.time || '';
@@ -18694,10 +18705,6 @@ function getUserWxPrefsOrDefault(){
   // 2) localStorage (marche même non connecté)
   const local = lbGetWxPrefLocal();
   if (local){
-    // Use the "Météo (Accueil)" stations as the single source of truth for defaults (Affluence, etc.)
-    window.__lbPreferredAffStation = String(local.from||'').trim();
-    window.__lbPreferredAffTo = String(local.to||'').trim();
-
     const fromCfg = resolveWxStation(local.from, def.from);
     const toCfg   = resolveWxStation(local.to,   def.to);
     return { from: fromCfg, to: toCfg };
@@ -19060,21 +19067,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const t = (affState.data?.trains||{})[String(trainNum||'')];
     if(!t) return null;
     const stops = Array.isArray(t.stops) ? t.stops : [];
-const prefRaw = preferredStopIndex;
-    // preferredStopIndex can be:
-    // - a numeric index
-    // - a station name (string), e.g. "Metz"
-    let prefIdx = -1;
-    if (typeof prefRaw === 'string' && prefRaw.trim()){
-      const wanted = prefRaw.trim().toLowerCase();
-      prefIdx = stops.findIndex(s=>{
-        const name = String(s?.station || s?.name || '').trim().toLowerCase();
-        return name === wanted;
-      });
-    }else if (Number.isFinite(Number(prefRaw))){
-      prefIdx = Number(prefRaw);
-    }
-    let idx = prefIdx;
+    let idx = Number.isFinite(Number(preferredStopIndex)) ? Number(preferredStopIndex) : -1;
     if (idx < 0 || idx >= stops.length){
       idx = stops.reduce((best,s,i)=>{
         const p = Number(s?.globalPct ?? Math.round((Number(s?.globalOcc)||0)*100));
@@ -19311,7 +19304,50 @@ function selectAffTrain(num,stopIndex=0){
   })();
 
   // ===== Favoris: extraction affluence depuis le JSON chargé (detail_YYYY-MM-DD.json) =====
-  async function loadAffluenceDate(dateStr){
+  window.getAffluenceTrainInfo = function getAffluenceTrainInfo(trainNum){
+    const js = window.__lbAffluenceData || affState?.data || null;
+    if (!js || !js.trains) return null;
+    const t = js.trains[String(trainNum)];
+    if (!t) return null;
+
+    const stops = Array.isArray(t.stops) ? t.stops : [];
+    const trainType = String(t.trainType || t.type || '').toUpperCase();
+    const wagons = Number(t.wagons);
+
+    const toPct = (x)=>{
+      const n = Number(x);
+      if (!Number.isFinite(n)) return null;
+      // globalOcc can be 0..1 or 0..100 depending on generator; support both.
+      const p = (n <= 1.01) ? (n*100) : n;
+      return Math.max(0, Math.min(100, Math.round(p)));
+    };
+
+    const depStop = stops[0] || null;
+    const depPct = depStop ? (toPct(depStop.globalOcc ?? depStop.pct ?? depStop.globalPct ?? depStop.occPct) ?? toPct(t.maxPct)) : (toPct(t.maxPct));
+    const schemaHtml = depStop ? wagonSchemaHtml(depStop, trainType) : '';
+
+    // build sparkline points
+    const pts = stops
+      .map((s,i)=>({i, p: toPct(s.globalOcc ?? s.pct ?? s.globalPct ?? s.occPct)}))
+      .filter(o=>o.p!=null);
+    const spark = (()=>{
+      if (pts.length < 2) return '';
+      const W=220, H=56, pad=6;
+      const xs = pts.map(o=>o.i);
+      const minX = Math.min(...xs), maxX=Math.max(...xs);
+      const scaleX = (i)=> pad + (maxX===minX ? 0 : ((i-minX)/(maxX-minX))*(W-2*pad));
+      const scaleY = (p)=> pad + ((100-p)/100)*(H-2*pad);
+      const d = pts.map(o=>`${scaleX(o.i).toFixed(1)},${scaleY(o.p).toFixed(1)}`).join(' ');
+      return `<svg class="fav-spark" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" aria-label="Courbe affluence">
+        <polyline fill="none" stroke="rgba(0,255,255,.85)" stroke-width="2" points="${d}"></polyline>
+        <polyline fill="none" stroke="rgba(0,255,255,.18)" stroke-width="6" points="${d}"></polyline>
+      </svg>`;
+    })();
+
+    return { trainNum:String(trainNum), trainType, wagons: (Number.isFinite(wagons)?wagons:null), depPct, depStop, stops, schemaHtml, spark };
+  };
+
+async function loadAffluenceDate(dateStr){
     if(!dateStr) return;
     const msg=$('affMsg'), url=`${VPS_BASE}/detail_${dateStr}.json`, u=$('affUrl');
     if(u) u.value=url;
