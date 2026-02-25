@@ -5449,6 +5449,8 @@ body.modal-open{ overflow:hidden; }
 
 /* --- Encadres (cause / prochains arrets) style site --- */
 .fav-box{margin-top:8px;padding:8px 10px;border-radius:12px;border:1px solid rgba(0,255,255,.14);background:rgba(0,0,0,.22);box-shadow: inset 0 0 0 1px rgba(255,255,255,.04);}
+.fav-box > summary::-webkit-details-marker{display:none;}
+.fav-box > summary{list-style:none; cursor:pointer;}
 .fav-box-info{border-color:rgba(0,255,255,.14);background:rgba(0,0,0,.20);}
 .fav-box-warn{border-color:rgba(255,154,60,.30);background:rgba(255,154,60,.10);}
 .fav-box-danger{border-color:rgba(255,60,60,.40);background:rgba(255,60,60,.10);}
@@ -5529,8 +5531,20 @@ body.modal-open{ overflow:hidden; }
 .fav-aff-typewrap{ display:flex; justify-content:flex-end; }
 .fav-aff-meta{ font-size:.92rem; color: rgba(224,240,255,.85); display:flex; align-items:center; gap:10px; }
 .fav-aff-pct{ font-weight:900; color:#00f0ff; }
+
+
+.fav-aff-pct.ok{ color:#2cff96; }
+.fav-aff-pct.mid{ color:#f1c40f; }
+.fav-aff-pct.warn{ color:#ff8a1a; }
+.fav-aff-pct.bad{ color:#ff3131; }
+.fav-aff-pct.sat{ color:#b7b7b7; }
+.fav-aff-max{ font-size:.85rem; opacity:.9; color: rgba(224,240,255,.75); }
+.fav-aff-max .m{ font-weight:900; }
+.fav-card .affls-pct{display:none !important;}
 .fav-aff-schema{ display:flex; justify-content:flex-end; align-items:center; gap:10px; flex-wrap:wrap; }
-.fav-aff-toggleline{ font-weight:800; font-size:.9rem; opacity:.85; color:#aef5ff; display:flex; justify-content:flex-end; }
+.fav-aff-toggleline{ cursor:pointer; font-weight:800; font-size:.9rem; opacity:.9; color:#aef5ff; display:flex; justify-content:flex-end; align-items:center; gap:8px; user-select:none; }
+.fav-aff-toggleline:after{ content:"▾"; opacity:.65; font-weight:900; }
+.fav-aff[open] .fav-aff-toggleline:after{ content:"▴"; opacity:.9; }
 .fav-aff[open] .fav-aff-toggleline{ opacity:1; }
 .fav-aff-body{ display:flex; flex-direction:column; gap:10px; }
 .fav-aff-stops{ display:flex; flex-direction:column; gap:8px; }
@@ -5540,6 +5554,12 @@ body.modal-open{ overflow:hidden; }
 .fav-aff-stop-time{ font-size:.82rem; opacity:.85; }
 .fav-aff-stop-right{ display:flex; align-items:center; gap:10px; flex-wrap:wrap; justify-content:flex-end; }
 .fav-aff-stop-pct{ font-weight:900; color:#dffbff; min-width:42px; text-align:right; }
+.fav-aff-stop-pct.ok{ color:#2cff96; }
+.fav-aff-stop-pct.mid{ color:#f1c40f; }
+.fav-aff-stop-pct.warn{ color:#ff8a1a; }
+.fav-aff-stop-pct.bad{ color:#ff3131; }
+.fav-aff-stop-pct.sat{ color:#b7b7b7; }
+
 .fav-aff-empty{ padding:10px 12px; border-radius:12px; border:1px solid rgba(255,180,80,.25); background: rgba(255,180,80,.08); color:#ffd9b0; font-weight:800; }
 .fav-spark{ width:100%; height:56px; border-radius:12px; background: rgba(0, 12, 22, .18); border:1px solid rgba(0,255,255,.12); }
 .fav-aff-open{ display:inline-flex; align-items:center; justify-content:center; gap:8px; padding:10px 12px; border-radius:14px; font-weight:900; text-decoration:none; color:#bffcff; border:1px solid rgba(0,255,255,.35); background: rgba(0,255,255,.08); }
@@ -17204,16 +17224,21 @@ function getGtfsDelayForStop(trainNumber, stopName){
     const affHtml = affInfo ? (()=> {
       const depName = affInfo.depStop?.station || affInfo.depStop?.name || '';
       const depTime = affInfo.depStop?.hhmm || affInfo.depStop?.time || '';
-      const depPct  = (affInfo.depPct!=null) ? `${affInfo.depPct}%` : '—';
+      const depPctVal = (affInfo.depPct!=null) ? Number(affInfo.depPct) : null;
+      const depPct  = (depPctVal!=null && Number.isFinite(depPctVal)) ? `${Math.round(depPctVal)}%` : '—';
+      const pctClass = (pp)=>{ if(pp==null) return ''; const v=Number(pp); if(!Number.isFinite(v)) return ''; const n=(v<=1.01)?(v*100):v; const p=Math.round(n); if(p>=95) return 'sat'; if(p>=85) return 'bad'; if(p>=70) return 'warn'; if(p>=50) return 'mid'; return 'ok'; };
       const typeBadge = (window.buildFavTrainTypeBadge ? window.buildFavTrainTypeBadge(trainId, affInfo.trainType) : '');
       const stops = Array.isArray(affInfo.stops) ? affInfo.stops : [];
 
       const toPct = (x)=>{ const n=Number(x); if(!Number.isFinite(n)) return null; const v=(n<=1.01)?(n*100):n; return Math.max(0,Math.min(100,Math.round(v))); };
+      let maxPct = null; let peakName = '';
       const stopsHtml = stops.map((s,idx)=>{
         const stName = escapeHtml(s.station || s.name || `Arrêt ${idx+1}`);
         const stTime = escapeHtml(s.hhmm || s.time || '');
         const pp = toPct(s.globalOcc ?? s.pct ?? s.globalPct ?? s.occPct);
+        if (pp!=null && (maxPct==null || pp>maxPct)) { maxPct = pp; peakName = String(s.station || s.name || peakName || ''); }
         const p  = (pp==null) ? '—' : `${pp}%`;
+        const pcls = pctClass(pp);
         const sch = wagonSchemaHtml(s, affInfo.trainType);
         return `<div class="fav-aff-stop">
           <div class="fav-aff-stop-left">
@@ -17221,7 +17246,7 @@ function getGtfsDelayForStop(trainNumber, stopName){
             <div class="fav-aff-stop-time">${stTime}</div>
           </div>
           <div class="fav-aff-stop-right">
-            <div class="fav-aff-stop-pct">${p}</div>
+            <div class="fav-aff-stop-pct ${pcls}">${p}</div>
             ${sch}
           </div>
         </div>`;
@@ -17231,13 +17256,10 @@ function getGtfsDelayForStop(trainNumber, stopName){
         <details class="fav-box fav-aff" ${stops.length? '' : 'data-empty="1"'}>
           <summary class="fav-box-head">
             <div class="fav-aff-summary">
-              <div class="fav-aff-top">
-                <div class="fav-aff-title">Affluence (départ)</div>
-                <div class="fav-aff-typewrap">${typeBadge}</div>
-              </div>
-              <div class="fav-aff-meta">${escapeHtml(depName)}${depTime?(' · '+escapeHtml(depTime)) : ''} <span class="fav-aff-pct">${depPct}</span></div>
+              <div class="fav-aff-top"><div class="fav-aff-title">Affluence (départ)</div></div>
+              <div class="fav-aff-meta">${escapeHtml(depName)}${depTime?(' · '+escapeHtml(depTime)) : ''} <span class="fav-aff-pct ${pctClass(depPctVal)}">${depPct}</span>${(maxPct!=null && peakName)?` <span class=\"fav-aff-max\">(max ${escapeHtml(peakName)} <span class=\"m ${pctClass(maxPct)}\">${maxPct}%</span>)</span>`:''}</div>
               <div class="fav-aff-schema">${affInfo.schemaHtml||''}</div>
-              <div class="fav-aff-toggleline">Détails affluence</div>
+              <div class="fav-aff-toggleline"></div>
             </div>
           </summary>
           <div class="fav-box-body fav-aff-body">
