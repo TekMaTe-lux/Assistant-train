@@ -1035,6 +1035,7 @@ input:checked + .slider:before {
         0 0 50px #00eaff,
         0 0 70px #00eaff;
     }
+    .aff-chart canvas{ width:100% !important; height:220px !important; }
     to {
       text-shadow:
         0 0 20px #00f0ff,
@@ -6910,9 +6911,86 @@ td{font-size:.92rem;}
     .aff-wagons{display:inline-flex;align-items:center;gap:3px;margin-top:4px}
     .aff-wagon{width:10px;height:10px;border-radius:2px;border:1px solid rgba(15,25,35,.25)}
     .aff-arrow{font-size:10px;color:#5f6f80;margin-left:2px}  
+
+    /* Schéma rame (style affluence_lab) — version compacte pour index5 */
+    .affls-rame{
+      display:inline-flex;
+      align-items:center;
+      gap:6px;
+      margin-left:6px;
+      padding-top:14px; /* place pour les % au-dessus des points */
+      vertical-align:middle;
+      max-width:100%;
+      overflow-x:auto;
+      overflow-y:visible;
+      -webkit-overflow-scrolling:touch;
+    }
+    .affls-rame::-webkit-scrollbar{height:6px;}
+    .affls-rame::-webkit-scrollbar-thumb{background:rgba(0,0,0,.18);border-radius:999px;}
+    .affls-rame::-webkit-scrollbar-track{background:transparent;}
+    .affls-unit{
+      width:132px;
+      height:22px;
+      border:2px solid #111;
+      border-radius:10px;
+      display:grid;
+      grid-template-columns: 1fr 1.2fr 1fr;
+      overflow:visible;
+      background:#fff;
+      flex:0 0 auto;
+    }
+    .affls-unit > span{
+      border-right:2px solid #111;
+      position:relative;
+      display:block;
+    }
+    .affls-unit > span:last-child{ border-right:none; }
+    .affls-dot{
+      width:10px; height:10px; border-radius:50%;
+      position:absolute; left:50%; top:50%;
+      transform:translate(-50%,-50%);
+      border:2px solid #111;
+      background:#bbb;
+      box-sizing:border-box;
+    }
+    .affls-dot.good{ background:#24c25a; } /* <50% */
+    .affls-dot.mid{  background:#f1c40f; } /* 50–69% */
+    .affls-dot.warn{ background:#ff8a1a; } /* 70–84% */
+    .affls-dot.bad{  background:#ff3131; } /* 85–94% */
+    .affls-dot.sat{  background:#000; }   /* ≥95% */
+    .affls-pct{
+      position:absolute;
+      left:50%;
+      top:-16px;
+      transform:translateX(-50%);
+      font-size:10px;
+      font-weight:800;
+      color:#111;
+      background:rgba(255,255,255,.92);
+      border:1px solid rgba(0,0,0,.15);
+      border-radius:6px;
+      padding:1px 4px;
+      line-height:1.2;
+      white-space:nowrap;
+      pointer-events:none;
+    }
+    .affls-unk .affls-unit{
+      border-style:dashed;
+      background:#f7f7f7;
+    }
+    .affls-unk .affls-unit > span{ border-right-style:dashed; }
+
     .aff-evo{margin-top:10px;border:1px solid rgba(15,25,35,.12);border-radius:12px;background:#fff;padding:10px}
     @media(max-width:980px){.aff-grid{grid-template-columns:1fr}}
-  </style>
+  
+    .aff-chart{
+      background:rgba(7, 15, 30, .75);
+      border:1px solid rgba(0,255,255,.22);
+      border-radius:14px;
+      padding:10px 12px;
+      box-shadow:0 0 18px rgba(0,255,255,.10), inset 0 0 0 1px rgba(0,255,255,.10);
+    }
+</style>
   <div class="media-card aff-shell">
     <div class="aff-row">
       <div><label for="affDaySel">Jour (J0 à J+14)</label><select id="affDaySel"></select></div>
@@ -6938,6 +7016,9 @@ td{font-size:.92rem;}
     <div class="aff-evo">
       <div><b id="affTrainTitle">—</b> <span id="affTrainMeta" style="font-size:12px;color:rgba(15,25,35,.62)"></span></div>
       <div id="affStops" style="margin-top:8px"></div>
+      <div class="aff-chart" style="margin-top:12px">
+        <canvas id="affEvolutionChart" height="140"></canvas>
+      </div>
     </div>	
   </div>
 </section>
@@ -16998,10 +17079,9 @@ function getGtfsDelayForStop(trainNumber, stopName){
     const nextTrainHtml = buildNextTrainInfo(widgetState, st);
 	const stopsHtml = (widgetState === 'running') ? buildFavStopsDetails(payload, trainId, st.now) : '';
     const affInfo = (typeof window.getAffluenceTrainInfo === 'function') ? window.getAffluenceTrainInfo(trainId) : null;
-    const affHtml = affInfo ? `<div class="fav-box" style="margin-top:10px;border:1px solid rgba(0,255,255,.25);background:rgba(0,255,255,.07);"><div class="fav-box-body" style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;"><span style="font-weight:800;color:#dffbff">Affluence: <span style="color:${affInfo.color||'#7ef7ff'}">${Number.isFinite(Number(affInfo.maxPct))?Math.round(Number(affInfo.maxPct)):'—'}%</span>${affInfo.stopLabel?` <span style="opacity:.75">(${escapeHtml(affInfo.stopLabel)})</span>`:''}</span><span>${affInfo.schemaHtml||''}</span></div></div>` : '';
-    line.innerHTML = (causeHtml || '') + (affHtml || '') + progressHtml + (nextTrainHtml || '') + (stopsHtml || '');
-
-    if (statsEl){
+    const affHtml = affInfo ? `<div class="fav-box" style="margin-top:8px;border:1px solid rgba(0,255,255,.25);background:rgba(0,255,255,.07);"><div class="fav-box-body" style="display:flex;justify-content:flex-end;align-items:center;gap:10px;flex-wrap:wrap;">${affInfo.schemaHtml||''}</div></div>` : '';
+    line.innerHTML = (causeHtml || '') + progressHtml + (nextTrainHtml || '') + (affHtml || '') + (stopsHtml || '');
+if (statsEl){
       renderFavStats(kind, trainId).catch(()=>{});
       if (!statsEl.hasAttribute('data-user-opened')) statsEl.open = false;
     }
@@ -18672,6 +18752,10 @@ document.addEventListener('DOMContentLoaded', () => {
   const $ = (id)=>document.getElementById(id);
   const affState = { data:null, byStation:new Map(), stations:[], currentTrain:'', currentStop:0, maxByTrain:new Map() };
 
+  // Chart (évolution du train)
+  let affEvoChart = null;
+
+
   const pctToColor = (p)=>p==null||!isFinite(p)?'#999':p<50?'#24c25a':p<70?'#ffd166':p<85?'#ff8a1a':p<95?'#ff3131':'#111';
   const hhmmToMin=(h)=>{const m=/^\s*(\d{1,2}):(\d{2})\s*$/.exec(h||'');return m?(+m[1])*60+(+m[2]):null;};
   const norm=(js)=>{if(!js||typeof js!=='object')return null;if(js.trains&&typeof js.trains==='object')return js;const ks=Object.keys(js);if(ks.some(k=>/^\d{5,6}$/.test(k)))return {date:js.date||'',trains:js};return null;};
@@ -18680,18 +18764,51 @@ document.addEventListener('DOMContentLoaded', () => {
   const pctToBand = (p)=>p==null||!isFinite(p)?'black':p<50?'green':p<70?'yellow':p<85?'orange':p<95?'red':'black';
   const normBand = (b,p)=>{ const x=String(b||'').toLowerCase(); return affBandColor[x] ? x : pctToBand(p); };
 
-  function wagonSchemaHtml(stop){
+  function wagonSchemaHtml(stop, trainType){
     const bands = Array.isArray(stop?.wagonBand) ? stop.wagonBand : [];
-    const pcts = Array.isArray(stop?.wagonPct) ? stop.wagonPct : [];
+    const pcts  = Array.isArray(stop?.wagonPct)  ? stop.wagonPct  : [];
     if (!bands.length && !pcts.length) return '';
+
     const n = Math.max(bands.length, pcts.length);
-    let out = '<span class="aff-wagons" aria-label="schéma affluence">';
-    for(let i=0;i<n;i++){
-      const pct = Number(pcts[i]);
-      const band = normBand(bands[i], Number.isFinite(pct)?pct:null);
-      const col = affBandColor[band] || pctToColor(Number.isFinite(pct)?pct:null);
-      out += `<span class="aff-wagon" style="background:${col}" title="W${i+1}: ${Number.isFinite(pct)?pct:'—'}%"></span>`;
+    const t = String(trainType || stop?.trainType || '').toUpperCase();
+    const isUnknown = (t === 'UNKNOWN' || t === 'UNK' || !t);
+
+    const cls = 'affls-rame' + (isUnknown ? ' affls-unk' : '');
+    let out = `<span class="${cls}" aria-label="schéma affluence">`;
+
+    const pctToDot = (pct)=>{
+      const p = Number(pct);
+      if (!Number.isFinite(p)) return 'mid';
+      if (p < 50) return 'good';
+      if (p < 70) return 'mid';
+      if (p < 85) return 'warn';
+      if (p < 95) return 'bad';
+      return 'sat';
+    };
+    const bandToDot = (band)=>{
+      const b = String(band || '').toLowerCase();
+      if (b === 'green') return 'good';
+      if (b === 'yellow') return 'mid';
+      if (b === 'orange') return 'warn';
+      if (b === 'red') return 'bad';
+      if (b === 'black') return 'sat';
+      return 'mid';
+    };
+
+    const units = Math.ceil(n / 3) || 1;
+    for (let u=0; u<units; u++){
+      out += '<span class="affls-unit">';
+      for (let i=0;i<3;i++){
+        const idx = u*3 + i;
+        const pct = pcts[idx];
+        const band = bands[idx];
+        const dotCls = Number.isFinite(Number(pct)) ? pctToDot(pct) : bandToDot(band);
+        const label = Number.isFinite(Number(pct)) ? (Math.round(Number(pct)) + '%') : '—';
+        out += `<span><span class="affls-dot ${dotCls}"></span><span class="affls-pct">${label}</span></span>`;
+      }
+      out += '</span>';
     }
+
     out += '<span class="aff-arrow">▶</span></span>';
     return out;
   }
@@ -18715,7 +18832,7 @@ document.addEventListener('DOMContentLoaded', () => {
       maxPct,
       color,
       stopLabel: stop ? `${stop.station||stop.name||''}${stop.hhmm?(' • '+stop.hhmm):''}` : '',
-      schemaHtml: wagonSchemaHtml(stop),
+      schemaHtml: wagonSchemaHtml(stop, t?.trainType),
       stopPct: stop ? Number(stop.globalPct ?? Math.round((Number(stop.globalOcc)||0)*100)) : null
     };
   }
@@ -18799,7 +18916,74 @@ document.addEventListener('DOMContentLoaded', () => {
 	A.forEach(e=>listA.appendChild(mk(e))); B.forEach(e=>listB.appendChild(mk(e)));
   }
 
-  function selectAffTrain(num,stopIndex=0){
+  function renderAffEvolutionChart(t){
+    try{
+      const canvas = document.getElementById('affEvolutionChart');
+      if (!canvas || !window.Chart) return;
+
+      const stops = Array.isArray(t?.stops) ? t.stops : [];
+      const labels = stops.map(s => s.station || s.name || '');
+      const vals = stops.map(s => {
+        const p = (s.globalPct != null) ? Number(s.globalPct) : Math.round((Number(s.globalOcc)||0)*100);
+        return Number.isFinite(p) ? p : null;
+      });
+
+      const pointColors = vals.map(v => {
+        if (!Number.isFinite(v)) return 'rgba(255,255,255,.15)';
+        // pctToColor existe déjà dans le module affluence
+        return (typeof pctToColor === 'function') ? pctToColor(v) : '#00ffff';
+      });
+
+      if (affEvoChart) { try{ affEvoChart.destroy(); }catch(e){} affEvoChart = null; }
+
+      affEvoChart = new Chart(canvas, {
+        type: 'line',
+        data: {
+          labels,
+          datasets: [{
+            data: vals,
+            tension: 0.35,
+            borderWidth: 2,
+            borderColor: 'rgba(0,255,255,.85)',
+            backgroundColor: 'rgba(0,255,255,.12)',
+            fill: false,
+            pointRadius: 5,
+            pointHoverRadius: 7,
+            pointBorderWidth: 2,
+            pointBorderColor: 'rgba(255,255,255,.65)',
+            pointBackgroundColor: (ctx) => pointColors[ctx.dataIndex] || 'rgba(0,255,255,.85)'
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: {
+            legend: { display: false },
+            tooltip: {
+              callbacks: {
+                label: (ctx) => (ctx.parsed?.y!=null ? (ctx.parsed.y + '%') : '—')
+              }
+            }
+          },
+          scales: {
+            y: {
+              min: 0,
+              max: 100,
+              ticks: { color: 'rgba(210,250,255,.9)', callback: v => v + '%' },
+              grid: { color: 'rgba(0,255,255,.12)' }
+            },
+            x: {
+              ticks: { color: 'rgba(210,250,255,.85)', maxRotation: 0, autoSkip: true },
+              grid: { color: 'rgba(0,255,255,.06)' }
+            }
+          }
+        }
+      });
+    }catch(e){}
+  }
+
+
+function selectAffTrain(num,stopIndex=0){
     affState.currentTrain=String(num||''); affState.currentStop=stopIndex||0;
     const t=(affState.data?.trains||{})[affState.currentTrain];
     const title=$('affTrainTitle'), meta=$('affTrainMeta'), stops=$('affStops');
@@ -18807,11 +18991,14 @@ document.addEventListener('DOMContentLoaded', () => {
     if(!t){ title.textContent='—'; meta.textContent=''; stops.innerHTML=''; renderAffLists(); return; }
     title.textContent = `${t.trainNum||affState.currentTrain} • ${t.origin||'—'} (${t.depHHMM||'—'}) → ${t.destination||'—'} (${t.arrHHMM||'—'})`;
     const selectedStop = (Array.isArray(t.stops)?t.stops:[])[affState.currentStop] || null;
-    meta.innerHTML = `Type: ${t.trainType||'—'} • wagons: ${t.wagons||'—'} • pic: ${t.maxPct??'—'}% ${wagonSchemaHtml(selectedStop)}${selectedStop?` <span style="font-size:11px;color:rgba(15,25,35,.55)">@ ${esc(selectedStop.station||selectedStop.name||'')}</span>`:''}`;
+    meta.innerHTML = `Type: ${t.trainType||'—'} • wagons: ${t.wagons||'—'} • pic: ${t.maxPct??'—'}% ${wagonSchemaHtml(selectedStop, t.trainType)}${selectedStop?` <span style="font-size:11px;color:rgba(15,25,35,.55)">@ ${esc(selectedStop.station||selectedStop.name||'')}</span>`:''}`;
     stops.innerHTML='';
-    (Array.isArray(t.stops)?t.stops:[]).forEach((s,i)=>{const p=s.globalPct??Math.round((Number(s.globalOcc)||0)*100);const col=s.globalColor||pctToColor(p);const row=document.createElement('div');row.style.cssText='display:flex;justify-content:space-between;border-bottom:1px solid rgba(15,25,35,.08);padding:6px 2px;'+(i===affState.currentStop?'background:rgba(32,201,151,.10);':'');row.innerHTML=`<div><b>${esc(s.station||s.name||'')}</b> <span style="color:#667">• ${esc(s.hhmm||'')}</span></div><div class="aff-pct" style="color:${col}">${p}%${wagonSchemaHtml(s)}</div>`;row.onclick=()=>{affState.currentStop=i;selectAffTrain(t.trainNum||affState.currentTrain,i)};stops.appendChild(row);});
+    (Array.isArray(t.stops)?t.stops:[]).forEach((s,i)=>{const p=s.globalPct??Math.round((Number(s.globalOcc)||0)*100);const col=s.globalColor||pctToColor(p);const row=document.createElement('div');row.style.cssText='display:flex;justify-content:space-between;border-bottom:1px solid rgba(15,25,35,.08);padding:6px 2px;'+(i===affState.currentStop?'background:rgba(32,201,151,.10);':'');row.innerHTML=`<div><b>${esc(s.station||s.name||'')}</b> <span style="color:#667">• ${esc(s.hhmm||'')}</span></div><div class="aff-pct" style="color:${col}">${p}%${wagonSchemaHtml(s, t.trainType)}</div>`;row.onclick=()=>{affState.currentStop=i;selectAffTrain(t.trainNum||affState.currentTrain,i)};stops.appendChild(row);});
     renderAffLists();
-  }
+  
+    // Graph (évolution)
+    renderAffEvolutionChart(t);
+}
 
   async function loadAffluenceDate(dateStr){
     if(!dateStr) return;
