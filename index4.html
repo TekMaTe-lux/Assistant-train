@@ -5213,7 +5213,7 @@ body.modal-open{ overflow:hidden; }
   background: rgba(0,255,255,.10);
   color: #0ff;
 }
-.fav-train{ font-weight: 900; color:#fff; max-width:100%; overflow-wrap:anywhere; text-align:right; }
+.fav-train{ font-weight:900; color:#fff; max-width:100%; overflow-wrap:anywhere; text-align:right; display:flex; align-items:center; gap:8px; justify-content:flex-end; }
 .fav-meta{ margin-top: 8px; color:#b9c8d8; font-size:.95rem; overflow-wrap:anywhere; }
 .fav-line{ margin-top: 8px; color:#e6f7ff; font-size:.95rem; line-height: 1.35; overflow-wrap:anywhere; }
 .fav-times{
@@ -5502,14 +5502,26 @@ body.modal-open{ overflow:hidden; }
 .fav-aff-right{ display:flex; flex-direction:column; align-items:flex-end; gap:6px; }
 .fav-aff-details{ width:100%; }
 .fav-aff-right .fav-aff-details{ width:auto; min-width: 210px; }
-.fav-aff-details .fav-details-summary{ justify-content:flex-end; padding:6px 10px; font-size:.82rem; opacity:.95; }
-.fav-aff-details .fav-details-body{ padding:10px 10px 8px 10px; }
+.fav-aff-details{ width:100%; }
+.fav-aff-details > summary{ list-style:none; }
+.fav-aff-details > summary::-webkit-details-marker{ display:none; }
+.fav-aff-details .fav-details-summary{ padding:10px 12px; }
+.fav-aff-details .fav-details-body{ padding:10px 12px 12px 12px; }
+.fav-aff-chev{ margin-top:6px; font-size:.78rem; opacity:.8; text-align:right; }
+.fav-aff-details[open] .fav-aff-chev{ opacity:1; }
+.fav-aff-details-grid{ display:grid; grid-template-columns: 1.2fr .8fr; gap:12px; align-items:start; }
+@media (max-width: 780px){
+  .fav-aff-details-grid{ grid-template-columns: 1fr; }
+}
+.fav-aff-stops{ max-height: 260px; overflow:auto; padding-right: 6px; }
+.fav-aff-curve-wrap{ display:flex; justify-content:flex-end; }
+.fav-aff-curve{ width:100%; height:160px; }
 .fav-aff-next-row{ display:flex; align-items:center; justify-content:space-between; gap:10px; padding:6px 0; border-top:1px dashed rgba(0,255,255,.12); }
 .fav-aff-next-row:first-child{ border-top:none; padding-top:0; }
 .fav-aff-next-stop{ opacity:.95; font-size:.9rem; }
 .fav-aff-next-pct{ font-weight:900; min-width:52px; text-align:right; }
-.fav-aff-spark{ margin-top:10px; opacity:.9; }
 .fav-aff-actions{ margin-top:10px; display:flex; justify-content:flex-end; }
+
 /* --- Favoris: horaires prevus / temps reel (retards live) --- */
 .fav-next{ margin-top: 6px; line-height: 1.35; }
 .fav-next .fav-next-title{ opacity: .9; margin-bottom: 2px; }
@@ -17038,6 +17050,80 @@ function getGtfsDelayForStop(trainNumber, stopName){
     const extra = reduced ? ' <span class="fav-mini-muted">(réduit)</span>' : '';
     return `<span class="fav-mini-badge" title="Type de rame prévu (base compotrains + service réduit si détecté)">${eff}${extra}</span>`;
   }
+
+// === Favoris: détails d'affluence (départ + tous arrêts + courbe) ===
+function buildFavAffluenceDetails(trainId){
+  const num = String(trainId||'');
+  const t = (affState.data?.trains||{})[num];
+  if(!t) return null;
+  const stops = Array.isArray(t.stops) ? t.stops : [];
+  if(!stops.length) return null;
+
+  const effType = (typeof lbGetEffectiveTrainType === 'function')
+    ? (lbGetEffectiveTrainType(num) || '')
+    : (String(t.trainType||'')||'');
+
+  const dep = stops[0] || null;
+  const depP = dep ? (dep.globalPct!=null?Number(dep.globalPct):Math.round((Number(dep.globalOcc)||0)*100)) : null;
+  const depPct = Number.isFinite(depP) ? Math.round(depP) : null;
+  const depColor = pctToColor(depPct);
+
+  const rows = stops.map((st, i)=>{
+    const p = (st.globalPct!=null) ? Number(st.globalPct) : Math.round((Number(st.globalOcc)||0)*100);
+    const pct = Number.isFinite(p) ? Math.round(p) : null;
+    const col = pctToColor(pct);
+    return {
+      i,
+      station: st.station || st.name || '',
+      hhmm: st.hhmm || '',
+      pct,
+      color: col,
+      schemaHtml: wagonSchemaHtml(st, effType || t.trainType)
+    };
+  });
+
+  // SVG courbe simple (léger, pas de Chart.js dans les favoris)
+  let sparkSvg = '';
+  try{
+    const W=520, H=140, pad=18;
+    const vals = rows.map(r=> (r.pct==null?null:Math.max(0,Math.min(120,r.pct))));
+    const xs = (k)=> pad + (k/(Math.max(1,vals.length-1)))*(W-2*pad);
+    const ys = (v)=> pad + (1 - (v/120))*(H-2*pad);
+
+    let d="";
+    for(let i=0;i<vals.length;i++){
+      const v=vals[i];
+      if(v==null) continue;
+      const x=xs(i), y=ys(v);
+      d += (d? " L ":"M ") + x.toFixed(1) + " " + y.toFixed(1);
+    }
+    if(d){
+      const pts = vals.map((v,i)=>{
+        if(v==null) return '';
+        const x=xs(i), y=ys(v);
+        const col = pctToColor(v);
+        return `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="3.6" fill="${col}" stroke="rgba(255,255,255,.65)" stroke-width="1"/>`;
+      }).join('');
+      sparkSvg = `<svg class="fav-aff-curve" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" aria-label="Courbe d'affluence">
+        <rect x="0" y="0" width="${W}" height="${H}" rx="14" ry="14" fill="rgba(0,0,0,.18)" stroke="rgba(0,255,255,.18)"/>
+        <path d="${d}" fill="none" stroke="rgba(0,255,255,.85)" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+        ${pts}
+      </svg>`;
+    }
+  }catch(e){ sparkSvg=''; }
+
+  return {
+    date: affState.data?.date || '',
+    trainType: effType,
+    depPct, depColor,
+    depStation: dep?.station || dep?.name || '',
+    depHHMM: dep?.hhmm || '',
+    depSchemaHtml: dep ? wagonSchemaHtml(dep, effType || t.trainType) : '',
+    rows,
+    curveSvg: sparkSvg
+  };
+}
+
 const renderFavCard = (kind, trainId, payload) => {
     const title   = document.getElementById(kind === 'AM' ? 'favTrainAM' : 'favTrainPM');
 	const badgeEl = document.getElementById(kind === 'AM' ? 'favStateAM' : 'favStatePM');
@@ -17055,7 +17141,7 @@ const renderFavCard = (kind, trainId, payload) => {
     if (!title || !meta || !line) return;
 
     if (card) card.classList.remove('is-canceled');
-    title.textContent = trainId || '—';
+    title.innerHTML = (trainId ? escapeHtml(trainId) : '—') + buildFavTrainTypeBadge(trainId);
 	if (badgeEl) badgeEl.innerHTML = '';
     meta.innerHTML = '';
     line.innerHTML = '';
@@ -17208,54 +17294,69 @@ const renderFavCard = (kind, trainId, payload) => {
 
     const nextTrainHtml = buildNextTrainInfo(widgetState, st);
 	const stopsHtml = (widgetState === 'running') ? buildFavStopsDetails(payload, trainId, st.now) : '';
-    const affInfo = (typeof window.getAffluenceTrainInfo === 'function') ? window.getAffluenceTrainInfo(trainId) : null;
-    const affHtml = affInfo ? (() => {
-      const depPct = (affInfo.depPct!=null && Number.isFinite(affInfo.depPct)) ? Math.round(affInfo.depPct) : null;
-      const depCol = affInfo.depColor || (depPct!=null ? pctToColor(depPct) : '#dffbff');
-      const depStop = affInfo.depStop || '';
-      const depHHMM = affInfo.depHHMM || '';
-      const depSchema = affInfo.depSchemaHtml || affInfo.schemaHtml || '';
-      const trainTypeTxt = affInfo.trainType || lbGetEffectiveTrainType(trainId) || '';
-      const nextRows = Array.isArray(affInfo.nextStops) ? affInfo.nextStops : [];
-      const rowsHtml = nextRows.slice(0,6).map(r=>{
-        const p = (r.pct!=null && Number.isFinite(r.pct)) ? Math.round(r.pct) : null;
-        const c = r.color || (p!=null ? pctToColor(p) : '#dffbff');
-        const nm = r.station || r.name || '';
-        const hh = r.hhmm || '';
-        const sch = r.schemaHtml || '';
-        return `<div class="fav-aff-next-row">
-          <div class="fav-aff-next-stop">${escapeHtml(nm)}${hh?` <span style="opacity:.75;">• ${escapeHtml(hh)}</span>`:''}</div>
-          <div style="display:flex;align-items:center;gap:10px;">
-            <div class="fav-aff-next-pct" style="color:${c}">${p!=null?`${p}%`:'—'}</div>
-            <div>${sch}</div>
+    const affInfo = buildFavAffluenceDetails(trainId);
+
+const affHtml = affInfo ? (() => {
+  const depPct = (affInfo.depPct!=null && Number.isFinite(affInfo.depPct)) ? Math.round(affInfo.depPct) : null;
+  const depCol = affInfo.depColor || (depPct!=null ? pctToColor(depPct) : '#dffbff');
+  const depStop = affInfo.depStation || '';
+  const depHHMM = affInfo.depHHMM || '';
+  const depSchema = affInfo.depSchemaHtml || '';
+  const trainTypeTxt = affInfo.trainType || '';
+  const dateTxt = affInfo.date ? ` <span class="fav-mini-muted">• ${escapeHtml(affInfo.date)}</span>` : '';
+
+  const rows = Array.isArray(affInfo.rows) ? affInfo.rows : [];
+  const rowsHtml = rows.map(r=>{
+    const p = (r.pct!=null && Number.isFinite(r.pct)) ? Math.round(r.pct) : null;
+    const c = r.color || (p!=null ? pctToColor(p) : '#dffbff');
+    const nm = r.station || '';
+    const hh = r.hhmm || '';
+    const sch = r.schemaHtml || '';
+    return `<div class="fav-aff-next-row">
+      <div class="fav-aff-next-stop">${escapeHtml(nm)}${hh?` <span style="opacity:.75;">• ${escapeHtml(hh)}</span>`:''}</div>
+      <div style="display:flex;align-items:center;gap:10px;">
+        <div class="fav-aff-next-pct" style="color:${c}">${p!=null?`${p}%`:'—'}</div>
+        <div>${sch}</div>
+      </div>
+    </div>`;
+  }).join('');
+
+  const curve = affInfo.curveSvg || '';
+  const openBtn = `<div class="fav-aff-actions"><button class="fav-aff-open" data-train="${escapeHtml(trainId)}" type="button">Ouvrir dans Affluence</button></div>`;
+
+  return `<div class="fav-box fav-aff-box">
+    <details class="fav-details fav-aff-details">
+      <summary class="fav-details-summary">
+        <div class="fav-aff-main">
+          <div class="fav-aff-left">
+            <div class="fav-aff-label">
+              <span>Affluence (départ)</span>
+              ${trainTypeTxt?`<span class="fav-mini-badge" title="Type de rame prévu">${escapeHtml(trainTypeTxt)}</span>`:''}
+              ${dateTxt}
+            </div>
+            <div class="fav-aff-pct" style="color:${depCol}">${depPct!=null?`${depPct}%`:'—'}</div>
+            <div class="fav-aff-stop">${escapeHtml(depStop)}${depHHMM?` • ${escapeHtml(depHHMM)}`:''}</div>
           </div>
-        </div>`;
-      }).join('');
-      const spark = affInfo.sparkSvg || '';
-      const openBtn = `<div class="fav-aff-actions"><button class="fav-aff-open" data-train="${escapeHtml(trainId)}" type="button">Ouvrir le détail</button></div>`;
-      return `<div class="fav-box fav-aff-box">
-        <div class="fav-box-body">
-          <div class="fav-aff-main">
-            <div class="fav-aff-left">
-              <div class="fav-aff-label">Affluence (départ) ${trainTypeTxt?`<span class="fav-mini-badge">${escapeHtml(trainTypeTxt)}</span>`:''}</div>
-              <div class="fav-aff-pct" style="color:${depCol}">${depPct!=null?`${depPct}%`:'—'}</div>
-              <div class="fav-aff-stop">${escapeHtml(depStop)}${depHHMM?` • ${escapeHtml(depHHMM)}`:''}</div>
-            </div>
-            <div class="fav-aff-right">
-              <div>${depSchema}</div>
-              <details class="fav-details fav-aff-details">
-                <summary class="fav-details-summary">Détails affluence</summary>
-                <div class="fav-details-body">
-                  ${rowsHtml || '<div style="opacity:.8;">—</div>'}
-                  ${spark?`<div class="fav-aff-spark">${spark}</div>`:''}
-                  ${openBtn}
-                </div>
-              </details>
-            </div>
+          <div class="fav-aff-right">
+            <div>${depSchema}</div>
+            <div class="fav-aff-chev">Détails ▾</div>
           </div>
         </div>
-      </div>`;
-    })() : '';
+      </summary>
+      <div class="fav-details-body">
+        <div class="fav-aff-details-grid">
+          <div class="fav-aff-stops">
+            ${rowsHtml || '<div style="opacity:.8;">—</div>'}
+          </div>
+          <div class="fav-aff-curve-wrap">
+            ${curve}
+          </div>
+        </div>
+        ${openBtn}
+      </div>
+    </details>
+  </div>`;
+})() : '';
     line.innerHTML = (causeHtml || '') + progressHtml + (nextTrainHtml || '') + (affHtml || '') + (stopsHtml || '');
 if (statsEl){
       renderFavStats(kind, trainId).catch(()=>{});
