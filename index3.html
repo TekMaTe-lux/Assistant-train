@@ -5553,11 +5553,65 @@ body.modal-open{ overflow:hidden; }
 .fav-aff[open] .fav-aff-toggleline{ opacity:1; }
 .fav-aff-body{ display:flex; flex-direction:column; gap:10px; }
 .fav-aff-stops{ display:flex; flex-direction:column; gap:8px; }
-.fav-aff-stop{ display:flex; align-items:center; justify-content:space-between; gap:10px; padding:8px 10px; border-radius:12px; border:1px solid rgba(0,255,255,.14); background: rgba(0, 12, 22, .28); }
-.fav-aff-stop-left{ display:flex; flex-direction:column; gap:2px; }
-.fav-aff-stop-name{ font-weight:900; }
-.fav-aff-stop-time{ font-size:.82rem; opacity:.85; }
-.fav-aff-stop-right{ display:flex; align-items:center; gap:10px; flex-wrap:wrap; justify-content:flex-end; }
+.fav-aff-stop{
+  display:flex;
+  flex-direction:column;
+  gap:8px;
+  padding:10px 12px;
+  border-radius:12px;
+  border:1px solid rgba(0,255,255,.14);
+  background: rgba(0, 12, 22, .28);
+}
+
+.fav-aff-stop-head{
+  display:flex;
+  align-items:baseline;
+  justify-content:space-between;
+  gap:12px;
+}
+
+.fav-aff-stop-title{
+  display:flex;
+  align-items:baseline;
+  gap:8px;
+  min-width:0;
+  flex:1 1 auto;
+}
+
+.fav-aff-stop-name{
+  font-weight:900;
+  white-space:nowrap;
+  overflow:hidden;
+  text-overflow:ellipsis;
+}
+
+.fav-aff-stop-time{
+  font-size:.82rem;
+  opacity:.85;
+  font-variant-numeric:tabular-nums;
+  white-space:nowrap;
+}
+
+.fav-aff-stop-schema{
+  width:100%;
+  overflow:hidden;
+}
+
+/* Le schéma doit toujours tenir dans la carte (mobile compris) */
+.fav-aff-stop-schema .train-schema,
+.fav-aff-stop-schema .trainSchema,
+.fav-aff-stop-schema .wagon-schema,
+.fav-aff-stop-schema .wagonSchema,
+.fav-aff-stop-schema svg{
+  max-width:100%;
+}
+
+/* Sur mobile: éviter tout scroll horizontal */
+@media (max-width: 520px){
+  .fav-aff-stop{ padding:10px 10px; }
+  .fav-aff-stop-head{ gap:10px; }
+  .fav-aff-stop-name{ max-width: 70vw; }
+}
 .fav-aff-stop-pct{ font-weight:900; color:#dffbff; min-width:42px; text-align:right; }
 .fav-aff-stop-pct.ok{ color:#2cff96; }
 .fav-aff-stop-pct.mid{ color:#f1c40f; }
@@ -15902,6 +15956,45 @@ const GARE_COORDS = {
   "Pont-à-Mousson":    { lat: 48.907, lon: 6.063 },
   "Nancy":             { lat: 48.692, lon: 6.184 }
 };
+// --- WX station name canonicalization (accents / hyphens / case) ---
+function __wxCanon(s){
+  try{
+    return String(s||'').trim()
+      .toLowerCase()
+      .normalize('NFD').replace(/[\u0300-\u036f]/g,'')   // remove accents
+      .replace(/[’']/g,'')
+      .replace(/\bsaint\b/g,'st')
+      .replace(/[^a-z0-9]+/g,''); // remove spaces, hyphens, punctuation
+  }catch(e){
+    return String(s||'').trim().toLowerCase();
+  }
+}
+const __WX_CANON_MAP = (function(){
+  const m = new Map();
+  try{
+    Object.keys(GARE_COORDS||{}).forEach(k=>{
+      m.set(__wxCanon(k), k);
+    });
+  }catch(e){}
+  return m;
+})();
+function __wxResolveKey(name){
+  if(!name) return null;
+  const raw = String(name).trim();
+  if(GARE_COORDS[raw]) return raw;
+  const ck = __wxCanon(raw);
+  if(__WX_CANON_MAP.has(ck)) return __WX_CANON_MAP.get(ck);
+  // a few common variants
+  const variants = [
+    ck.replace('grande','grande'), // noop but placeholder
+    ck.replace('lesmetz','lesmetz'),
+  ];
+  for(const v of variants){
+    if(__WX_CANON_MAP.has(v)) return __WX_CANON_MAP.get(v);
+  }
+  return null;
+}
+
 const WX_COORDS_CACHE = new Map();
 
 /* ---- Helpers ---- */
@@ -16059,7 +16152,10 @@ async function fetchWeatherForStations(stationNames, opt = {}){
   for (const name of stationNames || []) {
     if (!name || seen.has(name)) continue;
     seen.add(name);
-    const c = GARE_COORDS[name] || WX_COORDS_CACHE.get(name) || await resolveCoordsByName(name);
+    const key = __wxResolveKey(name) || name;
+    const c = GARE_COORDS[key] || WX_COORDS_CACHE.get(key) || await resolveCoordsByName(key);
+    // keep display name as chosen, but cache under key
+    if(c && !WX_COORDS_CACHE.get(key) && !GARE_COORDS[key]) { try{ WX_COORDS_CACHE.set(key, c); }catch(e){} }
     if (c && Number.isFinite(+c.lat) && Number.isFinite(+c.lon)) {
       coords.push({ name, lat:+c.lat, lon:+c.lon });
     }
@@ -17344,14 +17440,14 @@ function getGtfsDelayForStop(trainNumber, stopName){
         const pcls = pctClass(pp);
         const sch = wagonSchemaHtml(s, affInfo.trainType);
         return `<div class="fav-aff-stop">
-          <div class="fav-aff-stop-left">
-            <div class="fav-aff-stop-name">${stName}</div>
-            <div class="fav-aff-stop-time">${stTime}</div>
-          </div>
-          <div class="fav-aff-stop-right">
+          <div class="fav-aff-stop-head">
+            <div class="fav-aff-stop-title">
+              <span class="fav-aff-stop-name">${stName}</span>
+              ${stTime ? `<span class="fav-aff-stop-time">· ${stTime}</span>` : ``}
+            </div>
             <div class="fav-aff-stop-pct ${pcls}">${p}</div>
-            ${sch}
           </div>
+          <div class="fav-aff-stop-schema">${sch}</div>
         </div>`;
       }).join('');
 
