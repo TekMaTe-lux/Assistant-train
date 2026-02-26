@@ -1649,30 +1649,16 @@ table[data-snapshotting="true"] tbody tr:nth-child(even) {
   .table-scroll {
     overflow-x: auto;
     overflow-y: hidden;
-    -webkit-overflow-scrolling: touch;
-    height: auto; /* hauteur pilotée en JS pour afficher toutes les lignes */
-    max-height: none;
+    -webkit-overflow-scrolling: touch; /* scroll fluide iOS */
+    height: calc(100vh - var(--top-bar-height, 72px) - var(--bottom-bar-height, 78px) - 60px);
     margin-top: 0;
-    overscroll-behavior: contain;
-    touch-action: pan-x;
   }
   #trainInfo table{
     height: 100%;
     width: 100%;
     table-layout: fixed;
-    font-size: var(--lb-row-font, 0.85rem);
-    line-height: 1.05;
-  }
-
-  #trainInfo table thead th{
-    background: rgba(11,15,26,0.995);
-    backdrop-filter: blur(8px);
-  }
-
-  #trainInfo table tbody td{
-    height: var(--lb-row-h, 34px);
-    padding-top: 2px;
-    padding-bottom: 2px;
+    font-size: 0.85rem;
+    line-height: 1.1;
   }
   #trainInfo table th:first-child,
   #trainInfo table td:first-child{
@@ -1713,7 +1699,7 @@ table[data-snapshotting="true"] tbody tr:nth-child(even) {
     top: 0;
     z-index: 3;
   }
-  #trainInfo table thead th:first-child{ z-index: 50; }
+  #trainInfo table thead th:first-child{ z-index: 5; }
   .scroll-hint {
     display: block;
     font-size: .8rem;
@@ -1761,7 +1747,7 @@ table[data-snapshotting="true"] tbody tr:nth-child(even) {
     top: 0;
     z-index: 3;
   }
-  #trainInfo table thead th:first-child{ z-index: 50; }
+  #trainInfo table thead th:first-child{ z-index: 5; }
 }
 
 
@@ -1781,16 +1767,7 @@ table[data-snapshotting="true"] tbody tr:nth-child(even) {
     margin-bottom: 6px;
   }
 
-    
-
-/* Bouton Actualiser collé au tableau */
-#refreshContainer.refresh-near-table{ margin: 6px 0 4px !important; text-align: right; }
-#refreshContainer.refresh-near-table .refresh-btn{ padding: 6px 10px; font-size: 0.92rem; border-radius: 10px; }
-@media (max-width: 768px){
-  #refreshContainer.refresh-near-table{ margin: 4px 0 2px !important; }
-  #refreshContainer.refresh-near-table .refresh-btn{ padding: 5px 8px; font-size: 0.78rem; }
-}
-/* Conteneur scrollable pour le tableau */
+    /* Conteneur scrollable pour le tableau */
 .table-scroll {
   overflow-x: auto;
   overflow-y: auto;
@@ -8834,17 +8811,6 @@ function injectTableChunkedIntoTrainInfo(html, {chunk=200} = {}){
   // conteneur scrollable + horodatage
   host.innerHTML = '<div class="table-toolbar"><button type="button" id="btnTableSnapshot" class="snapshot-btn" disabled title="Afficher une capture plein écran du tableau">🔍 Vue globale</button></div><div class="scroll-hint">← glisser →</div><div class="table-scroll"></div><div id="lastUpdated" class="last-updated" aria-live="polite"></div>';
   const scroller = host.querySelector('.table-scroll');
-
-  // déplacer le bouton Actualiser au plus près du tableau (sans casser les listeners)
-  const refreshContainer = document.getElementById('refreshContainer');
-  if (refreshContainer && refreshContainer.parentElement !== host) {
-    // le placer juste sous la toolbar, avant le hint + tableau
-    try {
-      refreshContainer.style.display = 'block';
-      refreshContainer.classList.add('refresh-near-table');
-      host.insertBefore(refreshContainer, host.querySelector('.scroll-hint') || scroller);
-    } catch(e){}
-  }
   const snapshotBtn = host.querySelector('#btnTableSnapshot');
   const scrollHint = host.querySelector('.scroll-hint');
   if (scrollHint) scrollHint.style.display = 'none';
@@ -8935,8 +8901,6 @@ tableDst.style.setProperty('--lb-train-col-px', colPx + 'px');
       setLastUpdated?.();
       refreshScrollHint();
       if (snapshotBtn) snapshotBtn.disabled = false;
-      // Ajuste la hauteur/ligne pour afficher tout le tableau sur mobile
-      window.__lbScheduleTableFit?.();
       // GTFS-RT (non bloquant)
       setTimeout(()=> {
         if (window.retardsGTFS && (typeof isSelectedDateToday !== 'function' || isSelectedDateToday())){
@@ -8950,73 +8914,7 @@ tableDst.style.setProperty('--lb-train-col-px', colPx + 'px');
       setTimeout(()=> { try { chargerEtAfficherAlertes?.(); } catch(e){} }, 0);
     }
   }
-  
-
-// Ajuste le tableau pour qu'il tienne ENTIEREMENT à l'écran sur smartphone (zéro scroll vertical)
-function lbFitTrainTableViewport(host){
-  try{
-    const isMobile = window.matchMedia && window.matchMedia('(max-width: 768px)').matches;
-    if (!isMobile) return;
-    if (!host) host = document.getElementById('trainInfo');
-    const scroller = host?.querySelector?.('.table-scroll');
-    const table = scroller?.querySelector?.('table');
-    if (!scroller || !table) return;
-
-    // Empêche le scroll vertical page pendant la vue tableau
-    document.documentElement.style.overflowY = 'hidden';
-    document.body.style.overflowY = 'hidden';
-
-    const vv = window.visualViewport;
-    const viewportH = Math.floor(vv ? vv.height : window.innerHeight);
-
-    // barres haut/bas réelles (PWA / navigateur)
-    const bottomNav = document.querySelector('.bottom-nav, .bottomBar, .bottom-bar, nav.bottom, .bottomNav');
-    const bottomH = Math.floor(bottomNav ? bottomNav.getBoundingClientRect().height : 0);
-
-    const scTop = Math.floor(scroller.getBoundingClientRect().top);
-    const safeBottom = 0; // env(safe-area-inset-bottom) géré côté CSS de la bottom bar
-
-    const available = Math.max(140, viewportH - bottomH - safeBottom - scTop - 6);
-    scroller.style.height = available + 'px';
-    scroller.style.maxHeight = available + 'px';
-    scroller.style.overflowY = 'hidden';
-    scroller.style.touchAction = 'pan-x';
-
-    const theadH = Math.ceil((table.tHead && table.tHead.getBoundingClientRect().height) || 34);
-    const rowCount = Math.max(1, table.tBodies?.[0]?.rows?.length || 1);
-
-    const bodyH = Math.max(60, available - theadH - 2);
-    let rowH = Math.floor(bodyH / rowCount);
-
-    // clamp : doit rester lisible
-    rowH = Math.max(18, Math.min(46, rowH));
-
-    // police liée à rowH
-    let fontRem = 0.86;
-    if (rowH <= 20) fontRem = 0.70;
-    else if (rowH <= 22) fontRem = 0.74;
-    else if (rowH <= 26) fontRem = 0.78;
-    else if (rowH <= 30) fontRem = 0.82;
-
-    table.style.setProperty('--lb-row-h', rowH + 'px');
-    table.style.setProperty('--lb-row-font', fontRem + 'rem');
-
-  } catch(e) {
-    // no-op
-  }
-}
-
-(function(){
-  let raf = null;
-  const schedule = () => {
-    if (raf) cancelAnimationFrame(raf);
-    raf = requestAnimationFrame(() => lbFitTrainTableViewport(document.getElementById('trainInfo')));
-  };
-  window.addEventListener('resize', schedule);
-  if (window.visualViewport) window.visualViewport.addEventListener('resize', schedule);
-  window.__lbScheduleTableFit = schedule;
-})();
-requestAnimationFrame(pump);
+  requestAnimationFrame(pump);
 }
 
 /* Scroll vers le tableau généré pour le mettre immédiatement en vue */
