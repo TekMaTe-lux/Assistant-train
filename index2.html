@@ -2288,13 +2288,58 @@ table[data-snapshotting="true"] tbody tr:nth-child(even) {
   box-shadow: inset 0 0 8px #00f0ff33;
 }
 
-   #lastUpdated {
-  font-size: 0.8em;     
-  margin-top: 6px;   
-  color: #bbb;          
-  font-style: italic;  
-  text-align: right;    
+   #lastUpdated{
+  font-size:0.8em;
+  margin-top:6px;
+  color:#bbb;
+  font-style:italic;
+  /* on met le texte + bouton sur la même ligne, sans casser mobile */
+  display:flex;
+  justify-content:flex-end;
+  align-items:center;
+  gap:10px;
+  flex-wrap:wrap;
+  text-align:right;
 }
+#lastUpdated .last-updated-text{
+  min-width:0;
+}
+#lastUpdated .last-updated-text strong{ font-style:normal; }
+#lastUpdated .refresh-inline-btn{
+  appearance:none;
+  border:1px solid rgba(0, 240, 255, 0.35);
+  background:rgba(0, 240, 255, 0.10);
+  color:#9ffcff;
+  border-radius:999px;
+  width:34px;
+  height:34px;
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  cursor:pointer;
+  box-shadow:0 0 10px rgba(0, 240, 255, 0.18);
+  transition:transform .08s ease, box-shadow .15s ease, background .15s ease;
+  flex:0 0 auto;
+}
+#lastUpdated .refresh-inline-btn:hover{
+  background:rgba(0, 240, 255, 0.18);
+  box-shadow:0 0 14px rgba(0, 240, 255, 0.26);
+}
+#lastUpdated .refresh-inline-btn:active{ transform:scale(0.96); }
+#lastUpdated .refresh-inline-btn[disabled]{
+  opacity:0.55;
+  cursor:not-allowed;
+  box-shadow:none;
+}
+#lastUpdated .refresh-inline-btn .spin{
+  display:inline-block;
+  animation:lbspin 0.9s linear infinite;
+}
+@keyframes lbspin{ from{transform:rotate(0deg);} to{transform:rotate(360deg);} }
+
+/* Ancien bouton centré : on le masque (remplacé par l'icône à droite du "Généré le…") */
+#refreshContainer{ display:none !important; }
+
    /* Modale */
 .table-modal{
   display:none; position:fixed; inset:0; z-index:2000;
@@ -13415,8 +13460,6 @@ linkifyGaresAndTrains(document);
 setLastUpdated();
 
 // afficher le bouton refresh tout de suite
-$('#refreshContainer').show();
-
 // 6.2 — Laisser le rendu respirer, puis lancer les tâches lourdes en parallèle
 requestAnimationFrame(() => {
   // GTFS-RT (petit délai pour éviter un “coup de massue”)
@@ -13566,8 +13609,7 @@ scheduleWeatherAfterTableSettled();
     // Liens vers fiches trains (SNCF & CFL)
     linkifyGaresAndTrains(document);
 
-    // Bouton Actualiser
-    $('#refreshContainer').show();
+    // Bouton Actualiser : désormais intégré à droite du "Généré le…" (icône)
 
     // Résumé perturbations + infos : afficher/masquer
     updateDisruptionsSummaryVisibility();
@@ -13598,30 +13640,52 @@ scheduleWeatherAfterTableSettled();
     }
   });
 
-  // Bouton "Actualiser les données" : refetch FRESH puis régénère
-$('#refreshButton').off('click').on('click', async function () {
-  const el = document.getElementById('lastUpdated');
-  if (el) el.textContent = 'Actualisation en cours…';
+  // Bouton "Actualiser" (icône à droite du "Généré le…") : refetch FRESH puis régénère
+const __lbDoRefresh = async () => {
+  const statusEl = document.getElementById('lastUpdated');
+  const btn = document.getElementById('refreshInline') || document.getElementById('refreshButton');
+  if (btn){
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spin">🔄</span>';
+  }
+  if (statusEl) statusEl.querySelector?.('.last-updated-text') 
+    ? (statusEl.querySelector('.last-updated-text').textContent = 'Actualisation en cours…')
+    : (statusEl.textContent = 'Actualisation en cours…');
+
   try {
     await Promise.all([
       loadGtfsRetards({ forceFresh: true }),
       loadVoiesByTrain({ forceFresh: true }).catch(err => {
         console.warn('[Voies] Actualisation échouée', err?.message || err);
         return null;
-     }),
+      }),
       loadCflVoiesByTrain({ forceFresh: true }).catch(err => {
         console.warn('[CFL][Voies] Actualisation échouée', err?.message || err);
-        return null; 
+        return null;
       })
     ]);
   } catch (e) {
     console.error('[GTFS-RT] Actualiser ->', e);
     alert("Échec de l'actualisation GTFS-RT.\n" + (e && e.message ? e.message : ''));
+    if (btn){
+      btn.disabled = false;
+      btn.textContent = '🔄';
+    }
     return; // on ne régénère pas avec des données inchangées
   }
+
   $('#loadTrains').click();
   setLastUpdated();
+  // le bouton inline est recréé par setLastUpdated(), donc rien d'autre à faire
+};
+
+// Ancien bouton (si un jour tu le réactives) + nouveau bouton inline
+$('#refreshButton').off('click').on('click', __lbDoRefresh);
+$(document).off('click', '#refreshInline').on('click', '#refreshInline', (e) => {
+  e.preventDefault();
+  __lbDoRefresh();
 });
+
 });
 
 /* ---------- GTFS-RT : loader centralisé + auto-apply ---------- */
@@ -14037,7 +14101,7 @@ function setLastUpdated() {
     const [y, m, day] = d.split('-');
     validTxt = `${day}/${m}/${y}`;
   }
-  el.innerHTML = `Généré le ${nowTxt} — Données valables le <strong>${validTxt}</strong>`;
+  el.innerHTML = `<span class="last-updated-text">Généré le ${nowTxt} — Données valables le <strong>${validTxt}</strong></span>` + ` <button id="refreshInline" class="refresh-inline-btn" type="button" title="Actualiser les données" aria-label="Actualiser les données">🔄</button>`;
 }
 function todayYMDLux(){
   const parts = new Intl.DateTimeFormat('en-CA', {
