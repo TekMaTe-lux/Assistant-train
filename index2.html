@@ -1662,20 +1662,27 @@ table[data-snapshotting="true"] tbody tr:nth-child(even) {
   }
   #trainInfo table th:first-child,
   #trainInfo table td:first-child{
-    width: 22vw;
-    min-width: 22vw;
-    max-width: 22vw;
-    font-size: 0.66rem;
-    padding-left: 3px;
-    padding-right: 3px;
-    white-space: nowrap;
+    /* Colonne gares : plus large + lisible (évite les troncatures) */
+    width: var(--lb-first-col-px, 170px);
+    min-width: var(--lb-first-col-px, 170px);
+    max-width: var(--lb-first-col-px, 170px);
+
+    font-size: 0.72rem;
+    padding: 6px 6px;
+
+    /* On autorise le retour à la ligne (2 lignes max) */
+    white-space: normal;
     overflow: hidden;
-    text-overflow: ellipsis;
+    text-overflow: clip;
+    word-break: break-word;
+    line-height: 1.15;
+
     position: sticky;
     left: 0;
-    z-index: 4;
-    background: rgba(11,15,26,0.98);
-    box-shadow: 8px 0 16px rgba(0,0,0,0.35);
+    z-index: 6;
+    background: rgba(11,15,26,0.995);
+    border-right: 1px solid rgba(0,240,255,0.14);
+    box-shadow: 10px 0 18px rgba(0,0,0,0.35);
   }
 
   /* Colonnes trains : compactées pour en afficher ~4 sur smartphone */
@@ -1704,6 +1711,46 @@ table[data-snapshotting="true"] tbody tr:nth-child(even) {
   }
 }
 
+/* Desktop / grand écran : colonnes plus compactes (plus de trains visibles) */
+@media (min-width: 769px){
+  .table-scroll{
+    overflow-x: auto;
+    overflow-y: auto;
+  }
+  #trainInfo table{
+    table-layout: fixed;
+    width: 100%;
+    font-size: 0.95rem;
+    line-height: 1.2;
+  }
+  #trainInfo table th:first-child,
+  #trainInfo table td:first-child{
+    width: var(--lb-first-col-px, 280px);
+    min-width: var(--lb-first-col-px, 280px);
+    max-width: var(--lb-first-col-px, 280px);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    padding: 8px 10px;
+    z-index: 4;
+    background: rgba(11,15,26,0.98);
+    border-right: 1px solid rgba(0,240,255,0.14);
+  }
+  #trainInfo table th:not(:first-child),
+  #trainInfo table td:not(:first-child){
+    width: var(--lb-train-col-px, 92px);
+    min-width: var(--lb-train-col-px, 92px);
+    max-width: var(--lb-train-col-px, 92px);
+  }
+  #trainInfo table thead th{
+    position: sticky;
+    top: 0;
+    z-index: 3;
+  }
+  #trainInfo table thead th:first-child{ z-index: 5; }
+}
+
+
   .legend-container {
     font-size: 0.9em;
     line-height: 1.6;
@@ -1723,7 +1770,10 @@ table[data-snapshotting="true"] tbody tr:nth-child(even) {
     /* Conteneur scrollable pour le tableau */
 .table-scroll {
   overflow-x: auto;
+  overflow-y: auto;
   -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+  touch-action: pan-x pan-y;
   margin-top: 8px;
   border: 1px solid #00f0ff33;
   border-radius: 8px;
@@ -1733,9 +1783,10 @@ table[data-snapshotting="true"] tbody tr:nth-child(even) {
 #trainInfo table td:first-child{
   position: sticky;
   left: 0;
-  z-index: 2;
-  background: #0b0f1a;
-  box-shadow: 6px 0 10px rgba(0, 240, 255, 0.12);
+  z-index: 6;
+  background: rgba(11,15,26,0.995);
+  border-right: 1px solid rgba(0,240,255,0.14);
+  box-shadow: 10px 0 18px rgba(0,0,0,0.35);
 }
 
 #trainInfo table thead th:first-child{
@@ -8763,24 +8814,36 @@ function injectTableChunkedIntoTrainInfo(html, {chunk=200} = {}){
   // Objectif mobile : afficher ~4 colonnes trains "à l'écran".
   // Au-delà -> scroll horizontal (colonne "Gare" reste figée).
   const isMobile = window.matchMedia && window.matchMedia('(max-width: 768px)').matches;
-  const visibleCols = isMobile ? 4 : Math.min(trainColumns, 6);
 
-  const vw = Math.max(320, (window.innerWidth || 0));
-  const firstColPx = isMobile ? Math.round(vw * 0.22) : 220; // cohérent avec CSS mobile (22vw)
-  const usable = Math.max(240, vw - firstColPx);
+/* Cibles : ~4 trains visibles sur mobile, ~8 sur desktop */
+const visibleCols = isMobile ? 4 : Math.min(trainColumns || 0, 8);
 
-  // largeur d'une colonne train (px) : on compacte assez pour en voir 4 sur smartphone
-  const colPx = Math.max(56, Math.floor(usable / Math.max(1, visibleCols)));
+const vw = Math.max(320, (window.innerWidth || 0));
 
-  // Min-width total : viewport, ou (gare + n colonnes train) pour activer le scroll si > visibleCols
-  const minWidth = Math.max(vw, firstColPx + (colPx * trainColumns));
+/* Largeur colonne gares :
+   - mobile : clamp(140..200) autour de ~34vw (évite la troncature des gares)
+   - desktop : clamp(240..340) autour de ~26vw (évite une colonne énorme)
+*/
+const firstColPx = isMobile
+  ? Math.max(140, Math.min(200, Math.round(vw * 0.34)))
+  : Math.max(240, Math.min(340, Math.round(vw * 0.26)));
 
-  tableDst.style.width = '100%';
-  tableDst.style.minWidth = minWidth + 'px';
+const usable = Math.max(240, vw - firstColPx);
 
-  // Expose des variables CSS pour caler exactement les largeurs
-  tableDst.style.setProperty('--lb-first-col-px', firstColPx + 'px');
-  tableDst.style.setProperty('--lb-train-col-px', colPx + 'px');
+/* largeur colonne train : compacte pour en voir N sans flinguer la lisibilité */
+const colPx = isMobile
+  ? Math.max(52, Math.floor(usable / Math.max(1, visibleCols)))
+  : Math.max(76, Math.floor(usable / Math.max(1, visibleCols)));
+
+/* Min-width total : viewport, ou (gare + toutes colonnes trains) pour activer le scroll si besoin */
+const minWidth = Math.max(vw, firstColPx + (colPx * trainColumns));
+
+tableDst.style.width = '100%';
+tableDst.style.minWidth = minWidth + 'px';
+
+/* Expose des variables CSS pour caler exactement les largeurs */
+tableDst.style.setProperty('--lb-first-col-px', firstColPx + 'px');
+tableDst.style.setProperty('--lb-train-col-px', colPx + 'px');
 
   // clone THEAD immédiatement
   const thead = tableSrc.querySelector('thead');
