@@ -489,6 +489,58 @@ body {
   background: rgba(0,0,0,0.18);
 }
 
+.home-favs-mini{
+  margin-top: 10px;
+  border-radius: 16px;
+  border: 1px solid rgba(0,240,255,0.18);
+  background: rgba(0, 12, 22, 0.26);
+  overflow: hidden;
+}
+.home-favs-mini__btn{
+  width: 100%;
+  display:flex;
+  align-items:center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 12px 12px;
+  font-weight: 900;
+  letter-spacing: .02em;
+  color: rgba(224,240,255,0.92);
+  background: rgba(0,0,0,0.14);
+  border: 0;
+  cursor: pointer;
+}
+.home-favs-mini__btn:active{ transform: scale(0.995); }
+.home-favs-mini__chev{
+  color: rgba(0,240,255,0.9);
+  font-size: 1.15rem;
+  line-height: 1;
+}
+.home-favs-mini__sub{
+  padding: 0 12px 10px;
+  font-size: 0.86rem;
+  color: rgba(224,240,255,0.74);
+}
+.home-favs-mini__chips{
+  display:flex;
+  gap: 8px;
+  padding: 0 12px 12px;
+  flex-wrap: wrap;
+}
+.home-favs-mini__chip{
+  display:inline-flex;
+  align-items:center;
+  gap: 6px;
+  padding: 6px 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(0,240,255,0.14);
+  background: rgba(0,0,0,0.16);
+  font-size: 0.82rem;
+  color: rgba(224,240,255,0.85);
+}
+
+
+
 .home-motto{
   margin-top: 10px;
   text-align: center;
@@ -6834,6 +6886,19 @@ td{font-size:.92rem;}
         <div class="home-mini-wx__name" id="homeWxToTitle">Luxembourg</div>
       </div>
       <div class="home-mini-wx__badge" id="homeWxRisk">⚠️ Risque BER : —</div>
+    </div>
+
+
+    <div class="home-favs-mini" id="homeFavMini" aria-label="Favoris">
+      <button id="homeFavMiniBtn" class="home-favs-mini__btn" type="button">
+        ⭐ Mes bétaillères favorites
+        <span class="home-favs-mini__chev">›</span>
+      </button>
+      <div class="home-favs-mini__sub" id="homeFavMiniSub">Accès rapide à tes trains favoris (matin / soir).</div>
+      <div class="home-favs-mini__chips" id="homeFavMiniChips" aria-hidden="true">
+        <span class="home-favs-mini__chip" id="homeFavMiniAM">Matin —</span>
+        <span class="home-favs-mini__chip" id="homeFavMiniPM">Soir —</span>
+      </div>
     </div>
 
     <div class="home-motto">“Puisse le sort vous être favorable” <span class="home-motto__tag">#BER</span></div>
@@ -20080,20 +20145,40 @@ async function loadAffluenceDate(dateStr){
 
   function computeLevel(data){
     const delayed = Number(data?.counters?.DELAYED ?? 0);
-    // règle volontairement simple (accueil minimal)
+    const ontime  = Number(data?.counters?.ON_TIME ?? 0);
+    const totalRaw = Number(data?.count ?? (delayed + ontime));
+    const total = (Number.isFinite(totalRaw) && totalRaw > 0) ? totalRaw : (delayed + ontime);
+
+    // Accueil minimal mais "juste" : on raisonne surtout en pourcentage,
+    // avec un petit filet de sécurité sur les valeurs absolues.
     if (delayed <= 0) return 'state-green';
-    if (delayed <= 3) return 'state-orange';
-    return 'state-red';
+
+    const ratio = total > 0 ? (delayed / total) : 1;
+
+    // Très perturbé si >= 20% de trains en retard, ou beaucoup de trains touchés.
+    if (ratio >= 0.20 || delayed >= 5) return 'state-red';
+
+    // Perturbé si >= 6% (ex: 1/15), ou 2+ trains.
+    if (ratio >= 0.06 || delayed >= 2) return 'state-orange';
+
+    // Cas léger (ex: 1 train sur beaucoup) : on reste "fluide" mais on l'indique en sous-texte.
+    return 'state-green';
   }
 
   function computeSubtitle(data){
     const delayed = Number(data?.counters?.DELAYED ?? 0);
-    const ontime = Number(data?.counters?.ON_TIME ?? 0);
-    const total = Number(data?.count ?? (delayed + ontime));
+    const ontime  = Number(data?.counters?.ON_TIME ?? 0);
+    const totalRaw = Number(data?.count ?? (delayed + ontime));
+    const total = (Number.isFinite(totalRaw) && totalRaw > 0) ? totalRaw : (delayed + ontime);
     if (!Number.isFinite(total) || total <= 0) return "État de la ligne Nancy • Metz • Luxembourg";
-    if (delayed <= 0) return `${total} trains suivis • aucun retard significatif`;
-    if (delayed <= 3) return `${delayed}/${total} en retard • ça secoue un peu`;
-    return `${delayed}/${total} en retard • mode survie`;
+
+    if (delayed <= 0) return "Trafic fluide • rien à signaler";
+    const ratio = total > 0 ? (delayed / total) : 1;
+
+    // On ne montre PAS "x/y" ici (trop intrusif). On garde du qualitatif.
+    if (ratio < 0.06 && delayed === 1) return "Trafic globalement fluide • un retard isolé";
+    if (ratio < 0.20 && delayed < 5) return "Trafic perturbé • retards en cours";
+    return "Trafic très perturbé • plusieurs retards en cascade";
   }
 
   async function refreshHome(force){
@@ -20138,6 +20223,68 @@ async function loadAffluenceDate(dateStr){
     // refresh mini
     const r = document.getElementById('homeTrafficRefresh');
     if (r) r.addEventListener('click', () => refreshHome(true));
+
+    // Favoris (accès rapide)
+    const favBtn = document.getElementById('homeFavMiniBtn');
+    const favSub = document.getElementById('homeFavMiniSub');
+    const chips = document.getElementById('homeFavMiniChips');
+
+    function isFavWidgetVisible(){
+      const fav = document.getElementById('favTrainsWidget');
+      if (!fav) return false;
+      // style inline display:none quand non connecté
+      if (getComputedStyle(fav).display === 'none') return false;
+      return true;
+    }
+
+    function refreshFavMiniUI(){
+      const visible = isFavWidgetVisible();
+      if (chips) chips.setAttribute('aria-hidden', visible ? 'false' : 'true');
+      if (chips) chips.style.display = visible ? 'flex' : 'none';
+      if (favSub){
+        favSub.textContent = visible
+          ? "Clique pour voir tes favoris (matin / soir)."
+          : "Connecte-toi pour afficher tes favoris (matin / soir).";
+      }
+      // Si on a déjà les numéros affichés dans le widget, on les reflète en chips
+      try{
+        const am = document.getElementById('favTrainAM')?.textContent?.trim();
+        const pm = document.getElementById('favTrainPM')?.textContent?.trim();
+        const chipAM = document.getElementById('homeFavMiniAM');
+        const chipPM = document.getElementById('homeFavMiniPM');
+        if (chipAM) chipAM.textContent = am && am !== '—' ? `Matin ${am}` : "Matin —";
+        if (chipPM) chipPM.textContent = pm && pm !== '—' ? `Soir ${pm}` : "Soir —";
+      }catch(e){}
+    }
+
+    if (favBtn){
+      favBtn.addEventListener('click', ()=>{
+        const fav = document.getElementById('favTrainsWidget');
+        if (isFavWidgetVisible() && fav){
+          fav.scrollIntoView({ behavior:'smooth', block:'start' });
+          // petit offset topbar
+          setTimeout(()=>{ try{ window.scrollBy(0, -72); }catch(e){} }, 50);
+        } else {
+          // ouvre l'auth modal (si dispo)
+          const openAuth = document.getElementById('lbBtnOpenAuth');
+          if (openAuth) openAuth.click();
+          else location.hash = '#lbAuthModal';
+        }
+      });
+    }
+
+    // surveille l'apparition du widget (connexion)
+    try{
+      const favRoot = document.getElementById('favTrainsWidget');
+      if (favRoot){
+        const mo = new MutationObserver(()=>refreshFavMiniUI());
+        mo.observe(favRoot, { attributes:true, attributeFilter:['style','class'] });
+      }
+    }catch(e){}
+
+    // refresh initial (après que le reste du DOM soit prêt)
+    setTimeout(refreshFavMiniUI, 250);
+
 
     // auto-refresh léger
     refreshHome(true);
