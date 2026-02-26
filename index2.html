@@ -1767,16 +1767,27 @@ table[data-snapshotting="true"] tbody tr:nth-child(even) {
     margin-bottom: 6px;
   }
 
-    /* Conteneur scrollable pour le tableau */
+    /* Conteneur scrollable pour le tableau
+   IMPORTANT: on interdit le scroll vertical ici (mobile), la table doit se "caler" en hauteur.
+   Le seul scroll autorisé est horizontal (colonnes trains). */
 .table-scroll {
   overflow-x: auto;
-  overflow-y: auto;
+  overflow-y: hidden;
   -webkit-overflow-scrolling: touch;
   overscroll-behavior: contain;
-  touch-action: pan-x pan-y;
+  touch-action: pan-x;
   margin-top: 8px;
   border: 1px solid #00f0ff33;
   border-radius: 8px;
+}
+
+
+/* Desktop: on autorise le scroll vertical si nécessaire */
+@media (min-width: 769px){
+  .table-scroll{
+    overflow-y: auto;
+    touch-action: pan-x pan-y;
+  }
 }
 
 /* Fix superposition PC/mobile : en-têtes opaques + z-index corrects */
@@ -1790,6 +1801,23 @@ table[data-snapshotting="true"] tbody tr:nth-child(even) {
 #trainInfo table thead th:first-child{
   left: 0;
   z-index: 10;
+}
+
+/* Ajustement dynamique de la hauteur des lignes (JS pose --lb-row-h + --lb-row-font).
+   But: aucune barre de scroll verticale sur mobile, toutes les gares visibles. */
+#trainInfo table{
+  --lb-row-h: 34px;
+  --lb-row-font: 0.86rem;
+}
+#trainInfo table tbody tr{ height: var(--lb-row-h); }
+#trainInfo table tbody td{
+  font-size: var(--lb-row-font);
+  line-height: 1.05;
+  padding-top: 4px;
+  padding-bottom: 4px;
+}
+#trainInfo table thead th{
+  background: rgba(11,15,26,0.995);
 }
 
 #trainInfo table th:first-child,
@@ -8876,7 +8904,11 @@ tableDst.style.setProperty('--lb-train-col-px', colPx + 'px');
 
   const onResize = () => refreshScrollHint();
   window.addEventListener('resize', onResize);
-  host.__scrollHintCleanup = () => window.removeEventListener('resize', onResize);
+  host.__scrollHintCleanup = () => {
+    window.removeEventListener('resize', onResize);
+    window.removeEventListener('resize', _fitOnResize);
+    if (window.visualViewport) window.visualViewport.removeEventListener('resize', _fitOnResize);
+  };
 
     if (snapshotBtn) {
     snapshotBtn.addEventListener('click', () => {
@@ -8886,6 +8918,57 @@ tableDst.style.setProperty('--lb-train-col-px', colPx + 'px');
       window.__openTrainTableSnapshot?.(table, snapshotBtn);
     });
   }
+
+
+// Ajuste la hauteur des lignes pour afficher toutes les gares sans scroll vertical (mobile).
+function fitTableToViewport(){
+  try{
+    const table = tableDst;
+    const rowsCount = dstBody ? dstBody.children.length : 0;
+    if (!table || !rowsCount) return;
+
+    const vh = window.visualViewport ? window.visualViewport.height : window.innerHeight;
+    const topBar = document.querySelector('.header') || document.querySelector('header') || document.getElementById('topBar');
+    const bottomBar = document.querySelector('.bottom-nav') || document.querySelector('.bottomNav') || document.querySelector('nav.bottomNav');
+
+    const topH = topBar ? topBar.getBoundingClientRect().height : 0;
+    const bottomH = bottomBar ? bottomBar.getBoundingClientRect().height : 0;
+
+    const toolbarH = (host.querySelector('.table-toolbar')?.getBoundingClientRect().height || 0)
+                   + (host.querySelector('.scroll-hint')?.getBoundingClientRect().height || 0)
+                   + (host.querySelector('#lastUpdated')?.getBoundingClientRect().height || 0);
+
+    const theadH = (table.querySelector('thead')?.getBoundingClientRect().height || 0);
+
+    // petite marge de sécurité pour éviter le "bounce" PWA / barres navigateur
+    const safety = 10;
+
+    const available = Math.max(140, Math.floor(vh - topH - bottomH - toolbarH - theadH - safety));
+
+    // Row height: clamp (min 18px, max 44px)
+    let rowH = Math.floor(available / rowsCount);
+    rowH = Math.max(18, Math.min(44, rowH));
+
+    // Font size: adapte si on compacte fort
+    let font = 0.86;
+    if (rowH <= 22) font = 0.78;
+    if (rowH <= 19) font = 0.74;
+
+    table.style.setProperty('--lb-row-h', rowH + 'px');
+    table.style.setProperty('--lb-row-font', font + 'rem');
+
+    // force scroller height pile dans la fenêtre (pas de scroll vertical)
+    if (isMobile){
+      const scH = Math.floor(vh - topH - bottomH - toolbarH - safety);
+      scroller.style.height = Math.max(160, scH) + 'px';
+      scroller.style.overflowY = 'hidden';
+    }
+  }catch(e){}
+}
+
+const _fitOnResize = () => fitTableToViewport();
+window.addEventListener('resize', _fitOnResize);
+if (window.visualViewport) window.visualViewport.addEventListener('resize', _fitOnResize);
 
   let idx = 0;
   function pump(){
@@ -8899,6 +8982,7 @@ tableDst.style.setProperty('--lb-train-col-px', colPx + 'px');
       // fin : hooks post-rendu
       updateCompoHeaderColors?.();
       setLastUpdated?.();
+      fitTableToViewport();
       refreshScrollHint();
       if (snapshotBtn) snapshotBtn.disabled = false;
       // GTFS-RT (non bloquant)
