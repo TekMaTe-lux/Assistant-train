@@ -1922,21 +1922,11 @@ table[data-snapshotting="true"] tbody tr:nth-child(even) {
 
 #trainInfo table thead th:first-child{ z-index: 10; }
 
-/* En-tête à 2 lignes: évite la ligne parasite en scroll vertical */
-#trainInfo table thead tr:first-child th{
-  top: 0;
-  z-index: 9;
-}
-#trainInfo table thead tr:nth-child(2) th{
-  top: var(--lb-head-row1-h, 32px);
-  z-index: 8;
-}
-#trainInfo table thead tr:nth-child(2) th:first-child{
-  padding: 0 !important;
-  border: none !important;
-  background: transparent !important;
-  box-shadow: none !important;
-}
+#trainInfo table thead th:first-child{ z-index: 12; }
+#trainInfo table thead th:not(:first-child){ z-index: 7; }
+#trainInfo table thead th.status-head{ padding-top: 4px !important; padding-bottom: 4px !important; }
+#trainInfo table thead th .train-num{ display:block; line-height:1.05; }
+#trainInfo table thead th .train-state{ display:block; margin-top:2px; line-height:1; font-size:.86em; }
 
 .table-toolbar{
   display:flex;
@@ -10317,10 +10307,6 @@ function adjustTrainTableRowHeights(){
 
   const thead = table.querySelector('thead');
   const headerH = thead ? Math.ceil(thead.getBoundingClientRect().height) : 0;
-  const headRow1 = table.querySelector('thead tr:first-child');
-  const headRow1H = headRow1 ? Math.ceil(headRow1.getBoundingClientRect().height) : 32;
-  host.style.setProperty('--lb-head-row1-h', headRow1H + 'px');
-
   const avail = Math.max(80, scroller.clientHeight - headerH - 6); // 6px marge
   let rowH = Math.floor(avail / n);
 
@@ -14496,17 +14482,15 @@ const stopHasSchedule = (result, stopName) => {
     const favNumbers = getFavoriteNumbers();
     let html = '<table><thead><tr><th>Gare</th>';
     numbers.forEach(num => {
-  const composition = (typeof compoData !== 'undefined' && compoData) ? compoData[num] : '';
-      const compClass   = compoClassFromValue(composition); // ← force blanc si inconnu
+      const composition = (typeof compoData !== 'undefined' && compoData) ? compoData[num] : '';
+      const compClass   = compoClassFromValue(composition);
       const result = results[num];
       const isCfl = num.startsWith('CFL-');
       const cflLabel = isCfl
-        ? (result?.displayLabel
-            || TRAIN_LABEL_REGISTRY.get(num)
-            || formatTrainDisplayLabel(num, { result }))
+        ? (result?.displayLabel || TRAIN_LABEL_REGISTRY.get(num) || formatTrainDisplayLabel(num, { result }))
         : null;
       const headerLabel = isCfl ? (cflLabel || num) : num;
-      const classes = [`train-header`, compClass];
+      const classes = ['train-header', compClass, 'status-head'];
       if (isCfl) classes.push('cfl-train');
       const fallbackAttr = (!isCfl && result?.gtfsFallback) ? ' data-gtfs-fallback="1"' : '';
 	  const isFavorite = favNumbers.has(extractTrainNumber(num));
@@ -14514,28 +14498,21 @@ const stopHasSchedule = (result, stopName) => {
       const safeNumber = escapeHtml(num);
       const safeLabel = escapeHtml(headerLabel);
       TRAIN_LABEL_REGISTRY.set(num, headerLabel);
-      html += `<th class="${classes.join(' ')}" data-train-number="${safeNumber}" data-train-label="${safeLabel}"${fallbackAttr}${favAttr}>${safeLabel}</th>`;
-    });
-    html += '</tr><tr><th></th>';
-
-    /* Ligne d’icônes (statut) */
-    numbers.forEach(num => {
-      const result = results[num];
+     
       let icon = '', title = '';
       if (!result || result.error) {
         icon = '❌'; title = result?.error || 'Erreur';
       } else if (result.gtfsFallback) {
-        icon = 'ℹ️';
-        title = result.fallbackDetails?.tooltip || 'Horaires théoriques (GTFS)';  
+        icon = 'ℹ️'; title = result.fallbackDetails?.tooltip || 'Horaires théoriques (GTFS)';
       } else {
         const disruptions = result.disruptions || [];
         const impacted = result.impacted || {};
-        const hasDelay = Object.values(impacted).some(s => {
-          const amended = s.amended_departure_time || s.amended_arrival_time;
-          const baseTime = s.base_departure_time || s.base_arrival_time;
+        const hasDelay = Object.values(impacted).some(st => {
+          const amended = st.amended_departure_time || st.amended_arrival_time;
+          const baseTime = st.base_departure_time || st.base_arrival_time;
           const hasAmendedDelay = amended && baseTime && dl(baseTime, amended) > 0;
-          const delayMinutes = (typeof s.delay_minutes !== 'undefined' && s.delay_minutes !== null)
-            ? Number(s.delay_minutes)
+          const delayMinutes = (typeof st.delay_minutes !== 'undefined' && st.delay_minutes !== null)
+            ? Number(st.delay_minutes)
             : null;
           const hasDelayFlag = Number.isFinite(delayMinutes) && delayMinutes > 0;
           return hasAmendedDelay || hasDelayFlag;
@@ -14550,18 +14527,18 @@ const stopHasSchedule = (result, stopName) => {
 
         if (isFull) {
           icon = '❌'; title = 'Train supprimé';
-          if (result.disruptionCauses?.length) title += ' : ' + result.disruptionCauses.join(', ');
         } else if (isPartial || isPartialEnd) {
           icon = '⚠️'; title = 'Suppression partielle';
-          if (result.disruptionCauses?.length) title += ' : ' + result.disruptionCauses.join(', ');
         } else if (hasDelay) {
           icon = '⏰'; title = 'Retard';
-          if (result.disruptionCauses?.length) title += ' : ' + result.disruptionCauses.join(', ');
         } else {
           icon = ''; title = 'Sans perturbation';
         }
+		if (result.disruptionCauses?.length && title !== 'Sans perturbation') {
+          title += ' : ' + result.disruptionCauses.join(', ');
+        }
       }
-      html += `<th><span class="icon" title="${title}">${icon}</span></th>`;
+      html += `<th class="${classes.join(' ')}" data-train-number="${safeNumber}" data-train-label="${safeLabel}"${fallbackAttr}${favAttr}><span class="train-num">${safeLabel}</span><span class="train-state icon" title="${title}">${icon}</span></th>`;
     });
 
     html += '</tr></thead><tbody>';
