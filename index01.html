@@ -20297,9 +20297,9 @@ if (statsEl){
 <script>
 (function(){
   // Retards: plus fréquent, mais application in-place (faible coût)
-  const RETARDS_MS = 30 * 1000; // 30s
+  const RETARDS_MS = 20 * 1000; // 20s (quasi instantané)
   // Voies: moins fréquent + onlyIfChanged (évite de reparser si identique)
-  const VOIES_MS   = 60 * 1000; // 60s
+  const VOIES_MS   = 25 * 1000; // 25s (mise à jour fluide des voies)
 
   let tRetards = null;
   let tVoies = null;
@@ -20405,13 +20405,19 @@ if (statsEl){
     }
   }
 
+  function applyLiveOverlaysNow(){
+    try { if (typeof tryApplyGtfsToCurrentTable === 'function') tryApplyGtfsToCurrentTable(); } catch(_){}
+    try { updateVoiesInTable(); } catch(_){}
+  }
+
   async function tickRetards(){
     try {
       if (!canLive()) return;
       if (typeof loadGtfsRetards === 'function') {
-        // Ton code applique déjà les retards au tableau courant si présent.
-        await loadGtfsRetards({ forceFresh: false });
+        // Force un fetch live à intervalle court, sans attendre un refresh manuel.
+        await loadGtfsRetards({ forceFresh: true, useCachedFirst: true });
       }
+	  applyLiveOverlaysNow();
     } catch(e){}
   }
 
@@ -20420,18 +20426,22 @@ if (statsEl){
       if (!canLive()) return;
       if (typeof loadVoiesByTrain !== 'function') return;
 
+	  const prevSig = window.__voiesSig || null;
       // Recharge léger: onlyIfChanged -> si identique, pas de rebuild Map
-      await loadVoiesByTrain({ forceFresh: false, onlyIfChanged: true });
-      const changed = !!window.__voiesLastChanged;
+      await loadVoiesByTrain({ forceFresh: true, onlyIfChanged: true });
+      if (typeof loadCflVoiesByTrain === 'function') {
+        await loadCflVoiesByTrain({ forceFresh: true });
+      }
+      const changed = !!window.__voiesLastChanged || (!!window.__voiesSig && window.__voiesSig !== prevSig);
 
-      // Si rien n'a changé, on ne touche pas au DOM
-      if (!changed) return;
-
-      // Si un tableau est affiché, mise à jour in-place des voies.
+      // Si un tableau est affiché, mise à jour in-place des voies (même sans changement déclaré,
+      // utile après une génération de tableau pour appliquer les dernières voies en mémoire).
       if (!hasTrainTable()) return;
       if (window.__mainTableBusy) return;
 
-      updateVoiesInTable();
+      if (changed || document.querySelector('#trainInfo table td[data-base-time]')) {
+        updateVoiesInTable();
+      }
 
       // Met aussi à jour les favoris (ils affichent des voies)
       if (typeof window.updateFavoriteWidgetFromPrefs === 'function') {
@@ -20450,8 +20460,21 @@ if (statsEl){
     if (tVoies){   clearInterval(tVoies);   tVoies   = null; }
   }
 
+  const tableHost = document.getElementById('trainInfo');
+  let mo = null;
+
+  function armTableObserver(){
+    if (!tableHost || mo) return;
+    mo = new MutationObserver(() => {
+      // Dès qu'un tableau est (re)injecté, on applique instantanément les dernières voies/retards.
+      applyLiveOverlaysNow();
+    });
+    mo.observe(tableHost, { childList: true, subtree: true });
+  }
+
   window.addEventListener('load', () => {
     start();
+	armTableObserver();
     // 1ère synchro immédiate
     tickRetards().catch(()=>{});
     tickVoies().catch(()=>{});
