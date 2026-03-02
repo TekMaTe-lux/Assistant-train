@@ -1725,7 +1725,7 @@ table[data-snapshotting="true"] tbody tr:nth-child(even) {
     overflow-x: auto;
     overflow-y: hidden;
     -webkit-overflow-scrolling: touch; /* scroll fluide iOS */
-    height: calc(100dvh - var(--top-bar-height, 72px) - var(--bottom-bar-height, 78px) - 18px);
+    height: calc(100dvh - var(--top-bar-height, 72px) - var(--bottom-bar-height, 78px) - 10px);
     margin-top: 0;
   }
   #trainInfo table{
@@ -1755,7 +1755,7 @@ table[data-snapshotting="true"] tbody tr:nth-child(even) {
     min-width: var(--lb-first-col-px, 170px);
     max-width: var(--lb-first-col-px, 170px);
 
-    font-size: 0.66rem;
+    font-size: 0.63rem;
     padding: 2px 4px;
 
     /* Mode compact: une seule ligne, pas de retour pour éviter d'agrandir les lignes */
@@ -7968,6 +7968,12 @@ html, body{
   </div>
 </div>
 
+<div id="tableauViewNav" role="tablist" aria-label="Vues du tableau" hidden>
+  <button type="button" class="tableau-view-btn" data-tableau-view="perturbations">Perturbations</button>
+  <button type="button" class="tableau-view-btn" data-tableau-view="global">Voir global</button>
+  <button type="button" class="tableau-view-btn" data-tableau-view="search">Nouvelle recherche</button>
+</div>
+
 <!-- BLOC 1 : Perturbations + Informations -->
 <div id="disruptionsSummary" class="command-console" style="display:none;">
   <div class="disruption-header">Perturbations en cours</div>
@@ -8604,8 +8610,8 @@ html, body{
 /* ===== PATCH smartphone 2026-03-02: tableau full height + console plus pro ===== */
 @media (max-width: 768px){
   #trainInfo .table-scroll{
-    height: calc(100dvh - var(--top-bar-height, 72px) - var(--bottom-bar-height, 84px) - 18px) !important;
-    max-height: calc(100dvh - var(--top-bar-height, 72px) - var(--bottom-bar-height, 84px) - 18px) !important;
+    height: calc(100dvh - var(--top-bar-height, 72px) - var(--bottom-bar-height, 84px) - 10px) !important;
+    max-height: calc(100dvh - var(--top-bar-height, 72px) - var(--bottom-bar-height, 84px) - 10px) !important;
     overflow-y: hidden !important;
   }
 
@@ -8632,6 +8638,38 @@ html, body{
     border-radius: 14px;
     padding: 10px 12px;
   }
+}
+
+/* Barre de vue Tableau (PWA-friendly) */
+#tableauViewNav{
+  display:none;
+  position:sticky;
+  top: calc(var(--top-bar-height, 72px) + 6px);
+  z-index: 1150;
+  margin: 8px 0 10px;
+  padding: 8px;
+  border-radius: 14px;
+  border: 1px solid rgba(0,240,255,0.28);
+  background: linear-gradient(145deg, rgba(8,20,32,0.92), rgba(6,14,24,0.9));
+  box-shadow: 0 10px 24px rgba(0,0,0,0.35);
+  gap: 8px;
+}
+#tableauViewNav .tableau-view-btn{
+  flex:1 1 0;
+  min-width: 0;
+  margin:0 !important;
+  padding: 8px 10px !important;
+  font-size: .72rem !important;
+  letter-spacing: .03em;
+  border-radius: 10px;
+}
+#tableauViewNav .tableau-view-btn.is-active{
+  background: #00f0ff !important;
+  color:#00111a !important;
+  box-shadow: 0 0 14px rgba(0,240,255,.45), inset 0 0 14px rgba(0,240,255,.35) !important;
+}
+@media (max-width: 768px){
+  #tableauViewNav{ display:flex; }
 }
 
 </style>
@@ -10257,7 +10295,7 @@ function adjustTrainTableRowHeights(){
 
   // bornes: priorité absolue à voir tout le trajet sans scroll vertical interne
   // (même avec beaucoup de gares), quitte à compacter fortement.
-  rowH = Math.max(8, Math.min(54, rowH));
+  rowH = Math.max(7, Math.min(54, rowH));
 
   // padding ultra-compact pour les gros tableaux
   const padY = Math.max(0, Math.min(8, Math.floor((rowH - 12) / 2)));
@@ -21435,6 +21473,98 @@ async function loadAffluenceDate(dateStr){
   };
   window.lbOpenAffluenceTrain = lbOpenAffluenceTrain;
 })();
+
+(function(){
+  const nav = document.getElementById('tableauViewNav');
+  const search = document.getElementById('search');
+  const disruptions = document.getElementById('disruptionsSummary');
+  const trainInfo = document.getElementById('trainInfo');
+  if (!nav || !search || !disruptions || !trainInfo) return;
+
+  const buttons = Array.from(nav.querySelectorAll('[data-tableau-view]'));
+  let currentView = 'global';
+
+  const hasGeneratedTable = () => !!trainInfo.querySelector('table');
+  const onTableTab = () => (location.hash || '#home') === '#search';
+
+  function activateButton(view){
+    buttons.forEach(btn => btn.classList.toggle('is-active', btn.dataset.tableauView === view));
+  }
+
+  function applyView(view, opts = {}){
+    const hasTable = hasGeneratedTable();
+    if (!hasTable){
+      search.style.display = '';
+      disruptions.style.display = 'none';
+      trainInfo.style.display = '';
+      nav.hidden = true;
+      return;
+    }
+
+    currentView = view;
+    activateButton(view);
+    search.style.display = (view === 'search') ? '' : 'none';
+    disruptions.style.display = (view === 'perturbations') ? 'flex' : 'none';
+    trainInfo.style.display = (view === 'global') ? '' : 'none';
+
+    if (opts.scroll !== false){
+      const target = view === 'search' ? search : (view === 'perturbations' ? disruptions : trainInfo);
+      requestAnimationFrame(() => target.scrollIntoView({ behavior: 'smooth', block: 'start' }));
+    }
+  }
+
+  function refreshNav(opts = {}){
+    const hasTable = hasGeneratedTable();
+    const showNav = hasTable && onTableTab();
+    nav.hidden = !showNav;
+    if (!showNav){
+      if (onTableTab()){
+        search.style.display = '';
+        if (!opts.keepCurrentPanels){
+          disruptions.style.display = disruptions.style.display || 'none';
+          trainInfo.style.display = '';
+        }
+      }
+      return;
+    }
+    applyView(currentView || 'global', { scroll: false });
+  }
+
+  buttons.forEach(btn => {
+    btn.addEventListener('click', () => applyView(btn.dataset.tableauView));
+  });
+
+  window.addEventListener('hashchange', () => refreshNav({ keepCurrentPanels: true }));
+
+  const tableNavLink = document.querySelector('.bottom-nav__item[href="#search"]');
+  if (tableNavLink){
+    tableNavLink.addEventListener('click', (e) => {
+      if (!hasGeneratedTable()) return;
+      e.preventDefault();
+      if ((location.hash || '') !== '#search') location.hash = 'search';
+      currentView = 'global';
+      refreshNav();
+      applyView('global');
+    });
+  }
+
+  const mo = new MutationObserver(() => {
+    if (hasGeneratedTable()){
+      currentView = 'global';
+      if (onTableTab()){
+        refreshNav();
+        applyView('global');
+      }
+    } else {
+      refreshNav();
+    }
+  });
+  mo.observe(trainInfo, { childList: true, subtree: true });
+
+  document.addEventListener('DOMContentLoaded', () => refreshNav());
+  refreshNav();
+})();
+
 </script>
 
 </body>
