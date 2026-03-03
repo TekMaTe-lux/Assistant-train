@@ -536,6 +536,16 @@ body {
   border-color: rgba(0, 240, 255, 0.85);
 }
 
+.traffic-split{ display:grid; gap:10px; }
+.traffic-split-row{ display:flex; align-items:center; justify-content:space-between; gap:10px; padding:10px 12px; border:1px solid rgba(0,240,255,.18); border-radius:12px; background:rgba(0,0,0,.18); }
+.traffic-split-line{ font-weight:700; color:#dffbff; }
+.traffic-pill{ display:inline-flex; align-items:center; border-radius:999px; padding:5px 10px; font-size:.78rem; font-weight:800; border:1px solid transparent; }
+.traffic-pill--green{ background:rgba(36,194,90,.16); border-color:rgba(36,194,90,.45); color:#7df2a4; }
+.traffic-pill--yellow{ background:rgba(255,209,102,.14); border-color:rgba(255,209,102,.42); color:#ffe08f; }
+.traffic-pill--orange{ background:rgba(255,138,26,.14); border-color:rgba(255,138,26,.45); color:#ffba74; }
+.traffic-pill--red{ background:rgba(255,49,49,.14); border-color:rgba(255,49,49,.45); color:#ff8d8d; }
+.traffic-pill--loading{ background:rgba(0,240,255,.12); border-color:rgba(0,240,255,.35); color:#8ff9ff; }
+
 .quick-links{
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
@@ -7646,13 +7656,16 @@ html, body{
     <div class="home-welcome-line">Bienvenue 🐮 dans votre bétaillère Nancy–Metz–Lux 👋</div>
 
     <!-- État du trafic (accueil) -->
-    <article class="home-card home-traffic-card traffic-level--loading" aria-label="État du trafic">
-      <div class="traffic-inner">
-<div class="traffic-dot" aria-hidden="true"></div>
-        <div class="traffic-text">
-          <div class="traffic-title" id="homeTrafficTitle">Info Trafic</div>
-          <div class="traffic-sub" id="homeTrafficLineNorth">Metz - Luxembourg : Chargement…</div>
-          <div class="traffic-sub" id="homeTrafficLineSouth">Nancy - Metz : Chargement…</div>
+    <article class="home-card" aria-label="Info trafic">
+      <h2>Info trafic</h2>
+      <div class="traffic-split" id="homeTrafficRows">
+        <div class="traffic-split-row">
+          <span class="traffic-split-line" id="homeTrafficLineNorth">Metz - Luxembourg</span>
+          <span class="traffic-pill traffic-pill--loading" id="homeTrafficBadgeNorth">Chargement…</span>
+        </div>
+        <div class="traffic-split-row">
+          <span class="traffic-split-line" id="homeTrafficLineSouth">Nancy - Metz</span>
+          <span class="traffic-pill traffic-pill--loading" id="homeTrafficBadgeSouth">Chargement…</span>
         </div>
       </div>
     </article>
@@ -20793,70 +20806,81 @@ async function updateHomeWeather(fromCfg, toCfg){
    Affichage: uniquement un état (FLUIDE / DENSE / BLOQUÉ) + une phrase courte.
 */
 function __lbPickTrafficLevel({ maxDelayMin, delayed, total }){
-  const d = Math.max(0, Number(delayed||0));
-  const t = Math.max(0, Number(total||0));
-  const mx = Math.max(0, Number(maxDelayMin||0));
-  if (!t) return { level:'loading', label:'Données indisponibles' };
-  if (mx <= 0) return { level:'green', label:'Trafic fluide' };
-  if (mx <= 5 && d <= 1) return { level:'yellow', label:'Trafic ralenti' };
+  const d = Math.max(0, Number(delayed || 0));
+  const t = Math.max(0, Number(total || 0));
+  const mx = Math.max(0, Number(maxDelayMin || 0));
+  if (!t) return { level: 'loading', label: 'Données indisponibles' };
+  if (mx <= 0) return { level: 'green', label: 'Trafic fluide' };
+  if (mx <= 5 && d <= 1) return { level: 'yellow', label: 'Trafic ralenti' };
   const pct = t ? (d / t) : 0;
-  if (mx >= 20 || pct >= 0.25 || d >= 4) return { level:'red', label:'Trafic très perturbé' };
-  return { level:'orange', label:'Trafic perturbé' };
+  if (mx >= 20 || pct >= 0.25 || d >= 4) return { level: 'red', label: 'Trafic très perturbé' };
+  return { level: 'orange', label: 'Trafic perturbé' };
 }
 
 function __lbBuildTrafficSegmentStats(raw, segmentStationNames){
   const trainsObj = raw?.trains || raw?.normalized?.trains || raw?.['sncf-nml']?.trains || null;
-  if (!trainsObj || typeof trainsObj !== 'object') return { maxDelayMin:0, delayed:0, total:0 };
+  if (!trainsObj || typeof trainsObj !== 'object') return { maxDelayMin: 0, delayed: 0, total: 0 };
 
   const norm = (x) => {
     try { return normalizeStationName ? normalizeStationName(x || '') : String(x || '').toLowerCase().trim(); }
     catch(_) { return String(x || '').toLowerCase().trim(); }
   };
+	
   const stationSet = new Set((segmentStationNames || []).map(norm).filter(Boolean));
+  let total = 0;
+  let delayed = 0;
+  let maxDelayMin = 0;
 
-  let total = 0, delayed = 0, maxDelayMin = 0;
-  for (const tr of Object.values(trainsObj)){
+  for (const tr of Object.values(trainsObj)) {
     const stops = tr?.stops || {};
     let touchesSegment = false;
     let trSegMax = 0;
-    for (const [stopName, delayVal] of Object.entries(stops)){
+	  
+    for (const [stopName, delayVal] of Object.entries(stops)) {
       const stopNorm = norm(stopName);
       if (!stationSet.has(stopNorm)) continue;
       touchesSegment = true;
       const n = Number(delayVal);
       if (Number.isFinite(n) && n > trSegMax) trSegMax = n;
     }
+	  
     if (!touchesSegment) continue;
     total += 1;
     if (trSegMax > 0) delayed += 1;
     if (trSegMax > maxDelayMin) maxDelayMin = trSegMax;
   }
+	
   return { maxDelayMin, delayed, total };
 }
 
-function __lbUpdateHomeTrafficUI(payload){
-  const card = document.querySelector('.home-traffic-card');
-  const titleEl = document.getElementById('homeTrafficTitle');
-  const northEl = document.getElementById('homeTrafficLineNorth');
-  const southEl = document.getElementById('homeTrafficLineSouth');
-  if (!card || !titleEl || !northEl || !southEl) return;
+function __lbSetTrafficBadge(el, status){
+  if (!el) return;
+  el.classList.remove('traffic-pill--loading', 'traffic-pill--green', 'traffic-pill--yellow', 'traffic-pill--orange', 'traffic-pill--red');
+  el.classList.add(`traffic-pill--${status.level || 'loading'}`);
+  el.textContent = status.label || 'Données indisponibles';
+}
 
-  card.classList.remove('traffic-level--loading','traffic-level--green','traffic-level--yellow','traffic-level--orange','traffic-level--red');
+function __lbUpdateHomeTrafficUI(payload){
+  const lineNorth = document.getElementById('homeTrafficLineNorth');
+  const lineSouth = document.getElementById('homeTrafficLineSouth');
+  const badgeNorth = document.getElementById('homeTrafficBadgeNorth');
+  const badgeSouth = document.getElementById('homeTrafficBadgeSouth');
+  if (!lineNorth || !lineSouth || !badgeNorth || !badgeSouth) return;
+
+  lineNorth.textContent = 'Metz - Luxembourg';
+  lineSouth.textContent = 'Nancy - Metz';
 
   const raw = payload?.rawByDataset?.['sncf-nml'] || payload?.rawByDataset?.sncfNml || payload?.raw || payload;
-  const segNorth = __lbBuildTrafficSegmentStats(raw, ['Metz','Hagondange','Uckange','Thionville','Hettange-Grande','Bettembourg','Luxembourg']);
-  const segSouth = __lbBuildTrafficSegmentStats(raw, ['Nancy','Frouard','Pompey','Belleville','Dieulouard','Pont-à-Mousson','Vandières','Pagny-sur-Moselle','Novéant-sur-Moselle','Ancy-sur-Moselle','Ars-sur-Moselle','Metz']);
+  // Metz est volontairement EXCLU des 2 segments pour éviter le chevauchement
+  // des retards sur la gare frontière quand un train traverse les 2 zones.
+  const segNorth = __lbBuildTrafficSegmentStats(raw, ['Hagondange', 'Uckange', 'Thionville', 'Hettange-Grande', 'Bettembourg', 'Luxembourg']);
+  const segSouth = __lbBuildTrafficSegmentStats(raw, ['Nancy', 'Frouard', 'Pompey', 'Belleville', 'Dieulouard', 'Pont-à-Mousson', 'Vandières', 'Pagny-sur-Moselle', 'Novéant-sur-Moselle', 'Ancy-sur-Moselle', 'Ars-sur-Moselle']);
 
   const n = __lbPickTrafficLevel(segNorth);
   const s = __lbPickTrafficLevel(segSouth);
 
-  const levels = ['loading','green','yellow','orange','red'];
-  const worst = [n.level, s.level].sort((a,b)=>levels.indexOf(b)-levels.indexOf(a))[0] || 'loading';
-  card.classList.add(`traffic-level--${worst}`);
-
-  titleEl.textContent = 'Info Trafic';
-  northEl.textContent = `Metz - Luxembourg : ${n.label}`;
-  southEl.textContent = `Nancy - Metz : ${s.label}`;
+  __lbSetTrafficBadge(badgeNorth, n);
+  __lbSetTrafficBadge(badgeSouth, s);
 }
 
 async function updateHomeTrafficStatus(){
@@ -20878,14 +20902,14 @@ async function updateHomeTrafficStatus(){
     const result = await fetchGtfsDataset(dataset, { forceFresh: true });
     __lbUpdateHomeTrafficUI({ raw: result?.raw, normalized: result?.normalized });
   }catch(e){
-    const titleEl = document.getElementById('homeTrafficTitle');
-    const northEl = document.getElementById('homeTrafficLineNorth');
-    const southEl = document.getElementById('homeTrafficLineSouth');
-    const card = document.querySelector('.home-traffic-card');
-    if (card) card.classList.add('traffic-level--loading');
-    if (titleEl) titleEl.textContent = 'Info Trafic';
-    if (northEl) northEl.textContent = 'Metz - Luxembourg : Données indisponibles';
-    if (southEl) southEl.textContent = 'Nancy - Metz : Données indisponibles';
+    const lineNorth = document.getElementById('homeTrafficLineNorth');
+    const lineSouth = document.getElementById('homeTrafficLineSouth');
+    const badgeNorth = document.getElementById('homeTrafficBadgeNorth');
+    const badgeSouth = document.getElementById('homeTrafficBadgeSouth');
+    if (lineNorth) lineNorth.textContent = 'Metz - Luxembourg';
+    if (lineSouth) lineSouth.textContent = 'Nancy - Metz';
+    __lbSetTrafficBadge(badgeNorth, { level:'loading', label:'Données indisponibles' });
+    __lbSetTrafficBadge(badgeSouth, { level:'loading', label:'Données indisponibles' });
   }
 }
 
