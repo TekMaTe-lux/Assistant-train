@@ -1650,6 +1650,15 @@ table[data-snapshotting="true"] tbody tr:nth-child(even) {
 }
 .train-detail-stop{ display:flex; justify-content:space-between; gap:10px; padding:8px 10px; border-bottom:1px solid rgba(0,240,255,.08); }
 .train-detail-stop:last-child{ border-bottom:none; }
+.train-detail-stop .left{ display:flex; align-items:center; gap:10px; min-width:0; }
+.train-detail-stop .time{ min-width:50px; color:#8ff9ff; font-weight:700; font-variant-numeric:tabular-nums; }
+.train-detail-stop .name{ overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.train-detail-stop .right{ display:flex; align-items:center; gap:8px; }
+#trainDetailPanel .aff-chart{ padding:8px 10px; }
+#trainDetailPanel #trainDetailAffluenceChart{ height:92px !important; max-height:92px; }
+@media (max-width: 900px){
+  #trainDetailPanel #trainDetailAffluenceChart{ height:130px !important; max-height:130px; }
+}	
 .train-detail-actions{ margin-top:10px; display:flex; gap:8px; flex-wrap:wrap; }
 .train-detail-btn{
   display:inline-flex;
@@ -8255,7 +8264,6 @@ html, body{
   <div class="train-detail-top">
     <div>
       <h3 id="trainDetailTitle">Train —</h3>
-      <div id="trainDetailSubtitle" style="opacity:.82; font-size:.9rem">Détails internes</div>
     </div>
     <button id="trainDetailClose" class="train-detail-close" type="button" aria-label="Fermer le détail">✕</button>
   </div>
@@ -8272,7 +8280,7 @@ html, body{
   </div>
   <div class="train-detail-card" style="margin-top:10px">
     <div class="k">Affluence par gare</div>
-    <div class="aff-chart" style="margin-top:8px"><canvas id="trainDetailAffluenceChart" height="140"></canvas></div>
+    <div class="aff-chart" style="margin-top:8px"><canvas id="trainDetailAffluenceChart" height="92"></canvas></div>
   </div>
   <div class="train-detail-route" id="trainDetailStops"></div>
   <div class="train-detail-actions">
@@ -22213,7 +22221,6 @@ async function loadAffluenceDate(dateStr){
     const ymd = selectedDate.replace(/-/g, '');
 
     const titleEl = document.getElementById('trainDetailTitle');
-    const subtitleEl = document.getElementById('trainDetailSubtitle');
     const nextEl = document.getElementById('trainDetailNext');
     const relEl = document.getElementById('trainDetailReliability');
     const relDetailsEl = document.getElementById('trainDetailReliabilityDetails');
@@ -22224,7 +22231,6 @@ async function loadAffluenceDate(dateStr){
 
     panel.hidden = false;
     titleEl.textContent = `Train ${trainNumber}`;
-    subtitleEl.textContent = `Vue interne avancée • ${fmtDateFr(selectedDate)}`;
     nextEl.textContent = 'Chargement…';
     relEl.textContent = 'Chargement…';
     relDetailsEl.textContent = 'Chargement…';
@@ -22250,17 +22256,19 @@ async function loadAffluenceDate(dateStr){
       const affInfoInline = (typeof window.getAffluenceTrainInfo === 'function') ? window.getAffluenceTrainInfo(String(trainNumber)) : null;
       const affStops = Array.isArray(affInfoInline?.stops) ? affInfoInline.stops : [];
       const normStation = (nm) => { try{ return normalizeStationName ? normalizeStationName(nm||'') : String(nm||'').toLowerCase(); }catch(_){ return String(nm||'').toLowerCase(); } };
-      stopsEl.innerHTML = stopTimes.map((st, idx) => {
+      stopsEl.innerHTML = stopTimes.map((st) => {
         const arr = (st?.arrival_time || '').replace(/(\d{2})(\d{2}).*/, '$1:$2');
         const dep = (st?.departure_time || '').replace(/(\d{2})(\d{2}).*/, '$1:$2');
         const stopNameRaw = st?.stop_point?.name || '—';
         const stopName = esc(stopNameRaw);
         const t = dep || arr || '—';
-        const side = idx === 0 ? 'Départ' : (idx === stopTimes.length-1 ? 'Arrivée' : 'Passage');
         const hit = affStops.find(a => normStation(a?.station || a?.name || '') === normStation(stopNameRaw));
         const p = Number(hit?.globalPct ?? Math.round((Number(hit?.globalOcc)||0)*100));
-        const pct = Number.isFinite(p) ? `${Math.round(p)}%` : '—';
-        return `<div class="train-detail-stop"><span>${stopName}</span><span>${pct} • ${t} • ${side}</span></div>`;
+        const pctVal = Number.isFinite(p) ? Math.round(p) : null;
+        const pctTxt = Number.isFinite(pctVal) ? `${pctVal}%` : '—';
+        const pctColor = Number.isFinite(pctVal) ? affColor(pctVal) : '#9aa7b6';
+        const schema = (hit && typeof window.wagonSchemaHtml === 'function') ? window.wagonSchemaHtml(hit, affInfoInline?.trainType) : '';
+        return `<div class="train-detail-stop"><span class="left"><span class="time">${t}</span><span class="name">${stopName}</span></span><span class="right"><span style="color:${pctColor};font-weight:800">${pctTxt}</span>${schema}</span></div>`;
       }).join('');
     } else {
       pathEl.textContent = 'Parcours indisponible pour cette date';
@@ -22270,13 +22278,13 @@ async function loadAffluenceDate(dateStr){
 
     const rel = await getReliabilityData(trainNumber);
     if (rel){
-      relEl.textContent = `Fiabilité sur un mois : ${rel.pct}%`;
+      relEl.textContent = `${rel.pct}%`;
       relDetailsEl.innerHTML = `
         <div>✅ ${rel.onTime} à l'heure ⏰ ${rel.delayed} retard ❌ ${rel.canceled} supprimé 🟠 ${rel.partial} partiel</div>
         <div style="margin-top:4px">Retard moyen : ${rel.avgDelay} min</div>
         <div>Retard max : ${rel.maxDelay} min</div>`;
     } else {
-      relEl.textContent = 'Fiabilité sur un mois : —';
+      relEl.textContent = '—';
       relDetailsEl.textContent = 'Données indisponibles.';
     }
 
