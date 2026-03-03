@@ -7650,10 +7650,9 @@ html, body{
       <div class="traffic-inner">
 <div class="traffic-dot" aria-hidden="true"></div>
         <div class="traffic-text">
-          <div class="traffic-title" id="homeTrafficTitle">TRAFIC —</div>
-          <div class="traffic-sub" id="homeTrafficSub">Chargement…</div>
-          <div class="traffic-quote">“Puisse le sort vous être favorable”</div>
-          <div class="traffic-hash">#BER</div>
+          <div class="traffic-title" id="homeTrafficTitle">Info Trafic</div>
+          <div class="traffic-sub" id="homeTrafficLineNorth">Metz - Luxembourg : Chargement…</div>
+          <div class="traffic-sub" id="homeTrafficLineSouth">Nancy - Metz : Chargement…</div>
         </div>
       </div>
     </article>
@@ -8291,20 +8290,6 @@ html, body{
 
 <div id="refreshContainer" style="display:none; text-align:center; margin:8px 0 6px;">
   <button id="refreshButton" class="refresh-btn">Actualiser les données</button>
-</div>
-
-<div class="home-card">
-  <h2>Accès rapides</h2>
-  <div class="quick-links">
-    <a class="quick-card" id="btnCarte" href="#carte"><span>🗺️</span>Carte</a>
-    <button class="quick-card" id="btnBingo" type="button"><span>🎲</span>Bingo</button>
-    <button class="quick-card" id="btnJeu" type="button"><span>🎮</span>Jeu</button>
-    <a class="quick-card" href="#multimedia"><span>🎬</span>
-    <span class="bottom-nav__label">Multimédia</span>
-  </a>
-    <a class="quick-card" href="#statsConsole"><span>📊</span>Stats</a>
-	<a class="quick-card" href="#affluence"><span>🚆</span>Affluence</a>
-  </div>
 </div>
 
 <section id="carte" class="media-section" aria-label="Carte en direct">
@@ -16485,9 +16470,12 @@ window.addEventListener('load', () => {
 </script>
   <script>
 // Gestion du bouton Jeu
-document.getElementById("btnJeu").addEventListener("click", function() {
-  window.location.href = "https://tekmate-lux.github.io/Assistant-train/jeuBETA.html";
-});
+const btnJeu = document.getElementById("btnJeu");
+if (btnJeu){
+  btnJeu.addEventListener("click", function() {
+    window.location.href = "https://tekmate-lux.github.io/Assistant-train/jeuBETA.html";
+  });
+}
 </script>
 <script>
  // Gestion du bouton Carte
@@ -20808,94 +20796,67 @@ function __lbPickTrafficLevel({ maxDelayMin, delayed, total }){
   const d = Math.max(0, Number(delayed||0));
   const t = Math.max(0, Number(total||0));
   const mx = Math.max(0, Number(maxDelayMin||0));
-  if (!t) return { level:'loading', title:'TRAFIC —', sub:'Données indisponibles' };
-
-  // Échelles ferroviaires (simple, lisible)
-  // Vert   : aucun retard significatif
-  // Jaune  : quelques retards (≤ 5 min)
-  // Orange : trafic perturbé
-  // Rouge  : trafic très perturbé
+  if (!t) return { level:'loading', label:'Données indisponibles' };
+  if (mx <= 0) return { level:'green', label:'Trafic fluide' };
+  if (mx <= 5 && d <= 1) return { level:'yellow', label:'Trafic ralenti' };
   const pct = t ? (d / t) : 0;
+  if (mx >= 20 || pct >= 0.25 || d >= 4) return { level:'red', label:'Trafic très perturbé' };
+  return { level:'orange', label:'Trafic perturbé' };
+}
 
-  if (mx <= 0) return { level:'green',  title:'TRAFIC FLUIDE', sub:'RAS (pour une fois)' };
-  if (mx <= 5) return { level:'yellow', title:'QUELQUES RETARDS', sub:'≤ 5 min' };
+function __lbBuildTrafficSegmentStats(raw, segmentStationNames){
+  const trainsObj = raw?.trains || raw?.normalized?.trains || raw?.['sncf-nml']?.trains || null;
+  if (!trainsObj || typeof trainsObj !== 'object') return { maxDelayMin:0, delayed:0, total:0 };
 
-  // Au-delà de 5 min : on distingue perturbé / très perturbé
-  // On combine intensité (retard max) + volume (part de trains impactés)
-  const severe = (mx >= 20) || (pct >= 0.25) || (d >= 6);
-  if (severe) return { level:'red', title:'TRAFIC TRÈS PERTURBÉ', sub:'Retards importants' };
+  const norm = (x) => {
+    try { return normalizeStationName ? normalizeStationName(x || '') : String(x || '').toLowerCase().trim(); }
+    catch(_) { return String(x || '').toLowerCase().trim(); }
+  };
+  const stationSet = new Set((segmentStationNames || []).map(norm).filter(Boolean));
 
-  return { level:'orange', title:'TRAFIC PERTURBÉ', sub:'Retards en cours' };
+  let total = 0, delayed = 0, maxDelayMin = 0;
+  for (const tr of Object.values(trainsObj)){
+    const stops = tr?.stops || {};
+    let touchesSegment = false;
+    let trSegMax = 0;
+    for (const [stopName, delayVal] of Object.entries(stops)){
+      const stopNorm = norm(stopName);
+      if (!stationSet.has(stopNorm)) continue;
+      touchesSegment = true;
+      const n = Number(delayVal);
+      if (Number.isFinite(n) && n > trSegMax) trSegMax = n;
+    }
+    if (!touchesSegment) continue;
+    total += 1;
+    if (trSegMax > 0) delayed += 1;
+    if (trSegMax > maxDelayMin) maxDelayMin = trSegMax;
+  }
+  return { maxDelayMin, delayed, total };
 }
 
 function __lbUpdateHomeTrafficUI(payload){
   const card = document.querySelector('.home-traffic-card');
   const titleEl = document.getElementById('homeTrafficTitle');
-  const subEl = document.getElementById('homeTrafficSub');
-  if (!card || !titleEl || !subEl) return;
+  const northEl = document.getElementById('homeTrafficLineNorth');
+  const southEl = document.getElementById('homeTrafficLineSouth');
+  if (!card || !titleEl || !northEl || !southEl) return;
 
-  // Reset classes
-  card.classList.remove(
-    'traffic-level--loading',
-    'traffic-level--green',
-    'traffic-level--yellow',
-    'traffic-level--orange',
-    'traffic-level--red'
-  );
+  card.classList.remove('traffic-level--loading','traffic-level--green','traffic-level--yellow','traffic-level--orange','traffic-level--red');
 
-  let delayed = null, total = null, maxDelayMin = 0;
-
-  // payload peut être rawByDataset si plusieurs datasets
   const raw = payload?.rawByDataset?.['sncf-nml'] || payload?.rawByDataset?.sncfNml || payload?.raw || payload;
+  const segNorth = __lbBuildTrafficSegmentStats(raw, ['Metz','Hagondange','Uckange','Thionville','Hettange-Grande','Bettembourg','Luxembourg']);
+  const segSouth = __lbBuildTrafficSegmentStats(raw, ['Nancy','Frouard','Pompey','Belleville','Dieulouard','Pont-à-Mousson','Vandières','Pagny-sur-Moselle','Novéant-sur-Moselle','Ancy-sur-Moselle','Ars-sur-Moselle','Metz']);
 
-  // compteurs
-  if (raw && raw.counters){
-    delayed = raw.counters.DELAYED;
-    total = raw.count;
-  } else if (raw && raw.normalized && raw.normalized.counters){
-    delayed = raw.normalized.counters.DELAYED;
-    total = raw.normalized.count;
-  } else if (raw && raw['sncf-nml']){
-    delayed = raw['sncf-nml']?.counters?.DELAYED;
-    total = raw['sncf-nml']?.count;
-  }
+  const n = __lbPickTrafficLevel(segNorth);
+  const s = __lbPickTrafficLevel(segSouth);
 
-  // retard max (si trains/stops dispo)
-  const trainsObj = raw?.trains || raw?.normalized?.trains || raw?.['sncf-nml']?.trains || null;
-  if (trainsObj && typeof trainsObj === 'object'){
-    for (const tr of Object.values(trainsObj)){
-      const stops = tr?.stops || {};
-      let trMax = 0;
-      for (const v of Object.values(stops)){
-        const n = Number(v);
-        if (Number.isFinite(n) && n > trMax) trMax = n;
-      }
-      if (trMax > maxDelayMin) maxDelayMin = trMax;
-    }
-    // fallback compteurs si absents
-    if (delayed == null){
-      let d = 0;
-      for (const tr of Object.values(trainsObj)){
-        const stops = tr?.stops || {};
-        let trMax = 0;
-        for (const v of Object.values(stops)){
-          const n = Number(v);
-          if (Number.isFinite(n) && n > trMax) trMax = n;
-        }
-        if (trMax > 0) d++;
-      }
-      delayed = d;
-    }
-    if (total == null) total = Object.keys(trainsObj).length;
-  }
+  const levels = ['loading','green','yellow','orange','red'];
+  const worst = [n.level, s.level].sort((a,b)=>levels.indexOf(b)-levels.indexOf(a))[0] || 'loading';
+  card.classList.add(`traffic-level--${worst}`);
 
-  const s = __lbPickTrafficLevel({ maxDelayMin, delayed, total });
-
-  const cls = `traffic-level--${s.level}`;
-  card.classList.add(cls);
-
-  titleEl.textContent = s.title;
-  subEl.textContent = s.sub;
+  titleEl.textContent = 'Info Trafic';
+  northEl.textContent = `Metz - Luxembourg : ${n.label}`;
+  southEl.textContent = `Nancy - Metz : ${s.label}`;
 }
 
 async function updateHomeTrafficStatus(){
@@ -20918,11 +20879,13 @@ async function updateHomeTrafficStatus(){
     __lbUpdateHomeTrafficUI({ raw: result?.raw, normalized: result?.normalized });
   }catch(e){
     const titleEl = document.getElementById('homeTrafficTitle');
-    const subEl = document.getElementById('homeTrafficSub');
+    const northEl = document.getElementById('homeTrafficLineNorth');
+    const southEl = document.getElementById('homeTrafficLineSouth');
     const card = document.querySelector('.home-traffic-card');
     if (card) card.classList.add('traffic-level--loading');
-    if (titleEl) titleEl.textContent = 'TRAFIC —';
-    if (subEl) subEl.textContent = 'Données indisponibles';
+    if (titleEl) titleEl.textContent = 'Info Trafic';
+    if (northEl) northEl.textContent = 'Metz - Luxembourg : Données indisponibles';
+    if (southEl) southEl.textContent = 'Nancy - Metz : Données indisponibles';
   }
 }
 
