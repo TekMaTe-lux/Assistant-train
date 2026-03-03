@@ -1663,6 +1663,12 @@ table[data-snapshotting="true"] tbody tr:nth-child(even) {
   background:rgba(0,16,28,.5);
 }
 
+.train-detail-minirow{ display:flex; justify-content:space-between; gap:10px; padding:6px 0; border-bottom:1px dashed rgba(0,240,255,.12); }
+.train-detail-minirow:last-child{ border-bottom:none; }
+.train-detail-minirow .right{ text-align:right; }
+.train-detail-reliability-badges{ display:flex; gap:8px; flex-wrap:wrap; margin-top:6px; }
+.train-detail-reliability-badges span{ font-size:.82rem; }
+
 /* Pastille météo (lien) – intégrée, sans bleu ni souligné */
 #trainInfo .wx a.wx-link{
   color: inherit;                 /* hérite la couleur du texte du tableau */
@@ -8254,14 +8260,25 @@ html, body{
     <button id="trainDetailClose" class="train-detail-close" type="button" aria-label="Fermer le détail">✕</button>
   </div>
   <div class="train-detail-grid">
-    <div class="train-detail-card"><div class="k">Prochain départ</div><div class="v" id="trainDetailNext">—</div></div>
-    <div class="train-detail-card"><div class="k">Fiabilité (10 jours)</div><div class="v" id="trainDetailReliability">—</div></div>
-    <div class="train-detail-card"><div class="k">Affluence prévue</div><div class="v" id="trainDetailAffluence">—</div></div>
-    <div class="train-detail-card"><div class="k">Parcours</div><div class="v" id="trainDetailPath">—</div></div>
+    <div class="train-detail-card"><div class="k">Prochain départ / statut</div><div class="v" id="trainDetailNext">—</div></div>
+    <div class="train-detail-card"><div class="k">Fiabilité (10 jours)</div><div class="v" id="trainDetailReliability">—</div><div id="trainDetailReliabilityMeta" style="margin-top:6px;font-size:.84rem;opacity:.86"></div></div>
+    <div class="train-detail-card"><div class="k">Affluence prévue</div><div class="v" id="trainDetailAffluence">—</div><div id="trainDetailAffluenceMeta" style="margin-top:6px;font-size:.84rem;opacity:.86"></div></div>
+    <div class="train-detail-card"><div class="k">Composition prévue</div><div class="v" id="trainDetailCompo">—</div></div>
+    <div class="train-detail-card" style="grid-column:1/-1"><div class="k">Parcours</div><div class="v" id="trainDetailPath">—</div></div>
+  </div>
+  <div class="train-detail-card" style="margin-top:10px">
+    <div class="k">Détails fiabilité</div>
+    <div id="trainDetailReliabilityDetails" style="margin-top:6px">—</div>
+    <div class="aff-chart" style="margin-top:10px"><canvas id="trainDetailReliabilityChart" height="120"></canvas></div>
+  </div>
+  <div class="train-detail-card" style="margin-top:10px">
+    <div class="k">Prévisions affluence (arrêts)</div>
+    <div id="trainDetailAffluenceStops" style="margin-top:8px">—</div>
   </div>
   <div class="train-detail-route" id="trainDetailStops"></div>
   <div class="train-detail-actions">
     <a id="trainDetailAffBtn" class="train-detail-btn" href="#affluence">🚆 Ouvrir dans Affluence</a>
+    <a id="trainDetailStatsBtn" class="train-detail-btn" href="#statsConsole">📊 Ouvrir dans Stats</a>
   </div>
 </section>
 
@@ -22026,6 +22043,7 @@ async function loadAffluenceDate(dateStr){
 
 (function(){
   const luxTodayYMD = () => new Date().toLocaleDateString('en-CA', { timeZone: 'Europe/Luxembourg' });
+  const esc = (v) => String(v ?? '').replace(/[&<>"']/g, (ch) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch] || ch));
   const fmtDateFr = (iso) => {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(String(iso||''))) return 'date inconnue';
     const d = new Date(`${iso}T00:00:00`);
@@ -22052,7 +22070,16 @@ async function loadAffluenceDate(dateStr){
     return hh * 60 + mm;
   };
 
-  async function getReliability(trainNumber){
+  const trainDetailState = { relChart: null };
+
+  function destroyReliabilityChart(){
+    if (trainDetailState.relChart){
+      try{ trainDetailState.relChart.destroy(); }catch(_){}
+      trainDetailState.relChart = null;
+    }
+  }
+
+  async function getReliabilityData(trainNumber){
     try{
       const stats = window.__lbStats || {};
       if (typeof stats.getLastDaysRange !== 'function' || typeof stats.getRawRange !== 'function' || typeof stats.computeTrainSeriesFromRawDays !== 'function') return null;
@@ -22062,33 +22089,147 @@ async function loadAffluenceDate(dateStr){
       const range = stats.computeTrainSeriesFromRawDays(rawDays || [], r.from, r.to, String(trainNumber), null);
       const s = Array.isArray(range?.series) ? range.series : [];
       if (!s.length) return null;
-      let onTime = 0, total = 0;
+		
+      let onTime = 0, delayed = 0, canceled = 0, partial = 0;
+      const scoreForBucket = (b) => (b === 'ON_TIME' ? 100 : b === 'DELAYED' ? 35 : b === 'PARTIAL' ? 20 : b === 'CANCELED' ? 0 : 50);
+      const labels = [];
+      const values = [];
+
       for (const d of s){
         const b = String(d?.bucket || '');
         if (!b) continue;
-        total += 1;
         if (b === 'ON_TIME') onTime += 1;
+		else if (b === 'DELAYED') delayed += 1;
+        else if (b === 'CANCELED') canceled += 1;
+        else if (b === 'PARTIAL') partial += 1;
+
+        labels.push(String(d?.date || '').slice(5));
+        values.push(scoreForBucket(b));  
       }
+	  const total = onTime + delayed + canceled + partial;
       if (!total) return null;
-      return { pct: Math.round((onTime/total)*100), total };
+      return {
+        from: r.from,
+        to: r.to,
+        total,
+        onTime,
+        delayed,
+        canceled,
+        partial,
+        pct: Math.round((onTime / total) * 100),
+        labels,
+        values
+      };
     }catch(_){ return null; }
   }
 
-  function computeNextDepartureLabel(dateIso, firstDepRaw, lastArrRaw){
-    const depMin = hhmmToMin(firstDepRaw);
-    const arrMin = hhmmToMin(lastArrRaw);
+  function renderReliabilityChart(data){
+    const cvs = document.getElementById('trainDetailReliabilityChart');
+    if (!cvs || !window.Chart || !data?.values?.length) return;
+    destroyReliabilityChart();
+    trainDetailState.relChart = new Chart(cvs, {
+      type: 'line',
+      data: {
+        labels: data.labels,
+        datasets: [{
+          data: data.values,
+          tension: .3,
+          borderColor: 'rgba(0,255,255,.85)',
+          backgroundColor: 'rgba(0,255,255,.16)',
+          pointRadius: 3,
+          pointBackgroundColor: data.values.map(v => v >= 95 ? '#2dd36f' : v >= 30 ? '#ffd166' : '#ff5d7d'),
+          fill: true
+        }]
+      },
+      options: {
+        animation: false,
+        plugins: { legend: { display: false } },
+        scales: {
+          y: { min: 0, max: 100, ticks: { color:'rgba(210,250,255,.85)', callback: v => `${v}%` }, grid: { color:'rgba(0,255,255,.10)' } },
+          x: { ticks: { color:'rgba(210,250,255,.8)' }, grid: { color:'rgba(0,255,255,.06)' } }
+        }
+      }
+    });
+  }
+
+  function firstDepartureFromStopTimes(stopTimes){
+    if (!Array.isArray(stopTimes) || !stopTimes.length) return null;
+    return hhmmToMin(stopTimes[0]?.departure_time || stopTimes[0]?.arrival_time);
+  }
+
+  async function computeNextDepartureLabelEnhanced(dateIso, stopTimes){
+    const depMin = firstDepartureFromStopTimes(stopTimes);
+    const arrMin = hhmmToMin(stopTimes?.[stopTimes.length - 1]?.arrival_time || stopTimes?.[stopTimes.length - 1]?.departure_time);
     if (!Number.isFinite(depMin)) return 'Non disponible';
+	  
     const today = luxTodayYMD();
     if (dateIso === today){
       const now = luxNowMin();
-      if (Number.isFinite(arrMin) && now > arrMin) return `Terminé aujourd'hui (arrivé vers ${minToClock(arrMin)})`;
+      if (Number.isFinite(arrMin) && now > arrMin) {
+        const td = new Date(`${today}T00:00:00`); td.setDate(td.getDate() + 1);
+        const tomorrow = td.toISOString().slice(0,10);
+        try{
+          const fb = await buildGtfsFallbackResult(String(window.__trainDetailCurrentTrain || ''), { ymd: tomorrow.replace(/-/g,'') });
+          const tDep = firstDepartureFromStopTimes(fb?.train?.stop_times || []);
+          if (Number.isFinite(tDep)) return `Terminé aujourd’hui • prochain service demain à ${minToClock(tDep)}`;
+        }catch(_){ }
+        return `Terminé aujourd'hui (arrivé vers ${minToClock(arrMin)})`;
+      }
       if (now >= depMin) return `En cours (départ ${minToClock(depMin)})`;
       const diff = depMin - now;
       return `Aujourd'hui à ${minToClock(depMin)} (dans ${diff} min)`;
     }
+	  
     const tomorrow = (()=>{ const d=new Date(`${today}T00:00:00`); d.setDate(d.getDate()+1); return d.toISOString().slice(0,10); })();
     if (dateIso === tomorrow) return `Demain à ${minToClock(depMin)}`;
     return `Le ${fmtDateFr(dateIso)} à ${minToClock(depMin)}`;
+  }
+
+  async function renderAffluenceBlock(trainNumber, selectedDate){
+    const affEl = document.getElementById('trainDetailAffluence');
+    const affMetaEl = document.getElementById('trainDetailAffluenceMeta');
+    const affStopsEl = document.getElementById('trainDetailAffluenceStops');
+    const compoEl = document.getElementById('trainDetailCompo');
+
+    if (typeof window.lbAff?.loadDate === 'function') {
+      try { await window.lbAff.loadDate(selectedDate); } catch(_) {}
+    }
+
+    const info = (typeof window.getAffluenceTrainInfo === 'function')
+      ? window.getAffluenceTrainInfo(String(trainNumber))
+      : null;
+
+    if (!info){
+      affEl.textContent = 'Non disponible';
+      affMetaEl.textContent = 'Prévisions indisponibles pour cette date';
+      affStopsEl.innerHTML = '—';
+      compoEl.textContent = 'Inconnue';
+      return;
+    }
+
+    affEl.textContent = Number.isFinite(Number(info.depPct))
+      ? `${Math.round(Number(info.depPct))}% prévu au départ`
+      : 'Affluence non chiffrée';
+
+    const depName = info.depStop?.station || info.depStop?.name || '—';
+    affMetaEl.innerHTML = `${depName} ${info.schemaHtml || ''} ${info.spark || ''}`;
+
+    const topStops = Array.isArray(info.stops) ? info.stops.slice(0, 12) : [];
+    affStopsEl.innerHTML = topStops.length ? topStops.map((s) => {
+      const p = Number(s?.globalPct ?? Math.round((Number(s?.globalOcc)||0)*100));
+      const pct = Number.isFinite(p) ? `${Math.round(p)}%` : '—';
+      const nm = esc(s?.station || s?.name || '—');
+      const hh = esc(s?.hhmm || '—');
+      const schema = (typeof window.wagonSchemaHtml === 'function') ? window.wagonSchemaHtml(s, info.trainType) : '';
+      return `<div class="train-detail-minirow"><span>${nm} • ${hh}</span><span class="right">${pct} ${schema}</span></div>`;
+    }).join('') : 'Pas de prévisions arrêt par arrêt.';
+
+    if (typeof window.buildFavTrainTypeBadge === 'function') {
+      const badge = window.buildFavTrainTypeBadge(String(trainNumber), info.trainType || '');
+      compoEl.innerHTML = badge || 'Inconnue';
+    } else {
+      compoEl.textContent = info.trainType || 'Inconnue';
+    }
   }
 
   async function openInternalTrainPanel(trainNumber, dateIso){
@@ -22096,24 +22237,33 @@ async function loadAffluenceDate(dateStr){
     if (!panel) return;
     const selectedDate = /^\d{4}-\d{2}-\d{2}$/.test(String(dateIso||'')) ? String(dateIso) : (document.getElementById('trainDate')?.value || luxTodayYMD());
     const ymd = selectedDate.replace(/-/g, '');
+	window.__trainDetailCurrentTrain = String(trainNumber || '');
 
     const titleEl = document.getElementById('trainDetailTitle');
     const subtitleEl = document.getElementById('trainDetailSubtitle');
     const nextEl = document.getElementById('trainDetailNext');
     const relEl = document.getElementById('trainDetailReliability');
-    const affEl = document.getElementById('trainDetailAffluence');
+    const relMetaEl = document.getElementById('trainDetailReliabilityMeta');
+    const relDetailsEl = document.getElementById('trainDetailReliabilityDetails');
     const pathEl = document.getElementById('trainDetailPath');
     const stopsEl = document.getElementById('trainDetailStops');
     const affBtn = document.getElementById('trainDetailAffBtn');
+	const statsBtn = document.getElementById('trainDetailStatsBtn');
 
     panel.hidden = false;
     titleEl.textContent = `Train ${trainNumber}`;
-    subtitleEl.textContent = `Vue interne • ${fmtDateFr(selectedDate)}`;
+    subtitleEl.textContent = `Vue interne avancée • ${fmtDateFr(selectedDate)}`;
     nextEl.textContent = 'Chargement…';
     relEl.textContent = 'Chargement…';
-    affEl.textContent = 'Chargement…';
+    relMetaEl.textContent = '';
+    relDetailsEl.textContent = 'Chargement…';
     pathEl.textContent = 'Chargement…';
     stopsEl.innerHTML = '<div class="train-detail-stop"><span>Récupération du parcours…</span></div>';
+	destroyReliabilityChart();
+
+    if (typeof loadCompoData === 'function') {
+      try { await loadCompoData({ forceFresh: false, background: true }); } catch(_) {}
+    }
 
     let fallback = null;
     try { fallback = await buildGtfsFallbackResult(trainNumber, { ymd }); } catch(_) {}
@@ -22125,11 +22275,11 @@ async function loadAffluenceDate(dateStr){
       const origin = first?.stop_point?.name || '—';
       const dest = last?.stop_point?.name || '—';
       pathEl.textContent = `${origin} → ${dest} (${stopTimes.length} arrêts)`;
-      nextEl.textContent = computeNextDepartureLabel(selectedDate, first?.departure_time || first?.arrival_time, last?.arrival_time || last?.departure_time);
+      nextEl.textContent = await computeNextDepartureLabelEnhanced(selectedDate, stopTimes);
       stopsEl.innerHTML = stopTimes.map((st, idx) => {
         const arr = (st?.arrival_time || '').replace(/(\d{2})(\d{2}).*/, '$1:$2');
         const dep = (st?.departure_time || '').replace(/(\d{2})(\d{2}).*/, '$1:$2');
-        const stopName = st?.stop_point?.name || '—';
+        const stopName = esc(st?.stop_point?.name || '—');
         const t = dep || arr || '—';
         const side = idx === 0 ? 'Départ' : (idx === stopTimes.length-1 ? 'Arrivée' : 'Passage');
         return `<div class="train-detail-stop"><span>${stopName}</span><span>${t} • ${side}</span></div>`;
@@ -22140,25 +22290,44 @@ async function loadAffluenceDate(dateStr){
       stopsEl.innerHTML = '<div class="train-detail-stop"><span>Aucun arrêt GTFS trouvé pour ce train et cette date.</span></div>';
     }
 
-    const rel = await getReliability(trainNumber);
-    relEl.textContent = rel ? `${rel.pct}% ponctuel (${rel.total} jours observés)` : 'Pas assez de stats';
-
-    try{
-      if (window.lbAff?.loadDate) await window.lbAff.loadDate(selectedDate);
-      const aff = window.lbAff?.summary ? window.lbAff.summary(trainNumber) : null;
-      affEl.textContent = aff && Number.isFinite(aff.pct) ? `${aff.pct}% max prévu${aff.peakStop ? ` • pic à ${aff.peakStop}` : ''}` : 'Non disponible';
-    }catch(_){
-      affEl.textContent = 'Non disponible';
+    const rel = await getReliabilityData(trainNumber);
+    if (rel){
+      relEl.textContent = `${rel.pct}% de ponctualité`;
+      relMetaEl.textContent = `${rel.total} jours observés du ${rel.from} au ${rel.to}`;
+      relDetailsEl.innerHTML = `
+        <div class="train-detail-reliability-badges">
+          <span class="stats-status-on-time">✅ ${rel.onTime} à l'heure</span>
+          <span class="stats-status-delayed">⏰ ${rel.delayed} retard</span>
+          <span class="stats-status-canceled">❌ ${rel.canceled} supprimé</span>
+          <span class="stats-status-partial">🟠 ${rel.partial} partiel</span>
+        </div>`;
+      renderReliabilityChart(rel);
+    } else {
+      relEl.textContent = 'Pas assez de stats';
+      relMetaEl.textContent = 'Aucune série exploitable sur 10 jours';
+      relDetailsEl.textContent = '—';
     }
+
+	await renderAffluenceBlock(trainNumber, selectedDate);
 
     if (affBtn){
       affBtn.onclick = (e) => {
         e.preventDefault();
-        if (typeof window.lbOpenAffluenceTrain === 'function') {
-          window.lbOpenAffluenceTrain(trainNumber, selectedDate);
-        } else {
-          location.hash = '#affluence';
-        }
+        if (typeof window.lbOpenAffluenceTrain === 'function') window.lbOpenAffluenceTrain(trainNumber, selectedDate);
+        else location.hash = '#affluence';
+      };
+    }
+
+    if (statsBtn){
+      statsBtn.onclick = (e) => {
+        e.preventDefault();
+        const input = document.getElementById('statsTrainId');
+        if (input) input.value = String(trainNumber);
+        const tabBtn = document.getElementById('statsTabTrainBtn');
+        if (tabBtn) tabBtn.click();
+        const runBtn = document.getElementById('statsBtnTrainRun');
+        if (runBtn) runBtn.click();
+        location.hash = '#statsConsole';
       };
     }
 
@@ -22178,7 +22347,7 @@ async function loadAffluenceDate(dateStr){
   document.addEventListener('DOMContentLoaded', () => {
     const closeBtn = document.getElementById('trainDetailClose');
     const panel = document.getElementById('trainDetailPanel');
-    if (closeBtn && panel) closeBtn.addEventListener('click', () => { panel.hidden = true; });
+    if (closeBtn && panel) closeBtn.addEventListener('click', () => { panel.hidden = true; destroyReliabilityChart(); });
   });
 })();
 
