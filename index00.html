@@ -2244,7 +2244,31 @@ table[data-snapshotting="true"] tbody tr:nth-child(even) {
     box-shadow: 0 0 8px currentColor, inset 0 0 6px currentColor;
   }
 }
-  .gtfs-retard {
+	  
+  /* Modal détail perturbation (clic icône tableau) */
+#alertDetailModal{ position:fixed; inset:0; z-index:3800; display:none; }
+#alertDetailModal.is-open{ display:block; }
+#alertDetailModal .alert-detail-backdrop{ position:absolute; inset:0; background:rgba(2,8,18,.72); backdrop-filter:blur(4px); }
+#alertDetailModal .alert-detail-panel{
+  position:absolute; left:50%; top:50%; transform:translate(-50%,-50%);
+  width:min(92vw,640px); max-height:min(86vh,720px); overflow:auto;
+  border-radius:16px; border:1px solid rgba(0,240,255,.35);
+  background:linear-gradient(145deg, #091426, #050b16);
+  box-shadow:0 14px 38px rgba(0,0,0,.55), 0 0 18px rgba(0,240,255,.22);
+  padding:14px;
+}
+#alertDetailModal .alert-detail-head{ display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:10px; }
+#alertDetailModal .alert-detail-title{ color:#9ffcff; font-weight:800; font-size:1rem; }
+#alertDetailModal .alert-detail-close{ border:1px solid rgba(0,240,255,.38); background:rgba(0,240,255,.1); color:#dffbff; border-radius:10px; padding:6px 10px; font-weight:800; }
+#alertDetailModal .alert-detail-body{ display:flex; flex-direction:column; gap:10px; }
+#alertDetailModal .alert-detail-card{ border:1px solid rgba(0,240,255,.24); border-radius:12px; background:rgba(0,14,24,.6); padding:10px; }
+#alertDetailModal .alert-detail-card.red{ border-color:#ff3355; color:#ff8d9f; }
+#alertDetailModal .alert-detail-card.orange{ border-color:#ffb74d; color:#ffd08f; }
+#alertDetailModal .alert-detail-card.info{ border-color:#00f0ff; color:#7ff6ff; }
+#alertDetailModal .alert-detail-row{ display:flex; align-items:center; gap:8px; font-weight:800; }
+#alertDetailModal .alert-detail-desc{ margin-top:6px; line-height:1.35; opacity:.92; color:#d7ecff; }
+
+.gtfs-retard {
   display: inline-block;
   margin-top: 2px;
   padding: 0;
@@ -8281,6 +8305,17 @@ html, body{
 <div id="disruptionsSummary" class="command-console" style="display:none;">
   <div class="disruption-header">Perturbations en cours</div>
   <div id="disruptionsContent"></div>
+</div>
+
+<div id="alertDetailModal" aria-hidden="true">
+  <div class="alert-detail-backdrop" data-alert-close="1"></div>
+  <div class="alert-detail-panel" role="dialog" aria-modal="true" aria-labelledby="alertDetailTitle">
+    <div class="alert-detail-head">
+      <div id="alertDetailTitle" class="alert-detail-title">Détail perturbation</div>
+      <button type="button" class="alert-detail-close" id="alertDetailClose" aria-label="Fermer">✕</button>
+    </div>
+    <div class="alert-detail-body" id="alertDetailBody"></div>
+  </div>
 </div>
 
 <!-- BLOC 2 : Infos trains -->
@@ -16175,6 +16210,7 @@ function resetGtfsRetards(scope) {
 }
 /* ---------- ALERTES ---------- */
 const urlAlertes = 'https://vps.labetaillere.fr/gtfs/alertes_sillon_lorrain.json';
+const LB_ALERTS_BY_TRAIN = new Map();
 const motsCles = Array.from(new Set([
   ...garesParLigne.map(g => g.nom),
   'CFL','Moselle','Meurthe-et-Moselle','Luxembourg','Lorraine'
@@ -16292,6 +16328,8 @@ async function chargerEtAfficherAlertes() {
   const container = document.getElementById('disruptionsContent');
   if (!container) return;
 
+  LB_ALERTS_BY_TRAIN.clear();
+
   const selectedDateInput = document.getElementById('trainDate');
   let selectedDate = new Date();
   if (selectedDateInput && selectedDateInput.value) {
@@ -16406,6 +16444,19 @@ async function chargerEtAfficherAlertes() {
         }
 
         const trainsCibles = Array.from(new Set([...trainsFromEntities, ...trainsFromText]));
+		const detailEntry = {
+          level: (styleMeta.prio === 1) ? 'red' : ((styleMeta.prio === 2 || styleMeta.prio === 3 || isReducedSeats) ? 'orange' : 'info'),
+          icon: styleMeta.icone || 'ℹ️',
+          title: titre || styleMeta.label || 'Information',
+          description: description || '',
+          trains: trainsCibles.slice()
+        };
+        trainsCibles.forEach((tn) => {
+          const key = String(tn || '').trim();
+          if (!key) return;
+          if (!LB_ALERTS_BY_TRAIN.has(key)) LB_ALERTS_BY_TRAIN.set(key, []);
+          LB_ALERTS_BY_TRAIN.get(key).push(detailEntry);
+        });
 
         // hint visuel “US” si effect=2 et si train affiché
         const targetsDisplayed = trainsCibles.filter(n => sets.displayedNums.has(n));
@@ -22590,6 +22641,72 @@ async function loadAffluenceDate(dateStr){
   document.addEventListener('DOMContentLoaded', refresh);
   refresh();
 })();
+
+(function(){
+  const modal = document.getElementById('alertDetailModal');
+  const body = document.getElementById('alertDetailBody');
+  const title = document.getElementById('alertDetailTitle');
+  const closeBtn = document.getElementById('alertDetailClose');
+  if (!modal || !body || !title) return;
+
+  const esc = (v) => String(v || '').replace(/[&<>"']/g, (m) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+
+  function openForTrain(trainNo, fallbackTitle){
+    const key = String(trainNo || '').trim();
+    const list = LB_ALERTS_BY_TRAIN.get(key) || [];
+    if (!list.length) {
+      const t = fallbackTitle || 'Aucun détail disponible';
+      title.textContent = `Train ${key || '—'}`;
+      body.innerHTML = `<div class="alert-detail-card info"><div class="alert-detail-row">ℹ️ ${esc(t)}</div></div>`;
+    } else {
+      title.textContent = `Train ${key} — détail perturbation`;
+      body.innerHTML = list.map((it) => `
+        <div class="alert-detail-card ${esc(it.level)}">
+          <div class="alert-detail-row"><span>${esc(it.icon)}</span><span>${esc(it.title)}</span></div>
+          ${it.description ? `<div class="alert-detail-desc">${esc(it.description)}</div>` : ''}
+          ${Array.isArray(it.trains) && it.trains.length ? `<div class="disruption-trains">${it.trains.map(t => `<span class="disruption-train-pill">${esc(t)}</span>`).join('')}</div>` : ''}
+        </div>`).join('');
+    }
+    modal.classList.add('is-open');
+    modal.setAttribute('aria-hidden', 'false');
+  }
+
+  function closeModal(){
+    modal.classList.remove('is-open');
+    modal.setAttribute('aria-hidden', 'true');
+  }
+
+  closeBtn?.addEventListener('click', closeModal);
+  modal.addEventListener('click', (e) => {
+    if (e.target && e.target.getAttribute('data-alert-close') === '1') closeModal();
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && modal.classList.contains('is-open')) closeModal();
+  });
+
+  document.addEventListener('click', (e) => {
+    const icon = e.target.closest && e.target.closest('#trainInfo thead .icon, #trainInfo th .train-state');
+    if (!icon) return;
+
+    let th = icon.closest('th[data-train-number]');
+    if (!th) {
+      const td = icon.closest('td,th');
+      const row = td?.parentElement;
+      const idx = (td && row) ? Array.from(row.children).indexOf(td) : -1;
+      const firstHead = icon.closest('thead')?.querySelector('tr:first-child');
+      th = (firstHead && idx >= 0) ? firstHead.children[idx] : null;
+      if (!(th && th.matches && th.matches('th[data-train-number]'))) th = null;
+    }
+
+    if (!th) return;
+    const trainNo = (th.dataset.trainNumber || '').replace(/^CFL-/, '');
+    const fallback = icon.getAttribute('title') || th.getAttribute('title') || '';
+    if (!trainNo) return;
+    e.preventDefault();
+    openForTrain(trainNo, fallback);
+  });
+})();
+	
 </script>
 
 </body>
