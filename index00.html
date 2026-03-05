@@ -2206,6 +2206,12 @@ table[data-snapshotting="true"] tbody tr:nth-child(even) {
   gap: 14px;
   margin-top: 16px;
 }
+.disruption-title-row{ display:flex; align-items:center; gap:8px; font-weight:800; font-size:1rem; }
+.disruption-title-text{ letter-spacing:.01em; }
+.disruption-cause{ margin-top:6px; opacity:.9; font-style:italic; }
+.disruption-trains{ margin-top:10px; display:flex; flex-wrap:wrap; gap:6px; }
+.disruption-train-pill{ padding:3px 8px; border-radius:999px; border:1px solid currentColor; font-weight:700; font-size:.75rem; }
+.disruption-empty{ margin-top:10px; opacity:.75; font-size:.78rem; }
     @media (max-width: 768px) {
   #disruptionsSummary {
     overflow: hidden; /* Empêche les débordements visuels sur mobile */
@@ -8254,9 +8260,9 @@ html, body{
 </div>
 
 <div id="tableauViewNav" role="tablist" aria-label="Sous-navigation Tableau" hidden>
-  <button type="button" class="tableau-view-tab" role="tab" aria-selected="false" data-tableau-view="perturbations">Détails perturbations</button>
-  <button type="button" class="tableau-view-tab" role="tab" aria-selected="true" data-tableau-view="global">Tableau global</button>
-  <button type="button" class="tableau-view-tab" role="tab" aria-selected="false" data-tableau-view="search">Nouvelle recherche</button>
+  <button type="button" class="tableau-view-tab" role="tab" aria-selected="false" data-tableau-view="perturbations">Perturbations</button>
+  <button type="button" class="tableau-view-tab tableau-view-tab--search" role="tab" aria-selected="false" data-tableau-view="search">Nouvelle recherche</button>
+  <button type="button" class="tableau-view-tab" role="tab" aria-selected="true" data-tableau-view="global">Image tableau</button>
 </div>
 
 <div id="loisirsViewNav" role="tablist" aria-label="Sous-navigation Loisirs" hidden>
@@ -8997,6 +9003,10 @@ html, body{
   background: linear-gradient(135deg, rgba(0,255,255,.86), rgba(0,170,255,.86));
   color:#00111a;
   box-shadow: 0 0 14px rgba(0,240,255,.45), inset 0 0 14px rgba(0,240,255,.35);
+}
+#tableauViewNav .tableau-view-tab--search{
+  font-weight: 800;
+  letter-spacing: .03em;
 }
 @media (max-width: 768px){
   body.tableau-view-nav-visible{ --tableau-viewbar-h: 64px; }
@@ -15187,30 +15197,41 @@ function linkifyGaresAndTrains(root){
       const label = th.dataset.trainLabel || formatTrainDisplayLabel(numero);
       const safeLabel = escapeHtml(label);
       const href = 'https://www.cfl.lu/fr-fr';
-      const existing = th.querySelector('.train-link-cfl');
-      if (existing) {
-        existing.textContent = label;
-        existing.setAttribute('href', href);
+      const numWrap = th.querySelector('.train-num');
+      if (numWrap) {
+        const existingLink = numWrap.querySelector('.train-link-cfl');
+        if (existingLink) {
+          existingLink.textContent = label;
+          existingLink.setAttribute('href', href);
+        } else {
+          numWrap.innerHTML = `<a href="${href}" target="_blank" rel="noopener" class="train-link train-link-cfl">${safeLabel}</a>`;
+        }
       } else {
-        th.innerHTML = `<a href="${href}" target="_blank" rel="noopener" class="train-link train-link-cfl">${safeLabel}</a>`;
+        th.innerHTML = `<span class="train-num"><a href="${href}" target="_blank" rel="noopener" class="train-link train-link-cfl">${safeLabel}</a></span><span class="train-state icon">🚉</span>`;
       }
-	  applyFavStar(th);
+      applyFavStar(th);
       return;
     }
-    const already = th.querySelector('a.train-link');
+
     const internalHref = `#train-detail-${numero}`;
-    if (already) {
-      already.href = internalHref;
-      already.textContent = numero;
-      already.removeAttribute('target');
-      already.removeAttribute('rel');
-      already.dataset.trainNumber = numero;
-      already.dataset.trainDate = dateCirculation || '';
+    const numWrap = th.querySelector('.train-num');
+    if (numWrap) {
+      const current = numWrap.querySelector('a.train-link');
+      if (current) {
+        current.href = internalHref;
+        current.textContent = numero;
+        current.removeAttribute('target');
+        current.removeAttribute('rel');
+        current.dataset.trainNumber = numero;
+        current.dataset.trainDate = dateCirculation || '';
+      } else {
+        numWrap.innerHTML = `<a href="${internalHref}" class="train-link" data-train-number="${numero}" data-train-date="${dateCirculation || ''}">${numero}</a>`;
+      }
+    } else {
+      th.innerHTML = `<span class="train-num"><a href="${internalHref}" class="train-link" data-train-number="${numero}" data-train-date="${dateCirculation || ''}">${numero}</a></span><span class="train-state icon">🚉</span>`;
     }
-    else {
-      th.innerHTML = `<a href="${internalHref}" class="train-link" data-train-number="${numero}" data-train-date="${dateCirculation || ''}">${numero}</a>`;
-    }
-	applyFavStar(th);
+
+    applyFavStar(th);
     if (th.dataset.gtfsFallback === '1' && !th.querySelector('.fallback-pill')) {
       const pill = document.createElement('span');
       pill.className = 'fallback-pill';
@@ -15364,21 +15385,16 @@ scheduleWeatherAfterTableSettled();
       sortedGroups.forEach(disr => {
         const trainsList = Array.from(disr.trains).sort((a,b) => a.localeCompare(b));
         const trainsHtml = trainsList.length
-          ? '<ul>' + trainsList.map(t => `<li>${t}</li>`).join('') + '</ul>'
-          : '<p>Aucun train impacté listé</p>';
-        const color = disr.box === 'red' ? '#ff4c4c' : '#ff8a00';
+          ? `<div class="disruption-trains">${trainsList.map(t => `<span class="disruption-train-pill">${t}</span>`).join('')}</div>`
+          : '<div class="disruption-empty">Aucun train impacté listé</div>';
         disruptionsHtml += `
           <div class="disruption-box ${disr.box}">
-            <div style="display:flex;align-items:center;gap:8px;color:${color};font-weight:700;font-size:1.2rem;">
+            <div class="disruption-title-row">
               <div class="disruption-icon ${disr.blink ? 'icon-blink' : ''}">${disr.icon}</div>
-              <div>${disr.txt}</div>
+              <div class="disruption-title-text">${disr.txt}</div>
             </div>
-            <div style="color:${color};margin-top:6px;font-style:italic;">
-              ${disr.cause}
-            </div>
-            <div style="color:${color};margin-top:8px;">
-              ${trainsHtml}
-            </div>
+            <div class="disruption-cause">${disr.cause || 'Cause non précisée'}</div>
+            ${trainsHtml}
           </div>
         `;
       });
