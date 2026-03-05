@@ -15344,6 +15344,7 @@ scheduleWeatherAfterTableSettled();
     }
 
     let groupedDisruptions = {};
+	LB_TABLE_DISRUPTIONS_BY_TRAIN.clear();
     numbers.forEach(num => {
       const result = results[num];
       if (result && result.disruptions && result.disruptions.length > 0) {
@@ -15420,6 +15421,25 @@ scheduleWeatherAfterTableSettled();
       });
       sortedGroups.forEach(disr => {
         const trainsList = Array.from(disr.trains).sort((a,b) => a.localeCompare(b));
+		const detailEntry = {
+          key: `d_${++LB_ALERT_SEQ}`,
+          level: disr.box === 'red' ? 'red' : (disr.box === 'orange' ? 'orange' : 'info'),
+          icon: disr.icon || 'ℹ️',
+          title: disr.txt || 'Perturbation',
+          description: disr.cause || 'Cause non précisée',
+          trains: trainsList.slice()
+        };
+        LB_ALERTS_BY_KEY.set(detailEntry.key, detailEntry);
+
+        trainsList.forEach((tn) => {
+          const key = String((tn || '').replace(/^CFL-/, '')).trim();
+          if (!key) return;
+          if (!LB_TABLE_DISRUPTIONS_BY_TRAIN.has(key)) LB_TABLE_DISRUPTIONS_BY_TRAIN.set(key, []);
+          LB_TABLE_DISRUPTIONS_BY_TRAIN.get(key).push(detailEntry);
+          const header = Array.from(document.querySelectorAll('th[data-train-number]')).find(th => extractTrainNumber(th.dataset.trainNumber || '') === extractTrainNumber(key));
+          if (header && !header.dataset.alertKeyMain) header.dataset.alertKeyMain = detailEntry.key;
+        });
+
         const trainsHtml = trainsList.length
           ? `<div class="disruption-trains">${trainsList.map(t => `<span class="disruption-train-pill">${t}</span>`).join('')}</div>`
           : '<div class="disruption-empty">Aucun train impacté listé</div>';
@@ -16207,6 +16227,7 @@ function resetGtfsRetards(scope) {
 const urlAlertes = 'https://vps.labetaillere.fr/gtfs/alertes_sillon_lorrain.json';
 const LB_ALERTS_BY_TRAIN = new Map();
 const LB_ALERTS_BY_KEY = new Map();
+const LB_TABLE_DISRUPTIONS_BY_TRAIN = new Map();
 let LB_ALERT_SEQ = 0;
 const motsCles = Array.from(new Set([
   ...garesParLigne.map(g => g.nom),
@@ -22681,7 +22702,10 @@ async function loadAffluenceDate(dateStr){
   function openForKey(alertKey, trainNo, fallbackTitle){
     const item = alertKey ? LB_ALERTS_BY_KEY.get(String(alertKey)) : null;
     if (item) return openDetails([item], trainNo, fallbackTitle);
-    const list = LB_ALERTS_BY_TRAIN.get(String(trainNo || '').trim()) || [];
+    const trainKey = String(trainNo || '').trim();
+    const disr = LB_TABLE_DISRUPTIONS_BY_TRAIN.get(trainKey) || [];
+    if (disr.length) return openDetails(disr, trainNo, fallbackTitle);
+    const list = LB_ALERTS_BY_TRAIN.get(trainKey) || [];
     return openDetails(list, trainNo, fallbackTitle);
   }
 
