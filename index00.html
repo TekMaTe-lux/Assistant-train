@@ -2246,20 +2246,16 @@ table[data-snapshotting="true"] tbody tr:nth-child(even) {
 }
 	  
   /* Modal détail perturbation (clic icône tableau) */
-#alertDetailModal{ position:fixed; inset:0; z-index:3800; display:none; }
-#alertDetailModal.is-open{ display:block; }
-#alertDetailModal .alert-detail-backdrop{ position:absolute; inset:0; background:rgba(2,8,18,.72); backdrop-filter:blur(4px); }
-#alertDetailModal .alert-detail-panel{
-  position:absolute; left:50%; top:50%; transform:translate(-50%,-50%);
-  width:min(92vw,640px); max-height:min(86vh,720px); overflow:auto;
-  border-radius:16px; border:1px solid rgba(0,240,255,.35);
-  background:linear-gradient(145deg, #091426, #050b16);
-  box-shadow:0 14px 38px rgba(0,0,0,.55), 0 0 18px rgba(0,240,255,.22);
-  padding:14px;
+#alertDetailModal.lb-auth-modal{ z-index:3800; }
+#alertDetailModal.is-open{ display:flex !important; }
+#alertDetailModal .alert-detail-panel.lb-auth-card{
+  width:min(680px, 94vw);
+  max-height:min(86vh, 760px);
+  overflow:auto;
+  padding:16px;
 }
-#alertDetailModal .alert-detail-head{ display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:10px; }
+#alertDetailModal .alert-detail-head{ display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:10px; padding-right:28px; }
 #alertDetailModal .alert-detail-title{ color:#9ffcff; font-weight:800; font-size:1rem; }
-#alertDetailModal .alert-detail-close{ border:1px solid rgba(0,240,255,.38); background:rgba(0,240,255,.1); color:#dffbff; border-radius:10px; padding:6px 10px; font-weight:800; }
 #alertDetailModal .alert-detail-body{ display:flex; flex-direction:column; gap:10px; }
 #alertDetailModal .alert-detail-card{ border:1px solid rgba(0,240,255,.24); border-radius:12px; background:rgba(0,14,24,.6); padding:10px; }
 #alertDetailModal .alert-detail-card.red{ border-color:#ff3355; color:#ff8d9f; }
@@ -8307,12 +8303,11 @@ html, body{
   <div id="disruptionsContent"></div>
 </div>
 
-<div id="alertDetailModal" aria-hidden="true">
-  <div class="alert-detail-backdrop" data-alert-close="1"></div>
-  <div class="alert-detail-panel" role="dialog" aria-modal="true" aria-labelledby="alertDetailTitle">
+<div id="alertDetailModal" class="lb-auth-modal" aria-hidden="true">
+  <div class="alert-detail-panel lb-auth-card" role="dialog" aria-modal="true" aria-labelledby="alertDetailTitle">
+    <button type="button" class="lb-auth-close tron-close-button" id="alertDetailClose" aria-label="Fermer"></button>
     <div class="alert-detail-head">
       <div id="alertDetailTitle" class="alert-detail-title">Détail perturbation</div>
-      <button type="button" class="alert-detail-close" id="alertDetailClose" aria-label="Fermer">✕</button>
     </div>
     <div class="alert-detail-body" id="alertDetailBody"></div>
   </div>
@@ -16211,6 +16206,8 @@ function resetGtfsRetards(scope) {
 /* ---------- ALERTES ---------- */
 const urlAlertes = 'https://vps.labetaillere.fr/gtfs/alertes_sillon_lorrain.json';
 const LB_ALERTS_BY_TRAIN = new Map();
+const LB_ALERTS_BY_KEY = new Map();
+let LB_ALERT_SEQ = 0;
 const motsCles = Array.from(new Set([
   ...garesParLigne.map(g => g.nom),
   'CFL','Moselle','Meurthe-et-Moselle','Luxembourg','Lorraine'
@@ -16329,6 +16326,7 @@ async function chargerEtAfficherAlertes() {
   if (!container) return;
 
   LB_ALERTS_BY_TRAIN.clear();
+  LB_ALERTS_BY_KEY.clear();
 
   const selectedDateInput = document.getElementById('trainDate');
   let selectedDate = new Date();
@@ -16445,12 +16443,14 @@ async function chargerEtAfficherAlertes() {
 
         const trainsCibles = Array.from(new Set([...trainsFromEntities, ...trainsFromText]));
 		const detailEntry = {
+		  key: `a_${++LB_ALERT_SEQ}`,
           level: (styleMeta.prio === 1) ? 'red' : ((styleMeta.prio === 2 || styleMeta.prio === 3 || isReducedSeats) ? 'orange' : 'info'),
           icon: styleMeta.icone || 'ℹ️',
           title: titre || styleMeta.label || 'Information',
           description: description || '',
           trains: trainsCibles.slice()
         };
+		LB_ALERTS_BY_KEY.set(detailEntry.key, detailEntry);
         trainsCibles.forEach((tn) => {
           const key = String(tn || '').trim();
           if (!key) return;
@@ -16471,6 +16471,7 @@ async function chargerEtAfficherAlertes() {
             const header = findHeaderByNumber(numeroTrain);
             if (header) {
               header.classList.add('reduced-seats');
+			  if (!header.dataset.alertKeyMain) header.dataset.alertKeyMain = detailEntry.key;
         try{ if(window.lbReducedSeats) window.lbReducedSeats.add(String(trainNum)); }catch(e){}
               header.title = "Service réduit : réduction du nombre de places (UM ➜ US)";
               const headRow = header.parentElement;
@@ -16482,6 +16483,7 @@ async function chargerEtAfficherAlertes() {
                 iconSpan.className = 'icon reduced-seat-icon';
                 iconSpan.textContent = styleMeta.icone || '⚠️';
                 iconSpan.title = "Service réduit : réduction du nombre de places";
+				iconSpan.dataset.alertKey = detailEntry.key;
                 iconCell.appendChild(iconSpan);
               }
             }
@@ -16491,6 +16493,11 @@ async function chargerEtAfficherAlertes() {
         let classeCouleur = 'disruption-box info';
         if (styleMeta.prio === 1) classeCouleur = 'disruption-box red';
         else if (styleMeta.prio === 2 || styleMeta.prio === 3 || isReducedSeats) classeCouleur = 'disruption-box orange';
+
+		targetsDisplayed.forEach(numeroTrain => {
+          const header = findHeaderByNumber(numeroTrain);
+          if (header && !header.dataset.alertKeyMain) header.dataset.alertKeyMain = detailEntry.key;
+        });
 
         const trainsHtml = trainsCibles.length
           ? `<div class="disruption-trains">${trainsCibles.map(t => `<span class="disruption-train-pill">${t}</span>`).join('')}</div>`
@@ -22651,9 +22658,9 @@ async function loadAffluenceDate(dateStr){
 
   const esc = (v) => String(v || '').replace(/[&<>"']/g, (m) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
 
-  function openForTrain(trainNo, fallbackTitle){
+  function openDetails(detailItems, trainNo, fallbackTitle){
     const key = String(trainNo || '').trim();
-    const list = LB_ALERTS_BY_TRAIN.get(key) || [];
+    const list = Array.isArray(detailItems) ? detailItems : [];;
     if (!list.length) {
       const t = fallbackTitle || 'Aucun détail disponible';
       title.textContent = `Train ${key || '—'}`;
@@ -22671,6 +22678,13 @@ async function loadAffluenceDate(dateStr){
     modal.setAttribute('aria-hidden', 'false');
   }
 
+  function openForKey(alertKey, trainNo, fallbackTitle){
+    const item = alertKey ? LB_ALERTS_BY_KEY.get(String(alertKey)) : null;
+    if (item) return openDetails([item], trainNo, fallbackTitle);
+    const list = LB_ALERTS_BY_TRAIN.get(String(trainNo || '').trim()) || [];
+    return openDetails(list, trainNo, fallbackTitle);
+  }
+
   function closeModal(){
     modal.classList.remove('is-open');
     modal.setAttribute('aria-hidden', 'true');
@@ -22678,7 +22692,7 @@ async function loadAffluenceDate(dateStr){
 
   closeBtn?.addEventListener('click', closeModal);
   modal.addEventListener('click', (e) => {
-    if (e.target && e.target.getAttribute('data-alert-close') === '1') closeModal();
+    if (e.target === modal) closeModal();
   });
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape' && modal.classList.contains('is-open')) closeModal();
@@ -22701,9 +22715,10 @@ async function loadAffluenceDate(dateStr){
     if (!th) return;
     const trainNo = (th.dataset.trainNumber || '').replace(/^CFL-/, '');
     const fallback = icon.getAttribute('title') || th.getAttribute('title') || '';
+	const alertKey = icon.dataset.alertKey || th.dataset.alertKeyMain || '';
     if (!trainNo) return;
     e.preventDefault();
-    openForTrain(trainNo, fallback);
+    openForKey(alertKey, trainNo, fallback);
   });
 })();
 	
