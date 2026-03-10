@@ -468,7 +468,7 @@ body {
 
 .bottom-nav__item{ transition: transform .12s ease, filter .18s ease, color .18s ease; touch-action: manipulation; -webkit-user-select:none; user-select:none; }
 .bottom-nav__item:active{ transform: translateY(1px) scale(0.96); }
-.bottom-nav__item.click-ack{ animation: navClickPulse .22s ease; background: rgba(0, 240, 255, 0.18) !important; box-shadow: inset 0 0 0 1px rgba(0,240,255,.45), 0 0 16px rgba(0,240,255,.25) !important; }
+.bottom-nav__item.click-ack{ animation: navClickPulse .22s ease; }
 .bottom-nav__item.click-ack .bottom-nav__icon{ filter: brightness(1.35) drop-shadow(0 0 12px rgba(0,240,255,.75)); }
 .bottom-nav__item.is-pressing{ transform: scale(.94) !important; }
 @keyframes navClickPulse{
@@ -22550,7 +22550,15 @@ async function loadAffluenceDate(dateStr){
   };
 
   const navItems = Array.from(document.querySelectorAll('.bottom-nav__item[href]'));
-  const pages = Array.from(document.querySelectorAll('.app-page[data-page]'));
+  const PAGE_SECTIONS = {
+    home: ['home'],
+    search: ['search','disruptionsSummary','trainInfo','refreshContainer'],
+    carte: ['carte','affluence'],
+    favoris: ['favTrainsWidget'],
+    stats: ['stats'],
+    loisirs: ['divertissement','multimedia']
+  };
+  let skipNextHashScroll = false;
 
   function pageFromHash(hash){
     return PAGE_HASH_ALIASES[String(hash || '').toLowerCase()] || 'home';
@@ -22577,6 +22585,7 @@ async function loadAffluenceDate(dateStr){
     item.classList.remove('click-ack');
     item.offsetWidth;
     item.classList.add('click-ack');
+	setTimeout(() => item.classList.remove('click-ack'), 260);
 	try{
       item.animate([
         { transform:'scale(1)', filter:'brightness(1)' },
@@ -22611,6 +22620,23 @@ async function loadAffluenceDate(dateStr){
 
     document.body.classList.remove('page-home','page-search','page-carte','page-favoris','page-stats','page-loisirs');
     document.body.classList.add(`page-${page}`);
+
+	const activeIds = new Set(PAGE_SECTIONS[page] || []);
+    Object.values(PAGE_SECTIONS).flat().forEach((id) => {
+      const el = document.getElementById(id);
+      if (!el) return;
+      const on = activeIds.has(id);
+      if (id === 'favTrainsWidget') {
+        if (!on) el.style.display = 'none';
+      } else {
+        el.style.display = on ? '' : 'none';
+      }
+    });
+
+    const loisirsNav = document.getElementById('loisirsViewNav');
+    if (loisirsNav && page !== 'loisirs') { loisirsNav.hidden = true; loisirsNav.classList.remove('is-visible'); }
+    const tableauNav = document.getElementById('tableauViewNav');
+    if (tableauNav && page !== 'search') { tableauNav.hidden = true; tableauNav.classList.remove('is-visible'); }
 
     pages.forEach((node) => {
       const active = node.dataset.page === page;
@@ -22654,6 +22680,7 @@ async function loadAffluenceDate(dateStr){
 	  const targetPage = pageFromHash(href);
       syncPages({ forcePage: targetPage, hash: href, skipScroll: true });
       if ((location.hash || '') !== href) {
+	    skipNextHashScroll = true;
         location.hash = href;
       }
     }
@@ -22677,6 +22704,15 @@ async function loadAffluenceDate(dateStr){
       if (href.startsWith('#')) e.preventDefault();
       runNav(href, item);
     });
+
+	item.addEventListener('pointerup', (e) => {
+      if (e.pointerType !== 'touch') return;
+      if (Date.now() - lastNavTouchTs < 320) return;
+      const href = item.getAttribute('href') || '#home';
+      if (!href.startsWith('#')) return;
+      lastNavTouchTs = Date.now();
+      runNav(href, item);
+    });  
   });
 
   const accountNavBtn = document.getElementById('bottomAccountBtn');
@@ -22685,7 +22721,7 @@ async function loadAffluenceDate(dateStr){
     accountNavBtn.addEventListener('click', () => pulseNav(accountNavBtn));
   }
 
-  window.addEventListener('popstate', syncPages);
+  window.addEventListener('hashchange', () => { const skip = skipNextHashScroll; skipNextHashScroll = false; syncPages({ skipScroll: skip }); });
   document.addEventListener('DOMContentLoaded', syncPages);
   syncPages();
 })();
