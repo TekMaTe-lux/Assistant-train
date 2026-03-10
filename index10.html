@@ -22869,39 +22869,44 @@ async function loadAffluenceDate(dateStr){
   }
 
   let carteBooted = false;
+  let carteBootRequested = false;
+  let carteBootTimer = null;
+
   function ensureCarteFrame({ immediate = false } = {}){
     const frame = document.querySelector('#carte iframe');
     const shell = document.querySelector('#carte .map-embed-shell');
     if (!frame || !shell) return;
+
+    const onReady = () => shell.classList.add('is-loaded');
+
     const start = () => {
       if (carteBooted) return;
       carteBooted = true;
+      shell.classList.remove('is-loaded');
+      frame.addEventListener('load', onReady, { once:true });
       const src = frame.dataset.src;
       if (src && !frame.src) frame.src = src;
-      const onReady = () => shell.classList.add('is-loaded');
-      frame.addEventListener('load', onReady, { once:true });
       if (frame.contentDocument?.readyState === 'complete') onReady();
     };
+
+    const scheduleStart = (delay = 0) => {
+      if (carteBooted || carteBootRequested) return;
+      carteBootRequested = true;
+      if (carteBootTimer) clearTimeout(carteBootTimer);
+      carteBootTimer = setTimeout(() => {
+        carteBootTimer = null;
+        requestAnimationFrame(() => requestAnimationFrame(start));
+      }, delay);
+    };
+
     if (immediate) {
-      start();
+      scheduleStart(80);
       return;
     }
-    const idle = () => {
-      if ('requestIdleCallback' in window) requestIdleCallback(start, { timeout: 2200 });
-      else setTimeout(start, 700);
-    };
-    if ('IntersectionObserver' in window){
-      const io = new IntersectionObserver((entries) => {
-        if (entries.some((entry) => entry.isIntersecting)){
-          io.disconnect();
-          start();
-        }
-      }, { rootMargin: '200px 0px' });
-      io.observe(shell);
-      idle();
-    } else {
-      idle();
-    }
+
+    // Ne plus précharger agressivement la carte en fond :
+    // sur cette page, son initialisation bloque le thread principal.
+    // On attend une vraie ouverture de l'onglet Carte.
   }
 
   function lazyBootMediaEmbeds(){
@@ -22930,7 +22935,6 @@ async function loadAffluenceDate(dateStr){
     deferYoutubeEmbeds();
     convertInternalLinks();
     bindPageNav();
-    ensureCarteFrame({ immediate:false });
     renderPage({ instant:true, scrollTop:false });
   }
 
