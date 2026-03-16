@@ -65,6 +65,9 @@
     .trip-panel-back:hover{ border-color:#5bd6ff; color:#a0ff00; }
     .trip-panel-body{ display:flex; flex-direction:column; gap:12px; overflow:auto; padding-right:2px; }
     .trip-panel-title{ display:flex; align-items:center; gap:8px; font-weight:700; font-size:16px; }
+    .trip-panel-train-link{ border:0; background:none; color:inherit; font:inherit; padding:0; margin:0; text-align:left; cursor:default; }
+    .trip-panel-train-link.is-clickable{ cursor:pointer; text-decoration:underline; text-decoration-thickness:1px; text-underline-offset:2px; }
+    .trip-panel-train-link.is-clickable:hover{ color:#a0ff00; }
     .trip-panel-icon{ font-size:20px; filter: drop-shadow(0 0 4px rgba(0,0,0,0.6)); }
     .trip-panel-close{ border:none; background:rgba(32,50,75,0.6); color:#e0f0ff; font-size:18px; width:28px; height:28px; border-radius:50%; cursor:pointer; display:flex; align-items:center; justify-content:center; }
     .trip-panel-close:hover{ background:rgba(160,255,0,0.25); color:#0b0f1a; }
@@ -328,7 +331,7 @@
     <div class="trip-panel-header">
       <div class="trip-panel-title">
         <span id="trip-panel-icon" class="trip-panel-icon" aria-hidden="true">🐄</span>
-        <span id="trip-panel-train">Sélectionnez une bétaillère ou une gare</span>
+        <button id="trip-panel-train" class="trip-panel-train-link" type="button" aria-label="Ouvrir le détail train">Sélectionnez une bétaillère ou une gare</button>
       </div>
       <div class="trip-panel-header-right"><button id="trip-panel-back" class="trip-panel-back hidden" type="button" aria-label="Retour à la gare">← Retour</button><span id="station-board-now" class="station-board-now hidden" aria-live="off"></span><button id="trip-panel-close" class="trip-panel-close" type="button" aria-label="Fermer">×</button></div>
     </div>
@@ -3776,6 +3779,14 @@ function sanitizeCflStationName(name){
 
   tripPanelCloseBtn.addEventListener('click', handleTripPanelClose);
   tripPanelCloseBtn.addEventListener('touchstart', handleTripPanelClose, { passive:false });
+  if (tripPanelTrainEl){
+    tripPanelTrainEl.addEventListener('click', ()=>{
+      if (!activeTripId) return;
+      const data = trainDataById.get(activeTripId) || buildStaticPanelTrainData(activeTripId);
+      if (!data) return;
+      requestTrainDetailOpenFromMap(data);
+    });
+  }
 
   function handleTripPanelBack(ev){
     if (ev){
@@ -3977,6 +3988,25 @@ const mapContainerEl = map.getContainer();
   }
 
 
+  function requestTrainDetailOpenFromMap(trainData){
+    const candidate = extractTrainNumberCandidate(trainData?.number)
+      || extractTrainNumberCandidate(trainData?.numberRaw)
+      || extractTrainNumberCandidate(trainData?.numberKey)
+      || extractTrainNumberCandidate(trainData?.id);
+    if (candidate == null) return false;
+    const trainNumber = String(candidate);
+    const ymd = todayYMD().ymd;
+    try {
+      if (window.parent && window.parent !== window && typeof window.parent.postMessage === 'function') {
+        window.parent.postMessage({ type: 'lb:open-train-detail', trainNumber, dateYmd: ymd, source: 'carte' }, '*');
+        return true;
+      }
+    } catch(e) {}
+    const url = `https://www.sncf-voyageurs.com/fr/voyagez-avec-nous/horaires-et-itineraires/recherche-de-train/detail-train/?numeroCirculation=${encodeURIComponent(trainNumber)}&dateCirculation=${encodeURIComponent(ymd)}`;
+    try { window.open(url, '_blank', 'noopener'); } catch(_) { location.href = url; }
+    return true;
+  }
+
   function openTripPanel(trainId, options = {}){
     const fromStationId = options?.fromStationId || null;
     activeTripId = trainId;
@@ -4106,6 +4136,12 @@ const mapContainerEl = map.getContainer();
     } else {
       tripPanelTrainEl.textContent = data.id || 'Sélectionnez une bétaillère';
     }
+
+    const canOpenDetail = extractTrainNumberCandidate(data.number) != null
+      || extractTrainNumberCandidate(data.numberRaw) != null
+      || extractTrainNumberCandidate(data.numberKey) != null;
+    tripPanelTrainEl.classList.toggle('is-clickable', canOpenDetail);
+    tripPanelTrainEl.title = canOpenDetail ? 'Ouvrir les détails du train' : '';
 
     if (!seq || !seq.length){
       tripPanelSummaryEl.textContent = 'Données de trajet indisponibles pour ce service.';
