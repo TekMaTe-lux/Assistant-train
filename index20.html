@@ -8097,20 +8097,6 @@ html, body{
           <button class="lb-prefs-remove" type="button" data-remove-preset="L4">Supprimer la liste 4</button>
         </div>
       </div>
-      <div class="lb-prefs-options">
-        <label for="lbDefaultMode">Liste par défaut</label>
-        <select id="lbDefaultMode">
-          <option value="">Aucune</option>
-          <option value="AM">Liste 1</option>
-          <option value="PM">Liste 2</option>
-          <option value="L3">Liste 3</option>
-          <option value="L4">Liste 4</option>
-        </select>
-        <label class="lb-prefs-checkbox">
-          <input id="lbAutoLoad" type="checkbox">
-          Lancer automatiquement la génération rapide
-        </label>
-      </div>
 
 	  <div class="lb-prefs-section" style="margin-top:10px;">
         <div class="lb-prefs-section-title">Favoris & gares (source météo/stats/favoris)</div>
@@ -18739,20 +18725,7 @@ function scheduleWeatherAfterTableSettled(){
     // Rafraîchir le widget favoris
     try { if (typeof window.updateFavoriteWidgetFromPrefs === "function") window.updateFavoriteWidgetFromPrefs(); } catch(e) {}
 
-    const defaultMode = String(prefs.defaultMode || '').toUpperCase();
-    const autoLoad = !!prefs.autoLoad;
     if (!options.auto) return;
-    if (!lbPrefsAppliedOnce && defaultMode) {
-      const kind = defaultMode === 'SOIR' ? 'PM' : (defaultMode === 'MATIN' ? 'AM' : defaultMode);
-      if (['AM', 'PM', 'L3', 'L4'].includes(kind)) {
-        applyRapidPreset(kind, { auto: true, openModal: false, focus: false });
-        if (autoLoad) {
-          const trigger = document.querySelector(`.preset-btn[data-preset-kind="${kind}"]`);
-          if (trigger) trigger.classList.add('is-active');
-        }
-      }
-      lbPrefsAppliedOnce = true;
-    }
   };
 
   const loadPreferences = async () => {
@@ -20173,9 +20146,14 @@ if (statsEl){
   };
 
   const getNextOptionalPresetKey = () => {
-    const candidate = PREFS_LIST_CONFIG.filter((item) => item.optional)
-      .find(({ key }) => !presetHasContent(customRapidPresets[key]));
-    return candidate?.key || null;
+    const optional = PREFS_LIST_CONFIG.filter((item) => item.optional);
+    for (const { key } of optional) {
+      const fields = getPresetFields(key);
+      if (!fields?.section) continue;
+      const hidden = getComputedStyle(fields.section).display === 'none';
+      if (hidden) return key;
+    }
+    return null;
   };
 
   const hasHiddenOptionalPreset = () => Boolean(getNextOptionalPresetKey());
@@ -20254,20 +20232,12 @@ if (statsEl){
     prefsModal.style.display = "flex";
     prefsModal.setAttribute("aria-hidden", "false");
     if (!options.skipLoad) {
-      const defaultMode = $("lbDefaultMode");
-      const autoLoad = $("lbAutoLoad");
       PREFS_LIST_CONFIG.forEach(({ key }) => {
         const fields = getPresetFields(key);
         const preset = getPresetFromCache(key) || {};
         if (fields?.label) fields.label.value = preset?.label || "";
         if (fields?.trains) fields.trains.value = (preset?.trains || []).join(", ");
       });
-      if (defaultMode) {
-        const rawDefault = String(lbPrefsCache?.defaultMode || "").toUpperCase();
-        const mapped = rawDefault === "MATIN" ? "AM" : (rawDefault === "SOIR" ? "PM" : rawDefault);
-        defaultMode.value = mapped;
-      }
-      if (autoLoad) autoLoad.checked = !!lbPrefsCache?.autoLoad;
       syncOptionalPrefsSections();
       updateDefaultListOptions();
       updatePrefsAddButton();
@@ -20457,9 +20427,6 @@ if (statsEl){
 
   if (prefsSaveBtn) {
     prefsSaveBtn.addEventListener("click", async () => {
-      const defaultMode = $("lbDefaultMode");
-      const autoLoad = $("lbAutoLoad");
-
       const payloadPresets = {};
       for (const item of PREFS_LIST_CONFIG) {
         const fields = getPresetFields(item.key);
@@ -20485,8 +20452,6 @@ if (statsEl){
 
       const payload = {
         rapidPresets: payloadPresets,
-        defaultMode: defaultMode?.value || "",
-        autoLoad: !!autoLoad?.checked,
         favoriteMorningTrain: favMorning,
         favoriteEveningTrain: favEvening,
         favoriteFromStation: (document.getElementById('lbFavFromStation')?.value || '').trim(),
