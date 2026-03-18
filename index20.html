@@ -9690,6 +9690,33 @@ html, body{
   box-shadow: none !important;
 }
 
+/* === PATCH 2026-03-18: bottom-nav plus sobre + feedback immédiat visuel === */
+.bottom-nav__item,
+.bottom-nav__icon,
+.bottom-nav__icon-img{
+  transition: transform .14s ease, filter .16s ease, opacity .16s ease !important;
+}
+
+.bottom-nav__item:hover .bottom-nav__icon,
+.bottom-nav__item:focus-visible .bottom-nav__icon,
+.bottom-nav__item:hover .bottom-nav__icon-img,
+.bottom-nav__item:focus-visible .bottom-nav__icon-img{
+  transform: scale(1.05) !important;
+  filter: drop-shadow(0 0 6px rgba(0,255,255,.40)) !important;
+}
+
+.bottom-nav__item.active .bottom-nav__icon,
+.bottom-nav__item[aria-current="page"] .bottom-nav__icon,
+.bottom-nav__item.is-active .bottom-nav__icon,
+.bottom-nav__item.active .bottom-nav__icon-img,
+.bottom-nav__item[aria-current="page"] .bottom-nav__icon-img,
+.bottom-nav__item.is-active .bottom-nav__icon-img{
+  transform: scale(1.04) !important;
+  filter:
+    drop-shadow(0 0 5px rgba(0, 255, 255, 0.55))
+    drop-shadow(0 0 10px rgba(0, 214, 255, 0.34)) !important;
+}
+
 /* === PATCH 2026-03-17: rendre l'action "Générer" intégrée (plus de bouton flottant) === */
 @media (max-width: 720px){
   #selectionModal .selection-modal__body{
@@ -16584,11 +16611,21 @@ function scheduleBackgroundRefresh(immediate = false){
 }
 
 window.addEventListener('load', () => {
-  // Affiche rapidement du cache local puis met à jour en fond (stale-while-revalidate).
+  // Charge d'abord le strict nécessaire puis échelonne le reste pour éviter un pic CPU/réseau au démarrage.
   loadCompoData({ forceFresh: false, background: false });
-  loadVoiesByTrain({ forceFresh: false, onlyIfChanged: false }).catch(err => console.warn('[Voies] Préchargement échoué', err?.message || err));
-  loadGtfsRetards({ forceFresh: false, useCachedFirst: true })
-    .catch(err => console.warn("GTFS-RT temporairement indisponible:", err));
+  setTimeout(() => {
+    lbRunInBackground(() => {
+      loadVoiesByTrain({ forceFresh: false, onlyIfChanged: false })
+        .catch(err => console.warn('[Voies] Préchargement échoué', err?.message || err));
+    });
+  }, 180);
+
+  setTimeout(() => {
+    lbRunInBackground(() => {
+      loadGtfsRetards({ forceFresh: false, useCachedFirst: true })
+        .catch(err => console.warn("GTFS-RT temporairement indisponible:", err));
+    });
+  }, 420);
 
   lbRunInBackground(() => {
     refreshLiveDataInBackground({ forceFresh: true });
@@ -16600,11 +16637,12 @@ window.addEventListener('online', () => scheduleBackgroundRefresh(true));
 document.addEventListener('visibilitychange', () => scheduleBackgroundRefresh(true));
 
 window.addEventListener('load', () => {
-  // Précharge les données statiques SNCF en silence pour éviter les modales au 1er usage.
+  // Précharge GTFS en léger différé pour éviter de saturer le démarrage UI.
+  const startGTFSWarmup = () => ensureGTFSLoaded({ silent: true }).catch(() => {});
   if (typeof lbRunInBackground === 'function') {
-    lbRunInBackground(() => ensureGTFSLoaded({ silent: true }).catch(() => {}));
+    setTimeout(() => lbRunInBackground(startGTFSWarmup), 1200);
   } else {
-    setTimeout(() => { ensureGTFSLoaded({ silent: true }).catch(() => {}); }, 0);
+    setTimeout(startGTFSWarmup, 1200);
   }
 });
 
@@ -23145,6 +23183,17 @@ async function loadAffluenceDate(dateStr){
       item.setAttribute('aria-current', active ? 'page' : 'false');
     });
   }
+
+  // Feedback immédiat au tap/clic : évite l'impression de décalage avant le hashchange.
+  navItems.forEach((item) => {
+    const activateNow = () => {
+      const href = item.getAttribute('href') || '';
+      const page = pageFromHash(href);
+      syncActiveNav(page);
+    };
+    item.addEventListener('pointerdown', activateNow, { passive: true });
+    item.addEventListener('click', activateNow, { passive: true });
+  });
 
   function syncPages(){
     const hash = location.hash || '#home';
