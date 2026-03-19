@@ -773,15 +773,38 @@ body {
 .fav-comments-row{ margin-top:8px; display:flex; justify-content:flex-end; }
 .fav-comment-btn,
 .home-comment-pill{
-  border:1px solid rgba(0,240,255,.45);
+  border:1px solid rgba(0,240,255,.38);
   border-radius:999px;
-  background:rgba(0,14,26,.58);
+  background:rgba(0,14,26,.48);
   color:#dffbff;
-  padding:5px 10px;
-  font-size:.78rem;
+  padding:4px 8px;
+  font-size:.72rem;
   cursor:pointer;
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  gap:5px;
+  white-space:nowrap;
+  min-width:52px;
+  line-height:1;
 }
-.home-comment-pill{ font-size:.7rem; padding:4px 8px; }
+.home-comment-pill{
+  flex:0 0 auto;
+  align-self:center;
+}
+.home-comment-pill__emoji{
+  font-size:.82rem;
+  line-height:1;
+}
+.home-comment-pill__count{
+  font-size:.68rem;
+  font-weight:800;
+  letter-spacing:.02em;
+}
+.home-comment-pill:disabled{
+  opacity:.45;
+  cursor:default;
+}
 
 .train-comments{
   margin-top:10px;
@@ -20343,7 +20366,7 @@ function getGtfsDelayForStop(trainNumber, stopName){
   }
 
   const renderFavCard = (kind, trainId, payload) => {
-	window.__lbHomeFavPreviewData = window.__lbHomeFavPreviewData || {};
+    window.__lbHomeFavPreviewData = window.__lbHomeFavPreviewData || {};
     const syncHomeFavPreview = () => {
       window.__lbHomeFavPreviewData[kind] = {
         train: (title?.textContent || '').trim(),
@@ -20576,7 +20599,7 @@ if (statsEl){
       renderFavStats(kind, trainId).catch(()=>{});
       if (!statsEl.hasAttribute('data-user-opened')) statsEl.open = false;
     }
-	syncHomeFavPreview();
+    syncHomeFavPreview();
   };
   // Clic sur "Détail" dans l'affluence des favoris -> ouvre la section Affluence + détail du train
   if (!window.__lbFavAffOpenBound){
@@ -22233,115 +22256,83 @@ function lbRenderHomeFavPreview(){
   const slot = document.getElementById('homeFavSlot');
   if (!slot) return;
 
-  // lecture des infos déjà calculées par le widget favoris (AM/PM)
-  const read = (k) => {
-	const cache = window.__lbHomeFavPreviewData?.[k] || null;
-    if (cache && (cache.train || cache.meta || cache.state)) return cache;
-    const train = (document.getElementById('favTrain'+k)?.textContent || '').trim();
-    const meta  = (document.getElementById('favMeta'+k)?.textContent || '').trim();
-    const state = (document.getElementById('favState'+k)?.textContent || '').trim();
-    return { train, meta, state };
-  };
-
-  const am = read('AM');
-  const pm = read('PM');
-
   const toStateKey = (txt) => {
-    const t = (txt || '').toUpperCase();
+    const t = String(txt || '').toUpperCase();
     if (t.includes('ARRIV')) return 'after';
     if (t.includes('LIVE') || t.includes('EN COURS') || t.includes('EN ROUTE')) return 'running';
     if (t.includes('A VENIR') || t.includes('PROCHAIN') || t.includes('AVENIR')) return 'before';
     return 'unknown';
   };
 
-  const renderBadge = (stateTxt) => {
-    const key = toStateKey(stateTxt);
+  const renderBadge = (stateTxt, hasTrain) => {
+    const key = hasTrain && toStateKey(stateTxt) === 'unknown' ? 'before' : toStateKey(stateTxt);
     try{
       if (typeof buildWidgetStateBadge === 'function') return buildWidgetStateBadge(key);
     }catch(e){}
-    // fallback (au cas où)
     const label = (key === 'after') ? 'ARRIVÉ' : (key === 'running') ? 'Live' : (key === 'before') ? 'A VENIR' : '—';
     return `<span class="fav-state-badge fav-state-${key}">${escapeHtml(label)}</span>`;
   };
 
-  const buildRow = (k, data, label) => {
-    const trainTxt = data.train && data.train !== '—' ? data.train : '—';
-    const trainMatch = String(trainTxt).match(/\d{5,6}/);
+  const read = (k) => {
+    try{
+      const cache = window.__lbHomeFavPreviewData?.[k] || null;
+      if (cache && (cache.train || cache.meta || cache.state)) return cache;
+      return {
+        train: (document.getElementById('favTrain'+k)?.textContent || '').trim(),
+        meta: (document.getElementById('favMeta'+k)?.textContent || '').trim(),
+        state: (document.getElementById('favState'+k)?.textContent || '').trim()
+      };
+    }catch(e){
+      return { train:'', meta:'', state:'' };
+    }
+  };
+
+  const buildRow = (k, label) => {
+    const data = read(k);
     const fallbackTrain = getHomeFavoriteTrainNo(k);
-    const trainNo = trainMatch ? trainMatch[0] : (/^\d{5,6}$/.test(fallbackTrain) ? fallbackTrain : '');
-    const trainDisplay = trainTxt !== '—' ? trainTxt : (trainNo || '—');
-    const cc = trainNo ? getTrainCommentCount(trainNo) : 0;
-    const metaTxt  = data.meta && data.meta !== '—' ? data.meta : '';
-    const safeMeta = metaTxt ? escapeHtml(metaTxt) : '<span style="opacity:.55">Raccourci prêt.</span>';
+    const trainMatch = String(data.train || '').match(/\d{5,6}/);
+    const trainNo = trainMatch ? trainMatch[0] : fallbackTrain;
+    const trainDisplay = String(data.train || '').trim() || trainNo || '—';
+    const metaText = String(data.meta || '').trim() || (trainNo ? 'Raccourci prêt.' : 'Ajoutez un train dans vos préférences.');
+    const count = trainNo ? getTrainCommentCount(trainNo) : 0;
 
     return `
       <div class="home-fav-row" data-fav-k="${k}" role="button" tabindex="0" aria-label="Ouvrir favoris ${label}">
         <div class="home-fav-left">
           <div class="home-fav-train">${escapeHtml(trainDisplay)} <span style="opacity:.6;font-weight:800;letter-spacing:.06em;">${label}</span></div>
-          <div class="home-fav-meta">${safeMeta}</div>
+          <div class="home-fav-meta">${escapeHtml(metaText)}</div>
         </div>
-        <div class="fav-train-badge home-fav-badge">${renderBadge(data.state)}</div>
-       <button type="button" class="home-comment-pill" data-train-comment="${trainNo}" ${trainNo ? '' : 'disabled'} aria-label="Commentaires ${label}">
+        <div class="fav-train-badge home-fav-badge">${renderBadge(data.state, !!trainNo)}</div>
+        <button type="button" class="home-comment-pill" data-train-comment="${trainNo}" ${trainNo ? '' : 'disabled'} aria-label="Commentaires ${label}">
           <span class="home-comment-pill__emoji" aria-hidden="true">💬</span>
-          <span class="home-comment-pill__count">${cc}</span>
+          <span class="home-comment-pill__count">${count}</span>
         </button>
       </div>
     `;
   };
 
-  slot.innerHTML = buildRow('AM', am, 'Matin') + buildRow('PM', pm, 'Soir');
+  slot.innerHTML = buildRow('AM', 'Matin') + buildRow('PM', 'Soir');
 
-  // clic / clavier -> ouvre le bon favori (Matin / Soir)
   const jumpToFav = (k) => {
     location.hash = '#favTrainsWidget';
-
-    const getTopOffset = () => {
-      try{
-        const topBar = document.querySelector('.top-bar');
-        if (topBar) return Math.round(topBar.getBoundingClientRect().height) + 8;
-        const css = getComputedStyle(document.documentElement).getPropertyValue('--top-bar-height').trim();
-        if (css && css.endsWith('px')) return (parseFloat(css) || 0) + 8;
-      }catch(e){}
-      return 72;
-    };
-    const getBottomOffset = () => {
-      try{
-        const bottom = document.querySelector('.bottom-nav');
-        if (bottom) return Math.round(bottom.getBoundingClientRect().height) + 8;
-        const css = getComputedStyle(document.documentElement).getPropertyValue('--bottom-bar-height').trim();
-        if (css && css.endsWith('px')) return (parseFloat(css) || 0) + 8;
-      }catch(e){}
-      return 84;
-    };
-
     window.setTimeout(() => {
       const id = (k === 'PM') ? 'favCardPM' : 'favCardAM';
       const card = document.getElementById(id);
       if (!card) return;
-
-      const topOff = getTopOffset();
-      const botOff = getBottomOffset();
-      const vh = window.innerHeight || document.documentElement.clientHeight || 800;
-      const visibleH = Math.max(120, vh - topOff - botOff);
-      const rect = card.getBoundingClientRect();
-      const absTop = rect.top + (window.pageYOffset || document.documentElement.scrollTop || 0);
-      const targetY = absTop - topOff - Math.max(0, (visibleH - rect.height) / 2);
-
       try{
-        window.scrollTo({ top: Math.max(0, Math.round(targetY)), behavior: 'smooth' });
+        card.scrollIntoView({ behavior: 'smooth', block: 'center' });
       }catch(e){
-        window.scrollTo(0, Math.max(0, Math.round(targetY)));
+        card.scrollIntoView();
       }
-
       card.classList.add('home-jump-highlight');
       window.setTimeout(()=>card.classList.remove('home-jump-highlight'), 1300);
     }, 80);
   };
 
-  slot.querySelectorAll('.home-fav-row').forEach(row=>{
+  slot.querySelectorAll('.home-fav-row').forEach((row) => {
     const k = row.getAttribute('data-fav-k');
-    row.addEventListener('click', ()=>jumpToFav(k));
-    row.addEventListener('keydown', (e)=>{ if(e.key==='Enter' || e.key===' '){ e.preventDefault(); jumpToFav(k);} });
+    row.addEventListener('click', () => jumpToFav(k));
+    row.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); jumpToFav(k); } });
   });
   slot.querySelectorAll('.home-comment-pill').forEach((btn) => {
     btn.addEventListener('click', (e) => {
