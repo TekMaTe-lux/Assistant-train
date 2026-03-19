@@ -427,6 +427,9 @@ body {
     padding: 7px 8px;
     min-width: 0;
     overflow: hidden;
+    border: none;
+    background: transparent;
+    box-shadow: none;
   }
   .traffic-split-line{
     min-width: 0;
@@ -451,6 +454,9 @@ body {
   .home-card[aria-label="Météo sur votre ligne"] .wx-station{
     padding: 7px 8px;
     min-height: 64px;
+    border: none;
+    background: transparent;
+    box-shadow: none;
   }
   .home-card[aria-label="Météo sur votre ligne"] .wx-row{
     gap: 4px;
@@ -466,12 +472,25 @@ body {
     margin-top: 0;
     font-size: .62rem;
     line-height: 1.1;
-	white-space: normal;
+    white-space: normal;
+  }
+  .wx-station--punctuality .wx-row{
+    gap: 3px;
+  }
+  .wx-station--punctuality .wx-title{
+    order: -1;
+    font-size: .60rem;
+  }
+  .wx-station--punctuality .wx-now{
+    font-size: 1rem;
   }
 
   .home-card[forwarding="ber"]{
     padding-top: 9px !important;
     padding-bottom: 9px !important;
+  }
+  .home-card[forwarding="ber"] .ber-metric{
+    display:none !important;
   }
   .home-card[forwarding="ber"] .ber-line1{
     font-size: .96rem;
@@ -8355,7 +8374,7 @@ html, body{
     </article>
 
     <article class="home-card" aria-label="Météo sur votre ligne">
-      <h2>Météo sur votre ligne</h2>
+      <h2>Météo</h2>
 
       <div class="wx-stations">
         <div class="wx-station">
@@ -8369,6 +8388,13 @@ html, body{
           <div class="wx-row">
             <div class="wx-now" id="homeWxToNow">—</div>
 			<div class="wx-title" id="homeWxToTitle">Luxembourg</div>
+          </div>
+        </div>
+
+        <div class="wx-station wx-station--punctuality">
+          <div class="wx-row">
+            <div class="wx-title">Ponctualité hier</div>
+            <div class="wx-now" id="homeWxPunctuality">—</div>
           </div>
         </div>
       </div>
@@ -22084,32 +22110,39 @@ function __lbUpdateHomeTrafficUI(payload){
 }
 
 async function updateHomeTrafficStatus(){
-  // Si on a déjà les données GTFS-RT chargées, on les exploite.
-  // Sinon, on refetch juste le dataset SNCF Nancy/Metz/Lux.
-  try{
-    // (1) cas déjà chargé
-    if (window.retardsGTFS_RAW){
-      // si window.retardsGTFS_RAW est un rawByDataset, on passe tel quel
-      __lbUpdateHomeTrafficUI({ rawByDataset: window.retardsGTFS_RAW?.['sncf-nml'] ? window.retardsGTFS_RAW : null, raw: window.retardsGTFS_RAW });
-      return;
-    }
-  }catch{}
+  let hadImmediateData = false;
 
-  // (2) fetch du dataset SNCF (réutilise tes sources/fallbacks)
+  try{
+    if (window.retardsGTFS_RAW){
+      __lbUpdateHomeTrafficUI({
+        rawByDataset: window.retardsGTFS_RAW?.['sncf-nml'] ? window.retardsGTFS_RAW : null,
+        raw: window.retardsGTFS_RAW
+      });
+      hadImmediateData = true;
+    } else if (typeof hydrateGtfsRetardsFromCache === 'function' && hydrateGtfsRetardsFromCache()) {
+      __lbUpdateHomeTrafficUI({
+        rawByDataset: window.retardsGTFS_RAW?.['sncf-nml'] ? window.retardsGTFS_RAW : null,
+        raw: window.retardsGTFS_RAW
+      });
+      hadImmediateData = true;
+    }
+  }catch(_){}
+
   try{
     const dataset = (window.GTFS_RT_DATASETS || []).find(d => d.id === 'sncf-nml');
     if (!dataset) throw new Error('Dataset sncf-nml introuvable');
-    const result = await fetchGtfsDataset(dataset, { forceFresh: true });
+    const result = await fetchGtfsDataset(dataset, { forceFresh: false });
     __lbUpdateHomeTrafficUI({ raw: result?.raw, normalized: result?.normalized });
   }catch(e){
+    if (hadImmediateData) return;
     const lineNorth = document.getElementById('homeTrafficLineNorth');
     const lineSouth = document.getElementById('homeTrafficLineSouth');
     const badgeNorth = document.getElementById('homeTrafficBadgeNorth');
     const badgeSouth = document.getElementById('homeTrafficBadgeSouth');
     if (lineNorth) lineNorth.textContent = 'Metz - Luxembourg';
     if (lineSouth) lineSouth.textContent = 'Nancy - Metz';
-    __lbSetTrafficBadge(badgeNorth, { level:'loading', label:'Données indisponibles' });
-    __lbSetTrafficBadge(badgeSouth, { level:'loading', label:'Données indisponibles' });
+    __lbSetTrafficBadge(badgeNorth, { level:'loading', label:'Chargement…' });
+    __lbSetTrafficBadge(badgeSouth, { level:'loading', label:'Chargement…' });
   }
 }
 
@@ -22166,9 +22199,10 @@ async function fetchBerDailyMessage(dateStr){
 }
 
 function updateHomePunctuality(pct, label){
-  const el = document.getElementById('homeBerPunctuality');
-  if (!el) return;
-  el.textContent = fmtPct(pct);
+  ['homeBerPunctuality', 'homeWxPunctuality'].forEach((id) => {
+    const el = document.getElementById(id);
+    if (el) el.textContent = fmtPct(pct);
+  });
 }
 
 
@@ -22197,8 +22231,10 @@ async function ensureYesterdayPunctuality(){
   const want = __luxYesterdayISO();
   if (window.__LB_LAST_YESTERDAY_DATE === want && typeof window.__LB_LAST_YESTERDAY_PCT === 'number') return window.__LB_LAST_YESTERDAY_PCT;
 
-  const el = document.getElementById('homeBerPunctuality');
-  if (el) el.textContent = '…';
+  ['homeBerPunctuality', 'homeWxPunctuality'].forEach((id) => {
+    const el = document.getElementById(id);
+    if (el) el.textContent = '…';
+  });
 
   try{
     // on réutilise les helpers existants des stats si présents
