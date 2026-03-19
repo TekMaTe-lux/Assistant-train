@@ -812,6 +812,9 @@ body {
   .live-wall-item--home{ padding:5px 7px; }
   .live-wall-item--home .live-wall-meta{ font-size:.68rem; margin-bottom:2px; gap:6px; }
   .live-wall-item--home .live-wall-item-text{ font-size:.76rem; }
+  .home-comment-pill{ min-width:46px; padding:4px 7px; gap:4px; }
+  .home-comment-pill__emoji{ font-size:.76rem; }
+  .home-comment-pill__count{ font-size:.64rem; }
 }
 .quick-links{
   display: grid;
@@ -20330,6 +20333,14 @@ function getGtfsDelayForStop(trainNumber, stopName){
   }
 
   const renderFavCard = (kind, trainId, payload) => {
+	window.__lbHomeFavPreviewData = window.__lbHomeFavPreviewData || {};
+    const syncHomeFavPreview = () => {
+      window.__lbHomeFavPreviewData[kind] = {
+        train: (title?.textContent || '').trim(),
+        meta: (meta?.textContent || '').trim(),
+        state: (badgeEl?.textContent || '').trim()
+      };
+    };
     const title   = document.getElementById(kind === 'AM' ? 'favTrainAM' : 'favTrainPM');
 	const badgeEl = document.getElementById(kind === 'AM' ? 'favStateAM' : 'favStatePM');
     const meta    = document.getElementById(kind === 'AM' ? 'favMetaAM'  : 'favMetaPM');
@@ -20354,12 +20365,14 @@ function getGtfsDelayForStop(trainNumber, stopName){
 
     if (!trainId){
       meta.textContent = '➡️ Choisis un train dans tes préférences.';
+      syncHomeFavPreview();
       if (statsEl){ statsEl.open = false; }
       return;
     }
 
     if (payload?.error){
       meta.textContent = `🚫 ${payload.error}`;
+      syncHomeFavPreview();
       if (statsEl){
         renderFavStats(kind, trainId).catch(()=>{});
         if (!statsEl.hasAttribute('data-user-opened')) statsEl.open = false;
@@ -20370,6 +20383,7 @@ function getGtfsDelayForStop(trainNumber, stopName){
     const train = payload?.train;
     if (!train){
       meta.textContent = '🚫 Données indisponibles.';
+      syncHomeFavPreview();
       return;
     }
 
@@ -20552,6 +20566,7 @@ if (statsEl){
       renderFavStats(kind, trainId).catch(()=>{});
       if (!statsEl.hasAttribute('data-user-opened')) statsEl.open = false;
     }
+	syncHomeFavPreview();
   };
   // Clic sur "Détail" dans l'affluence des favoris -> ouvre la section Affluence + détail du train
   if (!window.__lbFavAffOpenBound){
@@ -22187,6 +22202,8 @@ function lbRenderHomeFavPreview(){
 
   // lecture des infos déjà calculées par le widget favoris (AM/PM)
   const read = (k) => {
+	const cache = window.__lbHomeFavPreviewData?.[k] || null;
+    if (cache && (cache.train || cache.meta || cache.state)) return cache;
     const train = (document.getElementById('favTrain'+k)?.textContent || '').trim();
     const meta  = (document.getElementById('favMeta'+k)?.textContent || '').trim();
     const state = (document.getElementById('favState'+k)?.textContent || '').trim();
@@ -22217,19 +22234,24 @@ function lbRenderHomeFavPreview(){
   const buildRow = (k, data, label) => {
     const trainTxt = data.train && data.train !== '—' ? data.train : '—';
     const trainMatch = String(trainTxt).match(/\d{5,6}/);
-    const trainNo = trainMatch ? trainMatch[0] : '';
+    const fallbackTrain = String(window.lbPrefsCache?.[k === 'AM' ? 'favoriteMorningTrain' : 'favoriteEveningTrain'] || '').trim();
+    const trainNo = trainMatch ? trainMatch[0] : (/^\d{5,6}$/.test(fallbackTrain) ? fallbackTrain : '');
+    const trainDisplay = trainTxt !== '—' ? trainTxt : (trainNo || '—');
     const cc = trainNo ? getTrainCommentCount(trainNo) : 0;
     const metaTxt  = data.meta && data.meta !== '—' ? data.meta : '';
-    const safeMeta = metaTxt ? escapeHtml(metaTxt) : '<span style="opacity:.55">—</span>';
+    const safeMeta = metaTxt ? escapeHtml(metaTxt) : '<span style="opacity:.55">Raccourci prêt.</span>';
 
     return `
       <div class="home-fav-row" data-fav-k="${k}" role="button" tabindex="0" aria-label="Ouvrir favoris ${label}">
         <div class="home-fav-left">
-          <div class="home-fav-train">${escapeHtml(trainTxt)} <span style="opacity:.6;font-weight:800;letter-spacing:.06em;">${label}</span></div>
+          <div class="home-fav-train">${escapeHtml(trainDisplay)} <span style="opacity:.6;font-weight:800;letter-spacing:.06em;">${label}</span></div>
           <div class="home-fav-meta">${safeMeta}</div>
         </div>
         <div class="fav-train-badge home-fav-badge">${renderBadge(data.state)}</div>
-        <button type="button" class="home-comment-pill" data-train-comment="${trainNo}">💬 ${cc}</button>
+       <button type="button" class="home-comment-pill" data-train-comment="${trainNo}" ${trainNo ? '' : 'disabled'} aria-label="Commentaires ${label}">
+          <span class="home-comment-pill__emoji" aria-hidden="true">💬</span>
+          <span class="home-comment-pill__count">${cc}</span>
+        </button>
       </div>
     `;
   };
