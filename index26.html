@@ -19615,6 +19615,8 @@ function scheduleWeatherAfterTableSettled(){
   window.lbCommentState = lbCommentState;
   let lbCurrentDetailTrain = '';
   let lbCommentsPoller = null;
+  let currentUser = null;
+  window.currentUser = null;
 
   const safePseudo = () => String(lbPrefsCache?.pseudo || '').trim().slice(0,24);
   const isCommentingAllowed = () => window.lbIsAuthed === true;
@@ -19637,7 +19639,7 @@ function scheduleWeatherAfterTableSettled(){
     catch(e){ return '—'; }
   };
 
-  function renderMessages(){
+  function renderMessages(messages){
     const feed = $('homeLiveWallFeed');
     const form = $('homeLiveWallForm');
     const input = $('homeLiveWallInput');
@@ -19646,7 +19648,8 @@ function scheduleWeatherAfterTableSettled(){
     const countEl = $('homeLiveWallCount');
     if (!feed || !form || !input || !countEl) return;
 
-    const wall = Array.isArray(lbCommentState.wall) ? lbCommentState.wall.slice(0, 50) : [];
+    const wallSource = Array.isArray(messages) ? messages : lbCommentState.wall;
+    const wall = Array.isArray(wallSource) ? wallSource.slice(0, 50) : [];
     countEl.textContent = String(Array.isArray(lbCommentState.wall) ? lbCommentState.wall.length : 0);
 
     if (!wall.length) {
@@ -19655,6 +19658,7 @@ function scheduleWeatherAfterTableSettled(){
       feed.innerHTML = wall.map((it) => `
         <div class="live-wall-item live-wall-item--home live-wall-item--compact">
           <div class="live-wall-item-text"><strong>${escapeHtml(it.pseudo || 'Voyageur')}</strong><span class="live-wall-inline-meta">${escapeHtml(fmtHour(it.ts))}</span> : ${escapeHtml(it.text || '')}</div>
+		  ${currentUser?.role === 'admin' && it.id ? `<div class="fav-comments-row"><button class="fav-comment-btn" type="button" data-comment-delete="${escapeHtml(String(it.id))}">Supprimer</button></div>` : ''}
         </div>
       `).join('');
       feed.scrollTop = 0;
@@ -19701,11 +19705,17 @@ function scheduleWeatherAfterTableSettled(){
 
   async function checkAuth(){
     let isAuthed = false;
+	currentUser = null;
+    window.currentUser = null;
     try{
-      await api('/me', { method: 'GET' });
-      isAuthed = true;
+      const data = await api('/me', { method: 'GET' });
+      currentUser = data?.user || null;
+      window.currentUser = currentUser;
+      isAuthed = !!currentUser;
     }catch(_err){
       isAuthed = false;
+	  currentUser = null;
+      window.currentUser = null;
     }
     window.lbIsAuthed = isAuthed;
 
@@ -19760,9 +19770,28 @@ function scheduleWeatherAfterTableSettled(){
     return data;
   }
 
+  async function deleteComment(id){
+    const commentId = String(id || '').trim();
+    if (!commentId) throw new Error('Commentaire introuvable');
+    if (currentUser?.role !== 'admin') throw new Error('Action réservée aux admins');
+
+    const res = await fetch(`${LB_COMMENTS_API}/${encodeURIComponent(commentId)}`, {
+      method: 'DELETE',
+      credentials: 'include'
+    });
+
+    let data = null;
+    try { data = await res.json(); } catch(_err) {}
+    if (!res.ok) throw new Error(data?.error || `HTTP ${res.status}`);
+
+    await loadMessages();
+    return data;
+  }
+
   window.checkAuth = checkAuth;
   window.loadMessages = loadMessages;
   window.sendMessage = sendMessage;
+  window.deleteComment = deleteComment;
 
   function bindCommentForms(){
     const homeForm = $('homeLiveWallForm');
@@ -19777,6 +19806,20 @@ function scheduleWeatherAfterTableSettled(){
           renderCommentsUI();
         }catch(err){
           alert(err?.message || "Impossible d'ajouter le commentaire.");
+        }
+      });
+    }
+
+	const feed = $('homeLiveWallFeed');
+    if (feed && !feed.dataset.deleteBound){
+      feed.dataset.deleteBound = '1';
+      feed.addEventListener('click', async (e) => {
+        const btn = e.target.closest('[data-comment-delete]');
+        if (!btn) return;
+        try{
+          await deleteComment(btn.getAttribute('data-comment-delete'));
+        }catch(err){
+          alert(err?.message || "Impossible de supprimer le commentaire.");
         }
       });
     }
