@@ -19611,6 +19611,27 @@ function scheduleWeatherAfterTableSettled(){
   };
 
   const LB_COMMENTS_API = `${LB_API}/comments`;
+  const commentApiCandidates = (path = '') => {
+    const normalized = String(path || '').startsWith('/') ? String(path || '') : `/${String(path || '')}`;
+    const rel = `/api/comments${normalized === '/' ? '' : normalized}`;
+    const abs = `${LB_COMMENTS_API}${normalized === '/' ? '' : normalized}`;
+    return location.hostname.endsWith('labetaillere.fr') ? [rel, abs] : [abs, rel];
+  };
+
+  async function fetchCommentsApi(path = '', options = {}){
+    const candidates = commentApiCandidates(path);
+    let lastError = null;
+    for (const url of candidates){
+      try{
+        const res = await fetch(url, { credentials: 'include', ...options });
+        if (res.ok) return res;
+        lastError = new Error(`HTTP ${res.status}`);
+      }catch(err){
+        lastError = err;
+      }
+    }
+    throw lastError || new Error('Impossible de joindre l’API commentaires');
+  }
   let lbCommentState = { wall: [], trains: {} };
   window.lbCommentState = lbCommentState;
   let lbCurrentDetailTrain = '';
@@ -19733,7 +19754,7 @@ function scheduleWeatherAfterTableSettled(){
 
   async function loadMessages(){
     try{
-      const res = await fetch(`${LB_COMMENTS_API}?scope=wall`, { credentials: 'include' });
+      const res = await fetchCommentsApi('?scope=wall');
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       const list = Array.isArray(data) ? data : (Array.isArray(data?.comments) ? data.comments : []);
@@ -19755,10 +19776,9 @@ function scheduleWeatherAfterTableSettled(){
     if (!message) throw new Error('Commentaire vide');
     if (!isCommentingAllowed()) throw new Error('Connexion requise');
 
-    const res = await fetch(LB_COMMENTS_API, {
+    const res = await fetchCommentsApi('', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      credentials: 'include',
       body: JSON.stringify({ message, scope: 'wall' })
     });
 
@@ -19775,9 +19795,8 @@ function scheduleWeatherAfterTableSettled(){
     if (!commentId) throw new Error('Commentaire introuvable');
     if (currentUser?.role !== 'admin') throw new Error('Action réservée aux admins');
 
-    const res = await fetch(`${LB_COMMENTS_API}/${encodeURIComponent(commentId)}`, {
-      method: 'DELETE',
-      credentials: 'include'
+    const res = await fetchCommentsApi(`/${encodeURIComponent(commentId)}`, {
+      method: 'DELETE'
     });
 
     let data = null;
