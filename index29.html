@@ -24919,6 +24919,24 @@ document.addEventListener('DOMContentLoaded', function(){
     }
     throw lastErr || new Error('rawrange indisponible');
   }
+  async function fetchPublicRange(from, to){
+    const qs = `from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`;
+    const urls = [
+      `${STATS_API_BASE}/api/stats/gtfs/range?${qs}`,
+      `${STATS_API_BASE}/stats/gtfs/range?${qs}`
+    ];
+    let lastErr = null;
+    for (const url of urls){
+      try{
+        const res = await fetch(url, { cache:'no-store', credentials:'omit' });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        return await res.json();
+      }catch(e){
+        lastErr = e;
+      }
+    }
+    throw lastErr || new Error('range indisponible');
+  }
   async function ensure30DayPunctuality(){
     const to = dateMinusDays(luxTodayISO(), 1);
     const from = dateMinusDays(to, 29);
@@ -24947,33 +24965,57 @@ document.addEventListener('DOMContentLoaded', function(){
       if (total > 0 && Number.isFinite(pctNot)) return 100 - pctNot;
       return null;
     };
+	const avgFromRangeSeries = (range) => {
+      const series = Array.isArray(range?.series) ? range.series : [];
+      const values = series
+        .filter(x => x && x.date >= from && x.date <= to)
+        .map(x => 100 - Number(x?.pct_not_on_time ?? NaN))
+        .filter(v => Number.isFinite(v));
+      return values.length ? (values.reduce((a, b) => a + b, 0) / values.length) : null;
+    };
 
     ['homeBerPunctuality','homeWxPunctuality'].forEach((id)=>{
       const el = document.getElementById(id);
       if (el && (!el.textContent || /^[-–—.\s%]*$/.test(el.textContent))) el.textContent = '…';
     });
     try{
-      let rawPayload = null;
+      let pct = null;
+		
       try{
-        rawPayload = await fetchPublicRawRange(from, to);
-      }catch(_publicErr){
-        if (typeof loadRawRangeAPI === 'function') rawPayload = await loadRawRangeAPI(from, to);
-        else throw _publicErr;
+        const range = await fetchPublicRange(from, to);
+        pct = avgFromRangeSeries(range);
+      }catch(_publicRangeErr){
+        try{
+          if (typeof loadRangeAPI === 'function'){
+            const range = await loadRangeAPI(from, to);
+            pct = avgFromRangeSeries(range);
+          } else {
+            throw _publicRangeErr;
+          }
+        }catch(_privateRangeErr){
+          let rawPayload = null;
+          try{
+            rawPayload = await fetchPublicRawRange(from, to);
+          }catch(_publicErr){
+            if (typeof loadRawRangeAPI === 'function') rawPayload = await loadRawRangeAPI(from, to);
+            else throw _publicErr;
+          }
+
+          const rawDays = (typeof normalizeRawRangePayload === 'function')
+            ? normalizeRawRangePayload(rawPayload)
+            : (Array.isArray(rawPayload) ? rawPayload : (Array.isArray(rawPayload?.days) ? rawPayload.days : []));
+
+          const values = rawDays
+            .filter(day => day && day.date >= from && day.date <= to)
+            .map(day => {
+              if (typeof computeDaySummaryFromRaw === 'function') return dailyPctFromSummary(computeDaySummaryFromRaw(day));
+              return dailyPctFromSummary(day);
+            })
+            .filter(v => Number.isFinite(v));
+
+          pct = values.length ? (values.reduce((a,b)=>a+b,0) / values.length) : null;
+        }
       }
-
-      const rawDays = (typeof normalizeRawRangePayload === 'function')
-        ? normalizeRawRangePayload(rawPayload)
-        : (Array.isArray(rawPayload) ? rawPayload : (Array.isArray(rawPayload?.days) ? rawPayload.days : []));
-
-      const values = rawDays
-        .filter(day => day && day.date >= from && day.date <= to)
-        .map(day => {
-          if (typeof computeDaySummaryFromRaw === 'function') return dailyPctFromSummary(computeDaySummaryFromRaw(day));
-          return dailyPctFromSummary(day);
-        })
-        .filter(v => Number.isFinite(v));
-
-      const pct = values.length ? (values.reduce((a,b)=>a+b,0) / values.length) : null;
       if (!Number.isFinite(Number(pct))) throw new Error('Moyenne 30 jours invalide');
 
       window.__LB_LAST_30D_KEY = key;
