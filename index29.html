@@ -25134,7 +25134,7 @@ document.addEventListener('DOMContentLoaded', function(){
   function forceYesterdayPunctuality(){
     try{
       const title = document.querySelector('[data-home-punctuality-title], #homeWxPunctualityTitle, #homeBerPunctualityTitle');
-      if (title) title.textContent = 'Ponctualité (30 jours)';
+      if (title) title.textContent = 'Ponctualité (7 jours)';
     }catch(e){}
   }
 
@@ -25311,7 +25311,7 @@ document.addEventListener('DOMContentLoaded', function(){
   function syncPunctualityLayout(){
     try{
       var title = document.querySelector('[data-home-punctuality-title], #homeWxPunctualityTitle, #homeBerPunctualityTitle');
-      if(title) title.textContent = 'Ponctualité (30 jours)';
+      if(title) title.textContent = 'Ponctualité (7 jours)';
     }catch(e){}
   }
 
@@ -25574,6 +25574,24 @@ document.addEventListener('DOMContentLoaded', function(){
 <script id="home-punctuality-visual-fix-script">
 (function(){
   var homePunctChart = null;
+  var HOME_RING_REST_COLOR = 'rgba(125,217,255,0.18)';
+
+  function homeFmtPctShort(x){
+    var n = Number(x);
+    if (!Number.isFinite(n)) return '—';
+    return Math.round(n) + '%';
+  }
+
+  function homeColorForPunctuality(score){
+    var n = Number(score);
+    if (!Number.isFinite(n)) return '#f97316';
+    if (window.__lbStats && typeof window.__lbStats.colorForPunctuality === 'function') return window.__lbStats.colorForPunctuality(n);
+    if (n >= 90) return '#22c55e';
+    if (n >= 85) return '#84cc16';
+    if (n >= 80) return '#facc15';
+    if (n >= 75) return '#fb923c';
+    return '#f97316';
+  }
 
   function ensureHomePunctualityChart(){
     var host = document.getElementById('homeWxPunctuality');
@@ -25591,7 +25609,7 @@ document.addEventListener('DOMContentLoaded', function(){
           labels: ['Ponctualité', 'Reste'],
           datasets: [{
             data: [0, 100],
-            backgroundColor: [statsPalette.onTime, ringRestColor],
+            backgroundColor: ['#22c55e', HOME_RING_REST_COLOR],
             borderWidth: 0,
             cutout: '74%'
           }]
@@ -25616,11 +25634,11 @@ document.addEventListener('DOMContentLoaded', function(){
     var value = Number(pct);
     if (!Number.isFinite(value)) value = 0;
     value = Math.max(0, Math.min(100, value));
-    var ringColor = (typeof colorForPunctuality === 'function') ? colorForPunctuality(value) : '#f97316';
+    var ringColor = homeColorForPunctuality(value);
     chart.data.datasets[0].data = [value, Math.max(0, 100 - value)];
-    chart.data.datasets[0].backgroundColor = [ringColor, ringRestColor];
+    chart.data.datasets[0].backgroundColor = [ringColor, HOME_RING_REST_COLOR];
     chart.options.plugins.centerText.lines = [
-      { text: fmtPctShort(value), font: '900 20px Orbitron, system-ui', color: '#e8fbff' }
+      { text: homeFmtPctShort(value), font: '900 20px Orbitron, system-ui', color: '#e8fbff' }
     ];
     chart.update();
   }
@@ -25629,11 +25647,17 @@ document.addEventListener('DOMContentLoaded', function(){
     try{
       var title = document.getElementById('homeWxPunctualityTitle');
       if (title) title.textContent = 'Ponctualité (7 jours)';
-      if (typeof getLastDaysRange !== 'function') return;
-      var rangeInfo = getLastDaysRange(7);
+      var statsApi = window.__lbStats || {};
+      if (typeof statsApi.getLastDaysRange !== 'function') return;
+      var rangeInfo = statsApi.getLastDaysRange(7);
       var range = null;
       if (typeof loadRangeAPI === 'function') range = await loadRangeAPI(rangeInfo.from, rangeInfo.to);
-      else if (typeof fetchPublicRange === 'function') range = await fetchPublicRange(rangeInfo.from, rangeInfo.to);
+      else {
+        var qs = 'from=' + encodeURIComponent(rangeInfo.from) + '&to=' + encodeURIComponent(rangeInfo.to);
+        var res = await fetch('https://vps.labetaillere.fr/api/stats/gtfs/range?' + qs, { credentials: 'include', cache: 'no-store' });
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        range = await res.json();
+      }
       var series = Array.isArray(range?.series) ? range.series : [];
       var values = series.map(function(x){ return 100 - Number(x && x.pct_not_on_time || 0); }).filter(function(v){ return Number.isFinite(v); });
       if (!values.length) throw new Error('Aucune ponctualité 7 jours');
@@ -26397,8 +26421,8 @@ body{ padding-bottom: calc(var(--bottom-bar-height, 58px) + 10px) !important; }
   function syncLabels(){
     const punctualityTitle = document.getElementById('homeWxPunctualityTitle');
     const punctualityValue = document.getElementById('homeWxPunctuality');
-    if (punctualityTitle) punctualityTitle.textContent = 'Ponctualité (30 jours)';
-    if (punctualityValue) punctualityValue.title = 'Moyenne de ponctualité calculée du J-1 au J-30';
+    if (punctualityTitle) punctualityTitle.textContent = 'Ponctualité (7 jours)';
+    if (punctualityValue) punctualityValue.title = 'Moyenne de ponctualité calculée sur les 7 derniers jours clos';
     ['homeTrafficBadgeNorth','homeTrafficBadgeSouth'].forEach((id) => {
       const el = document.getElementById(id);
       if (el) el.title = 'Mise à jour automatique via GTFS temps réel';
