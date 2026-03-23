@@ -19610,66 +19610,28 @@ function scheduleWeatherAfterTableSettled(){
     return data;
   };
 
-  const LB_COMMENTS_STORAGE_KEY = 'lb_comments_v1';
-  const lbCommentsChannel = ('BroadcastChannel' in window) ? new BroadcastChannel('lb_comments_channel') : null;
+  const LB_COMMENTS_API = `${LB_API}/comments`;
   let lbCommentState = { wall: [], trains: {} };
+  window.lbCommentState = lbCommentState;
   let lbCurrentDetailTrain = '';
+  let lbCommentsPoller = null;
+  let currentUser = null;
+  window.currentUser = null;
 
   const safePseudo = () => String(lbPrefsCache?.pseudo || '').trim().slice(0,24);
-  const isCommentingAllowed = () => window.lbIsAuthed === true && !!safePseudo();
+  const isCommentingAllowed = () => window.lbIsAuthed === true;
 
-  function loadCommentState(){
-    try{
-      const raw = localStorage.getItem(LB_COMMENTS_STORAGE_KEY);
-      if (!raw) return { wall: [], trains: {} };
-      const js = JSON.parse(raw);
-      if (!js || typeof js !== 'object') return { wall: [], trains: {} };
-      return {
-        wall: Array.isArray(js.wall) ? js.wall : [],
-        trains: (js.trains && typeof js.trains === 'object') ? js.trains : {}
-      };
-    }catch(e){
-      return { wall: [], trains: {} };
-    }
-  }
-
-  function saveCommentState(){
-    try{ localStorage.setItem(LB_COMMENTS_STORAGE_KEY, JSON.stringify(lbCommentState)); }catch(e){}
-    try{ lbCommentsChannel?.postMessage({ type: 'sync' }); }catch(e){}
-  }
-
-  function getTrainComments(trainNumber){
-    const key = String(trainNumber || '').trim();
-    if (!key) return [];
-    const list = lbCommentState?.trains?.[key];
-    return Array.isArray(list) ? list.slice().sort((a,b)=>(b.ts||0)-(a.ts||0)) : [];
-  }
-
-  function getTrainCommentCount(trainNumber){
-    return getTrainComments(trainNumber).length;
-  }
-
-  function addComment({ text, trainNumber = '' }){
-    const pseudo = safePseudo();
-    if (!isCommentingAllowed()) throw new Error('Connexion + pseudo requis');
-    const msg = String(text || '').trim().slice(0,180);
-    if (!msg) throw new Error('Commentaire vide');
-    const train = String(trainNumber || '').trim();
-    const item = {
-      id: `${Date.now()}_${Math.random().toString(36).slice(2,8)}`,
-      pseudo,
-      text: msg,
-      trainNumber: train,
-      ts: Date.now()
+  function normalizeCommentItem(raw){
+    if (!raw || typeof raw !== 'object') return null;
+    const createdAt = raw.created_at || raw.createdAt || raw.ts || raw.timestamp || Date.now();
+    const createdTs = Number.isFinite(Number(createdAt)) ? Number(createdAt) : Date.parse(createdAt) || Date.now();
+    return {
+      id: raw.id || `${createdTs}_${Math.random().toString(36).slice(2,8)}`,
+      pseudo: String(raw.pseudo || raw.username || raw.user_pseudo || 'Voyageur').trim().slice(0, 24),
+      text: String(raw.message || raw.text || '').trim().slice(0, 180),
+      trainNumber: String(raw.train_number || raw.trainNumber || '').trim(),
+      ts: createdTs
     };
-    lbCommentState.wall = [item, ...(lbCommentState.wall || [])].slice(0,60);
-    if (train){
-      const arr = Array.isArray(lbCommentState.trains[train]) ? lbCommentState.trains[train] : [];
-      lbCommentState.trains[train] = [item, ...arr].slice(0,120);
-    }
-    saveCommentState();
-    renderCommentsUI();
-    return item;
   }
 
   const fmtHour = (ts) => {
@@ -19677,25 +19639,17 @@ function scheduleWeatherAfterTableSettled(){
     catch(e){ return '—'; }
   };
 
-  const fmtDateHourCompact = (ts) => {
-    try{
-      return new Date(ts || Date.now()).toLocaleString('fr-FR', {
-        day:'2-digit',
-        month:'2-digit',
-        hour:'2-digit',
-        minute:'2-digit'
-      }).replace(',', '');
-    }catch(e){ return '—'; }
-  };
-
-  function renderHomeLiveWall(){
+  function renderMessages(messages){
     const feed = $('homeLiveWallFeed');
     const form = $('homeLiveWallForm');
+    const input = $('homeLiveWallInput');
+    const submitBtn = form?.querySelector('button[type="submit"], button:not([type]), .auth-button');
     const cta = $('homeLiveWallCta');
     const countEl = $('homeLiveWallCount');
-    if (!feed || !form || !cta || !countEl) return;
+    if (!feed || !form || !input || !countEl) return;
 
-    const wall = Array.isArray(lbCommentState.wall) ? lbCommentState.wall.slice(0,60) : [];
+    const wallSource = Array.isArray(messages) ? messages : lbCommentState.wall;
+    const wall = Array.isArray(wallSource) ? wallSource.slice(0, 50) : [];
     countEl.textContent = String(Array.isArray(lbCommentState.wall) ? lbCommentState.wall.length : 0);
 
     if (!wall.length) {
@@ -19703,81 +19657,188 @@ function scheduleWeatherAfterTableSettled(){
     } else {
       feed.innerHTML = wall.map((it) => `
         <div class="live-wall-item live-wall-item--home live-wall-item--compact">
-          <div class="live-wall-item-text"><strong>${escapeHtml(it.pseudo || 'Voyageur')}</strong><span class="live-wall-inline-meta">${escapeHtml(fmtDateHourCompact(it.ts))}</span> : ${escapeHtml(it.text || '')}</div>
+          <div class="live-wall-item-text"><strong>${escapeHtml(it.pseudo || 'Voyageur')}</strong><span class="live-wall-inline-meta">${escapeHtml(fmtHour(it.ts))}</span> : ${escapeHtml(it.text || '')}</div>
+		  ${currentUser?.role === 'admin' && it.id ? `<div class="fav-comments-row"><button class="fav-comment-btn" type="button" data-comment-delete="${escapeHtml(String(it.id))}">Supprimer</button></div>` : ''}
         </div>
       `).join('');
       feed.scrollTop = 0;
     }
+
+    form.hidden = false;
     const can = isCommentingAllowed();
-    form.hidden = !can;
+    input.disabled = !can;
+    if (submitBtn) submitBtn.disabled = !can;
+    input.placeholder = can ? 'Partager une info rapide' : 'Connectez-vous pour commenter';
     cta.hidden = can;
-    if (!window.lbIsAuthed) cta.textContent = 'Connectez-vous pour commenter en direct.';
-    else if (!safePseudo()) cta.textContent = 'Ajoutez un pseudo dans Mes préférences pour commenter.';
+    if (!can) cta.textContent = 'Connectez-vous pour commenter en direct.';
     else cta.textContent = '';
   }
 
-  window.renderHomeLiveWall = renderHomeLiveWall;
+  window.renderMessages = renderMessages;
+  window.renderHomeLiveWall = renderMessages;
 
   function renderTrainComments(trainNumber){
     const listEl = $('trainDetailCommentsList');
     const countEl = $('trainDetailCommentsCount');
     const form = $('trainDetailCommentsForm');
-    if (!listEl || !countEl || !form) return;
+    const input = $('trainDetailCommentsInput');
+    if (!listEl || !countEl || !form || !input) return;
     const train = String(trainNumber || lbCurrentDetailTrain || '').trim();
-    const comments = getTrainComments(train).slice(0,30);
+    const comments = (Array.isArray(lbCommentState.wall) ? lbCommentState.wall : [])
+      .filter((it) => !train || !it.trainNumber || it.trainNumber === train)
+      .slice(0, 30);
+
     countEl.textContent = String(comments.length);
     listEl.innerHTML = comments.length
       ? comments.map((it)=>`<div class="train-comments-item"><div class="live-wall-meta"><strong>${escapeHtml(it.pseudo || 'Voyageur')}</strong><span>${fmtHour(it.ts)}</span></div><div>${escapeHtml(it.text || '')}</div></div>`).join('')
       : '<div class="live-wall-empty">Pas encore de commentaire sur ce train.</div>';
-    form.hidden = !isCommentingAllowed();
+
+    form.hidden = true;
+    input.disabled = true;
+    input.placeholder = 'Commentaires train bientôt synchronisés';
   }
 
   function renderCommentsUI(){
-    renderHomeLiveWall();
+    renderMessages();
     renderTrainComments(lbCurrentDetailTrain);
   }
+
+  async function checkAuth(){
+    let isAuthed = false;
+	currentUser = null;
+    window.currentUser = null;
+    try{
+      const data = await api('/me', { method: 'GET' });
+      currentUser = data?.user || null;
+      window.currentUser = currentUser;
+      isAuthed = !!currentUser;
+    }catch(_err){
+      isAuthed = false;
+	  currentUser = null;
+      window.currentUser = null;
+    }
+    window.lbIsAuthed = isAuthed;
+
+    if (isAuthed) {
+      try {
+        const data = await api('/prefs', { method: 'GET' });
+        lbPrefsCache = data?.prefs || lbPrefsCache || {};
+        window.lbPrefsCache = lbPrefsCache;
+      } catch(_err){}
+    }
+
+    renderCommentsUI();
+    return isAuthed;
+  }
+
+  async function loadMessages(){
+    try{
+      const res = await fetch(`${LB_COMMENTS_API}?scope=wall`, { credentials: 'include' });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      const list = Array.isArray(data) ? data : (Array.isArray(data?.comments) ? data.comments : []);
+      lbCommentState.wall = list.map(normalizeCommentItem).filter(Boolean).slice(0, 50);
+      window.lbCommentState = lbCommentState;
+      renderCommentsUI();
+      return lbCommentState.wall;
+    }catch(err){
+      console.warn('Impossible de charger les commentaires', err);
+      if (!Array.isArray(lbCommentState.wall)) lbCommentState.wall = [];
+      window.lbCommentState = lbCommentState;
+      renderCommentsUI();
+      return lbCommentState.wall;
+    }
+  }
+
+  async function sendMessage(text){
+    const message = String(text || '').trim().slice(0, 180);
+    if (!message) throw new Error('Commentaire vide');
+    if (!isCommentingAllowed()) throw new Error('Connexion requise');
+
+    const res = await fetch(LB_COMMENTS_API, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ message, scope: 'wall' })
+    });
+
+    let data = null;
+    try { data = await res.json(); } catch(_err) {}
+    if (!res.ok) throw new Error(data?.error || `HTTP ${res.status}`);
+
+    await loadMessages();
+    return data;
+  }
+
+  async function deleteComment(id){
+    const commentId = String(id || '').trim();
+    if (!commentId) throw new Error('Commentaire introuvable');
+    if (currentUser?.role !== 'admin') throw new Error('Action réservée aux admins');
+
+    const res = await fetch(`${LB_COMMENTS_API}/${encodeURIComponent(commentId)}`, {
+      method: 'DELETE',
+      credentials: 'include'
+    });
+
+    let data = null;
+    try { data = await res.json(); } catch(_err) {}
+    if (!res.ok) throw new Error(data?.error || `HTTP ${res.status}`);
+
+    await loadMessages();
+    return data;
+  }
+
+  window.checkAuth = checkAuth;
+  window.loadMessages = loadMessages;
+  window.sendMessage = sendMessage;
+  window.deleteComment = deleteComment;
 
   function bindCommentForms(){
     const homeForm = $('homeLiveWallForm');
     const homeInput = $('homeLiveWallInput');
     if (homeForm && !homeForm.dataset.bound){
       homeForm.dataset.bound = '1';
-      homeForm.addEventListener('submit', (e) => {
+      homeForm.addEventListener('submit', async (e) => {
         e.preventDefault();
         try{
-          addComment({ text: homeInput?.value || '' });
+          await sendMessage(homeInput?.value || '');
           if (homeInput) homeInput.value = '';
+          renderCommentsUI();
         }catch(err){
           alert(err?.message || "Impossible d'ajouter le commentaire.");
         }
       });
     }
+
+	const feed = $('homeLiveWallFeed');
+    if (feed && !feed.dataset.deleteBound){
+      feed.dataset.deleteBound = '1';
+      feed.addEventListener('click', async (e) => {
+        const btn = e.target.closest('[data-comment-delete]');
+        if (!btn) return;
+        try{
+          await deleteComment(btn.getAttribute('data-comment-delete'));
+        }catch(err){
+          alert(err?.message || "Impossible de supprimer le commentaire.");
+        }
+      });
+    }
+
     const trainForm = $('trainDetailCommentsForm');
     const trainInput = $('trainDetailCommentsInput');
     if (trainForm && !trainForm.dataset.bound){
       trainForm.dataset.bound = '1';
-      trainForm.addEventListener('submit', (e) => {
-        e.preventDefault();
-        try{
-          addComment({ text: trainInput?.value || '', trainNumber: lbCurrentDetailTrain });
-          if (trainInput) trainInput.value = '';
-        }catch(err){
-          alert(err?.message || "Impossible d'ajouter le commentaire.");
-        }
-      });
+      trainForm.hidden = true;
+      if (trainInput) {
+        trainInput.disabled = true;
+        trainInput.placeholder = 'Commentaires train bientôt synchronisés';
+      }
     }
-    try{
-      lbCommentsChannel?.addEventListener('message', (ev) => {
-        if (ev?.data?.type !== 'sync') return;
-        lbCommentState = loadCommentState();
-        renderCommentsUI();
-      });
-    }catch(e){}
-    window.addEventListener('storage', (ev) => {
-      if (ev.key !== LB_COMMENTS_STORAGE_KEY) return;
-      lbCommentState = loadCommentState();
-      renderCommentsUI();
-    });
+  }
+
+  function startCommentsPolling(){
+    if (lbCommentsPoller) clearInterval(lbCommentsPoller);
+    lbCommentsPoller = setInterval(loadMessages, 5000);
   }
 
   window.lbComments = {
@@ -19785,14 +19846,17 @@ function scheduleWeatherAfterTableSettled(){
       lbCurrentDetailTrain = String(trainNumber || '').trim();
       renderTrainComments(lbCurrentDetailTrain);
     },
-    refresh(){ renderCommentsUI(); },
-    count(trainNumber){ return getTrainCommentCount(trainNumber); }
+    refresh(){ loadMessages(); },
+    count(trainNumber){
+      const train = String(trainNumber || '').trim();
+      return (Array.isArray(lbCommentState.wall) ? lbCommentState.wall : []).filter((it) => !train || it.trainNumber === train).length;
+    }
   };
 
-  lbCommentState = loadCommentState();
   bindCommentForms();
   renderCommentsUI();
-
+  checkAuth().finally(loadMessages);
+  startCommentsPolling();
   const openModal = () => {
     const modal = $("lbAuthModal");
     if (!modal) return;
@@ -25713,7 +25777,7 @@ body{ padding-bottom: calc(var(--bottom-bar-height, 58px) + 10px) !important; }
 
 .bottom-nav{
   height: auto !important;
-  min-height: 0 !important;	
+  min-height: 0 !important;
   padding: 3px calc(env(safe-area-inset-right, 0px) + 10px) 1px calc(env(safe-area-inset-left, 0px) + 10px) !important;
 }
 .bottom-nav__items{ height:auto !important; align-items:stretch !important; gap:4px !important; }
