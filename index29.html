@@ -25531,6 +25531,18 @@ document.addEventListener('DOMContentLoaded', function(){
   font-weight: 800 !important;
   letter-spacing: .01em !important;
 }
+.home-card[aria-label="Météo sur votre ligne"] #homeWxPunctuality.home-punct-chart-host{
+  display:flex !important;
+  align-items:center !important;
+  justify-content:center !important;
+  min-height: 92px !important;
+  margin-top: 2px !important;
+}
+.home-punct-chart-wrap{
+  width: 92px;
+  height: 92px;
+  margin: 0 auto;
+}
 @media (max-width: 768px){
   .home-card[aria-label="Météo sur votre ligne"] .wx-stations{
     grid-template-columns: 1fr 1fr !important;
@@ -25553,33 +25565,90 @@ document.addEventListener('DOMContentLoaded', function(){
   .home-card[aria-label="Météo sur votre ligne"] #homeWxPunctuality{
     font-size: 1.75rem !important;
   }
+  .home-punct-chart-wrap{
+    width: 86px;
+    height: 86px;
+  }
 }
 </style>
 <script id="home-punctuality-visual-fix-script">
 (function(){
-  function colorForHomePunctuality(score){
-    var n = Number(score);
-    if (!Number.isFinite(n)) return '#eaf6ff';
-    if (n >= 95) return '#16a34a';
-    if (n >= 90) return '#22c55e';
-    if (n >= 85) return '#facc15';
-    if (n >= 80) return '#fb923c';
-    if (n >= 75) return '#f97316';
-    return '#ef4444';
+  var homePunctChart = null;
+
+  function ensureHomePunctualityChart(){
+    var host = document.getElementById('homeWxPunctuality');
+    if (!host) return null;
+    host.classList.add('home-punct-chart-host');
+    if (!document.getElementById('homeWxPunctualityChart')){
+      host.innerHTML = '<div class="home-punct-chart-wrap"><canvas id="homeWxPunctualityChart"></canvas></div>';
+    }
+    var canvas = document.getElementById('homeWxPunctualityChart');
+    if (!canvas || typeof Chart !== 'function') return null;
+    if (!homePunctChart){
+      homePunctChart = new Chart(canvas, {
+        type: 'doughnut',
+        data: {
+          labels: ['Ponctualité', 'Reste'],
+          datasets: [{
+            data: [0, 100],
+            backgroundColor: [statsPalette.onTime, ringRestColor],
+            borderWidth: 0,
+            cutout: '74%'
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: {
+            legend: { display: false },
+            tooltip: { enabled: false },
+            centerText: { lineGap: 12, lines: [] }
+          }
+        }
+      });
+    }
+    return homePunctChart;
+  }
+
+  function renderHomePunctualityChart(pct){
+    var chart = ensureHomePunctualityChart();
+    if (!chart) return;
+    var value = Number(pct);
+    if (!Number.isFinite(value)) value = 0;
+    value = Math.max(0, Math.min(100, value));
+    var ringColor = (typeof colorForPunctuality === 'function') ? colorForPunctuality(value) : '#f97316';
+    chart.data.datasets[0].data = [value, Math.max(0, 100 - value)];
+    chart.data.datasets[0].backgroundColor = [ringColor, ringRestColor];
+    chart.options.plugins.centerText.lines = [
+      { text: fmtPctShort(value), font: '900 20px Orbitron, system-ui', color: '#e8fbff' }
+    ];
+    chart.update();
+  }
+
+  async function loadHomePunctualityChart(){
+    try{
+      var title = document.getElementById('homeWxPunctualityTitle');
+      if (title) title.textContent = 'Ponctualité (7 jours)';
+      if (typeof getLastDaysRange !== 'function') return;
+      var rangeInfo = getLastDaysRange(7);
+      var range = null;
+      if (typeof loadRangeAPI === 'function') range = await loadRangeAPI(rangeInfo.from, rangeInfo.to);
+      else if (typeof fetchPublicRange === 'function') range = await fetchPublicRange(rangeInfo.from, rangeInfo.to);
+      var series = Array.isArray(range?.series) ? range.series : [];
+      var values = series.map(function(x){ return 100 - Number(x && x.pct_not_on_time || 0); }).filter(function(v){ return Number.isFinite(v); });
+      if (!values.length) throw new Error('Aucune ponctualité 7 jours');
+      var avg = values.reduce(function(a, b){ return a + b; }, 0) / values.length;
+      renderHomePunctualityChart(avg);
+    }catch(e){
+      renderHomePunctualityChart(0);
+    }
   }
 
   function applyHomePunctualityVisual(){
     try{
       var title = document.getElementById('homeWxPunctualityTitle');
-      if (title) title.textContent = 'Ponctualité (30 jours)';
-
-      var value = document.getElementById('homeWxPunctuality');
-      if (!value) return;
-      var raw = String(value.textContent || '').replace(',', '.');
-      var match = raw.match(/(\d+(?:\.\d+)?)/);
-      var num = match ? Number(match[1]) : NaN;
-      value.style.color = colorForHomePunctuality(num);
-      value.style.textShadow = Number.isFinite(num) ? '0 0 10px rgba(255,255,255,.08)' : 'none';
+      if (title) title.textContent = 'Ponctualité (7 jours)';
+      ensureHomePunctualityChart();
     }catch(e){}
   }
 
@@ -25587,16 +25656,16 @@ document.addEventListener('DOMContentLoaded', function(){
   if (typeof _orig === 'function' && !_orig.__lbHomePunctWrapped){
     window.updateHomePunctuality = function(pct, label){
       var out = _orig.apply(this, arguments);
-      applyHomePunctualityVisual();
+      renderHomePunctualityChart(pct);
       return out;
     };
     window.updateHomePunctuality.__lbHomePunctWrapped = true;
   }
 
-  document.addEventListener('DOMContentLoaded', applyHomePunctualityVisual);
-  window.addEventListener('load', applyHomePunctualityVisual);
-  setTimeout(applyHomePunctualityVisual, 250);
-  setTimeout(applyHomePunctualityVisual, 1200);
+  document.addEventListener('DOMContentLoaded', function(){ applyHomePunctualityVisual(); loadHomePunctualityChart(); });
+  window.addEventListener('load', loadHomePunctualityChart);
+  setTimeout(loadHomePunctualityChart, 250);
+  setTimeout(loadHomePunctualityChart, 1200);
 })();
 </script>
 
