@@ -1229,6 +1229,10 @@ body {
   padding:3px 7px;
   font-weight:800;
 }
+.lb-stop-chip.is-own{
+  border-color:rgba(255,160,160,.48);
+  cursor:pointer;
+}
 .home-card[aria-label="Mur de commentaires"] .live-wall-card--home,
 .home-card[aria-label="Mur de commentaires"],
 .home-card.live-wall-card--home{ min-height:0; }
@@ -27729,6 +27733,12 @@ body{ padding-bottom: calc(var(--bottom-bar-height, 58px) + 10px) !important; }
     try { localStorage.setItem(localSignalStorageKey(), JSON.stringify(COMMUNITY.localSignals)); } catch(_){}
   }
 
+  function removeLocalSignalById(signalId){
+    loadLocalSignals();
+    COMMUNITY.localSignals = COMMUNITY.localSignals.filter((it)=> String(it.id) !== String(signalId));
+    try { localStorage.setItem(localSignalStorageKey(), JSON.stringify(COMMUNITY.localSignals)); } catch(_){}
+  }
+
   function loadLocalPresences(){
     try{
       const raw = JSON.parse(localStorage.getItem(localPresenceStorageKey()) || '[]');
@@ -27745,6 +27755,11 @@ body{ padding-bottom: calc(var(--bottom-bar-height, 58px) + 10px) !important; }
     try { localStorage.setItem(localPresenceStorageKey(), JSON.stringify(current.slice(0, 500))); } catch(_){}
   }
 
+  function removeLocalPresenceById(presenceId){
+    const current = loadLocalPresences().filter((it)=> String(it.id) !== String(presenceId));
+    try { localStorage.setItem(localPresenceStorageKey(), JSON.stringify(current)); } catch(_){}
+  }
+	
   function detectCommentTrainNumber(item){
     if (!item) return '';
     const direct = normalizeKey(item.trainNumber || item.train_number || item.train || '');
@@ -27766,6 +27781,7 @@ body{ padding-bottom: calc(var(--bottom-bar-height, 58px) + 10px) !important; }
     const detail = parsed ? String(parsed[5] || '').trim() : message;
     const delayMin = Number(raw.delay_min || raw.delayMin || 0);
     const infoTag = String(raw.info_tag || raw.infoTag || '').trim();
+	const accountId = String(raw.account_id || raw.accountId || raw.user_id || '').trim();
     return {
       id: raw.id || `${ts}_${Math.random().toString(36).slice(2,8)}`,
       pseudo: String(raw.pseudo || raw.username || raw.user_pseudo || 'Voyageur').trim().slice(0,24),
@@ -27774,6 +27790,7 @@ body{ padding-bottom: calc(var(--bottom-bar-height, 58px) + 10px) !important; }
       signalType,
       delayMin: Number.isFinite(delayMin) ? delayMin : 0,
       infoTag,
+	  accountId,
       trainNumber,
       station,
       ts
@@ -27942,16 +27959,32 @@ body{ padding-bottom: calc(var(--bottom-bar-height, 58px) + 10px) !important; }
     return `local:${getLocalAccountId()}`;
   }
 
+  function normalizeIdentity(value){
+    return String(value || '').trim().toLowerCase();
+  }
+
+  function isOwnSignal(signal){
+    const current = normalizeIdentity(getCurrentPresenceIdentity());
+    const byAccount = normalizeIdentity(signal?.accountId);
+    if (byAccount) return byAccount === current;
+    const pseudo = normalizeIdentity(window.currentUser?.pseudo || window.currentUser?.username || window.lbPrefsCache?.pseudo);
+    return !!pseudo && normalizeIdentity(signal?.pseudo) === pseudo;
+  }
+
+  function getMyPresenceToday(){
+    const ident = normalizeIdentity(getCurrentPresenceIdentity());
+    const today = toIsoDay();
+    return (Array.isArray(COMMUNITY.presences) ? COMMUNITY.presences : []).find((it)=>{
+      const day = toIsoDay(new Date(it.ts || Date.now()));
+      const identity = normalizeIdentity(it.accountId || it.pseudo);
+      return day === today && identity === ident;
+    }) || null;
+  }
+
   function hasCurrentUserPresence(trainNumber){
     const key = normalizeKey(trainNumber);
-    const ident = getCurrentPresenceIdentity();
-    if (!key || !ident) return false;
-    const today = toIsoDay();
-    return (Array.isArray(COMMUNITY.presences) ? COMMUNITY.presences : []).some((it)=>{
-      const day = toIsoDay(new Date(it.ts || Date.now()));
-      const identity = String(it.accountId || it.pseudo || '').trim().toLowerCase();
-      return normalizeKey(it.trainNumber) === key && day === today && identity === String(ident || '').toLowerCase();
-    });
+    const mine = getMyPresenceToday();
+    return !!mine && normalizeKey(mine.trainNumber) === key;
   }
 
   async function getLiveTrainStaticInfo(trainNumber){
@@ -28047,7 +28080,8 @@ body{ padding-bottom: calc(var(--bottom-bar-height, 58px) + 10px) !important; }
       const signals = getSignalsForTrain(train.trainNumber);
       const wallComments = getWallCommentsForTrain(train.trainNumber);
       const presence = getPresenceStatsForTrain(train.trainNumber);
-      const isAlreadyIn = hasCurrentUserPresence(train.trainNumber);
+      const myPresence = getMyPresenceToday();
+      const isInThisTrain = !!myPresence && normalizeKey(myPresence.trainNumber) === normalizeKey(train.trainNumber);
       const gtfsInfo = COMMUNITY.staticInfoCache.get(`${normalizeKey(train.trainNumber)}_${toYmd()}`) || null;
       const chips = [];
       if (signals.length) chips.push(`👥 ${signals.length} signalement(s)`);
@@ -28069,7 +28103,7 @@ body{ padding-bottom: calc(var(--bottom-bar-height, 58px) + 10px) !important; }
           <div class="lb-live-meta">${chips.length ? chips.map((chip)=>`<span class="lb-live-chip">${chip}</span>`).join('') : '<span class="lb-live-chip">Aucun retour voyageur</span>'}</div>
           <div class="lb-live-presence">
             <span class="lb-live-presence-count">🐮 ${presence.count} voyageur(s) dans ce train aujourd'hui</span>
-            <button type="button" class="lb-live-presence-btn" data-lb-presence-train="${safeEscape(train.trainNumber)}" ${isAlreadyIn ? 'disabled' : ''}>🐮 Je suis dans ce train</button>
+            <button type="button" class="lb-live-presence-btn" data-lb-presence-train="${safeEscape(train.trainNumber)}">${isInThisTrain ? '✅ Je quitte ce train' : '🐮 Je suis dans ce train'}</button>
           </div>
           <div class="lb-live-card-actions">
             <button type="button" data-lb-view-train="${safeEscape(train.trainNumber)}">Voir les retours</button>
@@ -28146,7 +28180,11 @@ body{ padding-bottom: calc(var(--bottom-bar-height, 58px) + 10px) !important; }
     stopsEl.innerHTML = stops.map((stopName)=>{
       const stopSignals = signals.filter((s)=> String(s.station || '').toLowerCase() === String(stopName).toLowerCase());
       const chips = stopSignals.length
-        ? stopSignals.slice(0, 6).map((s)=>`<span class="lb-stop-chip">${safeEscape(signalDisplayLabel(s))}</span>`).join('')
+        ? stopSignals.slice(0, 6).map((s)=>{
+          const mine = isOwnSignal(s);
+          const attrs = mine ? ` role="button" tabindex="0" title="Supprimer mon signalement" data-lb-delete-signal="${safeEscape(String(s.id || ''))}"` : '';
+          return `<span class="lb-stop-chip${mine ? ' is-own' : ''}"${attrs}>${safeEscape(signalDisplayLabel(s))}</span>`;
+        }).join('')
         : '<span class="lb-stop-chip">Aucun signalement</span>';
       return `<article class="lb-train-stop-item"><div class="lb-train-stop-name">${safeEscape(stopName)}</div><div class="lb-train-stop-signals">${chips}</div></article>`;
     }).join('');
@@ -28203,6 +28241,7 @@ body{ padding-bottom: calc(var(--bottom-bar-height, 58px) + 10px) !important; }
     const station = String(stationSelect?.value || '').trim();
     const delayMin = Number(delaySelect?.value || 0);
     const infoTag = COMMUNITY.selectedInfoTag;
+	const accountId = getCurrentPresenceIdentity();
     const detail = String(detailEl?.value || '').trim().slice(0, 180);
     if (!trainKey){ if (feedback) feedback.textContent = 'Choisissez un train live.'; return; }
     if (!signalType){ if (feedback) feedback.textContent = 'Choisissez un type de signalement.'; return; }
@@ -28225,7 +28264,7 @@ body{ padding-bottom: calc(var(--bottom-bar-height, 58px) + 10px) !important; }
       const res = await fetchCommentsApi('', {
         method:'POST',
         headers:{ 'Content-Type':'application/json' },
-        body: JSON.stringify({ message, scope:'signals', train_number: trainKey, station, signal_type: signalType, delay_min: delayMin || null, info_tag: infoTag || null })
+        body: JSON.stringify({ message, scope:'signals', train_number: trainKey, station, signal_type: signalType, delay_min: delayMin || null, info_tag: infoTag || null, account_id: accountId })
       });
       let data = null;
       try { data = await res.json(); } catch(_){ }
@@ -28249,6 +28288,7 @@ body{ padding-bottom: calc(var(--bottom-bar-height, 58px) + 10px) !important; }
         signal_type: signalType,
         delay_min: delayMin || 0,
         info_tag: infoTag || '',
+		account_id: accountId,
         created_at: Date.now()
       });
       if (localItem){
@@ -28273,8 +28313,13 @@ body{ padding-bottom: calc(var(--bottom-bar-height, 58px) + 10px) !important; }
   async function publishPresence(trainNumber){
     const key = normalizeKey(trainNumber);
     if (!key) return;
-    if (hasCurrentUserPresence(key)){
+    const existing = getMyPresenceToday();
+    if (existing && normalizeKey(existing.trainNumber) === key){
+      await clearMyPresence();
       return;
+    }
+    if (existing && normalizeKey(existing.trainNumber) !== key){
+      await clearMyPresence();
     }
 	const accountId = getCurrentPresenceIdentity();
     const payload = { message: `[PRESENCE] TER ${key} — ${toIsoDay()}`, scope:'presence', train_number:key, account_id: accountId };
@@ -28306,6 +28351,36 @@ body{ padding-bottom: calc(var(--bottom-bar-height, 58px) + 10px) !important; }
     }
   }
 
+  async function clearMyPresence(){
+    const mine = getMyPresenceToday();
+    if (!mine) return;
+    try{
+      if (mine.id){
+        const deleteRes = await fetchCommentsApi(`/${encodeURIComponent(String(mine.id))}`, { method:'DELETE' });
+        if (!deleteRes.ok) throw new Error(`HTTP ${deleteRes.status}`);
+      }
+    }catch(_){}
+    removeLocalPresenceById(mine.id);
+    COMMUNITY.presences = (Array.isArray(COMMUNITY.presences) ? COMMUNITY.presences : []).filter((it)=> String(it.id) !== String(mine.id));
+    refreshCommunityViews();
+    refreshLiveModal();
+  }
+
+  async function deleteOwnSignal(signalId){
+    const sig = (Array.isArray(COMMUNITY.signals) ? COMMUNITY.signals : []).find((it)=> String(it.id) === String(signalId));
+    if (!sig || !isOwnSignal(sig)) return;
+    try{
+      if (sig.id){
+        const res = await fetchCommentsApi(`/${encodeURIComponent(String(sig.id))}`, { method:'DELETE' });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      }
+    }catch(_){}
+    removeLocalSignalById(sig.id);
+    COMMUNITY.signals = (Array.isArray(COMMUNITY.signals) ? COMMUNITY.signals : []).filter((it)=> String(it.id) !== String(sig.id));
+    refreshCommunityViews();
+    renderTrainDetail(COMMUNITY.selectedTrain);
+  }
+
   document.addEventListener('click', (e)=>{
     const openLiveBtn = e.target.closest('#lbOpenLiveModal');
     if (openLiveBtn){ e.preventDefault(); openCommunityModal('lbLiveModal'); return; }
@@ -28319,6 +28394,12 @@ body{ padding-bottom: calc(var(--bottom-bar-height, 58px) + 10px) !important; }
       renderLiveFeed(COMMUNITY.selectedTrain);
       renderTrainDetail(COMMUNITY.selectedTrain);
       openCommunityModal('lbTrainDetailModal');
+      return;
+    }
+	const deleteSignalChip = e.target.closest('[data-lb-delete-signal]');
+    if (deleteSignalChip){
+      e.preventDefault();
+      deleteOwnSignal(deleteSignalChip.getAttribute('data-lb-delete-signal'));
       return;
     }
     const signalTrainBtn = e.target.closest('[data-lb-signal-train]');
