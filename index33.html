@@ -1081,6 +1081,41 @@ body {
   font-weight:800;
   cursor:pointer;
 }
+.lb-live-schedule{
+  margin-top:8px;
+  padding:7px 9px;
+  border-radius:10px;
+  border:1px solid rgba(0,240,255,.18);
+  background:rgba(0,20,38,.38);
+  font-size:.74rem;
+  line-height:1.35;
+  color:#d8f8ff;
+}
+.lb-live-presence{
+  margin-top:7px;
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:8px;
+}
+.lb-live-presence-count{
+  font-size:.72rem;
+  opacity:.92;
+}
+.lb-live-presence-btn{
+  border:1px solid rgba(77,245,174,.45);
+  background:linear-gradient(180deg, rgba(8,88,72,.65), rgba(6,56,46,.92));
+  color:#dcffef;
+  border-radius:999px;
+  padding:6px 10px;
+  font-weight:700;
+  font-size:.7rem;
+  cursor:pointer;
+}
+.lb-live-presence-btn:disabled{
+  opacity:.65;
+  cursor:not-allowed;
+}
 .lb-live-feed{ display:grid; gap:8px; max-height:55vh; overflow:auto; }
 .lb-live-feed-item{
   padding:8px 10px;
@@ -27524,7 +27559,34 @@ body{ padding-bottom: calc(var(--bottom-bar-height, 58px) + 10px) !important; }
     selectedTrain: '',
     selectedSignalType: '',
     liveTrains: [],
-    signals: []
+    signals: [],
+    presences: [],
+    staticInfoCache: new Map()
+  };
+
+  const toYmd = (date = new Date())=>{
+    const y = date.getFullYear();
+    const m = String(date.getMonth() + 1).padStart(2, '0');
+    const d = String(date.getDate()).padStart(2, '0');
+    return `${y}${m}${d}`;
+  };
+  const toIsoDay = (date = new Date())=> `${toYmd(date).slice(0,4)}-${toYmd(date).slice(4,6)}-${toYmd(date).slice(6,8)}`;
+  const formatGtfsHHMM = (raw)=>{
+    const digits = String(raw || '').replace(/\D/g, '');
+    if (!digits) return '—';
+    const hh = digits.slice(0, 2);
+    const mm = digits.slice(2, 4) || '00';
+    if (!hh) return '—';
+    return `${hh}:${mm}`;
+  };
+  const getCompoForTrain = (trainNumber)=>{
+    const raw = window.compoData?.[String(trainNumber || '').trim()] || '';
+    const normalized = String(raw || '').trim().toUpperCase();
+    if (!normalized) return '—';
+    if (normalized === 'US') return 'US 🐮 1';
+    if (normalized.startsWith('UM3')) return 'UM3 🐮 3';
+    if (normalized.startsWith('UM')) return 'UM 🐮 2';
+    return normalized;
   };
 
   function detectCommentTrainNumber(item){
@@ -27572,6 +27634,36 @@ body{ padding-bottom: calc(var(--bottom-bar-height, 58px) + 10px) !important; }
     }
     refreshCommunityViews();
     return COMMUNITY.signals;
+  }
+
+  function normalizePresenceItem(raw){
+    if (!raw || typeof raw !== 'object') return null;
+    const createdAt = raw.created_at || raw.createdAt || raw.ts || raw.timestamp || Date.now();
+    const ts = Number.isFinite(Number(createdAt)) ? Number(createdAt) : (Date.parse(createdAt) || Date.now());
+    const trainNumber = normalizeKey(raw.train_number || raw.trainNumber || detectCommentTrainNumber(raw));
+    if (!trainNumber) return null;
+    return {
+      id: raw.id || `${ts}_${Math.random().toString(36).slice(2,8)}`,
+      pseudo: String(raw.pseudo || raw.username || raw.user_pseudo || '').trim().slice(0,24),
+      trainNumber,
+      ts
+    };
+  }
+
+  async function loadPresences(){
+    try{
+      if (typeof fetchCommentsApi !== 'function') return [];
+      const res = await fetchCommentsApi('?scope=presence');
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      const list = Array.isArray(data) ? data : (Array.isArray(data?.comments) ? data.comments : []);
+      COMMUNITY.presences = list.map(normalizePresenceItem).filter(Boolean).sort((a,b)=> Number(b.ts||0) - Number(a.ts||0)).slice(0, 500);
+    }catch(err){
+      console.warn('Impossible de charger les présences voyageurs', err);
+      COMMUNITY.presences = Array.isArray(COMMUNITY.presences) ? COMMUNITY.presences : [];
+    }
+    refreshCommunityViews();
+    return COMMUNITY.presences;
   }
 
   function getRawLiveTrainPayload(){
@@ -27648,6 +27740,62 @@ body{ padding-bottom: calc(var(--bottom-bar-height, 58px) + 10px) !important; }
     return (Array.isArray(COMMUNITY.signals) ? COMMUNITY.signals : []).filter((it)=> normalizeKey(it.trainNumber) === key);
   }
 
+  function getPresenceStatsForTrain(trainNumber){
+    const key = normalizeKey(trainNumber);
+    const today = toIsoDay();
+    const map = new Map();
+    (Array.isArray(COMMUNITY.presences) ? COMMUNITY.presences : []).forEach((it)=>{
+      if (normalizeKey(it.trainNumber) !== key) return;
+      const day = toIsoDay(new Date(it.ts || Date.now()));
+      if (day !== today) return;
+      const uniqKey = `${String(it.pseudo || '').trim().toLowerCase()}|${day}|${key}`;
+      if (!map.has(uniqKey)) map.set(uniqKey, it);
+    });
+    return { count: map.size, today };
+  }
+
+  function getCurrentPresenceIdentity(){
+    return String(window.currentUser?.pseudo || window.currentUser?.username || window.lbPrefsCache?.pseudo || '').trim().toLowerCase();
+  }
+
+  function hasCurrentUserPresence(trainNumber){
+    const key = normalizeKey(trainNumber);
+    const ident = getCurrentPresenceIdentity();
+    if (!key || !ident) return false;
+    const today = toIsoDay();
+    return (Array.isArray(COMMUNITY.presences) ? COMMUNITY.presences : []).some((it)=>{
+      const day = toIsoDay(new Date(it.ts || Date.now()));
+      return normalizeKey(it.trainNumber) === key && day === today && String(it.pseudo || '').trim().toLowerCase() === ident;
+    });
+  }
+
+  async function getLiveTrainStaticInfo(trainNumber){
+    const key = normalizeKey(trainNumber);
+    const day = toYmd();
+    if (!key) return null;
+    const cacheKey = `${key}_${day}`;
+    if (COMMUNITY.staticInfoCache.has(cacheKey)) return COMMUNITY.staticInfoCache.get(cacheKey);
+    let info = null;
+    if (typeof buildGtfsFallbackResult === 'function'){
+      try{
+        const fallback = await buildGtfsFallbackResult(key, { ymd: day });
+        const stops = fallback?.train?.stop_times || [];
+        if (stops.length){
+          info = {
+            departure: formatGtfsHHMM(stops[0]?.departure_time || stops[0]?.arrival_time),
+            arrival: formatGtfsHHMM(stops[stops.length - 1]?.arrival_time || stops[stops.length - 1]?.departure_time),
+            trainType: getCompoForTrain(key)
+          };
+        }
+      }catch(_){}
+    }
+    if (!info){
+      info = { departure:'—', arrival:'—', trainType:getCompoForTrain(key) };
+    }
+    COMMUNITY.staticInfoCache.set(cacheKey, info);
+    return info;
+  }
+
   function formatSignalTypeLabel(type){
     switch(String(type || '').toLowerCase()){
       case 'retard': return '⏱ Retard';
@@ -27682,7 +27830,10 @@ body{ padding-bottom: calc(var(--bottom-bar-height, 58px) + 10px) !important; }
     const statusEl = $id('lbCommunityStatus');
     if (statusEl){
       const signalCount = Array.isArray(COMMUNITY.signals) ? COMMUNITY.signals.length : 0;
-      statusEl.textContent = signalCount > 0 ? `${signalCount} signalement(s) voyageurs disponibles en live.` : 'Live voyageurs et signalements en temps réel.';
+      const presenceCount = Array.isArray(COMMUNITY.presences) ? COMMUNITY.presences.filter((it)=> toIsoDay(new Date(it.ts || Date.now())) === toIsoDay()).length : 0;
+      statusEl.textContent = (signalCount > 0 || presenceCount > 0)
+        ? `${signalCount} signalement(s) · ${presenceCount} voyageur(s) en live aujourd'hui.`
+        : 'Live voyageurs et signalements en temps réel.';
     }
     if ($id('lbLiveModal')?.classList.contains('is-open')) refreshLiveModal();
     if ($id('lbSignalModal')?.classList.contains('is-open')) refreshSignalModal();
@@ -27701,6 +27852,9 @@ body{ padding-bottom: calc(var(--bottom-bar-height, 58px) + 10px) !important; }
     cardsEl.innerHTML = COMMUNITY.liveTrains.map((train)=>{
       const signals = getSignalsForTrain(train.trainNumber);
       const wallComments = getWallCommentsForTrain(train.trainNumber);
+      const presence = getPresenceStatsForTrain(train.trainNumber);
+      const isAlreadyIn = hasCurrentUserPresence(train.trainNumber);
+      const gtfsInfo = COMMUNITY.staticInfoCache.get(`${normalizeKey(train.trainNumber)}_${toYmd()}`) || null;
       const chips = [];
       if (signals.length) chips.push(`👥 ${signals.length} signalement(s)`);
       if (wallComments.length) chips.push(`💬 ${wallComments.length} commentaire(s)`);
@@ -27715,13 +27869,32 @@ body{ padding-bottom: calc(var(--bottom-bar-height, 58px) + 10px) !important; }
             </div>
             <span class="lb-live-status lb-live-status--${safeEscape(train.statusClass)}">${safeEscape(train.statusLabel)}</span>
           </div>
+          <div class="lb-live-schedule" data-lb-train-schedule="${safeEscape(train.trainNumber)}">
+            ⏱ ${safeEscape(gtfsInfo ? `${gtfsInfo.departure} - ${gtfsInfo.arrival}` : 'Horaires GTFS en chargement...')} · Type : ${safeEscape(gtfsInfo?.trainType || '—')}
+          </div>
           <div class="lb-live-meta">${chips.length ? chips.map((chip)=>`<span class="lb-live-chip">${chip}</span>`).join('') : '<span class="lb-live-chip">Aucun retour voyageur</span>'}</div>
+          <div class="lb-live-presence">
+            <span class="lb-live-presence-count">🐮 ${presence.count} voyageur(s) dans ce train aujourd'hui</span>
+            <button type="button" class="lb-live-presence-btn" data-lb-presence-train="${safeEscape(train.trainNumber)}" ${isAlreadyIn ? 'disabled' : ''}>🐮 Je suis dans ce train</button>
+          </div>
           <div class="lb-live-card-actions">
             <button type="button" data-lb-view-train="${safeEscape(train.trainNumber)}">Voir les retours</button>
             <button type="button" data-lb-signal-train="${safeEscape(train.trainNumber)}">⚠️ Signaler</button>
           </div>
         </div>`;
     }).join('');
+    hydrateLiveTrainStaticInfos();
+  }
+
+  async function hydrateLiveTrainStaticInfos(){
+    const trains = Array.isArray(COMMUNITY.liveTrains) ? COMMUNITY.liveTrains.slice(0, 20) : [];
+    if (!trains.length) return;
+    await Promise.all(trains.map(async (train)=>{
+      const info = await getLiveTrainStaticInfo(train.trainNumber);
+      const node = document.querySelector(`[data-lb-train-schedule="${String(train.trainNumber)}"]`);
+      if (!node || !info) return;
+      node.textContent = `⏱ ${info.departure} - ${info.arrival} · Type : ${info.trainType}`;
+    }));
   }
 
   function renderLiveFeed(trainNumber){
@@ -27832,6 +28005,33 @@ body{ padding-bottom: calc(var(--bottom-bar-height, 58px) + 10px) !important; }
     }
   }
 
+  async function publishPresence(trainNumber){
+    const key = normalizeKey(trainNumber);
+    if (!key) return;
+    if (typeof isCommentingAllowed === 'function' && !isCommentingAllowed()){
+      alert('Connectez-vous pour indiquer votre présence dans le train.');
+      return;
+    }
+    if (hasCurrentUserPresence(key)){
+      return;
+    }
+    try{
+      const message = `[PRESENCE] TER ${key} — ${toIsoDay()}`;
+      const res = await fetchCommentsApi('', {
+        method:'POST',
+        headers:{ 'Content-Type':'application/json' },
+        body: JSON.stringify({ message, scope:'presence', train_number:key })
+      });
+      let data = null;
+      try { data = await res.json(); } catch(_){ }
+      if (!res.ok) throw new Error(data?.error || `HTTP ${res.status}`);
+      await loadPresences();
+      refreshLiveModal();
+    }catch(err){
+      console.warn('Impossible de publier la présence train', err);
+    }
+  }
+
   document.addEventListener('click', (e)=>{
     const openLiveBtn = e.target.closest('#lbOpenLiveModal');
     if (openLiveBtn){ e.preventDefault(); openCommunityModal('lbLiveModal'); return; }
@@ -27848,6 +28048,12 @@ body{ padding-bottom: calc(var(--bottom-bar-height, 58px) + 10px) !important; }
       const trainSelect = $id('lbSignalTrainSelect');
       if (trainSelect) trainSelect.value = COMMUNITY.selectedTrain;
       updateSignalStationOptions();
+      return;
+    }
+    const presenceBtn = e.target.closest('[data-lb-presence-train]');
+    if (presenceBtn){
+      e.preventDefault();
+      publishPresence(presenceBtn.getAttribute('data-lb-presence-train'));
       return;
     }
     if (e.target.classList.contains('lb-community-modal')){
@@ -27886,9 +28092,15 @@ body{ padding-bottom: calc(var(--bottom-bar-height, 58px) + 10px) !important; }
   window.addEventListener('gtfsrt:loaded', ()=>{ refreshCommunityViews(); });
   window.addEventListener('load', ()=>{
     refreshCommunityViews();
-    setTimeout(()=>{ loadSignals(); }, 1000);
+    setTimeout(()=>{
+      loadSignals();
+      loadPresences();
+    }, 1000);
   });
-  setInterval(loadSignals, 8000);
+  setInterval(()=>{
+    loadSignals();
+    loadPresences();
+  }, 8000);
 
   window.lbCommunityLive = {
     refresh: refreshCommunityViews,
