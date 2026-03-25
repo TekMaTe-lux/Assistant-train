@@ -27698,6 +27698,20 @@ body{ padding-bottom: calc(var(--bottom-bar-height, 58px) + 10px) !important; }
     'wc-condamne': '🚻 WC condamné'
   };
   const localSignalStorageKey = ()=> `lb_local_signals_${toIsoDay()}`;
+  const localPresenceStorageKey = ()=> `lb_local_presence_${toIsoDay()}`;
+  const localDeviceAccountKey = 'lb_local_account_id';
+
+  function getLocalAccountId(){
+    try{
+      const existing = localStorage.getItem(localDeviceAccountKey);
+      if (existing) return existing;
+      const created = `device_${Math.random().toString(36).slice(2, 10)}`;
+      localStorage.setItem(localDeviceAccountKey, created);
+      return created;
+    }catch(_){
+      return `device_fallback`;
+    }
+  }
 
   function loadLocalSignals(){
     try{
@@ -27713,6 +27727,22 @@ body{ padding-bottom: calc(var(--bottom-bar-height, 58px) + 10px) !important; }
     COMMUNITY.localSignals.unshift(item);
     COMMUNITY.localSignals = COMMUNITY.localSignals.slice(0, 300);
     try { localStorage.setItem(localSignalStorageKey(), JSON.stringify(COMMUNITY.localSignals)); } catch(_){}
+  }
+
+  function loadLocalPresences(){
+    try{
+      const raw = JSON.parse(localStorage.getItem(localPresenceStorageKey()) || '[]');
+      const list = Array.isArray(raw) ? raw : [];
+      return list.map(normalizePresenceItem).filter(Boolean);
+    }catch(_){
+      return [];
+    }
+  }
+
+  function saveLocalPresence(item){
+    const current = loadLocalPresences();
+    current.unshift(item);
+    try { localStorage.setItem(localPresenceStorageKey(), JSON.stringify(current.slice(0, 500))); } catch(_){}
   }
 
   function detectCommentTrainNumber(item){
@@ -27752,8 +27782,12 @@ body{ padding-bottom: calc(var(--bottom-bar-height, 58px) + 10px) !important; }
 
   async function loadSignals(){
     loadLocalSignals();
+	if (typeof fetchCommentsApi !== 'function'){
+      COMMUNITY.signals = Array.isArray(COMMUNITY.localSignals) ? COMMUNITY.localSignals.slice(0, 200) : [];
+      refreshCommunityViews();
+      return COMMUNITY.signals;
+    }
     try{
-      if (typeof fetchCommentsApi !== 'function') return [];
       const res = await fetchCommentsApi('?scope=signals');
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
@@ -27781,14 +27815,20 @@ body{ padding-bottom: calc(var(--bottom-bar-height, 58px) + 10px) !important; }
     return {
       id: raw.id || `${ts}_${Math.random().toString(36).slice(2,8)}`,
       pseudo: String(raw.pseudo || raw.username || raw.user_pseudo || '').trim().slice(0,24),
+	  accountId: String(raw.account_id || raw.accountId || raw.user_id || '').trim(),
       trainNumber,
       ts
     };
   }
 
   async function loadPresences(){
+	const localPres = loadLocalPresences();
+    if (typeof fetchCommentsApi !== 'function'){
+      COMMUNITY.presences = localPres.slice(0, 500);
+      refreshCommunityViews();
+      return COMMUNITY.presences;
+    }
     try{
-      if (typeof fetchCommentsApi !== 'function') return [];
       const res = await fetchCommentsApi('?scope=presence');
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
@@ -27798,6 +27838,9 @@ body{ padding-bottom: calc(var(--bottom-bar-height, 58px) + 10px) !important; }
       console.warn('Impossible de charger les présences voyageurs', err);
       COMMUNITY.presences = Array.isArray(COMMUNITY.presences) ? COMMUNITY.presences : [];
     }
+	COMMUNITY.presences = [...localPres, ...(Array.isArray(COMMUNITY.presences) ? COMMUNITY.presences : [])]
+      .sort((a,b)=> Number(b.ts||0) - Number(a.ts||0))
+      .slice(0, 500);
     refreshCommunityViews();
     return COMMUNITY.presences;
   }
@@ -27884,14 +27927,19 @@ body{ padding-bottom: calc(var(--bottom-bar-height, 58px) + 10px) !important; }
       if (normalizeKey(it.trainNumber) !== key) return;
       const day = toIsoDay(new Date(it.ts || Date.now()));
       if (day !== today) return;
-      const uniqKey = `${String(it.pseudo || '').trim().toLowerCase()}|${day}|${key}`;
+      const identity = String(it.accountId || it.pseudo || '').trim().toLowerCase();
+      const uniqKey = `${identity}|${day}|${key}`;
       if (!map.has(uniqKey)) map.set(uniqKey, it);
     });
     return { count: map.size, today };
   }
 
   function getCurrentPresenceIdentity(){
-    return String(window.currentUser?.pseudo || window.currentUser?.username || window.lbPrefsCache?.pseudo || '').trim().toLowerCase();
+    const userId = String(window.currentUser?.id || window.currentUser?.user_id || '').trim();
+    if (userId) return `uid:${userId}`;
+    const pseudo = String(window.currentUser?.pseudo || window.currentUser?.username || window.lbPrefsCache?.pseudo || '').trim().toLowerCase();
+    if (pseudo) return `pseudo:${pseudo}`;
+    return `local:${getLocalAccountId()}`;
   }
 
   function hasCurrentUserPresence(trainNumber){
@@ -27901,7 +27949,8 @@ body{ padding-bottom: calc(var(--bottom-bar-height, 58px) + 10px) !important; }
     const today = toIsoDay();
     return (Array.isArray(COMMUNITY.presences) ? COMMUNITY.presences : []).some((it)=>{
       const day = toIsoDay(new Date(it.ts || Date.now()));
-      return normalizeKey(it.trainNumber) === key && day === today && String(it.pseudo || '').trim().toLowerCase() === ident;
+      const identity = String(it.accountId || it.pseudo || '').trim().toLowerCase();
+      return normalizeKey(it.trainNumber) === key && day === today && identity === String(ident || '').toLowerCase();
     });
   }
 
@@ -28224,19 +28273,16 @@ body{ padding-bottom: calc(var(--bottom-bar-height, 58px) + 10px) !important; }
   async function publishPresence(trainNumber){
     const key = normalizeKey(trainNumber);
     if (!key) return;
-    if (typeof isCommentingAllowed === 'function' && !isCommentingAllowed()){
-      alert('Connectez-vous pour indiquer votre présence dans le train.');
-      return;
-    }
     if (hasCurrentUserPresence(key)){
       return;
     }
+	const accountId = getCurrentPresenceIdentity();
+    const payload = { message: `[PRESENCE] TER ${key} — ${toIsoDay()}`, scope:'presence', train_number:key, account_id: accountId };
     try{
-      const message = `[PRESENCE] TER ${key} — ${toIsoDay()}`;
       const res = await fetchCommentsApi('', {
         method:'POST',
         headers:{ 'Content-Type':'application/json' },
-        body: JSON.stringify({ message, scope:'presence', train_number:key })
+        body: JSON.stringify(payload)
       });
       let data = null;
       try { data = await res.json(); } catch(_){ }
@@ -28244,7 +28290,19 @@ body{ padding-bottom: calc(var(--bottom-bar-height, 58px) + 10px) !important; }
       await loadPresences();
       refreshLiveModal();
     }catch(err){
-      console.warn('Impossible de publier la présence train', err);
+      const localItem = normalizePresenceItem({
+        created_at: Date.now(),
+        train_number: key,
+        pseudo: window.currentUser?.pseudo || window.lbPrefsCache?.pseudo || 'Voyageur',
+        account_id: accountId
+      });
+      if (localItem){
+        saveLocalPresence(localItem);
+        loadPresences();
+        refreshLiveModal();
+      }else{
+        console.warn('Impossible de publier la présence train', err);
+      }
     }
   }
 
