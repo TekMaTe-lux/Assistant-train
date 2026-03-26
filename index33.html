@@ -1033,6 +1033,14 @@ body {
   padding:8px;
   transition: transform .16s ease, box-shadow .16s ease, border-color .16s ease;
 }
+.lb-live-card--delay{
+  border-color: rgba(255,199,72,.5);
+  box-shadow:0 8px 22px rgba(0,0,0,.18), 0 0 16px rgba(255,199,72,.16);
+}
+.lb-live-card--cancel{
+  border-color: rgba(255,105,136,.55);
+  box-shadow:0 8px 22px rgba(0,0,0,.2), 0 0 16px rgba(255,105,136,.2);
+}
 .lb-live-card:hover,
 .lb-live-card:focus-within{
   border-color: rgba(0,240,255,.42);
@@ -1096,6 +1104,11 @@ body {
   border:1px solid rgba(255,217,121,.35);
   background:rgba(110,73,0,.24);
   white-space:nowrap;
+}
+.lb-live-user-alert--cancel{
+  color:#ff9db4;
+  border-color: rgba(255,120,152,.4);
+  background: rgba(110,20,42,.24);
 }
 .lb-live-meta{ display:flex; flex-wrap:wrap; gap:6px; margin-top:8px; }
 .lb-live-chip{
@@ -27985,17 +27998,17 @@ body{ padding-bottom: calc(var(--bottom-bar-height, 58px) + 10px) !important; }
     return (Array.isArray(COMMUNITY.signals) ? COMMUNITY.signals : []).filter((it)=> normalizeKey(it.trainNumber) === key);
   }
 
-  function getTravelerRetardSummary(trainNumber){
-    const delaySignals = getSignalsForTrain(trainNumber)
-      .filter((s)=> String(s.signalType || '').toLowerCase() === 'retard')
+  function getLatestTravelerDisruption(trainNumber){
+    const disruptions = getSignalsForTrain(trainNumber)
+      .filter((s)=> ['retard', 'suppression'].includes(String(s.signalType || '').toLowerCase()))
       .sort((a,b)=> Number(b.ts || 0) - Number(a.ts || 0));
-    if (!delaySignals.length) return null;
-    const maxDelay = delaySignals.reduce((acc, cur)=> Math.max(acc, Number(cur.delayMin || 0)), 0);
-    const latest = delaySignals[0];
+    if (!disruptions.length) return null;
+    const latest = disruptions[0];
     return {
-      maxDelay,
+      type: String(latest.signalType || '').toLowerCase(),
+      delayMin: Number(latest.delayMin || 0),
       station: latest.station || '',
-      count: delaySignals.length
+      ts: Number(latest.ts || 0)
     };
   }
 
@@ -28167,7 +28180,14 @@ body{ padding-bottom: calc(var(--bottom-bar-height, 58px) + 10px) !important; }
       const presence = getPresenceStatsForTrain(train.trainNumber);
       const myPresence = getMyPresenceToday();
       const isInThisTrain = !!myPresence && normalizeKey(myPresence.trainNumber) === normalizeKey(train.trainNumber);
-	  const travelerRetard = getTravelerRetardSummary(train.trainNumber);
+	  const travelerDisruption = getLatestTravelerDisruption(train.trainNumber);
+      const cardState = (()=> {
+        if (train.statusClass === 'cancel') return 'cancel';
+        if (train.statusClass === 'delay') return 'delay';
+        if (train.statusClass === 'ok' && travelerDisruption?.type === 'suppression') return 'cancel';
+        if (train.statusClass === 'ok' && travelerDisruption?.type === 'retard') return 'delay';
+        return 'ok';
+      })();
       const gtfsInfo = COMMUNITY.staticInfoCache.get(`${normalizeKey(train.trainNumber)}_${toYmd()}`) || null;
       const chips = [];
       if (signals.length) chips.push(`👥 ${signals.length} signalement(s)`);
@@ -28175,7 +28195,7 @@ body{ padding-bottom: calc(var(--bottom-bar-height, 58px) + 10px) !important; }
       if (signals[0]?.station) chips.push(`📍 ${safeEscape(signals[0].station)}`);
       if (signals[0]?.signalType) chips.push(safeEscape(signalDisplayLabel(signals[0])));
       return `
-        <div class="lb-live-card" data-lb-live-train="${safeEscape(train.trainNumber)}">
+        <div class="lb-live-card lb-live-card--${safeEscape(cardState)}" data-lb-live-train="${safeEscape(train.trainNumber)}">
           <div class="lb-live-card-top">
             <div>
               <div class="lb-live-train">${safeEscape(train.label)}</div>
@@ -28186,7 +28206,11 @@ body{ padding-bottom: calc(var(--bottom-bar-height, 58px) + 10px) !important; }
                 <span class="lb-live-passenger">🐮 ${presence.count}</span>
                 <span class="lb-live-status lb-live-status--${safeEscape(train.statusClass)}">${safeEscape(train.statusLabel)}</span>
               </div>
-              ${train.statusClass === 'ok' && travelerRetard ? `<span class="lb-live-user-alert" title="Signalements voyageurs (infos SNCF conservées en priorité)">Signalé: +${safeEscape(travelerRetard.maxDelay || '?')} min</span>` : ''}
+              ${train.statusClass === 'ok' && travelerDisruption
+                ? (travelerDisruption.type === 'suppression'
+                    ? `<span class="lb-live-user-alert lb-live-user-alert--cancel" title="Signalement usager récent (infos SNCF conservées en priorité)">❌ Supprimé (usager)</span>`
+                    : `<span class="lb-live-user-alert" title="Signalement usager récent (infos SNCF conservées en priorité)">Signalé: +${safeEscape(travelerDisruption.delayMin || '?')} min</span>`)
+                : ''}
             </div>
           </div>
           <div class="lb-live-schedule" data-lb-train-schedule="${safeEscape(train.trainNumber)}">
