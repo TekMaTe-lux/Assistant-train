@@ -1124,6 +1124,17 @@ body {
   border-color:rgba(255,160,160,.45);
   cursor:pointer;
 }
+.lb-live-sncf-cause{
+  margin-top:6px;
+  border-radius:10px;
+  border:1px solid rgba(255,168,76,.45);
+  background:rgba(112,62,18,.38);
+  color:#ffbd72;
+  font-size:.66rem;
+  font-weight:800;
+  padding:5px 8px;
+  line-height:1.2;
+}
 .lb-live-card-actions{ display:flex; gap:6px; margin-top:6px; }
 .lb-live-card-actions button{
   flex:1;
@@ -1286,6 +1297,15 @@ body {
   box-shadow:0 0 0 1px rgba(139,255,205,.34) inset, 0 0 16px rgba(139,255,205,.22);
 }
 .lb-train-detail-route{ font-size:.82rem; color:#cbe8f7; margin-top:2px; }
+.lb-train-detail-cause{
+  margin-top:6px;
+  font-size:.67rem;
+  color:#ffbd72;
+  border:1px solid rgba(255,168,76,.4);
+  background:rgba(112,62,18,.28);
+  border-radius:8px;
+  padding:4px 7px;
+}
 .lb-train-detail-stops{
   margin-top:10px;
   border:1px solid rgba(0,240,255,.18);
@@ -27797,6 +27817,7 @@ body{ padding-bottom: calc(var(--bottom-bar-height, 58px) + 10px) !important; }
         <div>
           <h3 id="lbTrainDetailTitle">Fiche train</h3>
           <div class="lb-train-detail-route" id="lbTrainDetailRoute">—</div>
+	      <div class="lb-train-detail-cause" id="lbTrainDetailCause" hidden></div>
         </div>
       </div>
       <section class="lb-train-detail-stops" id="lbTrainDetailStops">
@@ -28107,6 +28128,25 @@ body{ padding-bottom: calc(var(--bottom-bar-height, 58px) + 10px) !important; }
     const trainsObj = raw?.trains || raw?.normalized?.trains || null;
     const list = [];
     if (!trainsObj || typeof trainsObj !== 'object') return list;
+	const extractSncfCause = (payload)=>{
+      if (!payload || typeof payload !== 'object') return '';
+      const direct = [
+        payload.sncf_disruption_cause,
+        payload.disruption_cause,
+        payload.cause,
+        payload.reason
+      ].map((v)=> String(v || '').trim()).find(Boolean);
+      if (direct) return direct;
+      const disruptions = Array.isArray(payload.disruptions) ? payload.disruptions : [];
+      const causes = [];
+      disruptions.forEach((d)=>{
+        const c = String(d?.cause || '').trim();
+        if (c) causes.push(c);
+        const msg = String(d?.messages?.[0]?.text || '').trim();
+        if (msg) causes.push(msg);
+      });
+      return Array.from(new Set(causes)).slice(0, 2).join(' • ');
+    };
     Object.entries(trainsObj).forEach(([key, payload])=>{
       if (!payload || typeof payload !== 'object') return;
       const trainNumber = normalizeKey(payload.train_number || payload.train || payload.number || key);
@@ -28141,6 +28181,7 @@ body{ padding-bottom: calc(var(--bottom-bar-height, 58px) + 10px) !important; }
         to: routeTo,
         statusLabel,
         statusClass,
+		sncfCause: extractSncfCause(payload),
         maxDelay,
         stops: stopNames,
         raw: payload
@@ -28438,6 +28479,9 @@ body{ padding-bottom: calc(var(--bottom-bar-height, 58px) + 10px) !important; }
                     ? `<span class="lb-live-user-alert lb-live-user-alert--cancel" title="Signalement usager récent (infos SNCF conservées en priorité)">❌ Supprimé (usager)</span>`
                     : `<span class="lb-live-user-alert" title="Signalement usager récent (infos SNCF conservées en priorité)">Signalé: +${safeEscape(travelerDisruption.delayMin || '?')} min</span>`)
                 : ''}
+			  ${(train.statusClass === 'delay' || train.statusClass === 'cancel') && train.sncfCause
+                ? `<div class="lb-live-sncf-cause">${safeEscape(train.statusClass === 'cancel' ? 'Suppression' : 'Retard')} : ${safeEscape(train.sncfCause)}</div>`
+                : ''}  
             </div>
           </div>
           <div class="lb-live-schedule" data-lb-train-schedule="${safeEscape(train.trainNumber)}">
@@ -28503,11 +28547,22 @@ body{ padding-bottom: calc(var(--bottom-bar-height, 58px) + 10px) !important; }
     const key = normalizeKey(trainNumber || COMMUNITY.selectedTrain);
     const title = $id('lbTrainDetailTitle');
     const route = $id('lbTrainDetailRoute');
+    const cause = $id('lbTrainDetailCause');
     const stopsEl = $id('lbTrainDetailStops');
     const train = COMMUNITY.liveTrains.find((it)=> normalizeKey(it.trainNumber) === key);
     if (!title || !route || !stopsEl || !train) return;
     title.textContent = `Fiche ${train.label}`;
     route.textContent = train.route;
+    if (cause){
+      const txt = String(train.sncfCause || '').trim();
+      if ((train.statusClass === 'delay' || train.statusClass === 'cancel') && txt){
+        cause.hidden = false;
+        cause.textContent = `${train.statusClass === 'cancel' ? 'Suppression' : 'Retard'} : ${txt}`;
+      } else {
+        cause.hidden = true;
+        cause.textContent = '';
+      }
+    }
 
     let stops = Array.isArray(train.stops) ? train.stops.filter(Boolean) : [];
     const info = await getLiveTrainStaticInfo(train.trainNumber);
