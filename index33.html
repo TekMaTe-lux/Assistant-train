@@ -27781,11 +27781,25 @@ body{ padding-bottom: calc(var(--bottom-bar-height, 58px) + 10px) !important; }
   const getCompoForTrain = (trainNumber)=>{
     const raw = window.compoData?.[String(trainNumber || '').trim()] || '';
     const normalized = String(raw || '').trim().toUpperCase();
-    if (!normalized) return '—';
-    if (normalized === 'US') return 'US 🐮 1';
-    if (normalized.startsWith('UM3')) return 'UM3 🐮 3';
-    if (normalized.startsWith('UM')) return 'UM 🐮 2';
-    return normalized;
+    if (!normalized) return '';
+    if (normalized === 'US') return 'US';
+    if (normalized.startsWith('UM3')) return 'UM3';
+    if (normalized.startsWith('UM')) return 'UM';
+    return '';
+  };
+  const compoVisual = (code)=>{
+    if (code === 'US') return '🚆';
+    if (code === 'UM') return '🚆🚆';
+    if (code === 'UM3') return '🚆🚆🚆';
+    return '🚆?';
+  };
+  const compoCodeFromInfoTag = (tag)=>{
+    switch(String(tag || '').toLowerCase()){
+      case 'composition-simple': return 'US';
+      case 'composition-double': return 'UM';
+      case 'composition-triple': return 'UM3';
+      default: return '';
+    }
   };
   const INFO_TAG_LABELS = {
     'composition-simple': '🚆 Composition simple',
@@ -28032,6 +28046,15 @@ body{ padding-bottom: calc(var(--bottom-bar-height, 58px) + 10px) !important; }
     return (Array.isArray(COMMUNITY.signals) ? COMMUNITY.signals : []).filter((it)=> normalizeKey(it.trainNumber) === key);
   }
 
+  function getEffectiveCompositionCode(trainNumber){
+    const fromSignals = getSignalsForTrain(trainNumber)
+      .filter((s)=> String(s.signalType || '').toLowerCase() === 'information')
+      .sort((a,b)=> Number(b.ts || 0) - Number(a.ts || 0))
+      .map((s)=> compoCodeFromInfoTag(s.infoTag))
+      .find(Boolean);
+    return fromSignals || getCompoForTrain(trainNumber) || '';
+  }
+
   function getLatestTravelerDisruption(trainNumber){
     const disruptions = getSignalsForTrain(trainNumber)
       .filter((s)=> ['retard', 'suppression'].includes(String(s.signalType || '').toLowerCase()))
@@ -28220,6 +28243,7 @@ body{ padding-bottom: calc(var(--bottom-bar-height, 58px) + 10px) !important; }
       const myPresence = getMyPresenceToday();
       const isInThisTrain = !!myPresence && normalizeKey(myPresence.trainNumber) === normalizeKey(train.trainNumber);
 	  const travelerDisruption = getLatestTravelerDisruption(train.trainNumber);
+	  const effectiveCompo = getEffectiveCompositionCode(train.trainNumber);
       const cardState = (()=> {
         if (train.statusClass === 'cancel') return 'cancel';
         if (train.statusClass === 'delay') return 'delay';
@@ -28253,7 +28277,7 @@ body{ padding-bottom: calc(var(--bottom-bar-height, 58px) + 10px) !important; }
             </div>
           </div>
           <div class="lb-live-schedule" data-lb-train-schedule="${safeEscape(train.trainNumber)}">
-            ⏱ ${safeEscape(gtfsInfo ? `${gtfsInfo.departure} - ${gtfsInfo.arrival}` : 'Horaires GTFS en chargement...')} · Type : ${safeEscape(gtfsInfo?.trainType || '—')}
+            ⏱ ${safeEscape(gtfsInfo ? `${gtfsInfo.departure} - ${gtfsInfo.arrival}` : 'Horaires GTFS en chargement...')} · ${safeEscape(compoVisual(effectiveCompo))}
           </div>
 		  ${chips.length ? `<div class="lb-live-meta">${chips.map((chip)=>`<span class="lb-live-chip">${chip}</span>`).join('')}</div>` : ''}
           <div class="lb-live-card-actions">
@@ -28270,9 +28294,10 @@ body{ padding-bottom: calc(var(--bottom-bar-height, 58px) + 10px) !important; }
     if (!trains.length) return;
     await Promise.all(trains.map(async (train)=>{
       const info = await getLiveTrainStaticInfo(train.trainNumber);
+	  const effectiveCompo = getEffectiveCompositionCode(train.trainNumber);
       const node = document.querySelector(`[data-lb-train-schedule="${String(train.trainNumber)}"]`);
       if (!node || !info) return;
-      node.textContent = `⏱ ${info.departure} - ${info.arrival} · Type : ${info.trainType}`;
+      node.textContent = `⏱ ${info.departure} - ${info.arrival} · ${compoVisual(effectiveCompo)}`;
     }));
   }
 
