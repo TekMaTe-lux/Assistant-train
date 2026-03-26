@@ -17641,6 +17641,16 @@ const GTFS_RT_DATASETS = [
     ]
   },
   {
+    id: 'sncf-carte',
+    label: 'GTFS-RT SNCF Carte',
+    filename: 'retards_carte.json',
+    sources: [
+      'https://vps.labetaillere.fr/gtfs/retards_carte.json',
+      'https://raw.githubusercontent.com/TekMaTe-lux/Assistant-train/main/Assistant-train/retards_carte.json',
+      'https://cdn.jsdelivr.net/gh/TekMaTe-lux/Assistant-train@main/Assistant-train/retards_carte.json'
+    ]
+  }
+  {
     id: 'cfl-hafas',
     label: 'GTFS-RT CFL / HAFAS',
     filename: 'retards_cfl.json',
@@ -28119,6 +28129,7 @@ body{ padding-bottom: calc(var(--bottom-bar-height, 58px) + 10px) !important; }
 
   function getRawLiveTrainPayload(){
     const raw = window.retardsGTFS_RAW;
+	if (raw && raw['sncf-carte']?.trains) return raw['sncf-carte'];
     if (raw && raw['sncf-nml']) return raw['sncf-nml'];
     return raw || null;
   }
@@ -28128,16 +28139,43 @@ body{ padding-bottom: calc(var(--bottom-bar-height, 58px) + 10px) !important; }
     const trainsObj = raw?.trains || raw?.normalized?.trains || null;
     const list = [];
     if (!trainsObj || typeof trainsObj !== 'object') return list;
+	const buildCauseIndex = (root)=>{
+      const out = new Map();
+      const seen = new WeakSet();
+      const walk = (node, keyHint = '', depth = 0)=>{
+        if (!node || typeof node !== 'object') return;
+        if (depth > 7) return;
+        if (seen.has(node)) return;
+        seen.add(node);
+        const trainNum = normalizeKey(node.train_number || node.train || node.number || keyHint);
+        const directCause = String(
+          node.sncf_disruption_cause
+          || node.disruption_cause
+          || node.cause
+          || node.reason
+          || node?.data?.sncf_disruption_cause
+          || ''
+        ).trim();
+        if (trainNum && directCause && !out.has(trainNum)) out.set(trainNum, directCause);
+        Object.entries(node).forEach(([k, v])=>{
+          if (v && typeof v === 'object') walk(v, k, depth + 1);
+        });
+      };
+      walk(root);
+      return out;
+    };
+    const causeIndex = buildCauseIndex(window.retardsGTFS_RAW);
 	const extractSncfCause = (payload)=>{
       if (!payload || typeof payload !== 'object') return '';
       const direct = [
         payload.sncf_disruption_cause,
         payload.disruption_cause,
         payload.cause,
-        payload.reason
+        payload.reason,
+        payload?.data?.sncf_disruption_cause
       ].map((v)=> String(v || '').trim()).find(Boolean);
       if (direct) return direct;
-      const disruptions = Array.isArray(payload.disruptions) ? payload.disruptions : [];
+      const disruptions = Array.isArray(payload.disruptions) ? payload.disruptions : (Array.isArray(payload?.data?.disruptions) ? payload.data.disruptions : []);
       const causes = [];
       disruptions.forEach((d)=>{
         const c = String(d?.cause || '').trim();
@@ -28181,7 +28219,7 @@ body{ padding-bottom: calc(var(--bottom-bar-height, 58px) + 10px) !important; }
         to: routeTo,
         statusLabel,
         statusClass,
-		sncfCause: extractSncfCause(payload),
+		sncfCause: extractSncfCause(payload) || String(causeIndex.get(trainNumber) || '').trim(),
         maxDelay,
         stops: stopNames,
         raw: payload
