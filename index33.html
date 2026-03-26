@@ -28236,6 +28236,36 @@ body{ padding-bottom: calc(var(--bottom-bar-height, 58px) + 10px) !important; }
     return !!mine && normalizeKey(mine.trainNumber) === key;
   }
 
+  function getGtfsRtDelayForStop(trainNumber, stopName){
+    const trainKey = normalizeKey(trainNumber);
+    const station = String(stopName || '').trim();
+    if (!trainKey || !station) return null;
+    const perTrain = window.retardsGTFS && typeof window.retardsGTFS === 'object'
+      ? window.retardsGTFS[trainKey]
+      : null;
+    if (!perTrain || typeof perTrain !== 'object') return null;
+    let value = perTrain[station];
+    if (value == null && typeof normalizeStationName === 'function'){
+      const targetNorm = normalizeStationName(station);
+      if (targetNorm){
+        const normalizedLookup = perTrain[GTFS_NORMALIZED_STATION_MAP_KEY];
+        if (normalizedLookup instanceof Map && normalizedLookup.has(targetNorm)){
+          value = normalizedLookup.get(targetNorm);
+        } else {
+          for (const [knownStop, knownValue] of Object.entries(perTrain)){
+            if (normalizeStationName(knownStop) === targetNorm){
+              value = knownValue;
+              if (normalizedLookup instanceof Map) normalizedLookup.set(targetNorm, knownValue);
+              break;
+            }
+          }
+        }
+      }
+    }
+    const num = Number(value);
+    return Number.isFinite(num) ? num : null;
+  }
+
   async function getLiveTrainStaticInfo(trainNumber){
     const key = normalizeKey(trainNumber);
     const day = toYmd();
@@ -28481,7 +28511,8 @@ body{ padding-bottom: calc(var(--bottom-bar-height, 58px) + 10px) !important; }
       const propagated = propagatedByStop.get(stopKey) || null;
       const baseTime = String(row?.time || '—');
 	  const gtfsAmendedTime = String(row?.amendedTime || '—');
-      const gtfsDelayMin = Number(row?.delayMin);
+      const gtfsDelayFromStop = getGtfsRtDelayForStop(train.trainNumber, stopName);
+      const gtfsDelayMin = Number.isFinite(gtfsDelayFromStop) ? gtfsDelayFromStop : Number(row?.delayMin);
       const baseMinutes = hhmmToMinutes(baseTime);
       const amendedMinutes = hhmmToMinutes(gtfsAmendedTime);
       const hasGtfsDelay = baseTime !== '—'
