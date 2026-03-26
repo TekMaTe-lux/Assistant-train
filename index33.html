@@ -986,6 +986,7 @@ body {
   left:auto !important;
 }
 .lb-community-close.tron-close-button{
+  position:absolute !important;
   top:8px !important;
   right:8px !important;
   left:auto !important;
@@ -1159,6 +1160,7 @@ body {
 .lb-signal-form-grid{ display:grid; gap:10px; }
 .lb-signal-delay-wrap{ display:none; }
 .lb-signal-delay-wrap.is-visible{ display:block; }
+.lb-signal-station-wrap.is-hidden{ display:none; }
 .lb-signal-form select,
 .lb-signal-form textarea{
   width:100%;
@@ -27606,9 +27608,11 @@ body{ padding-bottom: calc(var(--bottom-bar-height, 58px) + 10px) !important; }
           <select id="lbSignalTrainSelect">
             <option value="">Choisir un train live</option>
           </select>
-          <select id="lbSignalStationSelect">
-            <option value="">Choisir la gare concernée</option>
-          </select>
+          <div class="lb-signal-station-wrap" id="lbSignalStationWrap">
+            <select id="lbSignalStationSelect">
+              <option value="">Choisir la gare concernée</option>
+            </select>
+          </div>
           <div class="lb-signal-delay-wrap" id="lbSignalDelayWrap">
             <select id="lbSignalDelaySelect">
               <option value="">Choisir le retard</option>
@@ -27647,10 +27651,12 @@ body{ padding-bottom: calc(var(--bottom-bar-height, 58px) + 10px) !important; }
       <div class="lb-info-quick-grid" id="lbInfoQuickGrid">
         <button type="button" class="lb-info-quick-btn" data-info-tag="composition-simple">🚆 Composition simple</button>
         <button type="button" class="lb-info-quick-btn" data-info-tag="composition-double">🚆🚆 Composition double</button>
+		<button type="button" class="lb-info-quick-btn" data-info-tag="composition-triple">🚆🚆🚆 Composition triple</button>
         <button type="button" class="lb-info-quick-btn" data-info-tag="climatisation-hs">❄️ Climatisation HS</button>
         <button type="button" class="lb-info-quick-btn" data-info-tag="chauffage-hs">🌡️ Chauffage HS</button>
         <button type="button" class="lb-info-quick-btn" data-info-tag="forte-affluence">👥 Forte affluence</button>
         <button type="button" class="lb-info-quick-btn" data-info-tag="wc-condamne">🚻 WC condamné</button>
+		<button type="button" class="lb-info-quick-btn" data-info-tag="forces-ordre">👮 Intervention forces de l'ordre</button>
       </div>
     </div>
   </div>
@@ -27721,10 +27727,12 @@ body{ padding-bottom: calc(var(--bottom-bar-height, 58px) + 10px) !important; }
   const INFO_TAG_LABELS = {
     'composition-simple': '🚆 Composition simple',
     'composition-double': '🚆🚆 Composition double',
+	'composition-triple': '🚆🚆🚆 Composition triple',
     'climatisation-hs': '❄️ Climatisation HS',
     'chauffage-hs': '🌡️ Chauffage HS',
     'forte-affluence': '👥 Forte affluence',
-    'wc-condamne': '🚻 WC condamné'
+    'wc-condamne': '🚻 WC condamné',
+    'forces-ordre': '👮 Intervention forces de l\'ordre'
   };
   const localSignalStorageKey = ()=> `lb_local_signals_${toIsoDay()}`;
   const localPresenceStorageKey = ()=> `lb_local_presence_${toIsoDay()}`;
@@ -28271,8 +28279,13 @@ body{ padding-bottom: calc(var(--bottom-bar-height, 58px) + 10px) !important; }
 
   function updateSignalTypeUI(){
     const delayWrap = $id('lbSignalDelayWrap');
+    const stationWrap = $id('lbSignalStationWrap');
     if (delayWrap){
       delayWrap.classList.toggle('is-visible', COMMUNITY.selectedSignalType === 'retard');
+    }
+    const needStation = COMMUNITY.selectedSignalType !== 'information' || COMMUNITY.selectedInfoTag === 'forces-ordre';
+    if (stationWrap){
+      stationWrap.classList.toggle('is-hidden', !needStation);
     }
   }
 
@@ -28300,9 +28313,10 @@ body{ padding-bottom: calc(var(--bottom-bar-height, 58px) + 10px) !important; }
     const infoTag = COMMUNITY.selectedInfoTag;
 	const accountId = getCurrentPresenceIdentity();
     const detail = String(detailEl?.value || '').trim().slice(0, 180);
+	const needsStation = signalType !== 'information' || infoTag === 'forces-ordre';
     if (!trainKey){ if (feedback) feedback.textContent = 'Choisissez un train live.'; return; }
     if (!signalType){ if (feedback) feedback.textContent = 'Choisissez un type de signalement.'; return; }
-    if (!station){ if (feedback) feedback.textContent = 'Choisissez la gare concernée.'; return; }
+    if (needsStation && !station){ if (feedback) feedback.textContent = 'Choisissez la gare concernée.'; return; }
     if (signalType === 'retard' && !(delayMin > 0)){ if (feedback) feedback.textContent = 'Choisissez un retard.'; return; }
     if (signalType === 'information' && !infoTag){ if (feedback) feedback.textContent = 'Choisissez une information prédéfinie.'; return; }
     const train = COMMUNITY.liveTrains.find((it)=> normalizeKey(it.trainNumber) === trainKey);
@@ -28314,14 +28328,14 @@ body{ padding-bottom: calc(var(--bottom-bar-height, 58px) + 10px) !important; }
         : signalType === 'a-lheure'
           ? `Train à l'heure${detail ? ` — ${detail}` : ''}`
           : `${INFO_TAG_LABELS[infoTag] || 'Information'}${detail ? ` — ${detail}` : ''}`;
-    const message = `[${signalType.toUpperCase().replace(/-/g,' ')}] ${label}${station ? ` [${station}]` : ''} — ${baseDetail}`;
+    const message = `[${signalType.toUpperCase().replace(/-/g,' ')}] ${label}${(needsStation && station) ? ` [${station}]` : ''} — ${baseDetail}`;
     try{
       if (submit) submit.disabled = true;
       if (feedback) feedback.textContent = 'Publication du signalement…';
       const res = await fetchCommentsApi('', {
         method:'POST',
         headers:{ 'Content-Type':'application/json' },
-        body: JSON.stringify({ message, scope:'signals', train_number: trainKey, station, signal_type: signalType, delay_min: delayMin || null, info_tag: infoTag || null, account_id: accountId })
+        body: JSON.stringify({ message, scope:'signals', train_number: trainKey, station: needsStation ? station : '', signal_type: signalType, delay_min: delayMin || null, info_tag: infoTag || null, account_id: accountId })
       });
       let data = null;
       try { data = await res.json(); } catch(_){ }
@@ -28341,7 +28355,7 @@ body{ padding-bottom: calc(var(--bottom-bar-height, 58px) + 10px) !important; }
         message,
         pseudo: window.currentUser?.pseudo || window.lbPrefsCache?.pseudo || 'Voyageur',
         train_number: trainKey,
-        station,
+        station: needsStation ? station : '',
         signal_type: signalType,
         delay_min: delayMin || 0,
         info_tag: infoTag || '',
@@ -28482,6 +28496,7 @@ body{ padding-bottom: calc(var(--bottom-bar-height, 58px) + 10px) !important; }
       closeCommunityModal('lbInfoQuickModal');
       const feedback = $id('lbSignalFeedback');
       if (feedback) feedback.textContent = `Information sélectionnée : ${INFO_TAG_LABELS[COMMUNITY.selectedInfoTag] || COMMUNITY.selectedInfoTag}`;
+	  updateSignalTypeUI();
       return;
     }
     const liveCard = e.target.closest('.lb-live-card');
