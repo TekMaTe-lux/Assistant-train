@@ -17641,6 +17641,16 @@ const GTFS_RT_DATASETS = [
     ]
   },
   {
+    id: 'sncf-carte',
+    label: 'GTFS-RT Carte SNCF (causes)',
+    filename: 'retards_carte.json',
+    sources: [
+      'https://vps.labetaillere.fr/gtfs/retards_carte.json',
+      'https://raw.githubusercontent.com/TekMaTe-lux/Assistant-train/main/Assistant-train/retards_carte.json',
+      'https://cdn.jsdelivr.net/gh/TekMaTe-lux/Assistant-train@main/Assistant-train/retards_carte.json'
+    ]
+  },
+  {
     id: 'cfl-hafas',
     label: 'GTFS-RT CFL / HAFAS',
     filename: 'retards_cfl.json',
@@ -28123,30 +28133,90 @@ body{ padding-bottom: calc(var(--bottom-bar-height, 58px) + 10px) !important; }
     return raw || null;
   }
 
+  function collectSncfDisruptionCauses(payload){
+    if (!payload || typeof payload !== 'object') return [];
+    const direct = [
+      payload.sncf_disruption_cause,
+      payload.disruption_cause,
+      payload.cause,
+      payload.reason
+    ]
+      .map((v)=> String(v || '').trim())
+      .filter(Boolean);
+    const disruptions = Array.isArray(payload.disruptions) ? payload.disruptions : [];
+    disruptions.forEach((d)=>{
+      const c = String(d?.cause || '').trim();
+      if (c) direct.push(c);
+      const msg = String(d?.messages?.[0]?.text || '').trim();
+      if (msg) direct.push(msg);
+    });
+    return Array.from(new Set(direct)).slice(0, 3);
+  }
+
+  function buildSncfCauseIndex(rawPayload){
+    const map = new Map();
+    if (!rawPayload || typeof rawPayload !== 'object') return map;
+
+    const visitNode = (node, keyHint = '')=>{
+      if (!node || typeof node !== 'object') return;
+      if (Array.isArray(node)){
+        node.forEach((entry)=> visitNode(entry, keyHint));
+        return;
+      }
+
+      const causes = collectSncfDisruptionCauses(node);
+      const candidates = [
+        node.train_number,
+        node.train,
+        node.number
+      ].map((v)=> String(v || '').trim()).filter(Boolean);
+
+      if (typeof keyHint === 'string' && keyHint.includes('vehicle_journey:')){
+        const m = keyHint.match(/:(\d+):\d+:Train$/) || keyHint.match(/:(\d+):/);
+        if (m && m[1]) candidates.push(String(m[1]).trim());
+      }
+
+      if (causes.length && candidates.length){
+        candidates.forEach((n)=>{
+          const key = normalizeKey(n);
+          if (!key) return;
+          const prev = map.get(key) || [];
+          map.set(key, Array.from(new Set([...prev, ...causes])).slice(0, 3));
+        });
+      }
+
+      Object.entries(node).forEach(([k, v])=>{
+        if (!v || typeof v !== 'object') return;
+        visitNode(v, k);
+      });
+    };
+
+    Object.entries(rawPayload).forEach(([key, value])=> visitNode(value, key));
+    return map;
+  }
+
+  function getSncfCauseForTrain(trainNumber, payload, causeIndex = null){
+    const ownCause = collectSncfDisruptionCauses(payload);
+    if (ownCause.length) return ownCause.slice(0, 2).join(' • ');
+    const key = normalizeKey(trainNumber);
+    if (!key) return '';
+    let idx = causeIndex;
+    if (!(idx instanceof Map)){
+      const raw = window.retardsGTFS_RAW;
+      const rawCarte = raw && raw['sncf-carte'] ? raw['sncf-carte'] : null;
+      idx = buildSncfCauseIndex(rawCarte || raw);
+    }
+    return (idx.get(key) || []).slice(0, 2).join(' • ');
+  }
+
   function extractLiveTrains(){
     const raw = getRawLiveTrainPayload();
+	const rawAll = window.retardsGTFS_RAW;
+    const rawCarte = rawAll && rawAll['sncf-carte'] ? rawAll['sncf-carte'] : null;
+    const causeIndex = buildSncfCauseIndex(rawCarte || rawAll);
     const trainsObj = raw?.trains || raw?.normalized?.trains || null;
     const list = [];
     if (!trainsObj || typeof trainsObj !== 'object') return list;
-	const extractSncfCause = (payload)=>{
-      if (!payload || typeof payload !== 'object') return '';
-      const direct = [
-        payload.sncf_disruption_cause,
-        payload.disruption_cause,
-        payload.cause,
-        payload.reason
-      ].map((v)=> String(v || '').trim()).find(Boolean);
-      if (direct) return direct;
-      const disruptions = Array.isArray(payload.disruptions) ? payload.disruptions : [];
-      const causes = [];
-      disruptions.forEach((d)=>{
-        const c = String(d?.cause || '').trim();
-        if (c) causes.push(c);
-        const msg = String(d?.messages?.[0]?.text || '').trim();
-        if (msg) causes.push(msg);
-      });
-      return Array.from(new Set(causes)).slice(0, 2).join(' • ');
-    };
     Object.entries(trainsObj).forEach(([key, payload])=>{
       if (!payload || typeof payload !== 'object') return;
       const trainNumber = normalizeKey(payload.train_number || payload.train || payload.number || key);
@@ -28181,7 +28251,7 @@ body{ padding-bottom: calc(var(--bottom-bar-height, 58px) + 10px) !important; }
         to: routeTo,
         statusLabel,
         statusClass,
-		sncfCause: extractSncfCause(payload),
+		sncfCause: getSncfCauseForTrain(trainNumber, payload, causeIndex),
         maxDelay,
         stops: stopNames,
         raw: payload
