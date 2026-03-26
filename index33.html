@@ -1275,7 +1275,30 @@ body {
   padding:7px 8px;
   background:rgba(255,255,255,.03);
 }
+.lb-train-stop-head{
+  display:flex;
+  justify-content:space-between;
+  align-items:flex-start;
+  gap:8px;
+}
 .lb-train-stop-name{ font-weight:800; font-size:.78rem; color:#dcf9ff; }
+.lb-train-stop-time{
+  font-size:.76rem;
+  font-weight:800;
+  color:#e8f8ff;
+  white-space:nowrap;
+}
+.lb-train-stop-time .planned{
+  text-decoration:line-through;
+  opacity:.68;
+  margin-right:4px;
+}
+.lb-train-stop-time .actual{ color:#ffffff; }
+.lb-train-stop-time.is-cancel .actual{
+  text-decoration:line-through;
+  color:#ffb8c6;
+  opacity:.82;
+}
 .lb-train-stop-signals{ margin-top:5px; display:flex; flex-wrap:wrap; gap:5px; }
 .lb-stop-chip{
   border-radius:999px;
@@ -27744,6 +27767,17 @@ body{ padding-bottom: calc(var(--bottom-bar-height, 58px) + 10px) !important; }
     if (!hh) return '—';
     return `${hh}:${mm}`;
   };
+  const addMinutesToHHMM = (hhmm, delta)=>{
+    const m = String(hhmm || '').match(/^(\d{2}):(\d{2})$/);
+    if (!m) return hhmm || '—';
+    const base = Number(m[1]) * 60 + Number(m[2]);
+    const total = base + Number(delta || 0);
+    const day = 24 * 60;
+    const normalized = ((total % day) + day) % day;
+    const h = String(Math.floor(normalized / 60)).padStart(2, '0');
+    const mn = String(normalized % 60).padStart(2, '0');
+    return `${h}:${mn}`;
+  };
   const getCompoForTrain = (trainNumber)=>{
     const raw = window.compoData?.[String(trainNumber || '').trim()] || '';
     const normalized = String(raw || '').trim().toUpperCase();
@@ -28075,17 +28109,22 @@ body{ padding-bottom: calc(var(--bottom-bar-height, 58px) + 10px) !important; }
         const fallback = await buildGtfsFallbackResult(key, { ymd: day });
         const stops = fallback?.train?.stop_times || [];
         if (stops.length){
+		  const stopRows = stops.map((s)=>({
+            name: String(s?.stop_point?.name || '').trim(),
+            time: formatGtfsHHMM(s?.arrival_time || s?.departure_time || '')
+          })).filter((s)=> s.name);
           info = {
             departure: formatGtfsHHMM(stops[0]?.departure_time || stops[0]?.arrival_time),
             arrival: formatGtfsHHMM(stops[stops.length - 1]?.arrival_time || stops[stops.length - 1]?.departure_time),
             trainType: getCompoForTrain(key),
-            stops: stops.map((s)=> String(s?.stop_point?.name || '').trim()).filter(Boolean)
+            stops: stopRows.map((s)=> s.name),
+            stopRows
           };
         }
       }catch(_){}
     }
     if (!info){
-      info = { departure:'—', arrival:'—', trainType:getCompoForTrain(key), stops:[] };
+      info = { departure:'—', arrival:'—', trainType:getCompoForTrain(key), stops:[], stopRows:[] };
     }
     COMMUNITY.staticInfoCache.set(cacheKey, info);
     return info;
@@ -28284,16 +28323,29 @@ body{ padding-bottom: calc(var(--bottom-bar-height, 58px) + 10px) !important; }
     let stops = Array.isArray(train.stops) ? train.stops.filter(Boolean) : [];
     const info = await getLiveTrainStaticInfo(train.trainNumber);
     if (info?.stops?.length) stops = info.stops;
+	const stopRows = Array.isArray(info?.stopRows) && info.stopRows.length
+      ? info.stopRows
+      : stops.map((name)=>({ name, time:'—' }));
     if (!stops.length){
       stopsEl.innerHTML = '<div class="lb-live-empty">Aucun arrêt disponible.</div>';
       return;
     }
     const signals = getSignalsForTrain(train.trainNumber);
-	const propagatedByStop = buildPropagatedSignalsByStop(stops, signals);
-    stopsEl.innerHTML = stops.map((stopName)=>{
+	const propagatedByStop = buildPropagatedSignalsByStop(stopRows.map((s)=> s.name), signals);
+    stopsEl.innerHTML = stopRows.map((row)=>{
+      const stopName = row?.name || '';
       const stopKey = String(stopName || '').toLowerCase();
       const stopSignals = signals.filter((s)=> String(s.station || '').toLowerCase() === stopKey);
       const propagated = propagatedByStop.get(stopKey) || null;
+	  const baseTime = String(row?.time || '—');
+      let timeClass = 'lb-train-stop-time';
+      let timeHtml = `<span class="actual">${safeEscape(baseTime)}</span>`;
+      if (baseTime !== '—' && String(propagated?.signalType || '').toLowerCase() === 'retard' && Number(propagated.delayMin || 0) > 0){
+        timeHtml = `<span class="planned">${safeEscape(baseTime)}</span><span class="actual">${safeEscape(addMinutesToHHMM(baseTime, Number(propagated.delayMin || 0)))}</span>`;
+      } else if (baseTime !== '—' && String(propagated?.signalType || '').toLowerCase() === 'suppression'){
+        timeClass = 'lb-train-stop-time is-cancel';
+        timeHtml = `<span class="actual">${safeEscape(baseTime)}</span>`;
+      }
       const chipsList = [];
       if (propagated){
         const alreadyExact = stopSignals.some((s)=> String(s.id) === String(propagated.id));
@@ -28309,7 +28361,7 @@ body{ padding-bottom: calc(var(--bottom-bar-height, 58px) + 10px) !important; }
         }));
       }
       const chips = chipsList.length ? chipsList.join('') : '<span class="lb-stop-chip">Aucun signalement</span>';
-      return `<article class="lb-train-stop-item"><div class="lb-train-stop-name">${safeEscape(stopName)}</div><div class="lb-train-stop-signals">${chips}</div></article>`;
+      return `<article class="lb-train-stop-item"><div class="lb-train-stop-head"><div class="lb-train-stop-name">${safeEscape(stopName)}</div><div class="${timeClass}">${timeHtml}</div></div><div class="lb-train-stop-signals">${chips}</div></article>`;
     }).join('');
   }
 
