@@ -28062,6 +28062,28 @@ body{ padding-bottom: calc(var(--bottom-bar-height, 58px) + 10px) !important; }
     return base;
   }
 
+  function buildPropagatedSignalsByStop(stopNames, trainSignals){
+    const normalizedStops = (Array.isArray(stopNames) ? stopNames : []).map((name)=> String(name || '').trim()).filter(Boolean);
+    const latestPerStop = new Map();
+    const propagationTypes = new Set(['retard', 'a-lheure', 'suppression']);
+    (Array.isArray(trainSignals) ? trainSignals : []).forEach((sig)=>{
+      const station = String(sig?.station || '').trim();
+      if (!station || !propagationTypes.has(String(sig?.signalType || '').toLowerCase())) return;
+      const key = station.toLowerCase();
+      const prev = latestPerStop.get(key);
+      if (!prev || Number(sig.ts || 0) > Number(prev.ts || 0)) latestPerStop.set(key, sig);
+    });
+    const out = new Map();
+    let carry = null;
+    normalizedStops.forEach((name)=>{
+      const key = name.toLowerCase();
+      const atStop = latestPerStop.get(key);
+      if (atStop) carry = atStop;
+      if (carry) out.set(key, carry);
+    });
+    return out;
+  }
+
   function openCommunityModal(id){
     const modal = $id(id);
     if (!modal) return;
@@ -28201,15 +28223,26 @@ body{ padding-bottom: calc(var(--bottom-bar-height, 58px) + 10px) !important; }
       return;
     }
     const signals = getSignalsForTrain(train.trainNumber);
+	const propagatedByStop = buildPropagatedSignalsByStop(stops, signals);
     stopsEl.innerHTML = stops.map((stopName)=>{
-      const stopSignals = signals.filter((s)=> String(s.station || '').toLowerCase() === String(stopName).toLowerCase());
-      const chips = stopSignals.length
-        ? stopSignals.slice(0, 6).map((s)=>{
+      const stopKey = String(stopName || '').toLowerCase();
+      const stopSignals = signals.filter((s)=> String(s.station || '').toLowerCase() === stopKey);
+      const propagated = propagatedByStop.get(stopKey) || null;
+      const chipsList = [];
+      if (propagated){
+        const alreadyExact = stopSignals.some((s)=> String(s.id) === String(propagated.id));
+        if (!alreadyExact){
+          chipsList.push(`<span class="lb-stop-chip">${safeEscape(`${signalDisplayLabel(propagated)} · depuis ${propagated.station}`)}</span>`);
+        }
+      }
+      if (stopSignals.length){
+        chipsList.push(...stopSignals.slice(0, 6).map((s)=>{
           const mine = isOwnSignal(s);
           const attrs = mine ? ` role="button" tabindex="0" title="Supprimer mon signalement" data-lb-delete-signal="${safeEscape(String(s.id || ''))}"` : '';
           return `<span class="lb-stop-chip${mine ? ' is-own' : ''}"${attrs}>${safeEscape(signalDisplayLabel(s))}</span>`;
-        }).join('')
-        : '<span class="lb-stop-chip">Aucun signalement</span>';
+        }));
+      }
+      const chips = chipsList.length ? chipsList.join('') : '<span class="lb-stop-chip">Aucun signalement</span>';
       return `<article class="lb-train-stop-item"><div class="lb-train-stop-name">${safeEscape(stopName)}</div><div class="lb-train-stop-signals">${chips}</div></article>`;
     }).join('');
   }
