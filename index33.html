@@ -1120,6 +1120,10 @@ body {
   background:rgba(255,255,255,.05);
   color:#eafcff;
 }
+.lb-live-chip.is-own{
+  border-color:rgba(255,160,160,.45);
+  cursor:pointer;
+}
 .lb-live-card-actions{ display:flex; gap:6px; margin-top:6px; }
 .lb-live-card-actions button{
   flex:1;
@@ -27779,6 +27783,8 @@ body{ padding-bottom: calc(var(--bottom-bar-height, 58px) + 10px) !important; }
         <button type="button" class="lb-info-quick-btn" data-info-tag="chauffage-hs">🌡️ Chauffage HS</button>
         <button type="button" class="lb-info-quick-btn" data-info-tag="forte-affluence">👥 Forte affluence</button>
         <button type="button" class="lb-info-quick-btn" data-info-tag="wc-condamne">🚻 WC condamné</button>
+		<button type="button" class="lb-info-quick-btn" data-info-tag="prise-hs">🔌 Prise de courant HS</button>
+        <button type="button" class="lb-info-quick-btn" data-info-tag="porte-hs">🚪 Porte HS</button>
         <button type="button" class="lb-info-quick-btn" data-info-tag="forces-ordre">👮 Intervention forces de l'ordre</button>
       </div>
     </div>
@@ -27885,6 +27891,8 @@ body{ padding-bottom: calc(var(--bottom-bar-height, 58px) + 10px) !important; }
     'chauffage-hs': '🌡️ Chauffage HS',
     'forte-affluence': '👥 Forte affluence',
     'wc-condamne': '🚻 WC condamné',
+	'prise-hs': '🔌 Prise de courant HS',
+    'porte-hs': '🚪 Porte HS',
     'forces-ordre': '👮 Intervention forces de l\'ordre'
   };
   const localSignalStorageKey = ()=> `lb_local_signals_${toIsoDay()}`;
@@ -28401,9 +28409,18 @@ body{ padding-bottom: calc(var(--bottom-bar-height, 58px) + 10px) !important; }
       })();
       const gtfsInfo = COMMUNITY.staticInfoCache.get(`${normalizeKey(train.trainNumber)}_${toYmd()}`) || null;
       const chips = [];
-      if (wallComments.length) chips.push(`💬 ${wallComments.length} commentaire(s)`);
-      if (signals[0]?.station) chips.push(`📍 ${safeEscape(signals[0].station)}`);
-      if (signals[0]?.signalType) chips.push(safeEscape(signalDisplayLabel(signals[0])));
+      if (wallComments.length) chips.push(`<span class="lb-live-chip">💬 ${wallComments.length} commentaire(s)</span>`);
+      if (signals[0]?.station) chips.push(`<span class="lb-live-chip">📍 ${safeEscape(signals[0].station)}</span>`);
+      const latestNonInfoSignal = signals.find((s)=> String(s?.signalType || '').toLowerCase() !== 'information');
+      if (latestNonInfoSignal) chips.push(`<span class="lb-live-chip">${safeEscape(signalDisplayLabel(latestNonInfoSignal))}</span>`);
+      const infoSignals = signals
+        .filter((s)=> String(s?.signalType || '').toLowerCase() === 'information')
+        .slice(0, 4);
+      infoSignals.forEach((s)=>{
+        const mine = isOwnSignal(s);
+        const attrs = mine ? ` role="button" tabindex="0" title="Supprimer mon signalement" data-lb-delete-signal="${safeEscape(String(s.id || ''))}"` : '';
+        chips.push(`<span class="lb-live-chip${mine ? ' is-own' : ''}"${attrs}>${safeEscape(signalDisplayLabel(s))}</span>`);
+      });
       return `
         <div class="lb-live-card lb-live-card--${safeEscape(cardState)}" data-lb-live-train="${safeEscape(train.trainNumber)}">
           <div class="lb-live-card-top">
@@ -28426,7 +28443,7 @@ body{ padding-bottom: calc(var(--bottom-bar-height, 58px) + 10px) !important; }
           <div class="lb-live-schedule" data-lb-train-schedule="${safeEscape(train.trainNumber)}">
             ⏱ ${safeEscape(gtfsInfo ? `${gtfsInfo.departure} - ${gtfsInfo.arrival}` : 'Horaires GTFS en chargement...')} · ${safeEscape(compoVisual(effectiveCompo))}
           </div>
-          ${chips.length ? `<div class="lb-live-meta">${chips.map((chip)=>`<span class="lb-live-chip">${chip}</span>`).join('')}</div>` : ''}
+          ${chips.length ? `<div class="lb-live-meta">${chips.join('')}</div>` : ''}
           <div class="lb-live-card-actions">
             <button type="button" data-lb-signal-train="${safeEscape(train.trainNumber)}">⚠️ Signaler</button>
             <button type="button" class="lb-live-presence-btn" data-lb-presence-train="${safeEscape(train.trainNumber)}">${isInThisTrain ? '🐮 Je quitte' : '🐮 Je suis'}</button>
@@ -28814,7 +28831,7 @@ body{ padding-bottom: calc(var(--bottom-bar-height, 58px) + 10px) !important; }
       return;
     }
     const liveCard = e.target.closest('.lb-live-card');
-    if (liveCard && !e.target.closest('button')){
+    if (liveCard && !e.target.closest('button,[data-lb-delete-signal]')){
       const trainNo = liveCard.getAttribute('data-lb-live-train');
       COMMUNITY.selectedTrain = normalizeKey(trainNo);
       renderTrainDetail(COMMUNITY.selectedTrain);
