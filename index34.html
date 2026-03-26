@@ -1011,6 +1011,28 @@ body {
   gap:8px;
   margin-bottom:10px;
 }
+.lb-live-toolbar-main{
+  display:flex;
+  align-items:center;
+  gap:8px;
+  flex-wrap:wrap;
+}
+.lb-live-direction{
+  min-width: 170px;
+  border-radius: 999px;
+  border:1px solid rgba(0,240,255,.28);
+  background: rgba(0, 18, 31, .82);
+  color:#dffbff;
+  font-weight:700;
+  font-size:.72rem;
+  padding:4px 10px;
+  outline:none;
+  box-shadow: inset 0 0 10px rgba(0,240,255,.12);
+}
+.lb-live-direction:focus{
+  border-color: rgba(0,240,255,.58);
+  box-shadow: 0 0 0 2px rgba(0,240,255,.22), inset 0 0 10px rgba(0,240,255,.12);
+}
 .lb-live-count{
   display:inline-flex;
   align-items:center;
@@ -27731,7 +27753,14 @@ body{ padding-bottom: calc(var(--bottom-bar-height, 58px) + 10px) !important; }
       <div class="lb-community-grid">
         <section class="lb-live-list" aria-label="Trains en live">
           <div class="lb-live-toolbar">
-            <strong>Trains en live</strong>
+            <div class="lb-live-toolbar-main">
+              <strong>Trains en live</strong>
+              <select id="lbLiveDirectionSelect" class="lb-live-direction" aria-label="Filtrer le sens des trains">
+                <option value="all">↕️ Tous les sens</option>
+                <option value="lux_to_nancy">↘️ Lux → Thionville → Metz → Nancy</option>
+                <option value="nancy_to_lux">↗️ Nancy → Metz → Thionville → Lux</option>
+              </select>
+            </div>
             <span class="lb-live-count" id="lbLiveTrainsCount">0</span>
           </div>
           <div class="lb-live-cards" id="lbLiveTrainCards">
@@ -27853,12 +27882,19 @@ body{ padding-bottom: calc(var(--bottom-bar-height, 58px) + 10px) !important; }
     selectedTrain: '',
     selectedSignalType: '',
     selectedInfoTag: '',
+    liveDirection: 'all',
     liveTrains: [],
     signals: [],
     presences: [],
     staticInfoCache: new Map(),
     localSignals: []
   };
+  try{
+    const savedDirection = localStorage.getItem('lbLiveDirectionMode');
+    if (savedDirection && ['all','lux_to_nancy','nancy_to_lux'].includes(savedDirection)){
+      COMMUNITY.liveDirection = savedDirection;
+    }
+  }catch(_){}
 
   const toYmd = (date = new Date())=>{
     const y = date.getFullYear();
@@ -27890,6 +27926,56 @@ body{ padding-bottom: calc(var(--bottom-bar-height, 58px) + 10px) !important; }
     const m = String(hhmm || '').match(/^(\d{2}):(\d{2})$/);
     if (!m) return null;
     return Number(m[1]) * 60 + Number(m[2]);
+  };
+  const normalizeCorridorStop = (value)=>{
+    const txt = String(value || '')
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .toLowerCase()
+      .trim();
+    if (!txt) return '';
+    if (txt.includes('lux')) return 'luxembourg';
+    if (txt.includes('thionville')) return 'thionville';
+    if (txt.includes('metz')) return 'metz';
+    if (txt.includes('nancy')) return 'nancy';
+    return txt;
+  };
+  const corridorOrderMap = new Map([
+    ['luxembourg', 0],
+    ['thionville', 1],
+    ['metz', 2],
+    ['nancy', 3]
+  ]);
+  const inferTrainDirection = (train)=>{
+    const from = normalizeCorridorStop(train?.from || '');
+    const to = normalizeCorridorStop(train?.to || '');
+    const fromRank = corridorOrderMap.get(from);
+    const toRank = corridorOrderMap.get(to);
+    if (!Number.isFinite(fromRank) || !Number.isFinite(toRank) || fromRank === toRank) return 'other';
+    return fromRank < toRank ? 'lux_to_nancy' : 'nancy_to_lux';
+  };
+  const sortAndFilterLiveTrainsByDirection = (trains, direction = 'all')=>{
+    const list = Array.isArray(trains) ? [...trains] : [];
+    const tagged = list.map((train)=> ({ ...train, direction: inferTrainDirection(train) }));
+    const filtered = direction === 'all' ? tagged : tagged.filter((train)=> train.direction === direction);
+    const corridorSort = direction === 'nancy_to_lux'
+      ? ['nancy','metz','thionville','luxembourg']
+      : ['luxembourg','thionville','metz','nancy'];
+    const sortMap = new Map(corridorSort.map((name, idx)=> [name, idx]));
+    filtered.sort((a, b)=>{
+      const aFrom = sortMap.get(normalizeCorridorStop(a.from));
+      const bFrom = sortMap.get(normalizeCorridorStop(b.from));
+      const aRank = Number.isFinite(aFrom) ? aFrom : 99;
+      const bRank = Number.isFinite(bFrom) ? bFrom : 99;
+      if (aRank !== bRank) return aRank - bRank;
+      const aTo = sortMap.get(normalizeCorridorStop(a.to));
+      const bTo = sortMap.get(normalizeCorridorStop(b.to));
+      const aToRank = Number.isFinite(aTo) ? aTo : 99;
+      const bToRank = Number.isFinite(bTo) ? bTo : 99;
+      if (aToRank !== bToRank) return aToRank - bToRank;
+      return String(a.trainNumber || '').localeCompare(String(b.trainNumber || ''), 'fr', { numeric: true });
+    });
+    return filtered;
   };
   const getCompoForTrain = (trainNumber)=>{
     const raw = window.compoData?.[String(trainNumber || '').trim()] || '';
@@ -28497,13 +28583,23 @@ body{ padding-bottom: calc(var(--bottom-bar-height, 58px) + 10px) !important; }
     COMMUNITY.liveTrains = extractLiveTrains();
     const cardsEl = $id('lbLiveTrainCards');
     const countEl = $id('lbLiveTrainsCount');
+	const directionSelect = $id('lbLiveDirectionSelect');
+    if (directionSelect && directionSelect.value !== COMMUNITY.liveDirection){
+      directionSelect.value = COMMUNITY.liveDirection;
+    }
     if (!cardsEl || !countEl) return;
-    countEl.textContent = String(COMMUNITY.liveTrains.length);
-    if (!COMMUNITY.liveTrains.length){
-      cardsEl.innerHTML = '<div class="lb-live-empty">Aucun train live détecté pour le moment.</div>';
+    const displayTrains = sortAndFilterLiveTrainsByDirection(COMMUNITY.liveTrains, COMMUNITY.liveDirection);
+    countEl.textContent = String(displayTrains.length);
+    if (!displayTrains.length){
+      const msg = COMMUNITY.liveDirection === 'all'
+        ? 'Aucun train live détecté pour le moment.'
+        : 'Aucun train trouvé pour ce sens actuellement.';
+      cardsEl.innerHTML = `<div class="lb-live-empty">${safeEscape(msg)}</div>`;
+      renderLiveFeed('');
+      if ($id('lbTrainDetailModal')?.classList.contains('is-open')) renderTrainDetail('');
       return;
     }
-    cardsEl.innerHTML = COMMUNITY.liveTrains.map((train)=>{
+    cardsEl.innerHTML = displayTrains.map((train)=>{
       const signals = getSignalsForTrain(train.trainNumber);
       const wallComments = getWallCommentsForTrain(train.trainNumber);
       const presence = getPresenceStatsForTrain(train.trainNumber);
@@ -28610,7 +28706,8 @@ body{ padding-bottom: calc(var(--bottom-bar-height, 58px) + 10px) !important; }
 
   function refreshLiveModal(){
     renderLiveTrainCards();
-    renderLiveFeed(COMMUNITY.selectedTrain || (COMMUNITY.liveTrains[0]?.trainNumber || ''));
+    const displayTrains = sortAndFilterLiveTrainsByDirection(COMMUNITY.liveTrains, COMMUNITY.liveDirection);
+    renderLiveFeed(COMMUNITY.selectedTrain || (displayTrains[0]?.trainNumber || ''));
   }
 
   async function renderTrainDetail(trainNumber){
@@ -28982,7 +29079,16 @@ body{ padding-bottom: calc(var(--bottom-bar-height, 58px) + 10px) !important; }
   });
 
   document.addEventListener('change', (e)=>{
-    if (e.target && e.target.id === 'lbSignalTrainSelect') updateSignalStationOptions();
+    if (e.target && e.target.id === 'lbLiveDirectionSelect'){
+      const next = String(e.target.value || 'all');
+      COMMUNITY.liveDirection = ['all','lux_to_nancy','nancy_to_lux'].includes(next) ? next : 'all';
+      try{ localStorage.setItem('lbLiveDirectionMode', COMMUNITY.liveDirection); }catch(_){}
+      const visible = sortAndFilterLiveTrainsByDirection(COMMUNITY.liveTrains, COMMUNITY.liveDirection);
+      if (COMMUNITY.selectedTrain && !visible.some((it)=> normalizeKey(it.trainNumber) === normalizeKey(COMMUNITY.selectedTrain))){
+        COMMUNITY.selectedTrain = visible[0]?.trainNumber || '';
+      }
+      refreshLiveModal();
+    }
   });
 
   document.addEventListener('click', (e)=>{
