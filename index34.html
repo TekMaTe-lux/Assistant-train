@@ -28583,9 +28583,19 @@ body{ padding-bottom: calc(var(--bottom-bar-height, 58px) + 10px) !important; }
     const today = toIsoDay();
     return (Array.isArray(COMMUNITY.presences) ? COMMUNITY.presences : []).find((it)=>{
       const day = toIsoDay(new Date(it.ts || Date.now()));
-      const identity = normalizeIdentity(it.accountId || it.pseudo);
+      const identity = normalizeIdentity(it.accountId || it.pseudo || it.id);
       return day === today && identity === ident;
     }) || null;
+  }
+
+  function getMyPresencesToday(){
+    const ident = normalizeIdentity(getCurrentPresenceIdentity());
+    const today = toIsoDay();
+    return (Array.isArray(COMMUNITY.presences) ? COMMUNITY.presences : []).filter((it)=>{
+      const day = toIsoDay(new Date(it.ts || Date.now()));
+      const identity = normalizeIdentity(it.accountId || it.pseudo || it.id);
+      return day === today && identity === ident;
+    });
   }
 
   function hasCurrentUserPresence(trainNumber){
@@ -29202,14 +29212,13 @@ body{ padding-bottom: calc(var(--bottom-bar-height, 58px) + 10px) !important; }
     const key = normalizeKey(trainNumber);
     if (!key) return;
 	setPresenceOptInToday(true);
-    const existing = getMyPresenceToday();
-    if (existing && normalizeKey(existing.trainNumber) === key){
+    const existingPresences = getMyPresencesToday();
+    const alreadyInTargetTrain = existingPresences.some((it)=> normalizeKey(it.trainNumber) === key);
+    if (alreadyInTargetTrain){
       await clearMyPresence();
       return;
     }
-    if (existing && normalizeKey(existing.trainNumber) !== key){
-      await clearMyPresence();
-    }
+    await clearMyPresence({ keepOptIn: true });
     const accountId = getCurrentPresenceIdentity();
     const payload = { message: `[PRESENCE] TER ${key} — ${toIsoDay()}`, scope:'presence', train_number:key, account_id: accountId };
     try{
@@ -29242,17 +29251,20 @@ body{ padding-bottom: calc(var(--bottom-bar-height, 58px) + 10px) !important; }
     }
   }
 
-  async function clearMyPresence(){
-	setPresenceOptInToday(false);
-    const mine = getMyPresenceToday();
-    if (!mine) return;
+  async function clearMyPresence(options = {}){
+    const keepOptIn = !!options.keepOptIn;
+    if (!keepOptIn) setPresenceOptInToday(false);
+    const mineList = getMyPresencesToday();
+    if (!mineList.length) return;
     try{
-      if (mine.id){
+      for (const mine of mineList){
+        if (!mine.id) continue;
         const deleteRes = await fetchCommentsApi(`/${encodeURIComponent(String(mine.id))}`, { method:'DELETE' });
         if (!deleteRes.ok) throw new Error(`HTTP ${deleteRes.status}`);
       }
     }catch(_){ return; }
-    COMMUNITY.presences = (Array.isArray(COMMUNITY.presences) ? COMMUNITY.presences : []).filter((it)=> String(it.id) !== String(mine.id));
+    const mineIds = new Set(mineList.map((it)=> String(it.id)));
+    COMMUNITY.presences = (Array.isArray(COMMUNITY.presences) ? COMMUNITY.presences : []).filter((it)=> !mineIds.has(String(it.id)));
     refreshCommunityViews();
     refreshLiveModal();
   }
@@ -29403,4 +29415,5 @@ body{ padding-bottom: calc(var(--bottom-bar-height, 58px) + 10px) !important; }
 </script>
 
 </body>
+	
 </html>
