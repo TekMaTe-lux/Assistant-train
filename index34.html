@@ -27987,7 +27987,6 @@ body{ padding-bottom: calc(var(--bottom-bar-height, 58px) + 10px) !important; }
             <button type="button" class="lb-signal-type" data-signal-type="information">ℹ️ Information</button>
             <button type="button" class="lb-signal-type" data-signal-type="a-lheure">✅ À l'heure</button>
           </div>
-          <textarea id="lbSignalDetail" maxlength="180" placeholder="Ajouter un détail facultatif : forte affluence, composition simple, climatisation HS, train non parti..."></textarea>
           <div class="lb-signal-help" id="lbSignalFeedback">Connectez-vous pour publier un signalement. Les données officielles SNCF restent visibles en priorité.</div>
           <button type="button" id="lbSignalSubmit" class="lb-signal-submit">Publier le signalement</button>
         </div>
@@ -29160,7 +29159,6 @@ body{ padding-bottom: calc(var(--bottom-bar-height, 58px) + 10px) !important; }
   async function publishSignal(){
     const trainSelect = $id('lbSignalTrainSelect');
     const stationSelect = $id('lbSignalStationSelect');
-    const delaySelect = $id('lbSignalDelaySelect');
     const detailEl = $id('lbSignalDetail');
     const feedback = $id('lbSignalFeedback');
     const submit = $id('lbSignalSubmit');
@@ -29170,7 +29168,6 @@ body{ padding-bottom: calc(var(--bottom-bar-height, 58px) + 10px) !important; }
     const delayMin = Number(delaySelect?.value || 0);
     const infoTag = COMMUNITY.selectedInfoTag;
     const accountId = getCurrentPresenceIdentity();
-    const detail = String(detailEl?.value || '').trim().slice(0, 180);
     const needsStation = signalType !== 'information' || infoTag === 'forces-ordre';
     if (!trainKey){ if (feedback) feedback.textContent = 'Choisissez un train live.'; return; }
     if (!signalType){ if (feedback) feedback.textContent = 'Choisissez un type de signalement.'; return; }
@@ -29180,13 +29177,37 @@ body{ padding-bottom: calc(var(--bottom-bar-height, 58px) + 10px) !important; }
     const train = COMMUNITY.liveTrains.find((it)=> normalizeKey(it.trainNumber) === trainKey);
     const label = train?.label || `TER ${trainKey}`;
     const baseDetail = signalType === 'retard'
-      ? `Retard +${delayMin} min${detail ? ` — ${detail}` : ''}`
+      ? `Retard +${delayMin} min`
       : signalType === 'suppression'
-        ? `Train supprimé à l'arrêt${detail ? ` — ${detail}` : ''}`
+        ? `Train supprimé à l'arrêt`
         : signalType === 'a-lheure'
-          ? `Train à l'heure${detail ? ` — ${detail}` : ''}`
-          : `${INFO_TAG_LABELS[infoTag] || 'Information'}${detail ? ` — ${detail}` : ''}`;
+          ? `Train à l'heure`
+          : `${INFO_TAG_LABELS[infoTag] || 'Information'}`;
     const message = `[${signalType.toUpperCase().replace(/-/g,' ')}] ${label}${(needsStation && station) ? ` [${station}]` : ''} — ${baseDetail}`;
+
+	const publishAutoWallAlertIfNeeded = async ()=>{
+      const isSuppression = signalType === 'suppression';
+      const isMajorDelay = signalType === 'retard' && delayMin >= 15;
+      if (!isSuppression && !isMajorDelay) return;
+      const statusTxt = isSuppression ? 'signalé supprimé' : `signalé en retard +${delayMin} min`;
+      const stationTxt = station ? ` à ${station}` : '';
+      const wallMessage = `#TER${trainKey} ${statusTxt}${stationTxt} par le #betail`;
+      try{
+        await window.fetchCommentsApi('', {
+          method:'POST',
+          headers:{ 'Content-Type':'application/json' },
+          body: JSON.stringify({
+            message: wallMessage,
+            scope:'wall',
+            train_number: trainKey,
+            account_id: accountId
+          })
+        });
+        try { window.lbComments?.refresh?.(); } catch(_){}
+      }catch(err){
+        console.warn('WALL_AUTO_SIGNAL_POST_ERROR', err);
+      }
+    };
     try{
       if (submit) submit.disabled = true;
       if (feedback) feedback.textContent = 'Publication du signalement…';
@@ -29198,12 +29219,12 @@ body{ padding-bottom: calc(var(--bottom-bar-height, 58px) + 10px) !important; }
       let data = null;
       try { data = await res.json(); } catch(_){ }
       if (!res.ok) throw new Error(data?.error || `HTTP ${res.status}`);
-      if (detailEl) detailEl.value = '';
       if (delaySelect) delaySelect.value = '';
       COMMUNITY.selectedSignalType = '';
       COMMUNITY.selectedInfoTag = '';
       document.querySelectorAll('.lb-signal-type.is-selected').forEach((btn)=> btn.classList.remove('is-selected'));
       if (feedback) feedback.textContent = 'Signalement publié ✅';
+	  await publishAutoWallAlertIfNeeded();
       await loadSignals();
       closeCommunityModal('lbSignalModal');
       openCommunityModal('lbLiveModal');
@@ -29226,7 +29247,6 @@ body{ padding-bottom: calc(var(--bottom-bar-height, 58px) + 10px) !important; }
       if (localItem){
         saveLocalSignal(localItem);
         await loadSignals();
-        if (detailEl) detailEl.value = '';
         if (delaySelect) delaySelect.value = '';
         COMMUNITY.selectedSignalType = '';
         COMMUNITY.selectedInfoTag = '';
