@@ -21348,8 +21348,15 @@ function scheduleWeatherAfterTableSettled(){
     if (!feed || !form || !input || !countEl) return;
 
     const wallSource = Array.isArray(messages) ? messages : lbCommentState.wall;
-    const wall = Array.isArray(wallSource) ? wallSource.slice(0, 50) : [];
-    countEl.textContent = String(Array.isArray(lbCommentState.wall) ? lbCommentState.wall.length : 0);
+    const wallAll = Array.isArray(wallSource) ? wallSource : [];
+    const wall = wallAll
+      .filter((it)=>{
+        const trainKey = normalizeKey(it?.trainNumber || detectCommentTrainNumber(it));
+        if (!trainKey) return true;
+        return !shouldHideLiveCommentByAutomoderation(it, trainKey);
+      })
+      .slice(0, 50);
+    countEl.textContent = String(wall.length);
 
     if (!wall.length) {
       feed.innerHTML = '<div class="live-wall-empty">Aucun commentaire pour le moment.</div>';
@@ -21384,6 +21391,11 @@ function scheduleWeatherAfterTableSettled(){
     const train = String(trainNumber || lbCurrentDetailTrain || '').trim();
     const comments = (Array.isArray(lbCommentState.wall) ? lbCommentState.wall : [])
       .filter((it) => !train || !it.trainNumber || it.trainNumber === train)
+	  .filter((it)=>{
+        const trainKey = normalizeKey(it?.trainNumber || train || detectCommentTrainNumber(it));
+        if (!trainKey) return true;
+        return !shouldHideLiveCommentByAutomoderation(it, trainKey);
+      })
       .slice(0, 30);
 
     countEl.textContent = String(comments.length);
@@ -21560,7 +21572,13 @@ function scheduleWeatherAfterTableSettled(){
     refresh(){ loadMessages(); },
     count(trainNumber){
       const train = String(trainNumber || '').trim();
-      return (Array.isArray(lbCommentState.wall) ? lbCommentState.wall : []).filter((it) => !train || it.trainNumber === train).length;
+      return (Array.isArray(lbCommentState.wall) ? lbCommentState.wall : [])
+        .filter((it) => !train || it.trainNumber === train)
+        .filter((it)=>{
+          const trainKey = normalizeKey(it?.trainNumber || train || detectCommentTrainNumber(it));
+          if (!trainKey) return true;
+          return !shouldHideLiveCommentByAutomoderation(it, trainKey);
+        }).length;
     }
   };
 
@@ -29424,23 +29442,36 @@ body{ padding-bottom: calc(var(--bottom-bar-height, 58px) + 10px) !important; }
     const id = String(signalId || '').trim();
     if (!id) return;
     try{
+      const voteValue = Number(value) > 0 ? 1 : -1;
       const res = await window.fetchCommentsApi(`/${encodeURIComponent(id)}/vote`, {
         method:'POST',
         headers:{ 'Content-Type':'application/json' },
-        body: JSON.stringify({ vote: Number(value) > 0 ? 1 : -1 })
+        body: JSON.stringify({ vote: voteValue })
       });
       let data = null;
       try { data = await res.json(); } catch(_){}
       if (!res.ok) throw new Error(data?.error || `HTTP ${res.status}`);
+      let moderationNotice = '';
       const target = (Array.isArray(COMMUNITY.signals) ? COMMUNITY.signals : []).find((it)=> String(it.id) === id);
       if (target){
+        const previousScore = Number(target.upvotes || 0) - Number(target.downvotes || 0);
         target.upvotes = Number(data?.upvotes || 0);
         target.downvotes = Number(data?.downvotes || 0);
         target.myVote = Number(data?.my_vote || 0);
+        const nextScore = Number(target.upvotes || 0) - Number(target.downvotes || 0);
+        if (voteValue < 0 && previousScore > -3 && nextScore <= -3){
+          moderationNotice = 'Votre vote fait passer ce signalement à -3 : il est automatiquement supprimé du live et du mur des commentaires.';
+        }
+      } else {
+        const nextScore = Number(data?.upvotes || 0) - Number(data?.downvotes || 0);
+        if (voteValue < 0 && nextScore <= -3){
+          moderationNotice = 'Votre vote fait passer ce signalement à -3 : il est automatiquement supprimé du live et du mur des commentaires.';
+        }
       }
       await loadSignals();
       if (COMMUNITY.selectedTrain) renderTrainDetail(COMMUNITY.selectedTrain);
       refreshLiveModal();
+	  if (moderationNotice) alert(moderationNotice);
     }catch(err){
       console.error('SIGNAL_VOTE_ERROR', err);
     }
