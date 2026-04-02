@@ -21344,6 +21344,30 @@ function scheduleWeatherAfterTableSettled(){
   function shouldHideWallCommentByAutomod(item, trainNumber){
     const trainKey = wallNormalizeKey(trainNumber || detectWallTrainNumber(item));
     if (!trainKey) return false;
+	const rawText = String(item?.text || item?.message || '');
+    const plainText = rawText.replace(/<[^>]*>/g, ' ').toLowerCase();
+    const looksLikeSuppression = /supprim/.test(plainText);
+    const delayMatch = plainText.match(/(?:retard|\+)\s*([0-9]{1,3})/i);
+    const mentionedDelay = delayMatch ? Number(delayMatch[1]) : null;
+    const looksLikeDelay = Number.isFinite(mentionedDelay) && mentionedDelay > 0;
+
+    if ((looksLikeSuppression || looksLikeDelay) && typeof getSignalsForTrain === 'function'){
+      const activeSignals = getSignalsForTrain(trainKey);
+      if (!Array.isArray(activeSignals) || !activeSignals.length) return true;
+      if (looksLikeSuppression){
+        const hasSuppressionChip = activeSignals.some((s)=> String(s?.signalType || '').toLowerCase() === 'suppression');
+        if (!hasSuppressionChip) return true;
+      }
+      if (looksLikeDelay){
+        const hasDelayChip = activeSignals.some((s)=>{
+          if (String(s?.signalType || '').toLowerCase() !== 'retard') return false;
+          const d = Number(s?.delayMin || 0);
+          return d > 0 && (!Number.isFinite(mentionedDelay) || d >= mentionedDelay);
+        });
+        if (!hasDelayChip) return true;
+      }
+    }
+
     if (typeof shouldHideLiveCommentByAutomoderation === 'function'){
       return !!shouldHideLiveCommentByAutomoderation(item, trainKey);
     }
