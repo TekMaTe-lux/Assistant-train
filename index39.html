@@ -29057,6 +29057,14 @@ body{ padding-bottom: calc(var(--bottom-bar-height, 58px) + 10px) !important; }
     saveSignalVotes(store);
   }
 
+  function buildCommentDeletePath(commentId, options = {}){
+    const id = String(commentId || '').trim();
+    if (!id) return '';
+    const params = new URLSearchParams();
+    if (options.moderationConfirmed) params.set('moderation_confirmed', '1');
+    return params.toString() ? `/${encodeURIComponent(id)}?${params.toString()}` : `/${encodeURIComponent(id)}`;
+  }
+
   function detectCommentTrainNumber(item){
     if (!item) return '';
     const direct = normalizeKey(item.trainNumber || item.train_number || item.train || '');
@@ -29662,17 +29670,28 @@ body{ padding-bottom: calc(var(--bottom-bar-height, 58px) + 10px) !important; }
         target.downvotes = Number(data?.downvotes || 0);
         target.myVote = Number(data?.my_vote || 0);
         const nextScore = Number(target.upvotes || 0) - Number(target.downvotes || 0);
-        if (voteValue < 0 && previousScore > -3 && nextScore <= -3){
-          moderationNotice = 'Votre vote fait passer ce signalement à -3 : il est automatiquement supprimé du live et du mur des commentaires.';
+        if (voteValue < 0 && nextScore <= -3){
+          if (previousScore > -3){
+            moderationNotice = 'Votre vote fait passer ce signalement à -3 : il est automatiquement supprimé du live et du mur des commentaires.';
+          }
           signalRemovedByModeration = { ...target };
         }
       } else {
         const nextScore = Number(data?.upvotes || 0) - Number(data?.downvotes || 0);
         if (voteValue < 0 && nextScore <= -3){
           moderationNotice = 'Votre vote fait passer ce signalement à -3 : il est automatiquement supprimé du live et du mur des commentaires.';
+		  if (targetBeforeVote){
+            signalRemovedByModeration = {
+              ...targetBeforeVote,
+              upvotes: Number(data?.upvotes || targetBeforeVote.upvotes || 0),
+              downvotes: Number(data?.downvotes || targetBeforeVote.downvotes || 0)
+            };
+          }
         }
       }
+      if (signalRemovedByModeration) await removeAssociatedWallAlertsForSignal(signalRemovedByModeration, { ignoreAuthorCheck: true });
       if (signalRemovedByModeration) rememberHiddenWallRuleFromSignal(signalRemovedByModeration);
+      if (signalRemovedByModeration) forceHideWallCommentsInFrontForSignal(signalRemovedByModeration);
       await loadSignals();
 	  if (voteValue < 0) await pruneWallAlertsWithoutActiveSignals();
       if (COMMUNITY.selectedTrain) renderTrainDetail(COMMUNITY.selectedTrain);
@@ -30288,7 +30307,7 @@ body{ padding-bottom: calc(var(--bottom-bar-height, 58px) + 10px) !important; }
 
     for (const item of candidates){
       try{
-        await window.fetchCommentsApi(`/${encodeURIComponent(String(item.id))}`, { method:'DELETE' });
+        await window.fetchCommentsApi(buildCommentDeletePath(item.id, { moderationConfirmed: true }), { method:'DELETE' });
       }catch(_){}
     }
     try { await window.loadMessages?.(); } catch(_){}
@@ -30319,6 +30338,30 @@ body{ padding-bottom: calc(var(--bottom-bar-height, 58px) + 10px) !important; }
       });
       try { await window.loadMessages?.(); } catch(_){}
     }catch(_){}
+  }
+
+  function forceHideWallCommentsInFrontForSignal(signal){
+    const sigType = String(signal?.signalType || '').toLowerCase();
+    const trainKey = normalizeKey(signal?.trainNumber);
+    const delayMin = Number(signal?.delayMin || 0);
+    if (!trainKey) return;
+    if (!['suppression','retard'].includes(sigType)) return;
+    if (sigType === 'retard' && delayMin < 15) return;
+    const before = Array.isArray(window.lbCommentState?.wall) ? window.lbCommentState.wall : [];
+    const filtered = before.filter((it)=>{
+      const text = String(it?.text || '').toLowerCase();
+      const commentTrain = normalizeKey(it?.trainNumber || detectCommentTrainNumber(it));
+      if (commentTrain !== trainKey) return true;
+      if (sigType === 'suppression') return !/supprim/.test(text);
+      const m = text.match(/\+\s*([0-9]{1,3})/);
+      if (!m) return true;
+      return Number(m[1] || 0) !== delayMin;
+    });
+    if (filtered.length === before.length) return;
+    if (!window.lbCommentState || typeof window.lbCommentState !== 'object') window.lbCommentState = { wall:[], trains:{} };
+    window.lbCommentState.wall = filtered;
+    try { window.renderMessages?.(); } catch(_){}
+    try { window.renderHomeLiveWall?.(); } catch(_){}
   }
 
   async function pruneWallAlertsWithoutActiveSignals(){
@@ -30354,7 +30397,7 @@ body{ padding-bottom: calc(var(--bottom-bar-height, 58px) + 10px) !important; }
     });
     if (!toDelete.length) return;
     for (const it of toDelete){
-      try{ await window.fetchCommentsApi(`/${encodeURIComponent(String(it.id))}`, { method:'DELETE' }); }catch(_){}
+      try{ await window.fetchCommentsApi(buildCommentDeletePath(it.id, { moderationConfirmed: true }), { method:'DELETE' }); }catch(_){}
     }
     try { await window.loadMessages?.(); } catch(_){}
   }
