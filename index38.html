@@ -29535,6 +29535,7 @@ body{ padding-bottom: calc(var(--bottom-bar-height, 58px) + 10px) !important; }
       }
       if (signalRemovedByModeration) await removeAssociatedWallAlertsForSignal(signalRemovedByModeration, { ignoreAuthorCheck: true });
       await loadSignals();
+	  if (voteValue < 0) await pruneWallAlertsWithoutActiveSignals();
       if (COMMUNITY.selectedTrain) renderTrainDetail(COMMUNITY.selectedTrain);
       refreshLiveModal();
       if (moderationNotice) alert(moderationNotice);
@@ -30178,6 +30179,44 @@ body{ padding-bottom: calc(var(--bottom-bar-height, 58px) + 10px) !important; }
       });
       try { await window.loadMessages?.(); } catch(_){}
     }catch(_){}
+  }
+
+  async function pruneWallAlertsWithoutActiveSignals(){
+    let wall = [];
+    try{
+      const res = await window.fetchCommentsApi('?scope=wall');
+      if (!res.ok) return;
+      const data = await res.json();
+      const list = Array.isArray(data) ? data : (Array.isArray(data?.comments) ? data.comments : []);
+      wall = list.map(normalizeCommentItem).filter(Boolean);
+    }catch(_){ return; }
+    if (!wall.length) return;
+
+    const toDelete = wall.filter((it)=>{
+      if (!it?.id) return false;
+      const trainKey = normalizeKey(it?.trainNumber || detectCommentTrainNumber(it));
+      if (!trainKey) return false;
+      const text = String(it?.text || '').toLowerCase().replace(/<[^>]*>/g, ' ');
+      const isSupp = /supprim/.test(text);
+      const delayMatch = text.match(/\+\s*([0-9]{1,3})/);
+      const delay = delayMatch ? Number(delayMatch[1]) : 0;
+      const isMajorDelay = delay >= 15;
+      if (!isSupp && !isMajorDelay) return false;
+      const active = getSignalsForTrain(trainKey);
+      if (!active.length) return true;
+      if (isSupp){
+        return !active.some((s)=> String(s?.signalType || '').toLowerCase() === 'suppression');
+      }
+      if (isMajorDelay){
+        return !active.some((s)=> String(s?.signalType || '').toLowerCase() === 'retard' && Number(s?.delayMin || 0) >= delay);
+      }
+      return false;
+    });
+    if (!toDelete.length) return;
+    for (const it of toDelete){
+      try{ await window.fetchCommentsApi(`/${encodeURIComponent(String(it.id))}`, { method:'DELETE' }); }catch(_){}
+    }
+    try { await window.loadMessages?.(); } catch(_){}
   }
 
   async function updateSignalInlineFromTrainDetail({ signalId, trainNumber, station, signalType, delayMin } = {}){
