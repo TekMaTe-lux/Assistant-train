@@ -21311,6 +21311,7 @@ function scheduleWeatherAfterTableSettled(){
       pseudo: String(raw.pseudo || raw.username || raw.user_pseudo || 'Voyageur').trim().slice(0, 24),
       text: String(raw.message || raw.text || '').trim().slice(0, 180),
       trainNumber: String(raw.train_number || raw.trainNumber || '').trim(),
+      accountId: String(raw.account_id || raw.accountId || raw.user_id || '').trim(),
       ts: createdTs
     };
   }
@@ -21326,6 +21327,56 @@ function scheduleWeatherAfterTableSettled(){
       }
     );
   }
+  window.lbRenderWallMessageHtml = lbRenderWallMessageHtml;
+
+  function wallNormalizeKey(value){
+    return String(value || '').replace(/\D+/g, '').trim();
+  }
+  window.wallNormalizeKey = wallNormalizeKey;
+
+  function detectWallTrainNumber(item){
+    if (!item) return '';
+    const direct = wallNormalizeKey(item.trainNumber || item.train_number || '');
+    if (direct) return direct;
+    const text = String(item.text || item.message || '');
+    const match = text.match(/(?:#?TER|#?RE|#?RB|#?IC|train\s*)?\s*(\d{3,6})/i);
+    return match ? wallNormalizeKey(match[1]) : '';
+  }
+  window.detectWallTrainNumber = detectWallTrainNumber;
+
+  function shouldHideWallCommentByAutomod(item, trainNumber){
+    const trainKey = wallNormalizeKey(trainNumber || detectWallTrainNumber(item));
+    if (!trainKey) return false;
+    const rawText = String(item?.text || item?.message || '');
+    const plainText = rawText.replace(/<[^>]*>/g, ' ').toLowerCase();
+    const looksLikeSuppression = /supprim/.test(plainText);
+    const delayMatch = plainText.match(/(?:retard|\+)\s*([0-9]{1,3})/i);
+    const mentionedDelay = delayMatch ? Number(delayMatch[1]) : null;
+    const looksLikeDelay = Number.isFinite(mentionedDelay) && mentionedDelay > 0;
+
+    if ((looksLikeSuppression || looksLikeDelay) && typeof getSignalsForTrain === 'function'){
+      const activeSignals = getSignalsForTrain(trainKey);
+      if (!Array.isArray(activeSignals) || !activeSignals.length) return true;
+      if (looksLikeSuppression){
+        const hasSuppressionChip = activeSignals.some((s)=> String(s?.signalType || '').toLowerCase() === 'suppression');
+        if (!hasSuppressionChip) return true;
+      }
+      if (looksLikeDelay){
+        const hasDelayChip = activeSignals.some((s)=>{
+          if (String(s?.signalType || '').toLowerCase() !== 'retard') return false;
+          const d = Number(s?.delayMin || 0);
+          return d > 0 && (!Number.isFinite(mentionedDelay) || d >= mentionedDelay);
+        });
+        if (!hasDelayChip) return true;
+      }
+    }
+
+    if (typeof shouldHideLiveCommentByAutomoderation === 'function'){
+      return !!shouldHideLiveCommentByAutomoderation(item, trainKey);
+    }
+    return false;
+  }
+  window.shouldHideWallCommentByAutomod = shouldHideWallCommentByAutomod;
 
   const fmtHour = (ts) => {
     try{
@@ -21348,8 +21399,15 @@ function scheduleWeatherAfterTableSettled(){
     if (!feed || !form || !input || !countEl) return;
 
     const wallSource = Array.isArray(messages) ? messages : lbCommentState.wall;
-    const wall = Array.isArray(wallSource) ? wallSource.slice(0, 50) : [];
-    countEl.textContent = String(Array.isArray(lbCommentState.wall) ? lbCommentState.wall.length : 0);
+    const wallAll = Array.isArray(wallSource) ? wallSource : [];
+    const wall = wallAll
+      .filter((it)=>{
+        const trainKey = wallNormalizeKey(it?.trainNumber || detectWallTrainNumber(it));
+        if (!trainKey) return true;
+        return !shouldHideWallCommentByAutomod(it, trainKey);
+      })
+      .slice(0, 50);
+    countEl.textContent = String(wall.length);
 
     if (!wall.length) {
       feed.innerHTML = '<div class="live-wall-empty">Aucun commentaire pour le moment.</div>';
@@ -21384,6 +21442,11 @@ function scheduleWeatherAfterTableSettled(){
     const train = String(trainNumber || lbCurrentDetailTrain || '').trim();
     const comments = (Array.isArray(lbCommentState.wall) ? lbCommentState.wall : [])
       .filter((it) => !train || !it.trainNumber || it.trainNumber === train)
+      .filter((it)=>{
+        const trainKey = wallNormalizeKey(it?.trainNumber || train || detectWallTrainNumber(it));
+        if (!trainKey) return true;
+        return !shouldHideWallCommentByAutomod(it, trainKey);
+      })
       .slice(0, 30);
 
     countEl.textContent = String(comments.length);
@@ -21560,7 +21623,13 @@ function scheduleWeatherAfterTableSettled(){
     refresh(){ loadMessages(); },
     count(trainNumber){
       const train = String(trainNumber || '').trim();
-      return (Array.isArray(lbCommentState.wall) ? lbCommentState.wall : []).filter((it) => !train || it.trainNumber === train).length;
+      return (Array.isArray(lbCommentState.wall) ? lbCommentState.wall : [])
+        .filter((it) => !train || it.trainNumber === train)
+        .filter((it)=>{
+          const trainKey = wallNormalizeKey(it?.trainNumber || train || detectWallTrainNumber(it));
+          if (!trainKey) return true;
+          return !shouldHideWallCommentByAutomod(it, trainKey);
+        }).length;
     }
   };
 
@@ -26643,8 +26712,18 @@ async function loadAffluenceDate(dateStr){
     if (!feed || !form || !cta || !countEl || !window.lbCommentState) return;
 
     var wallAll = Array.isArray(window.lbCommentState.wall) ? window.lbCommentState.wall : [];
-    var wall = wallAll.slice(0, 60);
-    countEl.textContent = String(wallAll.length);
+    var wall = wallAll.filter(function(it){
+      var trainKey = '';
+      if (typeof window.wallNormalizeKey === 'function' && typeof window.detectWallTrainNumber === 'function'){
+        trainKey = window.wallNormalizeKey((it && it.trainNumber) || window.detectWallTrainNumber(it));
+      }
+      if (!trainKey) return true;
+      if (typeof window.shouldHideWallCommentByAutomod === 'function'){
+        return !window.shouldHideWallCommentByAutomod(it, trainKey);
+      }
+      return true;
+    }).slice(0, 60);
+    countEl.textContent = String(wall.length);
     var can = window.lbIsAuthed === true;
     var pseudo = String(window.lbPrefsCache?.pseudo || '').trim().slice(0,24);
     var isAdmin = String(window.currentUser?.role || '').toLowerCase() === 'admin';
@@ -26668,7 +26747,10 @@ async function loadAffluenceDate(dateStr){
 	        var deleteBtn = (isAdmin && commentId)
 	          ? '<span class="fav-comments-row"><span class="fav-comment-btn" role="button" tabindex="0" data-comment-delete="' + escapeHtml(commentId) + '" aria-label="Supprimer le commentaire" title="Supprimer le commentaire">❌</span></span>'
 	          : '';
-	        return '<div class="live-wall-item live-wall-item--home live-wall-item--compact"><div class="live-wall-item-text"><strong>' + escapeHtml(it.pseudo || 'Voyageur') + '</strong><span class="live-wall-inline-meta">' + escapeHtml(fmtParisHour(it.ts)) + '</span> : ' + lbRenderWallMessageHtml(it.text || '') + '</div>' + deleteBtn + '</div>';
+	        var renderWallHtml = (typeof window.lbRenderWallMessageHtml === 'function')
+	          ? window.lbRenderWallMessageHtml
+	          : function(v){ return escapeHtml(String(v || '')); };
+	        return '<div class="live-wall-item live-wall-item--home live-wall-item--compact"><div class="live-wall-item-text"><strong>' + escapeHtml(it.pseudo || 'Voyageur') + '</strong><span class="live-wall-inline-meta">' + escapeHtml(fmtParisHour(it.ts)) + '</span> : ' + renderWallHtml(it.text || '') + '</div>' + deleteBtn + '</div>';
 	      }).join('');
 	      feed.scrollTop = 0;
 	    }
@@ -29142,7 +29224,43 @@ body{ padding-bottom: calc(var(--bottom-bar-height, 58px) + 10px) !important; }
 
   function getSignalsForTrain(trainNumber){
     const key = normalizeKey(trainNumber);
-    return (Array.isArray(COMMUNITY.signals) ? COMMUNITY.signals : []).filter((it)=> normalizeKey(it.trainNumber) === key);
+    return (Array.isArray(COMMUNITY.signals) ? COMMUNITY.signals : [])
+      .filter((it)=> normalizeKey(it.trainNumber) === key)
+      .filter((it)=> !isSignalRejectedByVotes(it));
+  }
+
+  function getSignalScore(signal){
+    const votes = getSignalVoteSummary(signal);
+    return Number(votes.up || 0) - Number(votes.down || 0);
+  }
+
+  function isSignalContestedByVotes(signal){
+    const score = getSignalScore(signal);
+    return score <= -1 && score >= -2;
+  }
+
+  function isSignalRejectedByVotes(signal){
+    return getSignalScore(signal) <= -3;
+  }
+
+  function isImportantDisruptionSignal(signal){
+    const type = String(signal?.signalType || '').toLowerCase();
+    if (type === 'suppression') return true;
+    if (type === 'retard' && Number(signal?.delayMin || 0) >= 15) return true;
+    return false;
+  }
+
+  function shouldHideLiveCommentByAutomoderation(comment, trainNumber){
+    const text = String(comment?.text || '').toLowerCase();
+    const mentionsSuppression = /supprim/.test(text);
+    const delayMatch = text.match(/(?:retard|\+)\s*([0-9]{1,3})/i);
+    const mentionsMajorDelay = !!(delayMatch && Number(delayMatch[1]) >= 15);
+    if (!mentionsSuppression && !mentionsMajorDelay) return false;
+    const key = normalizeKey(trainNumber);
+    const rejectedImportantSignalExists = (Array.isArray(COMMUNITY.signals) ? COMMUNITY.signals : [])
+      .filter((sig)=> normalizeKey(sig?.trainNumber) === key)
+      .some((sig)=> isImportantDisruptionSignal(sig) && isSignalRejectedByVotes(sig));
+    return rejectedImportantSignalExists;
   }
 
   function getEffectiveCompositionCode(trainNumber){
@@ -29311,9 +29429,11 @@ body{ padding-bottom: calc(var(--bottom-bar-height, 58px) + 10px) !important; }
   function signalDisplayLabel(signal){
     if (!signal) return 'Signalement';
     const base = formatSignalTypeLabel(signal.signalType);
-    if (signal.signalType === 'retard' && Number(signal.delayMin) > 0) return `${base} +${signal.delayMin} min`;
-    if (signal.signalType === 'information' && signal.infoTag && INFO_TAG_LABELS[signal.infoTag]) return INFO_TAG_LABELS[signal.infoTag];
-    return base;
+    let label = base;
+    if (signal.signalType === 'retard' && Number(signal.delayMin) > 0) label = `${base} +${signal.delayMin} min`;
+    if (signal.signalType === 'information' && signal.infoTag && INFO_TAG_LABELS[signal.infoTag]) label = INFO_TAG_LABELS[signal.infoTag];
+    if (isSignalContestedByVotes(signal)) label = `${label} · Signalement contesté`;
+    return label;
   }
 
   function getSignalVoteSummary(signal){
@@ -29386,23 +29506,62 @@ body{ padding-bottom: calc(var(--bottom-bar-height, 58px) + 10px) !important; }
     const id = String(signalId || '').trim();
     if (!id) return;
     try{
+      const voteValue = Number(value) > 0 ? 1 : -1;
+      const targetBeforeVote = (Array.isArray(COMMUNITY.signals) ? COMMUNITY.signals : []).find((it)=> String(it.id) === id) || null;
+      if (voteValue < 0 && targetBeforeVote){
+        const currentScore = Number(targetBeforeVote.upvotes || 0) - Number(targetBeforeVote.downvotes || 0);
+        const mine = Number(targetBeforeVote.myVote || 0);
+        const delta = mine < 0 ? 1 : (mine > 0 ? -2 : -1);
+        const projectedScore = currentScore + delta;
+        const willReachAutoModeration = currentScore > -3 && projectedScore <= -3;
+        if (willReachAutoModeration){
+          const ok = window.confirm('Ce vote va passer le signalement à -3 et déclencher sa suppression (chip + message mur). Confirmer ?');
+          if (!ok) return;
+        }
+      } else if (voteValue < 0){
+        const safeId = String(id).replace(/"/g, '\\"');
+        const btn = document.querySelector(`[data-lb-vote-signal="${safeId}"][data-lb-vote-value="-1"]`) || document.querySelector(`[data-lb-vote-signal="${safeId}"]`);
+        const voteWrap = btn ? btn.closest('.lb-signal-vote') : null;
+        const scoreEl = voteWrap ? voteWrap.querySelector('.lb-signal-vote-count') : null;
+        const domScore = Number(scoreEl?.textContent || 0);
+        if (Number.isFinite(domScore) && domScore <= -2){
+          const ok = window.confirm('Ce vote peut déclencher la suppression du signalement (chip + message mur). Confirmer ?');
+          if (!ok) return;
+        }
+      }
       const res = await window.fetchCommentsApi(`/${encodeURIComponent(id)}/vote`, {
         method:'POST',
         headers:{ 'Content-Type':'application/json' },
-        body: JSON.stringify({ vote: Number(value) > 0 ? 1 : -1 })
+        body: JSON.stringify({ vote: voteValue })
       });
       let data = null;
       try { data = await res.json(); } catch(_){}
       if (!res.ok) throw new Error(data?.error || `HTTP ${res.status}`);
+      let moderationNotice = '';
+      let signalRemovedByModeration = null;
       const target = (Array.isArray(COMMUNITY.signals) ? COMMUNITY.signals : []).find((it)=> String(it.id) === id);
       if (target){
+        const previousScore = Number(target.upvotes || 0) - Number(target.downvotes || 0);
         target.upvotes = Number(data?.upvotes || 0);
         target.downvotes = Number(data?.downvotes || 0);
         target.myVote = Number(data?.my_vote || 0);
+        const nextScore = Number(target.upvotes || 0) - Number(target.downvotes || 0);
+        if (voteValue < 0 && previousScore > -3 && nextScore <= -3){
+          moderationNotice = 'Votre vote fait passer ce signalement à -3 : il est automatiquement supprimé du live et du mur des commentaires.';
+          signalRemovedByModeration = { ...target };
+        }
+      } else {
+        const nextScore = Number(data?.upvotes || 0) - Number(data?.downvotes || 0);
+        if (voteValue < 0 && nextScore <= -3){
+          moderationNotice = 'Votre vote fait passer ce signalement à -3 : il est automatiquement supprimé du live et du mur des commentaires.';
+        }
       }
+      if (signalRemovedByModeration) await removeAssociatedWallAlertsForSignal(signalRemovedByModeration, { ignoreAuthorCheck: true });
       await loadSignals();
+      if (voteValue < 0) await pruneWallAlertsWithoutActiveSignals();
       if (COMMUNITY.selectedTrain) renderTrainDetail(COMMUNITY.selectedTrain);
       refreshLiveModal();
+      if (moderationNotice) console.info(moderationNotice);
     }catch(err){
       console.error('SIGNAL_VOTE_ERROR', err);
     }
@@ -29577,7 +29736,9 @@ body{ padding-bottom: calc(var(--bottom-bar-height, 58px) + 10px) !important; }
     let items = [];
     if (train){
       const signals = getSignalsForTrain(train.trainNumber).map((it)=>({ kind:'signal', ts:it.ts, pseudo:it.pseudo, text:`${signalDisplayLabel(it)}${it.station ? ` — ${it.station}` : ''}${it.detail ? ` — ${it.detail}` : ''}` }));
-      const comments = getWallCommentsForTrain(train.trainNumber).map((it)=>({ kind:'comment', ts:it.ts, pseudo:it.pseudo || 'Voyageur', text: String(it.text || '') }));
+      const comments = getWallCommentsForTrain(train.trainNumber)
+        .filter((it)=> !shouldHideLiveCommentByAutomoderation(it, train.trainNumber))
+        .map((it)=>({ kind:'comment', ts:it.ts, pseudo:it.pseudo || 'Voyageur', text: String(it.text || '') }));
       items = [...signals, ...comments].sort((a,b)=> Number(b.ts||0) - Number(a.ts||0)).slice(0, 30);
     } else {
       items = (Array.isArray(COMMUNITY.signals) ? COMMUNITY.signals : []).slice(0, 30).map((it)=>({ kind:'signal', ts:it.ts, pseudo:it.pseudo, text:`${it.trainNumber ? `TER ${it.trainNumber} — ` : ''}${signalDisplayLabel(it)}${it.station ? ` — ${it.station}` : ''}${it.detail ? ` — ${it.detail}` : ''}` }));
@@ -29860,8 +30021,10 @@ body{ padding-bottom: calc(var(--bottom-bar-height, 58px) + 10px) !important; }
       if (submit) submit.disabled = true;
       if (feedback) feedback.textContent = 'Publication du signalement…';
       if (editingSignalId){
+        const previousSignal = (Array.isArray(COMMUNITY.signals) ? COMMUNITY.signals : []).find((it)=> String(it.id) === editingSignalId) || null;
         const deleteRes = await window.fetchCommentsApi(`/${encodeURIComponent(editingSignalId)}`, { method:'DELETE' });
         if (!deleteRes.ok) throw new Error('Impossible de modifier ce signalement (suppression préalable refusée).');
+        if (previousSignal) await removeAssociatedWallAlertsForSignal(previousSignal);
       }
       const res = await window.fetchCommentsApi('', {
         method:'POST',
@@ -29962,9 +30125,123 @@ body{ padding-bottom: calc(var(--bottom-bar-height, 58px) + 10px) !important; }
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
       }
     }catch(_){ return; }
+    await removeAssociatedWallAlertsForSignal(sig);
     COMMUNITY.signals = (Array.isArray(COMMUNITY.signals) ? COMMUNITY.signals : []).filter((it)=> String(it.id) !== String(sig.id));
     refreshCommunityViews();
     renderTrainDetail(COMMUNITY.selectedTrain);
+  }
+
+  async function removeAssociatedWallAlertsForSignal(signal, options = {}){
+    const ignoreAuthorCheck = !!options.ignoreAuthorCheck;
+    const sigType = String(signal?.signalType || '').toLowerCase();
+    const trainKey = normalizeKey(signal?.trainNumber);
+    const station = String(signal?.station || '').trim().toLowerCase();
+    const delayMin = Number(signal?.delayMin || 0);
+    const ownIdentity = normalizeIdentity(getCurrentPresenceIdentity());
+    if (!trainKey) return;
+    if (!['suppression', 'retard'].includes(sigType)) return;
+    if (sigType === 'retard' && delayMin < 15) return;
+
+    let wall = Array.isArray(window.lbCommentState?.wall) ? window.lbCommentState.wall : [];
+    try{
+      const res = await window.fetchCommentsApi('?scope=wall');
+      if (res.ok){
+        const data = await res.json();
+        const list = Array.isArray(data) ? data : (Array.isArray(data?.comments) ? data.comments : []);
+        wall = list.map(normalizeCommentItem).filter(Boolean);
+      }
+    }catch(_){}
+    const candidates = wall.filter((it)=>{
+      if (!it?.id) return false;
+      const text = String(it?.text || '').toLowerCase();
+      const commentTrain = normalizeKey(it?.trainNumber || detectCommentTrainNumber(it));
+      if (commentTrain !== trainKey) return false;
+      // Station ignorée pour la suppression mur auto: certains messages mur n'embarquent
+      // pas exactement le même libellé d'arrêt, on privilégie train + type (+delay si retard).
+      if (sigType === 'suppression' && !/supprim/.test(text)) return false;
+      if (sigType === 'retard'){
+        const m = text.match(/\+\s*([0-9]{1,3})/);
+        if (!m) return false;
+        const commentDelay = Number(m[1] || 0);
+        if (commentDelay !== delayMin) return false;
+      }
+      const author = normalizeIdentity(it?.accountId || '');
+      if (!ignoreAuthorCheck && author && ownIdentity && author !== ownIdentity) return false;
+      return true;
+    });
+    if (!candidates.length) return;
+
+    for (const item of candidates){
+      try{
+        await window.fetchCommentsApi(`/${encodeURIComponent(String(item.id))}`, { method:'DELETE' });
+      }catch(_){}
+    }
+    try { await window.loadMessages?.(); } catch(_){}
+  }
+
+  async function postAssociatedWallAlertForSignal(signal){
+    const sigType = String(signal?.signalType || '').toLowerCase();
+    const trainKey = normalizeKey(signal?.trainNumber);
+    const station = String(signal?.station || '').trim();
+    const delayMin = Number(signal?.delayMin || 0);
+    const accountId = String(signal?.accountId || getCurrentPresenceIdentity() || '').trim();
+    if (!trainKey) return;
+    if (sigType !== 'suppression' && sigType !== 'retard') return;
+    if (sigType === 'retard' && delayMin < 15) return;
+    const wallMessage = sigType === 'suppression'
+      ? `🚫 <span class="lb-red">${trainKey} supprimé</span> à ${station} · 🐄`
+      : `⏱️ ${trainKey} <span class="lb-orange">+${delayMin}</span> à ${station} · 🐄`;
+    try{
+      await window.fetchCommentsApi('', {
+        method:'POST',
+        headers:{ 'Content-Type':'application/json' },
+        body: JSON.stringify({
+          message: wallMessage,
+          scope:'wall',
+          train_number: trainKey,
+          account_id: accountId
+        })
+      });
+      try { await window.loadMessages?.(); } catch(_){}
+    }catch(_){}
+  }
+
+  async function pruneWallAlertsWithoutActiveSignals(){
+    let wall = [];
+    try{
+      const res = await window.fetchCommentsApi('?scope=wall');
+      if (!res.ok) return;
+      const data = await res.json();
+      const list = Array.isArray(data) ? data : (Array.isArray(data?.comments) ? data.comments : []);
+      wall = list.map(normalizeCommentItem).filter(Boolean);
+    }catch(_){ return; }
+    if (!wall.length) return;
+
+    const toDelete = wall.filter((it)=>{
+      if (!it?.id) return false;
+      const trainKey = normalizeKey(it?.trainNumber || detectCommentTrainNumber(it));
+      if (!trainKey) return false;
+      const text = String(it?.text || '').toLowerCase().replace(/<[^>]*>/g, ' ');
+      const isSupp = /supprim/.test(text);
+      const delayMatch = text.match(/\+\s*([0-9]{1,3})/);
+      const delay = delayMatch ? Number(delayMatch[1]) : 0;
+      const isMajorDelay = delay >= 15;
+      if (!isSupp && !isMajorDelay) return false;
+      const active = getSignalsForTrain(trainKey);
+      if (!active.length) return true;
+      if (isSupp){
+        return !active.some((s)=> String(s?.signalType || '').toLowerCase() === 'suppression');
+      }
+      if (isMajorDelay){
+        return !active.some((s)=> String(s?.signalType || '').toLowerCase() === 'retard' && Number(s?.delayMin || 0) >= delay);
+      }
+      return false;
+    });
+    if (!toDelete.length) return;
+    for (const it of toDelete){
+      try{ await window.fetchCommentsApi(`/${encodeURIComponent(String(it.id))}`, { method:'DELETE' }); }catch(_){}
+    }
+    try { await window.loadMessages?.(); } catch(_){}
   }
 
   async function updateSignalInlineFromTrainDetail({ signalId, trainNumber, station, signalType, delayMin } = {}){
@@ -29979,8 +30256,10 @@ body{ padding-bottom: calc(var(--bottom-bar-height, 58px) + 10px) !important; }
       ? `[SUPPRESSION] ${label}${station ? ` [${station}]` : ''} — Train supprimé à l'arrêt`
       : `[RETARD] ${label}${station ? ` [${station}]` : ''} — Retard +${delay} min`;
     const accountId = getCurrentPresenceIdentity();
+    const previousSignal = (Array.isArray(COMMUNITY.signals) ? COMMUNITY.signals : []).find((it)=> String(it.id) === id) || null;
     const delRes = await window.fetchCommentsApi(`/${encodeURIComponent(id)}`, { method:'DELETE' });
     if (!delRes.ok) throw new Error('Suppression de l’ancien signalement impossible.');
+    if (previousSignal) await removeAssociatedWallAlertsForSignal(previousSignal);
     const postRes = await window.fetchCommentsApi('', {
       method:'POST',
       headers:{ 'Content-Type':'application/json' },
@@ -29996,6 +30275,13 @@ body{ padding-bottom: calc(var(--bottom-bar-height, 58px) + 10px) !important; }
       })
     });
     if (!postRes.ok) throw new Error('Publication du nouveau signalement impossible.');
+    await postAssociatedWallAlertForSignal({
+      signalType: type,
+      trainNumber: trainKey,
+      station: station ? String(station) : '',
+      delayMin: type === 'retard' ? delay : 0,
+      accountId
+    });
     await loadSignals();
     await renderTrainDetail(trainKey);
     refreshLiveModal();
