@@ -21326,6 +21326,29 @@ function scheduleWeatherAfterTableSettled(){
       }
     );
   }
+  window.lbRenderWallMessageHtml = lbRenderWallMessageHtml;
+
+  function wallNormalizeKey(value){
+    return String(value || '').replace(/\D+/g, '').trim();
+  }
+
+  function detectWallTrainNumber(item){
+    if (!item) return '';
+    const direct = wallNormalizeKey(item.trainNumber || item.train_number || '');
+    if (direct) return direct;
+    const text = String(item.text || item.message || '');
+    const match = text.match(/(?:#?TER|#?RE|#?RB|#?IC|train\s*)?\s*(\d{3,6})/i);
+    return match ? wallNormalizeKey(match[1]) : '';
+  }
+
+  function shouldHideWallCommentByAutomod(item, trainNumber){
+    const trainKey = wallNormalizeKey(trainNumber || detectWallTrainNumber(item));
+    if (!trainKey) return false;
+    if (typeof shouldHideLiveCommentByAutomoderation === 'function'){
+      return !!shouldHideLiveCommentByAutomoderation(item, trainKey);
+    }
+    return false;
+  }
 
   const fmtHour = (ts) => {
     try{
@@ -21351,9 +21374,9 @@ function scheduleWeatherAfterTableSettled(){
     const wallAll = Array.isArray(wallSource) ? wallSource : [];
     const wall = wallAll
       .filter((it)=>{
-        const trainKey = normalizeKey(it?.trainNumber || detectCommentTrainNumber(it));
+        const trainKey = wallNormalizeKey(it?.trainNumber || detectWallTrainNumber(it));
         if (!trainKey) return true;
-        return !shouldHideLiveCommentByAutomoderation(it, trainKey);
+        return !shouldHideWallCommentByAutomod(it, trainKey);
       })
       .slice(0, 50);
     countEl.textContent = String(wall.length);
@@ -21392,9 +21415,9 @@ function scheduleWeatherAfterTableSettled(){
     const comments = (Array.isArray(lbCommentState.wall) ? lbCommentState.wall : [])
       .filter((it) => !train || !it.trainNumber || it.trainNumber === train)
 	  .filter((it)=>{
-        const trainKey = normalizeKey(it?.trainNumber || train || detectCommentTrainNumber(it));
+        const trainKey = wallNormalizeKey(it?.trainNumber || train || detectWallTrainNumber(it));
         if (!trainKey) return true;
-        return !shouldHideLiveCommentByAutomoderation(it, trainKey);
+        return !shouldHideWallCommentByAutomod(it, trainKey);
       })
       .slice(0, 30);
 
@@ -21575,9 +21598,9 @@ function scheduleWeatherAfterTableSettled(){
       return (Array.isArray(lbCommentState.wall) ? lbCommentState.wall : [])
         .filter((it) => !train || it.trainNumber === train)
         .filter((it)=>{
-          const trainKey = normalizeKey(it?.trainNumber || train || detectCommentTrainNumber(it));
+          const trainKey = wallNormalizeKey(it?.trainNumber || train || detectWallTrainNumber(it));
           if (!trainKey) return true;
-          return !shouldHideLiveCommentByAutomoderation(it, trainKey);
+          return !shouldHideWallCommentByAutomod(it, trainKey);
         }).length;
     }
   };
@@ -26686,7 +26709,10 @@ async function loadAffluenceDate(dateStr){
 	        var deleteBtn = (isAdmin && commentId)
 	          ? '<span class="fav-comments-row"><span class="fav-comment-btn" role="button" tabindex="0" data-comment-delete="' + escapeHtml(commentId) + '" aria-label="Supprimer le commentaire" title="Supprimer le commentaire">❌</span></span>'
 	          : '';
-	        return '<div class="live-wall-item live-wall-item--home live-wall-item--compact"><div class="live-wall-item-text"><strong>' + escapeHtml(it.pseudo || 'Voyageur') + '</strong><span class="live-wall-inline-meta">' + escapeHtml(fmtParisHour(it.ts)) + '</span> : ' + lbRenderWallMessageHtml(it.text || '') + '</div>' + deleteBtn + '</div>';
+	        var renderWallHtml = (typeof window.lbRenderWallMessageHtml === 'function')
+	          ? window.lbRenderWallMessageHtml
+	          : function(v){ return escapeHtml(String(v || '')); };
+	        return '<div class="live-wall-item live-wall-item--home live-wall-item--compact"><div class="live-wall-item-text"><strong>' + escapeHtml(it.pseudo || 'Voyageur') + '</strong><span class="live-wall-inline-meta">' + escapeHtml(fmtParisHour(it.ts)) + '</span> : ' + renderWallHtml(it.text || '') + '</div>' + deleteBtn + '</div>';
 	      }).join('');
 	      feed.scrollTop = 0;
 	    }
