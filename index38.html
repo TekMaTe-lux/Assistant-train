@@ -29515,6 +29515,7 @@ body{ padding-bottom: calc(var(--bottom-bar-height, 58px) + 10px) !important; }
       try { data = await res.json(); } catch(_){}
       if (!res.ok) throw new Error(data?.error || `HTTP ${res.status}`);
       let moderationNotice = '';
+      let signalRemovedByModeration = null;
       const target = (Array.isArray(COMMUNITY.signals) ? COMMUNITY.signals : []).find((it)=> String(it.id) === id);
       if (target){
         const previousScore = Number(target.upvotes || 0) - Number(target.downvotes || 0);
@@ -29524,6 +29525,7 @@ body{ padding-bottom: calc(var(--bottom-bar-height, 58px) + 10px) !important; }
         const nextScore = Number(target.upvotes || 0) - Number(target.downvotes || 0);
         if (voteValue < 0 && previousScore > -3 && nextScore <= -3){
           moderationNotice = 'Votre vote fait passer ce signalement à -3 : il est automatiquement supprimé du live et du mur des commentaires.';
+          signalRemovedByModeration = { ...target };
         }
       } else {
         const nextScore = Number(data?.upvotes || 0) - Number(data?.downvotes || 0);
@@ -29531,15 +29533,15 @@ body{ padding-bottom: calc(var(--bottom-bar-height, 58px) + 10px) !important; }
           moderationNotice = 'Votre vote fait passer ce signalement à -3 : il est automatiquement supprimé du live et du mur des commentaires.';
         }
       }
+      if (signalRemovedByModeration) await removeAssociatedWallAlertsForSignal(signalRemovedByModeration);
       await loadSignals();
       if (COMMUNITY.selectedTrain) renderTrainDetail(COMMUNITY.selectedTrain);
       refreshLiveModal();
-	  if (moderationNotice) alert(moderationNotice);
+      if (moderationNotice) alert(moderationNotice);
     }catch(err){
       console.error('SIGNAL_VOTE_ERROR', err);
     }
   }
-
 
   function buildPropagatedSignalsByStop(stopNames, trainSignals){
     const normalizedStops = (Array.isArray(stopNames) ? stopNames : []).map((name)=> String(name || '').trim()).filter(Boolean);
@@ -30142,6 +30144,33 @@ body{ padding-bottom: calc(var(--bottom-bar-height, 58px) + 10px) !important; }
     try { await window.loadMessages?.(); } catch(_){}
   }
 
+  async function postAssociatedWallAlertForSignal(signal){
+    const sigType = String(signal?.signalType || '').toLowerCase();
+    const trainKey = normalizeKey(signal?.trainNumber);
+    const station = String(signal?.station || '').trim();
+    const delayMin = Number(signal?.delayMin || 0);
+    const accountId = String(signal?.accountId || getCurrentPresenceIdentity() || '').trim();
+    if (!trainKey) return;
+    if (sigType !== 'suppression' && sigType !== 'retard') return;
+    if (sigType === 'retard' && delayMin < 15) return;
+    const wallMessage = sigType === 'suppression'
+      ? `🚫 <span class="lb-red">${trainKey} supprimé</span> à ${station} · 🐄`
+      : `⏱️ ${trainKey} <span class="lb-orange">+${delayMin}</span> à ${station} · 🐄`;
+    try{
+      await window.fetchCommentsApi('', {
+        method:'POST',
+        headers:{ 'Content-Type':'application/json' },
+        body: JSON.stringify({
+          message: wallMessage,
+          scope:'wall',
+          train_number: trainKey,
+          account_id: accountId
+        })
+      });
+      try { await window.loadMessages?.(); } catch(_){}
+    }catch(_){}
+  }
+
   async function updateSignalInlineFromTrainDetail({ signalId, trainNumber, station, signalType, delayMin } = {}){
     const id = String(signalId || '').trim();
     const trainKey = normalizeKey(trainNumber || COMMUNITY.selectedTrain);
@@ -30154,8 +30183,10 @@ body{ padding-bottom: calc(var(--bottom-bar-height, 58px) + 10px) !important; }
       ? `[SUPPRESSION] ${label}${station ? ` [${station}]` : ''} — Train supprimé à l'arrêt`
       : `[RETARD] ${label}${station ? ` [${station}]` : ''} — Retard +${delay} min`;
     const accountId = getCurrentPresenceIdentity();
+	const previousSignal = (Array.isArray(COMMUNITY.signals) ? COMMUNITY.signals : []).find((it)=> String(it.id) === id) || null;
     const delRes = await window.fetchCommentsApi(`/${encodeURIComponent(id)}`, { method:'DELETE' });
     if (!delRes.ok) throw new Error('Suppression de l’ancien signalement impossible.');
+	if (previousSignal) await removeAssociatedWallAlertsForSignal(previousSignal);
     const postRes = await window.fetchCommentsApi('', {
       method:'POST',
       headers:{ 'Content-Type':'application/json' },
@@ -30171,6 +30202,13 @@ body{ padding-bottom: calc(var(--bottom-bar-height, 58px) + 10px) !important; }
       })
     });
     if (!postRes.ok) throw new Error('Publication du nouveau signalement impossible.');
+	await postAssociatedWallAlertForSignal({
+      signalType: type,
+      trainNumber: trainKey,
+      station: station ? String(station) : '',
+      delayMin: type === 'retard' ? delay : 0,
+      accountId
+    });
     await loadSignals();
     await renderTrainDetail(trainKey);
     refreshLiveModal();
