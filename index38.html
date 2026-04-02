@@ -21311,6 +21311,7 @@ function scheduleWeatherAfterTableSettled(){
       pseudo: String(raw.pseudo || raw.username || raw.user_pseudo || 'Voyageur').trim().slice(0, 24),
       text: String(raw.message || raw.text || '').trim().slice(0, 180),
       trainNumber: String(raw.train_number || raw.trainNumber || '').trim(),
+	  accountId: String(raw.account_id || raw.accountId || raw.user_id || '').trim(),
       ts: createdTs
     };
   }
@@ -29993,8 +29994,10 @@ body{ padding-bottom: calc(var(--bottom-bar-height, 58px) + 10px) !important; }
       if (submit) submit.disabled = true;
       if (feedback) feedback.textContent = 'Publication du signalement…';
       if (editingSignalId){
+        const previousSignal = (Array.isArray(COMMUNITY.signals) ? COMMUNITY.signals : []).find((it)=> String(it.id) === editingSignalId) || null;
         const deleteRes = await window.fetchCommentsApi(`/${encodeURIComponent(editingSignalId)}`, { method:'DELETE' });
         if (!deleteRes.ok) throw new Error('Impossible de modifier ce signalement (suppression préalable refusée).');
+        if (previousSignal) await removeAssociatedWallAlertsForSignal(previousSignal);
       }
       const res = await window.fetchCommentsApi('', {
         method:'POST',
@@ -30095,9 +30098,48 @@ body{ padding-bottom: calc(var(--bottom-bar-height, 58px) + 10px) !important; }
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
       }
     }catch(_){ return; }
+    await removeAssociatedWallAlertsForSignal(sig);
     COMMUNITY.signals = (Array.isArray(COMMUNITY.signals) ? COMMUNITY.signals : []).filter((it)=> String(it.id) !== String(sig.id));
     refreshCommunityViews();
     renderTrainDetail(COMMUNITY.selectedTrain);
+  }
+
+  async function removeAssociatedWallAlertsForSignal(signal){
+    const sigType = String(signal?.signalType || '').toLowerCase();
+    const trainKey = normalizeKey(signal?.trainNumber);
+    const station = String(signal?.station || '').trim().toLowerCase();
+    const delayMin = Number(signal?.delayMin || 0);
+    const ownIdentity = normalizeIdentity(getCurrentPresenceIdentity());
+    if (!trainKey) return;
+    if (!['suppression', 'retard'].includes(sigType)) return;
+    if (sigType === 'retard' && delayMin < 15) return;
+
+    const wall = Array.isArray(window.lbCommentState?.wall) ? window.lbCommentState.wall : [];
+    const candidates = wall.filter((it)=>{
+      if (!it?.id) return false;
+      const text = String(it?.text || '').toLowerCase();
+      const commentTrain = normalizeKey(it?.trainNumber || detectCommentTrainNumber(it));
+      if (commentTrain !== trainKey) return false;
+      if (station && !text.includes(station)) return false;
+      if (sigType === 'suppression' && !/supprim/.test(text)) return false;
+      if (sigType === 'retard'){
+        const m = text.match(/\+\s*([0-9]{1,3})/);
+        if (!m) return false;
+        const commentDelay = Number(m[1] || 0);
+        if (commentDelay !== delayMin) return false;
+      }
+      const author = normalizeIdentity(it?.accountId || '');
+      if (author && ownIdentity && author !== ownIdentity) return false;
+      return true;
+    });
+    if (!candidates.length) return;
+
+    for (const item of candidates){
+      try{
+        await window.fetchCommentsApi(`/${encodeURIComponent(String(item.id))}`, { method:'DELETE' });
+      }catch(_){}
+    }
+    try { await window.loadMessages?.(); } catch(_){}
   }
 
   async function updateSignalInlineFromTrainDetail({ signalId, trainNumber, station, signalType, delayMin } = {}){
