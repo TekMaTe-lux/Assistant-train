@@ -1814,9 +1814,6 @@ body {
   color: #ff9f1a;
   font-weight: 600;
 }
-.lb-link-meta{
-  display:none !important;
-}
 .home-card[aria-label="Mur de commentaires"] .live-wall-card--home,
 .home-card[aria-label="Mur de commentaires"],
 .home-card.live-wall-card--home{ min-height:0; }
@@ -21305,27 +21302,16 @@ function scheduleWeatherAfterTableSettled(){
     return Number.isFinite(parsed.getTime()) ? parsed.getTime() : Date.now();
   };
 
-  function extractWallLinkedSignalId(rawText){
-    const text = String(rawText || '');
-    const match = text.match(/<span\s+class=["']lb-link-meta["'][^>]*data-signal-id=["']([^"']+)["'][^>]*><\/span>/i);
-    return match ? String(match[1] || '').trim() : '';
-  }
-
-  function stripWallLinkMetadata(rawText){
-    return String(rawText || '').replace(/<span\s+class=["']lb-link-meta["'][^>]*data-signal-id=["'][^"']+["'][^>]*><\/span>/gi, '').trim();
-  }
-
   function normalizeCommentItem(raw){
     if (!raw || typeof raw !== 'object') return null;
     const createdAt = raw.created_at || raw.createdAt || raw.ts || raw.timestamp || Date.now();
     const createdTs = window.lbParseTimestamp(createdAt);
-    const rawText = String(raw.message || raw.text || '').trim();
     return {
       id: raw.id || `${createdTs}_${Math.random().toString(36).slice(2,8)}`,
       pseudo: String(raw.pseudo || raw.username || raw.user_pseudo || 'Voyageur').trim().slice(0, 24),
-      text: stripWallLinkMetadata(rawText).slice(0, 180),
+      text: String(raw.message || raw.text || '').trim().slice(0, 180),
       trainNumber: String(raw.train_number || raw.trainNumber || '').trim(),
-      linkedSignalId: extractWallLinkedSignalId(rawText),
+	  accountId: String(raw.account_id || raw.accountId || raw.user_id || '').trim(),
       ts: createdTs
     };
   }
@@ -21360,12 +21346,6 @@ function scheduleWeatherAfterTableSettled(){
   function shouldHideWallCommentByAutomod(item, trainNumber){
     const trainKey = wallNormalizeKey(trainNumber || detectWallTrainNumber(item));
     if (!trainKey) return false;
-    const linkedSignalId = String(item?.linkedSignalId || '').trim();
-    if (linkedSignalId && typeof getSignalsForTrain === 'function'){
-      const activeSignals = getSignalsForTrain(trainKey);
-      const hasLinkedSignal = Array.isArray(activeSignals) && activeSignals.some((sig)=> String(sig?.id || '').trim() === linkedSignalId);
-      if (!hasLinkedSignal) return true;
-    }
 	const rawText = String(item?.text || item?.message || '');
     const plainText = rawText.replace(/<[^>]*>/g, ' ').toLowerCase();
     const looksLikeSuppression = /supprim/.test(plainText);
@@ -29526,6 +29506,28 @@ body{ padding-bottom: calc(var(--bottom-bar-height, 58px) + 10px) !important; }
     if (!id) return;
     try{
       const voteValue = Number(value) > 0 ? 1 : -1;
+	  const targetBeforeVote = (Array.isArray(COMMUNITY.signals) ? COMMUNITY.signals : []).find((it)=> String(it.id) === id) || null;
+      if (voteValue < 0 && targetBeforeVote){
+        const currentScore = Number(targetBeforeVote.upvotes || 0) - Number(targetBeforeVote.downvotes || 0);
+        const mine = Number(targetBeforeVote.myVote || 0);
+        const delta = mine < 0 ? 1 : (mine > 0 ? -2 : -1);
+        const projectedScore = currentScore + delta;
+        const willReachAutoModeration = currentScore > -3 && projectedScore <= -3;
+        if (willReachAutoModeration){
+          const ok = window.confirm('Ce vote va passer le signalement à -3 et déclencher sa suppression (chip + message mur). Confirmer ?');
+          if (!ok) return;
+        }
+	  } else if (voteValue < 0){
+        const safeId = String(id).replace(/"/g, '\\"');
+        const btn = document.querySelector(`[data-lb-vote-signal="${safeId}"][data-lb-vote-value="-1"]`) || document.querySelector(`[data-lb-vote-signal="${safeId}"]`);
+        const voteWrap = btn ? btn.closest('.lb-signal-vote') : null;
+        const scoreEl = voteWrap ? voteWrap.querySelector('.lb-signal-vote-count') : null;
+        const domScore = Number(scoreEl?.textContent || 0);
+        if (Number.isFinite(domScore) && domScore <= -2){
+          const ok = window.confirm('Ce vote peut déclencher la suppression du signalement (chip + message mur). Confirmer ?');
+          if (!ok) return;
+        }
+      }
       const res = await window.fetchCommentsApi(`/${encodeURIComponent(id)}/vote`, {
         method:'POST',
         headers:{ 'Content-Type':'application/json' },
@@ -29535,6 +29537,7 @@ body{ padding-bottom: calc(var(--bottom-bar-height, 58px) + 10px) !important; }
       try { data = await res.json(); } catch(_){}
       if (!res.ok) throw new Error(data?.error || `HTTP ${res.status}`);
       let moderationNotice = '';
+      let signalRemovedByModeration = null;
       const target = (Array.isArray(COMMUNITY.signals) ? COMMUNITY.signals : []).find((it)=> String(it.id) === id);
       if (target){
         const previousScore = Number(target.upvotes || 0) - Number(target.downvotes || 0);
@@ -29544,6 +29547,7 @@ body{ padding-bottom: calc(var(--bottom-bar-height, 58px) + 10px) !important; }
         const nextScore = Number(target.upvotes || 0) - Number(target.downvotes || 0);
         if (voteValue < 0 && previousScore > -3 && nextScore <= -3){
           moderationNotice = 'Votre vote fait passer ce signalement à -3 : il est automatiquement supprimé du live et du mur des commentaires.';
+          signalRemovedByModeration = { ...target };
         }
       } else {
         const nextScore = Number(data?.upvotes || 0) - Number(data?.downvotes || 0);
@@ -29551,20 +29555,16 @@ body{ padding-bottom: calc(var(--bottom-bar-height, 58px) + 10px) !important; }
           moderationNotice = 'Votre vote fait passer ce signalement à -3 : il est automatiquement supprimé du live et du mur des commentaires.';
         }
       }
-      const nextScoreNow = Number(data?.upvotes || 0) - Number(data?.downvotes || 0);
-      if (nextScoreNow <= -3){
-        try { await deleteLinkedWallCommentsBySignalId(id, { forceReload:true }); } catch(_){ }
-      }
+      if (signalRemovedByModeration) await removeAssociatedWallAlertsForSignal(signalRemovedByModeration, { ignoreAuthorCheck: true });
       await loadSignals();
-      try { await loadMessages(); } catch(_){ }
+	  if (voteValue < 0) await pruneWallAlertsWithoutActiveSignals();
       if (COMMUNITY.selectedTrain) renderTrainDetail(COMMUNITY.selectedTrain);
       refreshLiveModal();
-	  if (moderationNotice) alert(moderationNotice);
+      if (moderationNotice) console.info(moderationNotice);
     }catch(err){
       console.error('SIGNAL_VOTE_ERROR', err);
     }
   }
-
 
   function buildPropagatedSignalsByStop(stopNames, trainSignals){
     const normalizedStops = (Array.isArray(stopNames) ? stopNames : []).map((name)=> String(name || '').trim()).filter(Boolean);
@@ -29961,91 +29961,6 @@ body{ padding-bottom: calc(var(--bottom-bar-height, 58px) + 10px) !important; }
     if (options.length === 1) stationSelect.value = options[0];
   }
 
-  function buildWallSignalMeta(signalId){
-    const id = String(signalId || '').trim();
-    return id ? `<span class="lb-link-meta" data-signal-id="${safeEscape(id)}"></span>` : '';
-  }
-
-  function extractCreatedCommentId(payload){
-    const direct = payload?.id ?? payload?.comment_id ?? payload?.commentId ?? payload?.signal_id ?? payload?.signalId ?? payload?.comment?.id ?? payload?.data?.id ?? payload?.data?.comment?.id;
-    return String(direct == null ? '' : direct).trim();
-  }
-
-  function findMatchingOwnSignalId({ trainKey, station, signalType, delayMin, accountId, excludeId } = {}){
-    const key = normalizeKey(trainKey || '');
-    const type = String(signalType || '').toLowerCase().trim();
-    const stationKey = String(station || '').trim().toLowerCase();
-    const accountKey = String(accountId || '').trim();
-    const excluded = String(excludeId || '').trim();
-    const delay = Number(delayMin || 0);
-    const list = Array.isArray(COMMUNITY.signals) ? COMMUNITY.signals : [];
-    const match = list.find((sig)=>{
-      if (!sig) return false;
-      if (excluded && String(sig.id || '').trim() === excluded) return false;
-      if (key && normalizeKey(sig.trainNumber || '') !== key) return false;
-      if (type && String(sig.signalType || '').toLowerCase().trim() !== type) return false;
-      if (stationKey && String(sig.station || '').trim().toLowerCase() !== stationKey) return false;
-      if (type === 'retard' && Number(sig.delayMin || 0) !== delay) return false;
-      if (accountKey && String(sig.accountId || '').trim() !== accountKey) return false;
-      return true;
-    });
-    return String(match?.id || '').trim();
-  }
-
-  async function deleteLinkedWallCommentsBySignalId(signalId, options = {}){
-    const id = String(signalId || '').trim();
-    if (!id) return 0;
-    let wall = Array.isArray(lbCommentState?.wall) ? lbCommentState.wall : [];
-    if (!wall.length || options.forceReload){
-      try { wall = await loadMessages(); } catch(_){ wall = Array.isArray(lbCommentState?.wall) ? lbCommentState.wall : []; }
-    }
-    const linked = (Array.isArray(wall) ? wall : []).filter((it)=> String(it?.linkedSignalId || '').trim() === id && String(it?.id || '').trim());
-    let removed = 0;
-    for (const item of linked){
-      try{
-        const res = await window.fetchCommentsApi(`/${encodeURIComponent(String(item.id))}`, { method:'DELETE' });
-        if (res.ok) removed += 1;
-      }catch(err){
-        console.warn('WALL_LINKED_DELETE_ERROR', err);
-      }
-    }
-    if (removed){
-      lbCommentState.wall = (Array.isArray(lbCommentState.wall) ? lbCommentState.wall : []).filter((it)=> String(it?.linkedSignalId || '').trim() !== id);
-      window.lbCommentState = lbCommentState;
-      renderCommentsUI();
-    }
-    return removed;
-  }
-
-  async function publishLinkedWallAlertForSignal({ signalId, trainKey, station, signalType, delayMin, accountId } = {}){
-    const id = String(signalId || '').trim();
-    const key = normalizeKey(trainKey || '');
-    const type = String(signalType || '').toLowerCase().trim();
-    const delay = Number(delayMin || 0);
-    const isSuppression = type === 'suppression';
-    const isMajorDelay = type === 'retard' && delay >= 15;
-    if (!key || !id || (!isSuppression && !isMajorDelay)) return null;
-    const safeStation = String(station || '').trim();
-    const wallMessageCore = isSuppression
-      ? `🚫 <span class="lb-red">${key} supprimé</span> à ${safeStation} · 🐄`
-      : `⏱️ ${key} <span class="lb-orange">+${delay}</span> à ${safeStation} · 🐄`;
-    const wallMessage = `${wallMessageCore}${buildWallSignalMeta(id)}`;
-    const res = await window.fetchCommentsApi('', {
-      method:'POST',
-      headers:{ 'Content-Type':'application/json' },
-      body: JSON.stringify({
-        message: wallMessage,
-        scope:'wall',
-        train_number: key,
-        account_id: accountId
-      })
-    });
-    let data = null;
-    try { data = await res.json(); } catch(_){ }
-    if (!res.ok) throw new Error(data?.error || `HTTP ${res.status}`);
-    return data;
-  }
-
   async function publishSignal(){
     const trainSelect = $id('lbSignalTrainSelect');
     const stationSelect = $id('lbSignalStationSelect');
@@ -30104,8 +30019,10 @@ body{ padding-bottom: calc(var(--bottom-bar-height, 58px) + 10px) !important; }
       if (submit) submit.disabled = true;
       if (feedback) feedback.textContent = 'Publication du signalement…';
       if (editingSignalId){
+        const previousSignal = (Array.isArray(COMMUNITY.signals) ? COMMUNITY.signals : []).find((it)=> String(it.id) === editingSignalId) || null;
         const deleteRes = await window.fetchCommentsApi(`/${encodeURIComponent(editingSignalId)}`, { method:'DELETE' });
         if (!deleteRes.ok) throw new Error('Impossible de modifier ce signalement (suppression préalable refusée).');
+        if (previousSignal) await removeAssociatedWallAlertsForSignal(previousSignal);
       }
       const res = await window.fetchCommentsApi('', {
         method:'POST',
@@ -30115,14 +30032,6 @@ body{ padding-bottom: calc(var(--bottom-bar-height, 58px) + 10px) !important; }
       let data = null;
       try { data = await res.json(); } catch(_){ }
       if (!res.ok) throw new Error(data?.error || `HTTP ${res.status}`);
-      let createdSignalId = extractCreatedCommentId(data);
-      if (!createdSignalId){
-        await loadSignals();
-        createdSignalId = findMatchingOwnSignalId({ trainKey, station, signalType, delayMin, accountId, excludeId: editingSignalId });
-      }
-      if (editingSignalId){
-        try { await deleteLinkedWallCommentsBySignalId(editingSignalId, { forceReload:true }); } catch(_){ }
-      }
       const delaySelectEl = $id('lbSignalDelaySelect');
       if (delaySelectEl) delaySelectEl.value = '';
       COMMUNITY.selectedSignalType = '';
@@ -30130,9 +30039,8 @@ body{ padding-bottom: calc(var(--bottom-bar-height, 58px) + 10px) !important; }
       resetSignalEditMode();
       document.querySelectorAll('.lb-signal-type.is-selected').forEach((btn)=> btn.classList.remove('is-selected'));
       if (feedback) feedback.textContent = 'Signalement publié ✅';
-      await publishAutoWallAlertIfNeeded(createdSignalId);
+      await publishAutoWallAlertIfNeeded();
       await loadSignals();
-      try { await loadMessages(); } catch(_){ }
       closeCommunityModal('lbSignalModal');
       openCommunityModal('lbLiveModal');
       renderLiveFeed(trainKey);
@@ -30215,11 +30123,123 @@ body{ padding-bottom: calc(var(--bottom-bar-height, 58px) + 10px) !important; }
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
       }
     }catch(_){ return; }
-    try { await deleteLinkedWallCommentsBySignalId(sig.id, { forceReload:true }); } catch(_){ }
+    await removeAssociatedWallAlertsForSignal(sig);
     COMMUNITY.signals = (Array.isArray(COMMUNITY.signals) ? COMMUNITY.signals : []).filter((it)=> String(it.id) !== String(sig.id));
     refreshCommunityViews();
     renderTrainDetail(COMMUNITY.selectedTrain);
-    try { await loadMessages(); } catch(_){ }
+  }
+
+  async function removeAssociatedWallAlertsForSignal(signal, options = {}){
+    const ignoreAuthorCheck = !!options.ignoreAuthorCheck;
+    const sigType = String(signal?.signalType || '').toLowerCase();
+    const trainKey = normalizeKey(signal?.trainNumber);
+    const station = String(signal?.station || '').trim().toLowerCase();
+    const delayMin = Number(signal?.delayMin || 0);
+    const ownIdentity = normalizeIdentity(getCurrentPresenceIdentity());
+    if (!trainKey) return;
+    if (!['suppression', 'retard'].includes(sigType)) return;
+    if (sigType === 'retard' && delayMin < 15) return;
+
+    let wall = Array.isArray(window.lbCommentState?.wall) ? window.lbCommentState.wall : [];
+    try{
+      const res = await window.fetchCommentsApi('?scope=wall');
+      if (res.ok){
+        const data = await res.json();
+        const list = Array.isArray(data) ? data : (Array.isArray(data?.comments) ? data.comments : []);
+        wall = list.map(normalizeCommentItem).filter(Boolean);
+      }
+    }catch(_){}
+    const candidates = wall.filter((it)=>{
+      if (!it?.id) return false;
+      const text = String(it?.text || '').toLowerCase();
+      const commentTrain = normalizeKey(it?.trainNumber || detectCommentTrainNumber(it));
+      if (commentTrain !== trainKey) return false;
+      // Station ignorée pour la suppression mur auto: certains messages mur n'embarquent
+      // pas exactement le même libellé d'arrêt, on privilégie train + type (+delay si retard).
+      if (sigType === 'suppression' && !/supprim/.test(text)) return false;
+      if (sigType === 'retard'){
+        const m = text.match(/\+\s*([0-9]{1,3})/);
+        if (!m) return false;
+        const commentDelay = Number(m[1] || 0);
+        if (commentDelay !== delayMin) return false;
+      }
+      const author = normalizeIdentity(it?.accountId || '');
+      if (!ignoreAuthorCheck && author && ownIdentity && author !== ownIdentity) return false;
+      return true;
+    });
+    if (!candidates.length) return;
+
+    for (const item of candidates){
+      try{
+        await window.fetchCommentsApi(`/${encodeURIComponent(String(item.id))}`, { method:'DELETE' });
+      }catch(_){}
+    }
+    try { await window.loadMessages?.(); } catch(_){}
+  }
+
+  async function postAssociatedWallAlertForSignal(signal){
+    const sigType = String(signal?.signalType || '').toLowerCase();
+    const trainKey = normalizeKey(signal?.trainNumber);
+    const station = String(signal?.station || '').trim();
+    const delayMin = Number(signal?.delayMin || 0);
+    const accountId = String(signal?.accountId || getCurrentPresenceIdentity() || '').trim();
+    if (!trainKey) return;
+    if (sigType !== 'suppression' && sigType !== 'retard') return;
+    if (sigType === 'retard' && delayMin < 15) return;
+    const wallMessage = sigType === 'suppression'
+      ? `🚫 <span class="lb-red">${trainKey} supprimé</span> à ${station} · 🐄`
+      : `⏱️ ${trainKey} <span class="lb-orange">+${delayMin}</span> à ${station} · 🐄`;
+    try{
+      await window.fetchCommentsApi('', {
+        method:'POST',
+        headers:{ 'Content-Type':'application/json' },
+        body: JSON.stringify({
+          message: wallMessage,
+          scope:'wall',
+          train_number: trainKey,
+          account_id: accountId
+        })
+      });
+      try { await window.loadMessages?.(); } catch(_){}
+    }catch(_){}
+  }
+
+  async function pruneWallAlertsWithoutActiveSignals(){
+    let wall = [];
+    try{
+      const res = await window.fetchCommentsApi('?scope=wall');
+      if (!res.ok) return;
+      const data = await res.json();
+      const list = Array.isArray(data) ? data : (Array.isArray(data?.comments) ? data.comments : []);
+      wall = list.map(normalizeCommentItem).filter(Boolean);
+    }catch(_){ return; }
+    if (!wall.length) return;
+
+    const toDelete = wall.filter((it)=>{
+      if (!it?.id) return false;
+      const trainKey = normalizeKey(it?.trainNumber || detectCommentTrainNumber(it));
+      if (!trainKey) return false;
+      const text = String(it?.text || '').toLowerCase().replace(/<[^>]*>/g, ' ');
+      const isSupp = /supprim/.test(text);
+      const delayMatch = text.match(/\+\s*([0-9]{1,3})/);
+      const delay = delayMatch ? Number(delayMatch[1]) : 0;
+      const isMajorDelay = delay >= 15;
+      if (!isSupp && !isMajorDelay) return false;
+      const active = getSignalsForTrain(trainKey);
+      if (!active.length) return true;
+      if (isSupp){
+        return !active.some((s)=> String(s?.signalType || '').toLowerCase() === 'suppression');
+      }
+      if (isMajorDelay){
+        return !active.some((s)=> String(s?.signalType || '').toLowerCase() === 'retard' && Number(s?.delayMin || 0) >= delay);
+      }
+      return false;
+    });
+    if (!toDelete.length) return;
+    for (const it of toDelete){
+      try{ await window.fetchCommentsApi(`/${encodeURIComponent(String(it.id))}`, { method:'DELETE' }); }catch(_){}
+    }
+    try { await window.loadMessages?.(); } catch(_){}
   }
 
   async function updateSignalInlineFromTrainDetail({ signalId, trainNumber, station, signalType, delayMin } = {}){
@@ -30234,9 +30254,10 @@ body{ padding-bottom: calc(var(--bottom-bar-height, 58px) + 10px) !important; }
       ? `[SUPPRESSION] ${label}${station ? ` [${station}]` : ''} — Train supprimé à l'arrêt`
       : `[RETARD] ${label}${station ? ` [${station}]` : ''} — Retard +${delay} min`;
     const accountId = getCurrentPresenceIdentity();
+	const previousSignal = (Array.isArray(COMMUNITY.signals) ? COMMUNITY.signals : []).find((it)=> String(it.id) === id) || null;
     const delRes = await window.fetchCommentsApi(`/${encodeURIComponent(id)}`, { method:'DELETE' });
     if (!delRes.ok) throw new Error('Suppression de l’ancien signalement impossible.');
-    try { await deleteLinkedWallCommentsBySignalId(id, { forceReload:true }); } catch(_){ }
+	if (previousSignal) await removeAssociatedWallAlertsForSignal(previousSignal);
     const postRes = await window.fetchCommentsApi('', {
       method:'POST',
       headers:{ 'Content-Type':'application/json' },
@@ -30251,18 +30272,15 @@ body{ padding-bottom: calc(var(--bottom-bar-height, 58px) + 10px) !important; }
         account_id: accountId
       })
     });
-    let postData = null;
-    try { postData = await postRes.json(); } catch(_){ }
     if (!postRes.ok) throw new Error('Publication du nouveau signalement impossible.');
-    let createdSignalId = extractCreatedCommentId(postData);
+	await postAssociatedWallAlertForSignal({
+      signalType: type,
+      trainNumber: trainKey,
+      station: station ? String(station) : '',
+      delayMin: type === 'retard' ? delay : 0,
+      accountId
+    });
     await loadSignals();
-    if (!createdSignalId){
-      createdSignalId = findMatchingOwnSignalId({ trainKey, station, signalType: type, delayMin: delay, accountId, excludeId: id });
-    }
-    try {
-      await publishLinkedWallAlertForSignal({ signalId: createdSignalId, trainKey, station, signalType: type, delayMin: delay, accountId });
-    } catch(_){ }
-    try { await loadMessages(); } catch(_){ }
     await renderTrainDetail(trainKey);
     refreshLiveModal();
   }
