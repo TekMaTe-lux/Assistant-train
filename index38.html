@@ -29501,6 +29501,42 @@ body{ padding-bottom: calc(var(--bottom-bar-height, 58px) + 10px) !important; }
     return `<span class="lb-signal-vote"><button type="button" class="lb-signal-vote-btn is-up${votes.mine > 0 ? ' is-active' : ''}" data-lb-vote-signal="${safeEscape(String(signal.id || ''))}" data-lb-vote-value="1" aria-label="Vote positif">👍</button><span class="lb-signal-vote-count">${score}</span><button type="button" class="lb-signal-vote-btn is-down${votes.mine < 0 ? ' is-active' : ''}" data-lb-vote-signal="${safeEscape(String(signal.id || ''))}" data-lb-vote-value="-1" aria-label="Vote négatif">👎</button></span>`;
   }
 
+  function askSignalModerationConfirmation(message){
+    return new Promise((resolve)=>{
+      let modal = document.getElementById('lbVoteConfirmModal');
+      if (!modal){
+        modal = document.createElement('div');
+        modal.id = 'lbVoteConfirmModal';
+        modal.className = 'lb-community-modal';
+        modal.setAttribute('aria-hidden', 'true');
+        modal.innerHTML = `
+          <div class="lb-community-panel" role="dialog" aria-modal="true" aria-labelledby="lbVoteConfirmTitle">
+            <button type="button" class="lb-community-close tron-close-button" data-lb-vote-confirm-cancel aria-label="Fermer"></button>
+            <div class="lb-community-head">
+              <h3 id="lbVoteConfirmTitle">Confirmer la modération</h3>
+            </div>
+            <div style="padding:6px 2px 2px;color:#d9f7ff;line-height:1.45;font-size:.92rem" id="lbVoteConfirmText"></div>
+            <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:14px">
+              <button type="button" class="lb-signal-submit" data-lb-vote-confirm-ok style="max-width:180px">Confirmer</button>
+              <button type="button" class="lb-community-btn" data-lb-vote-confirm-cancel>Annuler</button>
+            </div>
+          </div>`;
+        document.body.appendChild(modal);
+      }
+      const txt = modal.querySelector('#lbVoteConfirmText');
+      if (txt) txt.textContent = String(message || '');
+      const finalize = (choice)=>{
+        modal.classList.remove('is-open');
+        modal.setAttribute('aria-hidden', 'true');
+        resolve(!!choice);
+      };
+      modal.querySelectorAll('[data-lb-vote-confirm-ok]').forEach((btn)=> btn.onclick = ()=> finalize(true));
+      modal.querySelectorAll('[data-lb-vote-confirm-cancel]').forEach((btn)=> btn.onclick = ()=> finalize(false));
+      modal.classList.add('is-open');
+      modal.setAttribute('aria-hidden', 'false');
+    });
+  }
+
   async function submitSignalVote(signalId, value){
     const id = String(signalId || '').trim();
     if (!id) return;
@@ -29514,7 +29550,7 @@ body{ padding-bottom: calc(var(--bottom-bar-height, 58px) + 10px) !important; }
         const projectedScore = currentScore + delta;
         const willReachAutoModeration = currentScore > -3 && projectedScore <= -3;
         if (willReachAutoModeration){
-          const ok = window.confirm('Ce vote va passer le signalement à -3 et déclencher sa suppression (chip + message mur). Confirmer ?');
+          const ok = await askSignalModerationConfirmation('Ce vote valide la suppression du signalement initial (signalement multicontesté).');
           if (!ok) return;
         }
 	  } else if (voteValue < 0){
@@ -29524,7 +29560,7 @@ body{ padding-bottom: calc(var(--bottom-bar-height, 58px) + 10px) !important; }
         const scoreEl = voteWrap ? voteWrap.querySelector('.lb-signal-vote-count') : null;
         const domScore = Number(scoreEl?.textContent || 0);
         if (Number.isFinite(domScore) && domScore <= -2){
-          const ok = window.confirm('Ce vote peut déclencher la suppression du signalement (chip + message mur). Confirmer ?');
+          const ok = await askSignalModerationConfirmation('Ce vote valide la suppression du signalement initial (signalement multicontesté).');
           if (!ok) return;
         }
       }
