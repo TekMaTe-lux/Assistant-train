@@ -29142,7 +29142,43 @@ body{ padding-bottom: calc(var(--bottom-bar-height, 58px) + 10px) !important; }
 
   function getSignalsForTrain(trainNumber){
     const key = normalizeKey(trainNumber);
-    return (Array.isArray(COMMUNITY.signals) ? COMMUNITY.signals : []).filter((it)=> normalizeKey(it.trainNumber) === key);
+    return (Array.isArray(COMMUNITY.signals) ? COMMUNITY.signals : [])
+      .filter((it)=> normalizeKey(it.trainNumber) === key)
+      .filter((it)=> !isSignalRejectedByVotes(it));
+  }
+
+  function getSignalScore(signal){
+    const votes = getSignalVoteSummary(signal);
+    return Number(votes.up || 0) - Number(votes.down || 0);
+  }
+
+  function isSignalContestedByVotes(signal){
+    const score = getSignalScore(signal);
+    return score <= -2 && score >= -3;
+  }
+
+  function isSignalRejectedByVotes(signal){
+    return getSignalScore(signal) <= -4;
+  }
+
+  function isImportantDisruptionSignal(signal){
+    const type = String(signal?.signalType || '').toLowerCase();
+    if (type === 'suppression') return true;
+    if (type === 'retard' && Number(signal?.delayMin || 0) >= 15) return true;
+    return false;
+  }
+
+  function shouldHideLiveCommentByAutomoderation(comment, trainNumber){
+    const text = String(comment?.text || '').toLowerCase();
+    const mentionsSuppression = /supprim/.test(text);
+    const delayMatch = text.match(/(?:retard|\+)\s*([0-9]{1,3})/i);
+    const mentionsMajorDelay = !!(delayMatch && Number(delayMatch[1]) >= 15);
+    if (!mentionsSuppression && !mentionsMajorDelay) return false;
+    const key = normalizeKey(trainNumber);
+    const rejectedImportantSignalExists = (Array.isArray(COMMUNITY.signals) ? COMMUNITY.signals : [])
+      .filter((sig)=> normalizeKey(sig?.trainNumber) === key)
+      .some((sig)=> isImportantDisruptionSignal(sig) && isSignalRejectedByVotes(sig));
+    return rejectedImportantSignalExists;
   }
 
   function getEffectiveCompositionCode(trainNumber){
@@ -29311,9 +29347,11 @@ body{ padding-bottom: calc(var(--bottom-bar-height, 58px) + 10px) !important; }
   function signalDisplayLabel(signal){
     if (!signal) return 'Signalement';
     const base = formatSignalTypeLabel(signal.signalType);
-    if (signal.signalType === 'retard' && Number(signal.delayMin) > 0) return `${base} +${signal.delayMin} min`;
-    if (signal.signalType === 'information' && signal.infoTag && INFO_TAG_LABELS[signal.infoTag]) return INFO_TAG_LABELS[signal.infoTag];
-    return base;
+    let label = base;
+    if (signal.signalType === 'retard' && Number(signal.delayMin) > 0) label = `${base} +${signal.delayMin} min`;
+    if (signal.signalType === 'information' && signal.infoTag && INFO_TAG_LABELS[signal.infoTag]) label = INFO_TAG_LABELS[signal.infoTag];
+    if (isSignalContestedByVotes(signal)) label = `${label} · Signalement contesté`;
+    return label;
   }
 
   function getSignalVoteSummary(signal){
@@ -29577,7 +29615,9 @@ body{ padding-bottom: calc(var(--bottom-bar-height, 58px) + 10px) !important; }
     let items = [];
     if (train){
       const signals = getSignalsForTrain(train.trainNumber).map((it)=>({ kind:'signal', ts:it.ts, pseudo:it.pseudo, text:`${signalDisplayLabel(it)}${it.station ? ` — ${it.station}` : ''}${it.detail ? ` — ${it.detail}` : ''}` }));
-      const comments = getWallCommentsForTrain(train.trainNumber).map((it)=>({ kind:'comment', ts:it.ts, pseudo:it.pseudo || 'Voyageur', text: String(it.text || '') }));
+      const comments = getWallCommentsForTrain(train.trainNumber)
+        .filter((it)=> !shouldHideLiveCommentByAutomoderation(it, train.trainNumber))
+        .map((it)=>({ kind:'comment', ts:it.ts, pseudo:it.pseudo || 'Voyageur', text: String(it.text || '') }));
       items = [...signals, ...comments].sort((a,b)=> Number(b.ts||0) - Number(a.ts||0)).slice(0, 30);
     } else {
       items = (Array.isArray(COMMUNITY.signals) ? COMMUNITY.signals : []).slice(0, 30).map((it)=>({ kind:'signal', ts:it.ts, pseudo:it.pseudo, text:`${it.trainNumber ? `TER ${it.trainNumber} — ` : ''}${signalDisplayLabel(it)}${it.station ? ` — ${it.station}` : ''}${it.detail ? ` — ${it.detail}` : ''}` }));
