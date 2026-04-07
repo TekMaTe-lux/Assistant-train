@@ -1,4 +1,4 @@
-const CACHE_NAME = 'lbetaillere-v4';
+const CACHE_NAME = 'lbetaillere-v5';
 const ASSETS = [
   './',
   './index40.html',
