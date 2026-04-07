@@ -1,4 +1,4 @@
-const CACHE_NAME = 'lbetaillere-v3';
+const CACHE_NAME = 'lbetaillere-v4';
 const ASSETS = [
   './',
   './index40.html',
@@ -7,6 +7,8 @@ const ASSETS = [
   './service-worker.js',
   './logoText.png',
   './logobetailleresanstexte.png',
+  './icon-192.png',
+  './icon-512.png',
   './favicon.jpg'
 ];
 
