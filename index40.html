@@ -21465,7 +21465,26 @@ function scheduleWeatherAfterTableSettled(){
         ? new Date(raw.replace(' ', 'T') + 'Z')
         : new Date(raw);
       if (!Number.isFinite(parsed.getTime())) return '--:--';
-      return parsed.toLocaleTimeString('fr-FR', { hour:'2-digit', minute:'2-digit', timeZone:'Europe/Paris' });
+      const parisParts = (dateObj)=>{
+        const parts = new Intl.DateTimeFormat('fr-FR', {
+          timeZone: 'Europe/Paris',
+          year: 'numeric',
+          month: '2-digit',
+          day: '2-digit'
+        }).formatToParts(dateObj);
+        const get = (type)=> parts.find((p)=> p.type === type)?.value || '';
+        return { year: Number(get('year')), month: Number(get('month')), day: Number(get('day')) };
+      };
+      const commentDate = parisParts(parsed);
+      const nowDate = parisParts(new Date());
+      const commentStamp = Date.UTC(commentDate.year, commentDate.month - 1, commentDate.day);
+      const nowStamp = Date.UTC(nowDate.year, nowDate.month - 1, nowDate.day);
+      const dayDiff = Math.round((nowStamp - commentStamp) / 86400000);
+      if (dayDiff === 0){
+        return parsed.toLocaleTimeString('fr-FR', { hour:'2-digit', minute:'2-digit', timeZone:'Europe/Paris' });
+      }
+      if (dayDiff === 1) return 'hier';
+      return parsed.toLocaleDateString('fr-FR', { day:'2-digit', month:'2-digit', year:'2-digit', timeZone:'Europe/Paris' });
     }catch(e){ return '--:--'; }
   };
 
@@ -26818,7 +26837,29 @@ async function loadAffluenceDate(dateStr){
 	            ? new Date(raw.replace(' ', 'T') + 'Z')
 	            : new Date(raw);
 	          if (!Number.isFinite(parsed.getTime())) return '--:--';
-	          return parsed.toLocaleTimeString('fr-FR', { hour:'2-digit', minute:'2-digit', timeZone:'Europe/Paris' });
+	          var parisParts = function(dateObj){
+	            var parts = new Intl.DateTimeFormat('fr-FR', {
+	              timeZone: 'Europe/Paris',
+	              year: 'numeric',
+	              month: '2-digit',
+	              day: '2-digit'
+	            }).formatToParts(dateObj);
+	            var pick = function(type){
+	              var found = parts.find(function(p){ return p.type === type; });
+	              return found ? found.value : '';
+	            };
+	            return { year: Number(pick('year')), month: Number(pick('month')), day: Number(pick('day')) };
+	          };
+	          var commentDate = parisParts(parsed);
+	          var nowDate = parisParts(new Date());
+	          var commentStamp = Date.UTC(commentDate.year, commentDate.month - 1, commentDate.day);
+	          var nowStamp = Date.UTC(nowDate.year, nowDate.month - 1, nowDate.day);
+	          var dayDiff = Math.round((nowStamp - commentStamp) / 86400000);
+	          if (dayDiff === 0){
+	            return parsed.toLocaleTimeString('fr-FR', { hour:'2-digit', minute:'2-digit', timeZone:'Europe/Paris' });
+	          }
+	          if (dayDiff === 1) return 'hier';
+	          return parsed.toLocaleDateString('fr-FR', { day:'2-digit', month:'2-digit', year:'2-digit', timeZone:'Europe/Paris' });
 	        }
 	        catch(_){ return '--:--'; }
 	      };
@@ -29057,6 +29098,14 @@ body{ padding-bottom: calc(var(--bottom-bar-height, 58px) + 10px) !important; }
     saveSignalVotes(store);
   }
 
+  function buildCommentDeletePath(commentId, options = {}){
+    const id = String(commentId || '').trim();
+    if (!id) return '';
+    const params = new URLSearchParams();
+    if (options.moderationConfirmed) params.set('moderation_confirmed', '1');
+    return params.toString() ? `/${encodeURIComponent(id)}?${params.toString()}` : `/${encodeURIComponent(id)}`;
+  }
+
   function detectCommentTrainNumber(item){
     if (!item) return '';
     const direct = normalizeKey(item.trainNumber || item.train_number || item.train || '');
@@ -29662,17 +29711,28 @@ body{ padding-bottom: calc(var(--bottom-bar-height, 58px) + 10px) !important; }
         target.downvotes = Number(data?.downvotes || 0);
         target.myVote = Number(data?.my_vote || 0);
         const nextScore = Number(target.upvotes || 0) - Number(target.downvotes || 0);
-        if (voteValue < 0 && previousScore > -3 && nextScore <= -3){
-          moderationNotice = 'Votre vote fait passer ce signalement à -3 : il est automatiquement supprimé du live et du mur des commentaires.';
+        if (voteValue < 0 && nextScore <= -3){
+          if (previousScore > -3){
+            moderationNotice = 'Votre vote fait passer ce signalement à -3 : il est automatiquement supprimé du live et du mur des commentaires.';
+          }
           signalRemovedByModeration = { ...target };
         }
       } else {
         const nextScore = Number(data?.upvotes || 0) - Number(data?.downvotes || 0);
         if (voteValue < 0 && nextScore <= -3){
           moderationNotice = 'Votre vote fait passer ce signalement à -3 : il est automatiquement supprimé du live et du mur des commentaires.';
+		  if (targetBeforeVote){
+            signalRemovedByModeration = {
+              ...targetBeforeVote,
+              upvotes: Number(data?.upvotes || targetBeforeVote.upvotes || 0),
+              downvotes: Number(data?.downvotes || targetBeforeVote.downvotes || 0)
+            };
+          }
         }
       }
+      if (signalRemovedByModeration) await removeAssociatedWallAlertsForSignal(signalRemovedByModeration, { ignoreAuthorCheck: true });
       if (signalRemovedByModeration) rememberHiddenWallRuleFromSignal(signalRemovedByModeration);
+      if (signalRemovedByModeration) forceHideWallCommentsInFrontForSignal(signalRemovedByModeration);
       await loadSignals();
 	  if (voteValue < 0) await pruneWallAlertsWithoutActiveSignals();
       if (COMMUNITY.selectedTrain) renderTrainDetail(COMMUNITY.selectedTrain);
@@ -30288,7 +30348,7 @@ body{ padding-bottom: calc(var(--bottom-bar-height, 58px) + 10px) !important; }
 
     for (const item of candidates){
       try{
-        await window.fetchCommentsApi(`/${encodeURIComponent(String(item.id))}`, { method:'DELETE' });
+        await window.fetchCommentsApi(buildCommentDeletePath(item.id, { moderationConfirmed: true }), { method:'DELETE' });
       }catch(_){}
     }
     try { await window.loadMessages?.(); } catch(_){}
@@ -30319,6 +30379,30 @@ body{ padding-bottom: calc(var(--bottom-bar-height, 58px) + 10px) !important; }
       });
       try { await window.loadMessages?.(); } catch(_){}
     }catch(_){}
+  }
+
+  function forceHideWallCommentsInFrontForSignal(signal){
+    const sigType = String(signal?.signalType || '').toLowerCase();
+    const trainKey = normalizeKey(signal?.trainNumber);
+    const delayMin = Number(signal?.delayMin || 0);
+    if (!trainKey) return;
+    if (!['suppression','retard'].includes(sigType)) return;
+    if (sigType === 'retard' && delayMin < 15) return;
+    const before = Array.isArray(window.lbCommentState?.wall) ? window.lbCommentState.wall : [];
+    const filtered = before.filter((it)=>{
+      const text = String(it?.text || '').toLowerCase();
+      const commentTrain = normalizeKey(it?.trainNumber || detectCommentTrainNumber(it));
+      if (commentTrain !== trainKey) return true;
+      if (sigType === 'suppression') return !/supprim/.test(text);
+      const m = text.match(/\+\s*([0-9]{1,3})/);
+      if (!m) return true;
+      return Number(m[1] || 0) !== delayMin;
+    });
+    if (filtered.length === before.length) return;
+    if (!window.lbCommentState || typeof window.lbCommentState !== 'object') window.lbCommentState = { wall:[], trains:{} };
+    window.lbCommentState.wall = filtered;
+    try { window.renderMessages?.(); } catch(_){}
+    try { window.renderHomeLiveWall?.(); } catch(_){}
   }
 
   async function pruneWallAlertsWithoutActiveSignals(){
@@ -30354,7 +30438,7 @@ body{ padding-bottom: calc(var(--bottom-bar-height, 58px) + 10px) !important; }
     });
     if (!toDelete.length) return;
     for (const it of toDelete){
-      try{ await window.fetchCommentsApi(`/${encodeURIComponent(String(it.id))}`, { method:'DELETE' }); }catch(_){}
+      try{ await window.fetchCommentsApi(buildCommentDeletePath(it.id, { moderationConfirmed: true }), { method:'DELETE' }); }catch(_){}
     }
     try { await window.loadMessages?.(); } catch(_){}
   }
