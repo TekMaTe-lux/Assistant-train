@@ -1,4 +1,4 @@
-const CACHE_NAME = 'lbetaillere-v1';
+const CACHE_NAME = 'lbetaillere-v2';
 const ASSETS = [
   './',
   './index00.html',
@@ -20,13 +20,26 @@ self.addEventListener('activate', (event) => {
 
 self.addEventListener('fetch', (event) => {
   if (event.request.method !== 'GET') return;
+  const url = new URL(event.request.url);
+  const sameOrigin = url.origin === self.location.origin;
   event.respondWith(
     caches.match(event.request).then((cached) => {
       if (cached) return cached;
       return fetch(event.request)
         .then((response) => {
-          const copy = response.clone();
-          caches.open(CACHE_NAME).then((cache) => cache.put(event.request, copy));
+          // Évite les erreurs DOMException de CacheStorage (Firefox / réponses opaques / non-HTTP).
+          const canCache =
+            sameOrigin &&
+            url.protocol.startsWith('http') &&
+            response &&
+            response.ok &&
+            response.type === 'basic';
+          if (canCache) {
+            const copy = response.clone();
+            caches.open(CACHE_NAME)
+              .then((cache) => cache.put(event.request, copy))
+              .catch(() => {});
+          }
           return response;
         })
         .catch(() => caches.match('./index00.html'));
