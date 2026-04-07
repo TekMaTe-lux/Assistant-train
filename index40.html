@@ -24114,25 +24114,11 @@ function computeBerRisk({ rainProb, windKmh }){
   return { label: 'Élevé', icon: '🔴', hint: 'PN sensibles + galère probable' };
 }
 
-try{
-    const r = await fetch(url, {
-      cache: 'no-store',
-      signal: ctrl.signal,
-      headers: { 'Accept': 'application/json' }
-    });
-
-    if (!r.ok) throw new Error(`Meteo HTTP ${r.status}`);
-
-    const ct = (r.headers.get('content-type') || '').toLowerCase();
-    if (!ct.includes('application/json')) {
-      const txt = await r.text();
-      throw new Error(`Meteo réponse invalide: ${txt.slice(0, 120)}`);
-    }
-
-    return await r.json();
-  } finally {
-    clearTimeout(to);
-  }
+async function fetchOpenMeteo(lat, lon){
+  const url = `https://api.open-meteo.com/v1/forecast?latitude=${encodeURIComponent(lat)}&longitude=${encodeURIComponent(lon)}&current=temperature_2m,precipitation,wind_speed_10m,weather_code&hourly=temperature_2m,precipitation_probability,wind_speed_10m,weather_code&forecast_days=1&timezone=Europe%2FLuxembourg`;
+  const r = await fetch(url, { cache: 'no-store' });
+  if (!r.ok) throw new Error(`Meteo HTTP ${r.status}`);
+  return r.json();
 }
 
 function pickNextHourIndex(hourlyTimes){
@@ -24151,27 +24137,11 @@ function pickNextHourIndex(hourlyTimes){
 async function updateHomeWeather(fromCfg, toCfg){
   const $ = (id)=>document.getElementById(id);
   const riskEl = $('homeWxRisk');
-  const fromTitle = $('homeWxFromTitle');
-  const toTitle = $('homeWxToTitle');
-  const fromNow = $('homeWxFromNow');
-  const toNow = $('homeWxToNow');
-
-  function renderUnavailable(el){
-    if (!el) return;
-    el.innerHTML = `
-      <span class="wx-main">
-        <span class="wx-icon">—</span>
-        <span class="wx-temp">—</span>
-      </span>
-      <span class="wx-details">Météo indisponible</span>
-    `;
-  }
-
   try{
-    if (fromTitle) fromTitle.textContent = `${fromCfg.label}`;
-    if (toTitle) toTitle.textContent = `${toCfg.label}`;
+    $('homeWxFromTitle').textContent = `${fromCfg.label}`;
+    $('homeWxToTitle').textContent = `${toCfg.label}`;
 
-    const [a, b] = await Promise.all([
+    const [a,b] = await Promise.all([
       fetchOpenMeteo(fromCfg.lat, fromCfg.lon),
       fetchOpenMeteo(toCfg.lat, toCfg.lon),
     ]);
@@ -24182,20 +24152,15 @@ async function updateHomeWeather(fromCfg, toCfg){
       const curCode = data?.current?.weather_code;
       const emoji = wxCodeToEmoji(curCode);
       const curIdx = pickNextHourIndex(data?.hourly?.time || []);
-      const curP =
-        data?.hourly?.precipitation_probability?.[Math.max(0, curIdx - 1)]
-        ?? data?.hourly?.precipitation_probability?.[0];
-
-      const target = $(prefix + 'Now');
-      if (target){
-        target.innerHTML = `
-          <span class="wx-main">
-            <span class="wx-icon">${emoji}</span>
-            <span class="wx-temp">${fmtTemp(curT)}</span>
-          </span>
-          <span class="wx-details">💧 ${fmtPct(curP)} · 💨 ${fmtWind(curW)}</span>
-        `;
-      }
+      const curP = data?.hourly?.precipitation_probability?.[Math.max(0, curIdx-1)] ?? data?.hourly?.precipitation_probability?.[0];
+      const nowHtml = `
+        <span class="wx-main">
+          <span class="wx-icon">${emoji}</span>
+          <span class="wx-temp">${fmtTemp(curT)}</span>
+        </span>
+        <span class="wx-details">💧 ${fmtPct(curP)} · 💨 ${fmtWind(curW)}</span>
+      `;
+      $(prefix+'Now').innerHTML = nowHtml;
 
       return { rainProb: curP, windKmh: curW };
     }
@@ -24203,25 +24168,15 @@ async function updateHomeWeather(fromCfg, toCfg){
     const r1 = renderOne('homeWxFrom', a);
     const r2 = renderOne('homeWxTo', b);
 
+    // Risque BER = max des 2 points (simple et efficace)
     const risk1 = computeBerRisk(r1);
     const risk2 = computeBerRisk(r2);
-    const pick =
-      (risk1.label === 'Élevé' || risk2.label === 'Élevé') ? (risk1.label === 'Élevé' ? risk1 : risk2) :
-      (risk1.label === 'Moyen' || risk2.label === 'Moyen') ? (risk1.label === 'Moyen' ? risk1 : risk2) :
-      risk1;
-
-    if (riskEl) {
-      riskEl.textContent = `⚠️ Risque BER : ${pick.icon} ${pick.label} — ${pick.hint}`;
-    }
-  } catch(e){
-    console.warn('[HOME WX] météo indisponible', e);
-
-    renderUnavailable(fromNow);
-    renderUnavailable(toNow);
-
-    if (riskEl) {
-      riskEl.textContent = '⚠️ Risque BER : — (météo indisponible)';
-    }
+    const pick = (risk1.label === 'Élevé' || risk2.label === 'Élevé') ? (risk1.label==='Élevé'?risk1:risk2)
+               : (risk1.label === 'Moyen' || risk2.label === 'Moyen') ? (risk1.label==='Moyen'?risk1:risk2)
+               : risk1;
+    riskEl.textContent = `⚠️ Risque BER : ${pick.icon} ${pick.label} — ${pick.hint}`;
+  }catch(e){
+    if (riskEl) riskEl.textContent = '⚠️ Risque BER : — (météo indisponible)';
   }
 }
 /* ===== HOME : état du trafic (minimal, style BER) =====
