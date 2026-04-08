@@ -21450,7 +21450,7 @@ function scheduleWeatherAfterTableSettled(){
   let lbCommentsPoller = null;
   let currentUser = null;
   window.currentUser = null;
-  const lbGamificationState = { profile: null, ranking: [], myRank: null, lastFetchAt: 0, inflight: null };
+  const lbGamificationState = { profile: null, ranking: [], myRank: null, me: null, lastFetchAt: 0, inflight: null };
   let lbPseudoTooltip = null;
   let lbPseudoTooltipAnchor = null;
 
@@ -22055,6 +22055,7 @@ function scheduleWeatherAfterTableSettled(){
       pseudo: String(it?.display_pseudo || it?.pseudo || it?.username || 'Voyageur').trim().slice(0, 24),
       grade: String(it?.grade || it?.author_grade || 'Mouton égaré').trim(),
       points: Number(it?.points || it?.author_points || 0) || 0,
+	  userId: Number(it?.user_id || it?.id || 0) || null,
       me: !!(it?.me || it?.is_me || it?.self)
     })).filter((it)=> it.rank > 0).sort((a,b)=> a.rank - b.rank);
   }
@@ -22065,11 +22066,7 @@ function scheduleWeatherAfterTableSettled(){
     const podium = $("lbRankingPodium");
     const listEl = $("lbRankingList");
     if (!host || !filter || !podium || !listEl) return;
-    if (!window.lbIsAuthed){
-      host.style.display = "none";
-      return;
-    }
-    host.style.display = "grid";
+    if (host) host.style.display = window.lbIsAuthed ? "grid" : "none";
     const p = lbGamificationState.profile || {};
     const ranking = Array.isArray(lbGamificationState.ranking) ? lbGamificationState.ranking : [];
     const pseudo = String(p.display_pseudo || p.pseudo || safePseudo() || currentUser?.pseudo || 'Voyageur').trim();
@@ -22094,7 +22091,7 @@ function scheduleWeatherAfterTableSettled(){
     else if (mode === 'top10') rows = ranking.slice(0, 10);
     else if (mode === 'top50') rows = ranking.slice(0, 50);
     else if (mode === 'around'){
-      const aroundRank = myRank || ranking.find((it)=> it.me)?.rank || null;
+      const aroundRank = myRank || Number(lbGamificationState?.me?.rank || 0) || ranking.find((it)=> it.me)?.rank || null;
       if (aroundRank){
         rows = ranking.filter((it)=> Math.abs(it.rank - aroundRank) <= 2).slice(0, 7);
       } else {
@@ -22108,13 +22105,6 @@ function scheduleWeatherAfterTableSettled(){
 
   async function refreshGamificationUI(options = {}){
     const force = !!options.force;
-    if (!window.lbIsAuthed){
-      lbGamificationState.profile = null;
-      lbGamificationState.ranking = [];
-      lbGamificationState.myRank = null;
-      renderGamificationUI();
-      return;
-    }
     const ttl = 15000;
     const now = Date.now();
     if (!force && lbGamificationState.inflight) return lbGamificationState.inflight;
@@ -22125,15 +22115,22 @@ function scheduleWeatherAfterTableSettled(){
     lbGamificationState.inflight = (async ()=>{
       try{
         const [profileData, rankingData] = await Promise.all([
-          api('/me/profile', { method:'GET' }).catch(()=> ({})),
+          window.lbIsAuthed ? api('/me/profile', { method:'GET' }).catch(()=> ({})) : Promise.resolve({}),
           api('/ranking', { method:'GET' }).catch(()=> ({}))
         ]);
         const profile = profileData?.profile || profileData?.me || profileData || {};
         const ranking = normalizeRankingList(rankingData);
         const profileRank = Number(profile?.rank || 0) || null;
-        const detectedRank = ranking.find((it)=> it.me || normalizeIdentity(it.pseudo) === normalizeIdentity(profile?.display_pseudo || profile?.pseudo || safePseudo()))?.rank || null;
-        lbGamificationState.profile = profile;
+        const mePayload = rankingData?.me || null;
+        const meUserId = Number(mePayload?.user_id || 0) || null;
+        const detectedRank = ranking.find((it)=>
+          it.me
+          || (meUserId && Number(it.userId || 0) === meUserId)
+          || normalizeIdentity(it.pseudo) === normalizeIdentity(profile?.display_pseudo || profile?.pseudo || safePseudo())
+        )?.rank || null;
+        lbGamificationState.profile = window.lbIsAuthed ? profile : null;
         lbGamificationState.ranking = ranking;
+        lbGamificationState.me = mePayload;
         lbGamificationState.myRank = profileRank || detectedRank || null;
         lbGamificationState.lastFetchAt = Date.now();
       }catch(_){}
@@ -23692,9 +23689,10 @@ if (statsEl){
     }
     openPrefsModal();
   });
-  if (rankingBtn) rankingBtn.addEventListener("click", () => {
+  if (rankingBtn) rankingBtn.addEventListener("click", async () => {
     if (typeof closeModal === "function") closeModal();
     if (!rankingModal) return;
+	await refreshGamificationUI({ force: true });
     rankingModal.style.display = "flex";
     rankingModal.setAttribute("aria-hidden", "false");
     renderGamificationUI();
