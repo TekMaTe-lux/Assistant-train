@@ -10070,11 +10070,6 @@ body{
           <span class="traffic-pill traffic-pill--loading" id="homeTrafficBadgeSouth">Chargement…</span>
         </div>
       </div>
-      <div class="home-quick-presets" aria-label="Listes prédéfinies">
-        <div class="home-quick-presets__label">Tableaux rapides</div>
-        <button type="button" class="home-quick-presets__btn" data-home-preset-kind="AM">Matin</button>
-        <button type="button" class="home-quick-presets__btn" data-home-preset-kind="PM">Soir</button>
-      </div>
     </article>
 
     <article class="home-card live-wall-card live-wall-card--home home-comments-compact" aria-label="Mur de commentaires">
@@ -10096,25 +10091,13 @@ body{
       </form>
     </article>
 
-    <article class="home-card" aria-label="Météo sur votre ligne">
-      <h2>Météo</h2>
-
-      <div class="wx-stations">
-        <div class="wx-station">
-          <div class="wx-row">
-            <div class="wx-now" id="homeWxFromNow">—</div>
-			<div class="wx-title" id="homeWxFromTitle">Metz</div>
-          </div>
-        </div>
-
-        <div class="wx-station">
-          <div class="wx-row">
-            <div class="wx-now" id="homeWxToNow">—</div>
-			<div class="wx-title" id="homeWxToTitle">Luxembourg</div>
-          </div>
-        </div>
+    <article class="home-card home-quick-card" aria-label="Tableau rapide">
+      <h2>Tableau rapide</h2>
+      <div class="home-quick-presets home-quick-presets--card" aria-label="Tableaux rapides">
+        <button type="button" class="home-quick-presets__btn" data-home-preset-kind="AM">Matin</button>
+        <button type="button" class="home-quick-presets__btn" data-home-preset-kind="PM">Soir</button>
       </div>
-</article>
+    </article>
 
     <article class="home-card home-punct-card" aria-label="Ponctualité sur 7 jours">
       <h2 id="homePunctCardTitle">Ponctualité</h2>
@@ -10129,6 +10112,12 @@ body{
         <button class="home-action" id="homeAccountBtn" type="button">Se connecter</button>
       </div>
     </article>
+  </div>
+  <div id="homeWeatherGhost" hidden aria-hidden="true">
+    <div id="homeWxFromNow">—</div>
+    <div id="homeWxFromTitle">Metz</div>
+    <div id="homeWxToNow">—</div>
+    <div id="homeWxToTitle">Luxembourg</div>
   </div>
 
 </section>
@@ -24145,9 +24134,16 @@ function pickNextHourIndex(hourlyTimes){
 async function updateHomeWeather(fromCfg, toCfg){
   const $ = (id)=>document.getElementById(id);
   const riskEl = $('homeWxRisk');
+  const fromTitleEl = $('homeWxFromTitle');
+  const toTitleEl = $('homeWxToTitle');
+  const fromNowEl = $('homeWxFromNow');
+  const toNowEl = $('homeWxToNow');
+  if (!fromTitleEl || !toTitleEl || !fromNowEl || !toNowEl){
+    return;
+  }
   try{
-    $('homeWxFromTitle').textContent = `${fromCfg.label}`;
-    $('homeWxToTitle').textContent = `${toCfg.label}`;
+    fromTitleEl.textContent = `${fromCfg.label}`;
+    toTitleEl.textContent = `${toCfg.label}`;
 
     const [a,b] = await Promise.all([
       fetchOpenMeteo(fromCfg.lat, fromCfg.lon),
@@ -24168,7 +24164,8 @@ async function updateHomeWeather(fromCfg, toCfg){
         </span>
         <span class="wx-details">💧 ${fmtPct(curP)} · 💨 ${fmtWind(curW)}</span>
       `;
-      $(prefix+'Now').innerHTML = nowHtml;
+      const nowEl = $(prefix+'Now');
+      if (nowEl) nowEl.innerHTML = nowHtml;
 
       return { rainProb: curP, windKmh: curW };
     }
@@ -27168,8 +27165,8 @@ async function loadAffluenceDate(dateStr){
     host.classList.add('home-punct-chart-host');
     if (!document.getElementById('homeWxPunctualityChart7d') || !document.getElementById('homeWxPunctualityChartYesterday')){
       host.innerHTML =
-        '<div class="home-punct-chart-wrap"><canvas id="homeWxPunctualityChart7d"></canvas><span class="home-punct-mini-label">J-7</span></div>' +
-        '<div class="home-punct-chart-wrap"><canvas id="homeWxPunctualityChartYesterday"></canvas><span class="home-punct-mini-label">J-1</span></div>';
+        '<div class="home-punct-chart-wrap"><canvas id="homeWxPunctualityChart7d"></canvas><span class="home-punct-mini-label">J-7</span><span id="homePunctQuality7d" class="home-punct-quality">—</span></div>' +
+        '<div class="home-punct-chart-wrap"><canvas id="homeWxPunctualityChartYesterday"></canvas><span class="home-punct-mini-label">J-1</span><span id="homePunctQualityYesterday" class="home-punct-quality">—</span></div>';
     }
     if (!homePunctChart7d) homePunctChart7d = makeDonutChart(document.getElementById('homeWxPunctualityChart7d'));
     if (!homePunctChartYesterday) homePunctChartYesterday = makeDonutChart(document.getElementById('homeWxPunctualityChartYesterday'));
@@ -27195,6 +27192,25 @@ async function loadAffluenceDate(dateStr){
     if (!charts) return;
     setDonutValue(charts.seven, p7);
     setDonutValue(charts.yesterday, py);
+	applyPunctualityQualityLabel('homePunctQuality7d', p7);
+    applyPunctualityQualityLabel('homePunctQualityYesterday', py);
+  }
+
+  function punctualityQuality(pct){
+    var value = Number(pct);
+    if (!Number.isFinite(value)) return { text: '—', cls: '' };
+    if (value >= 90) return { text: 'Bon', cls: 'is-good' };
+    if (value >= 80) return { text: 'Moyen', cls: 'is-mid' };
+    return { text: 'Faible', cls: 'is-bad' };
+  }
+
+  function applyPunctualityQualityLabel(id, pct){
+    var el = document.getElementById(id);
+    if (!el) return;
+    var quality = punctualityQuality(pct);
+    el.textContent = quality.text;
+    el.classList.remove('is-good', 'is-mid', 'is-bad');
+    if (quality.cls) el.classList.add(quality.cls);
   }
 
   async function loadHomePunctualityChart(){
@@ -28733,6 +28749,95 @@ body{ padding-bottom: calc(var(--bottom-bar-height, 58px) + 10px) !important; }
   }
   .home-card[aria-label="Mur de commentaires"] .live-wall-head + .lb-community-actions{
     margin-top: -2px !important;
+  }
+}
+</style>
+
+<style id="home-dashboard-targeted-refresh">
+/* Cible accueil uniquement: remplace météo par tableau rapide, sans casser le reste */
+.home-card[aria-label="Tableau rapide"]{
+  grid-area: weather !important;
+  display:flex !important;
+  flex-direction:column !important;
+  justify-content:center !important;
+  align-items:center !important;
+  text-align:center !important;
+  min-height: 132px;
+}
+.home-card[aria-label="Tableau rapide"] h2{
+  margin-bottom: 8px !important;
+}
+.home-card[aria-label="Tableau rapide"] .home-quick-presets{
+  margin-top: 0 !important;
+  width: min(320px, 100%) !important;
+  gap: 6px !important;
+  background: rgba(5,18,32,.52) !important;
+  border-color: rgba(0,240,255,.22) !important;
+}
+.home-card[aria-label="Info trafic"] .home-quick-presets{ display:none !important; }
+
+/* Ponctualité: ajouter un label de qualité lisible */
+.home-punct-quality{
+  position:absolute;
+  left:50%;
+  bottom:-16px;
+  transform:translateX(-50%);
+  font-size:.56rem;
+  font-weight:800;
+  letter-spacing:.04em;
+  text-transform:uppercase;
+  padding:1px 6px;
+  border-radius:999px;
+  border:1px solid rgba(140,240,255,.22);
+  background: rgba(2,14,24,.72);
+  color:#dffbff;
+  white-space:nowrap;
+}
+.home-punct-quality.is-good{ color:#7df2a4; border-color:rgba(36,194,90,.42); background:rgba(36,194,90,.12); }
+.home-punct-quality.is-mid{ color:#ffd67a; border-color:rgba(255,168,66,.42); background:rgba(255,168,66,.12); }
+.home-punct-quality.is-bad{ color:#ff9aa7; border-color:rgba(255,77,109,.42); background:rgba(255,77,109,.12); }
+
+/* Commentaires: meilleure lisibilité sans augmenter la hauteur du bloc */
+.home-card[aria-label="Mur de commentaires"] .live-wall-feed--home{
+  max-height: 96px !important;
+}
+.home-card[aria-label="Mur de commentaires"] .live-wall-item-text{
+  font-size: .80rem !important;
+  line-height: 1.24 !important;
+}
+.home-card[aria-label="Mur de commentaires"] .live-wall-form input{
+  background: rgba(2,18,30,.86) !important;
+  border:1px solid rgba(126,247,255,.34) !important;
+  color:#ecfbff !important;
+}
+.home-card[aria-label="Mur de commentaires"] .live-wall-form .auth-button{
+  background: linear-gradient(135deg, rgba(0,198,255,.30), rgba(0,240,255,.18)) !important;
+  border-color: rgba(126,247,255,.5) !important;
+  color:#f3feff !important;
+  font-weight:800 !important;
+}
+.home-card[aria-label="Mur de commentaires"] .lb-community-actions{
+  grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  gap:6px !important;
+}
+
+@media (max-width: 700px){
+  .home-card[aria-label="Tableau rapide"]{
+    min-height: 96px !important;
+    padding: 10px 10px 8px !important;
+  }
+  .home-card[aria-label="Tableau rapide"] h2{
+    font-size: .9rem !important;
+    margin-bottom: 6px !important;
+  }
+  .home-card[aria-label="Tableau rapide"] .home-quick-presets{
+    width:100% !important;
+    gap:4px !important;
+  }
+  .home-punct-quality{
+    bottom:-14px;
+    font-size:.52rem;
+    padding:1px 5px;
   }
 }
 </style>
