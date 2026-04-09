@@ -1,8 +1,8 @@
-const CACHE_NAME = 'lbetaillere-v5';
+const CACHE_NAME = 'lbetaillere-v6';
 const ASSETS = [
   './',
-  './index40.html',
-  './index40.html#home',
+  './index42.html',
+  './index42.html#home',
   './manifest.webmanifest',
   './service-worker.js',
   './logoText.png',
