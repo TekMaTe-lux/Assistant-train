@@ -21476,6 +21476,12 @@ function scheduleWeatherAfterTableSettled(){
   let currentUser = null;
   window.currentUser = null;
   const lbGamificationState = { profile: null, ranking: [], myRank: null, me: null, lastFetchAt: 0, inflight: null };
+  let lbProfileCache = null;
+  let lbRankingCache = null;
+  let lbCurrentMe = null;
+  window.lbProfileCache = null;
+  window.lbRankingCache = null;
+  window.lbCurrentMe = null;
   let lbPseudoTooltip = null;
   let lbPseudoTooltipAnchor = null;
 
@@ -22130,6 +22136,29 @@ function scheduleWeatherAfterTableSettled(){
       : '<div class="live-wall-empty">Classement indisponible.</div>';
   }
 
+  function resetGamificationUI(){
+    lbGamificationState.profile = null;
+    lbGamificationState.ranking = [];
+    lbGamificationState.myRank = null;
+    lbGamificationState.me = null;
+    lbGamificationState.lastFetchAt = 0;
+    lbGamificationState.inflight = null;
+    lbProfileCache = null;
+    lbRankingCache = null;
+    lbCurrentMe = null;
+    window.lbProfileCache = null;
+    window.lbRankingCache = null;
+    window.lbCurrentMe = null;
+    const host = $("lbProfileTroupeau");
+    if (host) host.style.display = "none";
+    if ($("lbProfilePseudo")) $("lbProfilePseudo").textContent = "—";
+    if ($("lbProfileGrade")) $("lbProfileGrade").textContent = "—";
+    if ($("lbProfilePoints")) $("lbProfilePoints").textContent = "0 meuh";
+    if ($("lbProfileRank")) $("lbProfileRank").textContent = "—";
+    if ($("lbRankingPodium")) $("lbRankingPodium").innerHTML = '';
+    if ($("lbRankingList")) $("lbRankingList").innerHTML = '<div class="live-wall-empty">Classement indisponible.</div>';
+  }
+
   async function refreshGamificationUI(options = {}){
     const force = !!options.force;
     const ttl = 15000;
@@ -22142,9 +22171,12 @@ function scheduleWeatherAfterTableSettled(){
     lbGamificationState.inflight = (async ()=>{
       try{
         const [profileData, rankingData] = await Promise.all([
-          window.lbIsAuthed ? api('/me/profile', { method:'GET' }).catch(()=> ({})) : Promise.resolve({}),
-          api('/ranking', { method:'GET' }).catch(()=> ({}))
+          window.lbIsAuthed ? api('/me/profile', { method:'GET', cache: 'no-store' }).catch(()=> ({})) : Promise.resolve({}),
+          api('/ranking', { method:'GET', cache: 'no-store' }).catch(()=> ({}))
         ]);
+        console.log("PROFILE_FRESH", profileData);
+        console.log("RANKING_FRESH", rankingData);
+        console.log("RANKING_ME_FRESH", rankingData?.me);
         const profile = profileData?.profile || profileData?.me || profileData || {};
         const ranking = normalizeRankingList(rankingData);
         const profileRank = Number(profile?.rank || 0) || null;
@@ -22160,6 +22192,12 @@ function scheduleWeatherAfterTableSettled(){
         lbGamificationState.me = mePayload;
         lbGamificationState.myRank = profileRank || detectedRank || null;
         lbGamificationState.lastFetchAt = Date.now();
+		lbProfileCache = lbGamificationState.profile;
+        lbRankingCache = lbGamificationState.ranking;
+        lbCurrentMe = lbGamificationState.me;
+        window.lbProfileCache = lbProfileCache;
+        window.lbRankingCache = lbRankingCache;
+        window.lbCurrentMe = lbCurrentMe;
       }catch(err){
         console.warn('GAMIFICATION_REFRESH_ERROR', err);
       }
@@ -22168,9 +22206,13 @@ function scheduleWeatherAfterTableSettled(){
     try{ await lbGamificationState.inflight; } finally { lbGamificationState.inflight = null; }
   }
   window.refreshGamificationUI = refreshGamificationUI;
-  
 
-
+  if ('serviceWorker' in navigator){
+    navigator.serviceWorker.getRegistration().then((reg)=>{
+      if (reg) console.log('SW_REG_ACTIVE', reg.scope);
+      else console.log('SW_REG_NONE');
+    }).catch(()=>{});
+  }
 
   // ===== (UI) Ajuste automatiquement l'échelle des schémas de rame dans les favoris (mobile) =====
   function lbFitFavSchemas(){
@@ -23419,12 +23461,19 @@ if (statsEl){
       if (typeof window.updateStatsConsoleAuth === "function") {
         window.updateStatsConsoleAuth(false);
       }
-      msg("ℹ️ Non connecté");
+      resetGamificationUI();
+	  msg("ℹ️ Non connecté");
       refreshGamificationUI({ force: true }).catch(()=>{});
       try{ window.lbComments?.refresh(); }catch(e){}
     }
     updateQuickAddButton();
     updateSelectionApplyButton();
+  };
+
+  const refreshAuthState = async () => {
+    try{ await checkAuth(); }catch(_){}
+    await refreshAccountUI();
+    console.log("AUTH_REFRESH_DONE");
   };
 
   const openBtn = $("lbBtnOpenAuth");
@@ -23476,8 +23525,9 @@ if (statsEl){
 
     try {
       await api("/auth/login", { method: "POST", body: JSON.stringify({ email, password }) });
-      msg("✅ Connecté");
-      await refreshAccountUI();
+      msg("✅ Connecté");	  
+      await refreshAuthState();
+      await refreshGamificationUI({ force: true });
       closeModal();
     } catch (e) {
       msg("❌ " + e, true);
@@ -23518,8 +23568,10 @@ if (statsEl){
   logoutBtn.addEventListener("click", async () => {
     try {
       await api("/auth/logout", { method: "POST", body: "{}" });
+      resetGamificationUI();
       msg("✅ Déconnecté");
-      await refreshAccountUI();
+      await refreshAuthState();
+      await refreshGamificationUI({ force: true });
     } catch (e) {
       msg("❌ " + e, true);
     }
