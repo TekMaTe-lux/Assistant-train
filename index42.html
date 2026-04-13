@@ -3477,6 +3477,7 @@ body.page-carte .train-detail-panel{
   text-shadow:0 0 6px rgba(255,209,90,.7);
 }
 
+
 .table-toolbar{
   display:flex;
   align-items:center;
@@ -19418,11 +19419,11 @@ async function chargerEtAfficherAlertes() {
       // ⚙️ sets construits à partir des trains AFFICHÉS
       const sets = buildDisplayedFilters(ymd);
 
-	  document.querySelectorAll('th[data-train-number]').forEach((header) => {
+      document.querySelectorAll('th[data-train-number]').forEach((header) => {
         header.classList.remove('reduced-seats');
         header.removeAttribute('data-alert-key-main');
         header.querySelectorAll('.reduced-seat-icon, .train-alert-icon').forEach((node) => node.remove());
-      }); 
+      });
 
       // 1) Filtrage strict : actif + touche nos trips/routes/stops affichés
       let alertesFiltres = alertes.filter(a => {
@@ -25159,18 +25160,68 @@ function lbRenderHomeFavPreview(){
     return `<span class="fav-state-badge fav-state-${key}">${escapeHtml(label)}</span>`;
   };
 
+  const compactStationLabel = (name) => {
+    const base = String(name || '').trim();
+    if (!base) return '';
+    const map = {
+      'Luxembourg': 'Lux',
+      'Thionville': 'Thionv.',
+      'Hettange-Grande': 'Hettange',
+      'Pont-à-Mousson': 'PAM',
+      'Maizières-lès-Metz': 'Maizières',
+      'Pagny-sur-Moselle': 'Pagny'
+    };
+    return map[base] || base;
+  };
+
+  const parseFavMeta = (metaTxt) => {
+    const raw = String(metaTxt || '').replace(/\s+/g, ' ').trim();
+    if (!raw) return { route: '—', timeRange: '—' };
+
+    const timeMatches = Array.from(raw.matchAll(/\b([01]?\d|2[0-3])[:h]([0-5]\d)\b/g))
+      .map((m) => `${m[1].padStart(2,'0')}:${m[2]}`);
+    const timeRange = timeMatches.length >= 2 ? `${timeMatches[0]} — ${timeMatches[1]}` : (timeMatches[0] || '—');
+
+    const stationCandidates = Array.isArray(garesParLigne)
+      ? garesParLigne.map((g) => g && g.nom).filter(Boolean)
+      : [];
+    const found = stationCandidates
+      .map((nom) => ({ nom, idx: raw.toLowerCase().indexOf(String(nom).toLowerCase()) }))
+      .filter((x) => x.idx >= 0)
+      .sort((a, b) => a.idx - b.idx);
+
+    let route = '—';
+    if (found.length >= 2) {
+      const start = compactStationLabel(found[0].nom);
+      const end = compactStationLabel(found[1].nom);
+      route = `${start} → ${end}`;
+    } else {
+      const fallback = raw
+        .replace(/\b([01]?\d|2[0-3])[:h]([0-5]\d)\b/g, '')
+        .replace(/\s+/g, ' ')
+        .trim();
+      route = fallback || '—';
+    }
+
+    return { route, timeRange };
+  };
+
   const buildRow = (k, data, label) => {
     const trainTxt = data.train && data.train !== '—' ? data.train : '—';
     const metaTxt  = data.meta && data.meta !== '—' ? data.meta : '';
-    const safeMeta = metaTxt ? escapeHtml(metaTxt) : '<span style="opacity:.55">—</span>';
+    const parsed = parseFavMeta(metaTxt);
 
     return `
       <div class="home-fav-row" data-fav-k="${k}" role="button" tabindex="0" aria-label="Ouvrir favoris ${label}">
-        <div class="home-fav-left">
-          <div class="home-fav-train">${escapeHtml(trainTxt)} <span style="opacity:.6;font-weight:800;letter-spacing:.06em;">${label}</span></div>
-          <div class="home-fav-meta">${safeMeta}</div>
+        <div class="home-fav-head">
+          <div class="home-fav-trainline">
+            <span class="home-fav-train">${escapeHtml(trainTxt)}</span>
+            <span class="home-fav-moment">${escapeHtml(label)}</span>
+          </div>
+          <div class="fav-train-badge home-fav-badge">${renderBadge(data.state)}</div>
         </div>
-        <div class="fav-train-badge home-fav-badge">${renderBadge(data.state)}</div>
+        <div class="home-fav-route">${escapeHtml(parsed.route)}</div>
+        <div class="home-fav-time">${escapeHtml(parsed.timeRange)}</div>
       </div>
     `;
   };
@@ -26580,9 +26631,9 @@ async function loadAffluenceDate(dateStr){
     });
   }
 
-    let lastHasTable = hasGeneratedTable();
-	const mo = new MutationObserver(() => {
-	const hasTableNow = hasGeneratedTable();
+  let lastHasTable = hasGeneratedTable();
+  const mo = new MutationObserver(() => {
+    const hasTableNow = hasGeneratedTable();
 
     if (hasTableNow !== lastHasTable) {
       lastHasTable = hasTableNow;
@@ -28967,23 +29018,75 @@ body{ padding-bottom: calc(var(--bottom-bar-height, 58px) + 10px) !important; }
     margin-top: 4px !important;
 	grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
   }
-  .home-fav-row{
-    padding: 5px 7px !important;
+  #homeFavSlot.home-fav-preview{
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
     gap: 6px !important;
+  }
+  #homeFavSlot .home-fav-row{
+    padding: 7px 8px !important;
     border-radius: 12px !important;
+    gap: 4px !important;
+    display: flex !important;
+    flex-direction: column !important;
+    min-width: 0 !important;
   }
-  .home-fav-train{
-    font-size: .7rem !important;
+  #homeFavSlot .home-fav-head{
+    display:flex !important;
+    align-items:flex-start !important;
+    justify-content:space-between !important;
+    gap:6px !important;
+    min-width:0 !important;
   }
-  .home-fav-meta{
-    font-size: .62rem !important;
-    line-height: 1.12 !important;
+  #homeFavSlot .home-fav-trainline{
+    display:flex !important;
+    align-items:center !important;
+    gap:5px !important;
+    min-width:0 !important;
   }
-  .home-fav-badge,
-  .home-fav-row .fav-state-badge,
-  .home-fav-pill{
-    font-size: .54rem !important;
-    padding: 3px 6px !important;
+  #homeFavSlot .home-fav-train{
+    font-size: .76rem !important;
+    font-weight: 900 !important;
+    letter-spacing: .03em !important;
+    white-space: nowrap !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+  }
+  #homeFavSlot .home-fav-moment{
+    font-size:.56rem !important;
+    font-weight:800 !important;
+    padding:2px 6px !important;
+    border-radius:999px !important;
+    border:1px solid rgba(0,240,255,.32) !important;
+    background:rgba(0,240,255,.10) !important;
+    color:#9ef8ff !important;
+    text-transform:uppercase !important;
+    white-space:nowrap !important;
+    flex:0 0 auto !important;
+  }
+  #homeFavSlot .home-fav-route{
+    font-size:.64rem !important;
+    color:#d6efff !important;
+    white-space: nowrap !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+    line-height:1.12 !important;
+  }
+  #homeFavSlot .home-fav-time{
+    font-size:.68rem !important;
+    font-weight:800 !important;
+    color:#8ef8ff !important;
+    letter-spacing:.02em !important;
+    line-height:1.1 !important;
+    font-variant-numeric: tabular-nums !important;
+    white-space: nowrap !important;
+  }
+  #homeFavSlot .home-fav-badge,
+  #homeFavSlot .home-fav-row .fav-state-badge,
+  #homeFavSlot .home-fav-pill{
+    font-size: .52rem !important;
+    padding: 2px 6px !important;
+    white-space: nowrap !important;
+    flex: 0 0 auto !important;
   }
   .home-card[forwarding="ber"]{
     display: none !important;
