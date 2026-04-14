@@ -5987,6 +5987,66 @@ body.modal-open{ overflow:hidden; }
 }
 .lb-profile-chip b{ display:block; font-size:.7rem; color:#8da8bc; font-weight:600; }
 .lb-profile-chip span{ display:block; margin-top:2px; font-size:.82rem; color:#e2f7ff; font-weight:700; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.lb-grade-card{
+  margin: 0 0 12px;
+  border: 1px solid rgba(0,240,255,.25);
+  border-radius: 14px;
+  background: radial-gradient(circle at 50% -20%, rgba(0,255,255,.15), transparent 60%), rgba(5,16,28,.6);
+  box-shadow: inset 0 0 14px rgba(0,220,255,.08);
+  padding: 12px 10px;
+  text-align: center;
+}
+.lb-grade-card .lb-grade-label{
+  font-size: .68rem;
+  text-transform: uppercase;
+  letter-spacing: .08em;
+  color:#8fdaf2;
+  margin-bottom: 8px;
+}
+.lb-grade-card img{
+  width: 86px;
+  height: 86px;
+  border-radius: 50%;
+  object-fit: cover;
+  border: 1px solid rgba(0,240,255,.35);
+  box-shadow: 0 0 18px rgba(0,255,255,.2);
+  background: rgba(8,18,32,.75);
+}
+.lb-grade-name{
+  margin-top: 8px;
+  font-size: .9rem;
+  font-weight: 700;
+  color: #e6fbff;
+}
+.lb-grade-points{
+  margin-top: 3px;
+  font-size: .75rem;
+  color:#9fc1d7;
+}
+.lb-grade-progress{
+  margin: 10px auto 0;
+  width: min(280px, 100%);
+}
+.lb-grade-progress-track{
+  width: 100%;
+  height: 9px;
+  border-radius: 999px;
+  border: 1px solid rgba(0,240,255,.28);
+  background: rgba(8,18,32,.75);
+  overflow: hidden;
+}
+.lb-grade-progress-fill{
+  height: 100%;
+  width: 0%;
+  background: linear-gradient(90deg, #20d6ff, #79f9ff);
+  box-shadow: 0 0 12px rgba(70,240,255,.45);
+  transition: width .25s ease;
+}
+.lb-grade-next{
+  margin-top: 5px;
+  font-size: .7rem;
+  color:#8da8bc;
+}
 .lb-ranking-head{
   display:flex;
   align-items:center;
@@ -10617,6 +10677,18 @@ body{
     <div class="lb-auth-card" role="dialog" aria-modal="true" aria-labelledby="lbPrefsTitle">
       <button id="lbBtnClosePrefs" class="lb-auth-close tron-close-button" type="button" aria-label="Fermer"></button>
       <h3 id="lbPrefsTitle">Mes préférences</h3>
+      <div id="lbPrefsGradeCard" class="lb-grade-card" style="display:none;">
+        <div class="lb-grade-label">Niveau du troupeau</div>
+        <img id="lbGradeImage" src="/Mouton%20%C3%A9gar%C3%A9.png" alt="Grade du profil">
+        <div id="lbGradeName" class="lb-grade-name">Mouton égaré</div>
+        <div id="lbGradePoints" class="lb-grade-points">0 meuh</div>
+        <div class="lb-grade-progress">
+          <div class="lb-grade-progress-track">
+            <div id="lbGradeProgressFill" class="lb-grade-progress-fill"></div>
+          </div>
+          <div id="lbGradeNext" class="lb-grade-next">Prochain niveau : —</div>
+        </div>
+      </div>
       <p class="lb-prefs-note">Personnalise tes listes rapides (10 trains max).</p>
       <div class="lb-prefs-grid">
         <div class="lb-prefs-section" data-preset="AM">
@@ -21761,6 +21833,16 @@ function scheduleWeatherAfterTableSettled(){
   let currentUser = null;
   window.currentUser = null;
   const lbGamificationState = { profile: null, ranking: [], myRank: null, me: null, lastFetchAt: 0, inflight: null };
+  const LB_GRADE_LEVELS = [
+    { name: 'Mouton égaré', min: 0, image: 'Mouton égaré.png' },
+    { name: 'Poulet du Quai', min: 120, image: 'Poulet du Quai.png' },
+    { name: 'Porc en déroute', min: 280, image: 'Porc en déroute.png' },
+    { name: 'Porc entassé du couloir', min: 500, image: 'Porc entassé du couloir.png' },
+    { name: 'Bélier du sas', min: 800, image: 'Bélier du sas.png' },
+    { name: 'Architecte Chèvre de la galère', min: 1150, image: 'Architecte Chèvre de la galère.png' },
+    { name: 'Golden Vache', min: 1550, image: 'Golden Vache.png' },
+    { name: 'Ministre dindon du chaos ferroviaire', min: 2000, image: 'Ministre dindon du chaos ferroviaire.png' }
+  ];
   let lbProfileCache = null;
   let lbRankingCache = null;
   let lbCurrentMe = null;
@@ -21772,69 +21854,54 @@ function scheduleWeatherAfterTableSettled(){
 
   const safePseudo = () => String(lbPrefsCache?.pseudo || '').trim().slice(0,24);
   const isCommentingAllowed = () => window.lbIsAuthed === true;
-
-  const PROFILE_GRADE_TIERS = [
-    { min: 0, label: 'Mouton égaré' },
-    { min: 25, label: 'Veau du quai' },
-    { min: 70, label: 'Vache des rails' },
-    { min: 140, label: 'Taureau express' },
-    { min: 230, label: 'Maître de la bétaillère' },
-    { min: 350, label: 'Légende du troupeau' }
-  ];
-  const PRESENCE_DAILY_BONUS_POINTS = 0.5;
-  const presenceDailyBonusStorageKey = (day = toIsoDay()) => `lb_presence_daily_bonus_${day}`;
-  const normalizeOneDecimal = (value)=>{
-    const num = Number(value || 0);
-    if (!Number.isFinite(num)) return 0;
-    return Math.round(num * 10) / 10;
-  };
-  const formatPointsValue = (value)=>{
-    const normalized = normalizeOneDecimal(value);
-    return Number.isInteger(normalized) ? String(normalized) : normalized.toFixed(1);
-  };
-  const resolveGradeFromPoints = (points, fallback = 'Mouton égaré')=>{
-    const numeric = Number(points);
-    if (!Number.isFinite(numeric)) return String(fallback || 'Mouton égaré').trim() || 'Mouton égaré';
-    let current = PROFILE_GRADE_TIERS[0]?.label || 'Mouton égaré';
-    PROFILE_GRADE_TIERS.forEach((tier)=>{
-      if (numeric >= Number(tier.min || 0)) current = tier.label;
-    });
-    return current;
-  };
-  const hasPresenceDailyBonus = (accountId, day = toIsoDay())=>{
-    const key = String(accountId || '').trim();
-    if (!key) return false;
-    try{
-      const store = JSON.parse(localStorage.getItem(presenceDailyBonusStorageKey(day)) || '{}');
-      return Number(store?.[key] || 0) >= PRESENCE_DAILY_BONUS_POINTS;
-    }catch(_){
-      return false;
+  const normalizeGradeKey = (v) => String(v || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
+  function resolveGradeMeta(gradeLabel, points){
+    const key = normalizeGradeKey(gradeLabel);
+    let idx = LB_GRADE_LEVELS.findIndex((it)=> normalizeGradeKey(it.name) === key);
+    if (idx < 0) idx = LB_GRADE_LEVELS.reduce((best, it, i)=> (points >= it.min ? i : best), 0);
+    const current = LB_GRADE_LEVELS[Math.max(0, idx)] || LB_GRADE_LEVELS[0];
+    const next = LB_GRADE_LEVELS[idx + 1] || null;
+    return { current, next };
+  }
+  function renderPrefsGradeCard(grade, points){
+    const card = $("lbPrefsGradeCard");
+    if (!card) return;
+    const nameEl = $("lbGradeName");
+    const pointsEl = $("lbGradePoints");
+    const imageEl = $("lbGradeImage");
+    const fillEl = $("lbGradeProgressFill");
+    const nextEl = $("lbGradeNext");
+    const safePoints = Number(points || 0) || 0;
+    const { current, next } = resolveGradeMeta(grade, safePoints);
+    if (nameEl) nameEl.textContent = current?.name || String(grade || 'Mouton égaré');
+    if (pointsEl) pointsEl.textContent = `${safePoints} meuh`;
+    if (imageEl){
+      imageEl.src = `/${encodeURI(current?.image || 'Mouton égaré.png')}`;
+      imageEl.alt = `Grade ${current?.name || 'Mouton égaré'}`;
     }
-  };
-  const grantPresenceDailyBonus = (accountId, day = toIsoDay())=>{
-    const key = String(accountId || '').trim();
-    if (!key) return;
-    try{
-      const storageKey = presenceDailyBonusStorageKey(day);
-      const store = JSON.parse(localStorage.getItem(storageKey) || '{}');
-      store[key] = PRESENCE_DAILY_BONUS_POINTS;
-      localStorage.setItem(storageKey, JSON.stringify(store));
-    }catch(_){}
-  };
-  const getPresenceDailyBonusPoints = (accountId, day = toIsoDay())=>
-    hasPresenceDailyBonus(accountId, day) ? PRESENCE_DAILY_BONUS_POINTS : 0;
-  const getViewerPresenceBonusPoints = ()=> getPresenceDailyBonusPoints(getCurrentPresenceIdentity());
-  const renderPointsValue = (it) => {
-    const base = Number(it?.authorPoints ?? it?.points ?? 0) || 0;
-    const accountId = normalizeIdentityLite(it?.accountId || '');
-    const viewerId = normalizeIdentityLite(getCurrentPresenceIdentity() || '');
-    const bonus = accountId && viewerId && accountId === viewerId ? getViewerPresenceBonusPoints() : 0;
-    return normalizeOneDecimal(base + bonus);
-  };
-  const renderGradeValue = (it) => {
-    const baseGrade = String(it?.authorGrade || it?.grade || 'Mouton égaré').trim() || 'Mouton égaré';
-    return resolveGradeFromPoints(renderPointsValue(it), baseGrade);
-  };
+    if (fillEl){
+      const span = next ? Math.max(1, (next.min - current.min)) : 1;
+      const progress = next ? Math.min(100, Math.max(0, ((safePoints - current.min) / span) * 100)) : 100;
+      fillEl.style.width = `${progress.toFixed(1)}%`;
+    }
+    if (nextEl){
+      if (next){
+        const remain = Math.max(0, next.min - safePoints);
+        nextEl.textContent = `Prochain niveau : ${next.name} · ${remain} meuh restants`;
+      } else {
+        nextEl.textContent = 'Niveau max atteint 🏆';
+      }
+    }
+    card.style.display = window.lbIsAuthed ? "block" : "none";
+  }
+
+  const renderPseudoValue = (it) => String(it?.displayPseudo || it?.pseudo || 'Voyageur').trim().slice(0, 24) || 'Voyageur';
+  const renderGradeValue = (it) => String(it?.authorGrade || it?.grade || 'Mouton égaré').trim() || 'Mouton égaré';
   const renderPointsValue = (it) => Number(it?.authorPoints ?? it?.points ?? 0) || 0;
   const normalizeIdentityLite = (value) => String(value || '').trim().toLowerCase().replace(/[^a-z0-9]+/g,'');
 
@@ -21856,7 +21923,7 @@ function scheduleWeatherAfterTableSettled(){
     closePseudoTooltip();
     const tip = document.createElement('div');
     tip.className = 'lb-pseudo-tooltip';
-    tip.innerHTML = `<strong>${escapeHtml(pseudo)}</strong><div>${escapeHtml(grade)}</div><div>${escapeHtml(formatPointsValue(points))} meuh</div>`;
+    tip.innerHTML = `<strong>${escapeHtml(pseudo)}</strong><div>${escapeHtml(grade)}</div><div>${escapeHtml(String(points))} meuh</div>`;
     document.body.appendChild(tip);
     const rect = anchor.getBoundingClientRect();
     const margin = 8;
@@ -21870,7 +21937,7 @@ function scheduleWeatherAfterTableSettled(){
   }
 
   function buildPseudoTriggerHtml(item){
-    return `<span class="lb-pseudo-trigger" data-lb-pseudo-trigger data-pseudo="${escapeHtml(renderPseudoValue(item))}" data-grade="${escapeHtml(renderGradeValue(item))}" data-points="${escapeHtml(formatPointsValue(renderPointsValue(item)))}">${escapeHtml(renderPseudoValue(item))}</span>`;
+    return `<span class="lb-pseudo-trigger" data-lb-pseudo-trigger data-pseudo="${escapeHtml(renderPseudoValue(item))}" data-grade="${escapeHtml(renderGradeValue(item))}" data-points="${escapeHtml(String(renderPointsValue(item)))}">${escapeHtml(renderPseudoValue(item))}</span>`;
   }
   window.buildPseudoTriggerHtml = buildPseudoTriggerHtml;
 	
@@ -22448,23 +22515,20 @@ function scheduleWeatherAfterTableSettled(){
     const p = lbGamificationState.profile || {};
     const ranking = Array.isArray(lbGamificationState.ranking) ? lbGamificationState.ranking : [];
     const pseudo = String(p.display_pseudo || p.pseudo || safePseudo() || currentUser?.pseudo || 'Voyageur').trim();
+    const grade = String(p.grade || 'Mouton égaré').trim();
     const points = Number(p.points || 0) || 0;
-	const meBonus = getViewerPresenceBonusPoints();
-    const displayedPoints = normalizeOneDecimal(points + meBonus);
-    const grade = resolveGradeFromPoints(displayedPoints, String(p.grade || 'Mouton égaré').trim());
     const myRank = Number(lbGamificationState.myRank || p.rank || 0) || null;
     if ($("lbProfilePseudo")) $("lbProfilePseudo").textContent = pseudo || "—";
     if ($("lbProfileGrade")) $("lbProfileGrade").textContent = grade || "—";
-    if ($("lbProfilePoints")) $("lbProfilePoints").textContent = `${formatPointsValue(displayedPoints)} meuh`;
+    if ($("lbProfilePoints")) $("lbProfilePoints").textContent = `${points} meuh`;
     if ($("lbProfileRank")) $("lbProfileRank").textContent = myRank ? `#${myRank}` : "—";
+    renderPrefsGradeCard(grade, points);
 
     const top3 = ranking.slice(0, 3);
     podium.innerHTML = [2,1,3].map((rankNum)=>{
       const item = top3.find((it)=> it.rank === rankNum);
       if (!item) return `<div class="lb-ranking-podium-item pos-${rankNum}"><div class="rank">#${rankNum}</div><div class="pseudo">—</div></div>`;
-      const rowPoints = normalizeOneDecimal((Number(item.points || 0) || 0) + ((myRank && item.rank === myRank) ? meBonus : 0));
-      const rowGrade = resolveGradeFromPoints(rowPoints, item.grade);
-      return `<div class="lb-ranking-podium-item pos-${rankNum}"><div class="rank">#${item.rank}</div><div class="pseudo">${escapeHtml(item.pseudo)}</div><div class="meta">${escapeHtml(rowGrade)} · ${escapeHtml(formatPointsValue(rowPoints))}</div></div>`;
+      return `<div class="lb-ranking-podium-item pos-${rankNum}"><div class="rank">#${item.rank}</div><div class="pseudo">${escapeHtml(item.pseudo)}</div><div class="meta">${escapeHtml(item.grade)} · ${escapeHtml(String(item.points))}</div></div>`;
     }).join('');
 
     const mode = filter.value || 'top10';
@@ -22481,12 +22545,7 @@ function scheduleWeatherAfterTableSettled(){
       }
     }
     listEl.innerHTML = rows.length
-      ? rows.map((it)=>{
-          const isMe = !!(myRank && it.rank === myRank);
-          const rowPoints = normalizeOneDecimal((Number(it.points || 0) || 0) + (isMe ? meBonus : 0));
-          const rowGrade = resolveGradeFromPoints(rowPoints, it.grade);
-          return `<div class="lb-ranking-row${isMe ? ' me' : ''}"><span>#${it.rank}</span><span title="${escapeHtml(rowGrade)}">${escapeHtml(it.pseudo)}</span><span>${escapeHtml(formatPointsValue(rowPoints))} 🐮</span></div>`;
-        }).join('')
+      ? rows.map((it)=> `<div class="lb-ranking-row${(myRank && it.rank === myRank) ? ' me' : ''}"><span>#${it.rank}</span><span title="${escapeHtml(it.grade)}">${escapeHtml(it.pseudo)}</span><span>${escapeHtml(String(it.points))} 🐮</span></div>`).join('')
       : '<div class="live-wall-empty">Classement indisponible.</div>';
   }
 
@@ -22509,6 +22568,7 @@ function scheduleWeatherAfterTableSettled(){
     if ($("lbProfileGrade")) $("lbProfileGrade").textContent = "—";
     if ($("lbProfilePoints")) $("lbProfilePoints").textContent = "0 meuh";
     if ($("lbProfileRank")) $("lbProfileRank").textContent = "—";
+    renderPrefsGradeCard('Mouton égaré', 0);
     if ($("lbRankingPodium")) $("lbRankingPodium").innerHTML = '';
     if ($("lbRankingList")) $("lbRankingList").innerHTML = '<div class="live-wall-empty">Classement indisponible.</div>';
   }
@@ -31789,15 +31849,7 @@ body{ padding-bottom: calc(var(--bottom-bar-height, 58px) + 10px) !important; }
     }
     await clearMyPresence({ keepOptIn: true });
     const accountId = getCurrentPresenceIdentity();
-    const dayKey = toIsoDay();
-    const shouldAwardDailyBonus = !hasPresenceDailyBonus(accountId, dayKey);
-    const payload = {
-      message: `[PRESENCE] TER ${key} — ${dayKey}`,
-      scope:'presence',
-      train_number:key,
-      account_id: accountId,
-      points_bonus: shouldAwardDailyBonus ? PRESENCE_DAILY_BONUS_POINTS : 0
-    };
+    const payload = { message: `[PRESENCE] TER ${key} — ${toIsoDay()}`, scope:'presence', train_number:key, account_id: accountId };
     try{
       const res = await window.fetchCommentsApi('', {
         method:'POST',
@@ -31807,12 +31859,8 @@ body{ padding-bottom: calc(var(--bottom-bar-height, 58px) + 10px) !important; }
       let data = null;
       try { data = await res.json(); } catch(_){ }
       if (!res.ok) throw new Error(data?.error || `HTTP ${res.status}`);
-	  if (shouldAwardDailyBonus){
-        grantPresenceDailyBonus(accountId, dayKey);
-      }
       await loadPresences();
       refreshLiveModal();
-	  if (typeof window.refreshGamificationUI === 'function') window.refreshGamificationUI({ force: true }).catch(()=>{});
     }catch(err){
       console.error('PRESENCE_POST_ERROR', err);
       return;
