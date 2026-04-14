@@ -26107,19 +26107,64 @@ function selectAffTrain(num,stopIndex=0){
 
     // build sparkline points
     const pts = stops
-      .map((s,i)=>({i, p: toPct(s.globalOcc ?? s.pct ?? s.globalPct ?? s.occPct)}))
+      .map((s,i)=>({
+        i,
+        p: toPct(s.globalOcc ?? s.pct ?? s.globalPct ?? s.occPct),
+        station: String(s?.station || s?.name || '').trim(),
+        hhmm: String(s?.hhmm || '').trim()
+      }))
       .filter(o=>o.p!=null);
     const spark = (()=>{
       if (pts.length < 2) return '';
-      const W=220, H=56, pad=6;
+      const W=220, H=56;
+      const padL=22, padR=6, padT=4, padB=12;
       const xs = pts.map(o=>o.i);
       const minX = Math.min(...xs), maxX=Math.max(...xs);
-      const scaleX = (i)=> pad + (maxX===minX ? 0 : ((i-minX)/(maxX-minX))*(W-2*pad));
-      const scaleY = (p)=> pad + ((100-p)/100)*(H-2*pad);
+      const scaleX = (i)=> padL + (maxX===minX ? 0 : ((i-minX)/(maxX-minX))*(W-padL-padR));
+      const scaleY = (p)=> padT + ((100-p)/100)*(H-padT-padB);
       const d = pts.map(o=>`${scaleX(o.i).toFixed(1)},${scaleY(o.p).toFixed(1)}`).join(' ');
+	  const yTicks = [100, 50, 0];
+      const grid = yTicks.map((v)=>{
+        const y = scaleY(v).toFixed(1);
+        return `<line x1="${padL}" y1="${y}" x2="${W-padR}" y2="${y}" stroke="rgba(180,230,255,.15)" stroke-width="1"></line>`;
+      }).join('');
+      const axis = yTicks.map((v)=>{
+        const y = scaleY(v).toFixed(1);
+        return `<text x="${padL-3}" y="${Number(y)+3}" text-anchor="end" font-size="7" fill="rgba(195,235,255,.78)">${v}%</text>`;
+      }).join('');
+      const compactName = (name)=>{
+        const n = String(name || '').trim();
+        if (!n) return '';
+        return n.length > 12 ? `${n.slice(0, 11)}…` : n;
+      };
+      const keyIdx = (() => {
+        const last = pts.length - 1;
+        const mid = Math.floor(last / 2);
+        let peak = 0;
+        for (let i = 1; i < pts.length; i++) if (pts[i].p > pts[peak].p) peak = i;
+        const picks = Array.from(new Set([0, mid, peak, last])).sort((a,b)=>a-b);
+        return picks.length > 4 ? [0, peak, last] : picks;
+      })();
+      const keyDots = keyIdx.map((idx)=>{
+        const o = pts[idx];
+        const x = scaleX(o.i), y = scaleY(o.p);
+        return `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="1.7" fill="#8ef8ff" />`;
+      }).join('');
+      const keyLabels = keyIdx.map((idx)=>{
+        const o = pts[idx];
+        const x = scaleX(o.i);
+        const txt = compactName(o.station);
+        if (!txt) return '';
+        const anchor = (idx === 0) ? 'start' : ((idx === pts.length - 1) ? 'end' : 'middle');
+        return `<text x="${x.toFixed(1)}" y="${H-1}" text-anchor="${anchor}" font-size="6.4" fill="rgba(190,235,255,.75)">${safeEscape(txt)}</text>`;
+      }).join('');
       return `<svg class="fav-spark" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" aria-label="Courbe affluence">
-        <polyline fill="none" stroke="rgba(0,255,255,.85)" stroke-width="2" points="${d}"></polyline>
+        ${grid}
         <polyline fill="none" stroke="rgba(0,255,255,.18)" stroke-width="6" points="${d}"></polyline>
+		<polyline fill="none" stroke="rgba(0,255,255,.85)" stroke-width="2" points="${d}"></polyline>
+        ${keyDots}
+        ${axis}
+        ${keyLabels}
       </svg>`;
     })();
 
