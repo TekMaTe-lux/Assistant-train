@@ -21773,8 +21773,68 @@ function scheduleWeatherAfterTableSettled(){
   const safePseudo = () => String(lbPrefsCache?.pseudo || '').trim().slice(0,24);
   const isCommentingAllowed = () => window.lbIsAuthed === true;
 
-  const renderPseudoValue = (it) => String(it?.displayPseudo || it?.pseudo || 'Voyageur').trim().slice(0, 24) || 'Voyageur';
-  const renderGradeValue = (it) => String(it?.authorGrade || it?.grade || 'Mouton égaré').trim() || 'Mouton égaré';
+  const PROFILE_GRADE_TIERS = [
+    { min: 0, label: 'Mouton égaré' },
+    { min: 25, label: 'Veau du quai' },
+    { min: 70, label: 'Vache des rails' },
+    { min: 140, label: 'Taureau express' },
+    { min: 230, label: 'Maître de la bétaillère' },
+    { min: 350, label: 'Légende du troupeau' }
+  ];
+  const PRESENCE_DAILY_BONUS_POINTS = 0.5;
+  const presenceDailyBonusStorageKey = (day = toIsoDay()) => `lb_presence_daily_bonus_${day}`;
+  const normalizeOneDecimal = (value)=>{
+    const num = Number(value || 0);
+    if (!Number.isFinite(num)) return 0;
+    return Math.round(num * 10) / 10;
+  };
+  const formatPointsValue = (value)=>{
+    const normalized = normalizeOneDecimal(value);
+    return Number.isInteger(normalized) ? String(normalized) : normalized.toFixed(1);
+  };
+  const resolveGradeFromPoints = (points, fallback = 'Mouton égaré')=>{
+    const numeric = Number(points);
+    if (!Number.isFinite(numeric)) return String(fallback || 'Mouton égaré').trim() || 'Mouton égaré';
+    let current = PROFILE_GRADE_TIERS[0]?.label || 'Mouton égaré';
+    PROFILE_GRADE_TIERS.forEach((tier)=>{
+      if (numeric >= Number(tier.min || 0)) current = tier.label;
+    });
+    return current;
+  };
+  const hasPresenceDailyBonus = (accountId, day = toIsoDay())=>{
+    const key = String(accountId || '').trim();
+    if (!key) return false;
+    try{
+      const store = JSON.parse(localStorage.getItem(presenceDailyBonusStorageKey(day)) || '{}');
+      return Number(store?.[key] || 0) >= PRESENCE_DAILY_BONUS_POINTS;
+    }catch(_){
+      return false;
+    }
+  };
+  const grantPresenceDailyBonus = (accountId, day = toIsoDay())=>{
+    const key = String(accountId || '').trim();
+    if (!key) return;
+    try{
+      const storageKey = presenceDailyBonusStorageKey(day);
+      const store = JSON.parse(localStorage.getItem(storageKey) || '{}');
+      store[key] = PRESENCE_DAILY_BONUS_POINTS;
+      localStorage.setItem(storageKey, JSON.stringify(store));
+    }catch(_){}
+  };
+  const getPresenceDailyBonusPoints = (accountId, day = toIsoDay())=>
+    hasPresenceDailyBonus(accountId, day) ? PRESENCE_DAILY_BONUS_POINTS : 0;
+  const getViewerPresenceBonusPoints = ()=> getPresenceDailyBonusPoints(getCurrentPresenceIdentity());
+  const renderPointsValue = (it) => {
+    const base = Number(it?.authorPoints ?? it?.points ?? 0) || 0;
+    const accountId = normalizeIdentityLite(it?.accountId || '');
+    const viewerId = normalizeIdentityLite(getCurrentPresenceIdentity() || '');
+    const bonus = accountId && viewerId && accountId === viewerId ? getViewerPresenceBonusPoints() : 0;
+    return normalizeOneDecimal(base + bonus);
+  };
+  const renderGradeValue = (it) => {
+    const baseGrade = String(it?.authorGrade || it?.grade || 'Mouton égaré').trim() || 'Mouton égaré';
+    return resolveGradeFromPoints(renderPointsValue(it), baseGrade);
+  };
   const renderPointsValue = (it) => Number(it?.authorPoints ?? it?.points ?? 0) || 0;
   const normalizeIdentityLite = (value) => String(value || '').trim().toLowerCase().replace(/[^a-z0-9]+/g,'');
 
@@ -21796,7 +21856,7 @@ function scheduleWeatherAfterTableSettled(){
     closePseudoTooltip();
     const tip = document.createElement('div');
     tip.className = 'lb-pseudo-tooltip';
-    tip.innerHTML = `<strong>${escapeHtml(pseudo)}</strong><div>${escapeHtml(grade)}</div><div>${escapeHtml(String(points))} meuh</div>`;
+    tip.innerHTML = `<strong>${escapeHtml(pseudo)}</strong><div>${escapeHtml(grade)}</div><div>${escapeHtml(formatPointsValue(points))} meuh</div>`;
     document.body.appendChild(tip);
     const rect = anchor.getBoundingClientRect();
     const margin = 8;
@@ -21810,7 +21870,7 @@ function scheduleWeatherAfterTableSettled(){
   }
 
   function buildPseudoTriggerHtml(item){
-    return `<span class="lb-pseudo-trigger" data-lb-pseudo-trigger data-pseudo="${escapeHtml(renderPseudoValue(item))}" data-grade="${escapeHtml(renderGradeValue(item))}" data-points="${escapeHtml(String(renderPointsValue(item)))}">${escapeHtml(renderPseudoValue(item))}</span>`;
+    return `<span class="lb-pseudo-trigger" data-lb-pseudo-trigger data-pseudo="${escapeHtml(renderPseudoValue(item))}" data-grade="${escapeHtml(renderGradeValue(item))}" data-points="${escapeHtml(formatPointsValue(renderPointsValue(item)))}">${escapeHtml(renderPseudoValue(item))}</span>`;
   }
   window.buildPseudoTriggerHtml = buildPseudoTriggerHtml;
 	
@@ -22388,19 +22448,23 @@ function scheduleWeatherAfterTableSettled(){
     const p = lbGamificationState.profile || {};
     const ranking = Array.isArray(lbGamificationState.ranking) ? lbGamificationState.ranking : [];
     const pseudo = String(p.display_pseudo || p.pseudo || safePseudo() || currentUser?.pseudo || 'Voyageur').trim();
-    const grade = String(p.grade || 'Mouton égaré').trim();
     const points = Number(p.points || 0) || 0;
+	const meBonus = getViewerPresenceBonusPoints();
+    const displayedPoints = normalizeOneDecimal(points + meBonus);
+    const grade = resolveGradeFromPoints(displayedPoints, String(p.grade || 'Mouton égaré').trim());
     const myRank = Number(lbGamificationState.myRank || p.rank || 0) || null;
     if ($("lbProfilePseudo")) $("lbProfilePseudo").textContent = pseudo || "—";
     if ($("lbProfileGrade")) $("lbProfileGrade").textContent = grade || "—";
-    if ($("lbProfilePoints")) $("lbProfilePoints").textContent = `${points} meuh`;
+    if ($("lbProfilePoints")) $("lbProfilePoints").textContent = `${formatPointsValue(displayedPoints)} meuh`;
     if ($("lbProfileRank")) $("lbProfileRank").textContent = myRank ? `#${myRank}` : "—";
 
     const top3 = ranking.slice(0, 3);
     podium.innerHTML = [2,1,3].map((rankNum)=>{
       const item = top3.find((it)=> it.rank === rankNum);
       if (!item) return `<div class="lb-ranking-podium-item pos-${rankNum}"><div class="rank">#${rankNum}</div><div class="pseudo">—</div></div>`;
-      return `<div class="lb-ranking-podium-item pos-${rankNum}"><div class="rank">#${item.rank}</div><div class="pseudo">${escapeHtml(item.pseudo)}</div><div class="meta">${escapeHtml(item.grade)} · ${escapeHtml(String(item.points))}</div></div>`;
+      const rowPoints = normalizeOneDecimal((Number(item.points || 0) || 0) + ((myRank && item.rank === myRank) ? meBonus : 0));
+      const rowGrade = resolveGradeFromPoints(rowPoints, item.grade);
+      return `<div class="lb-ranking-podium-item pos-${rankNum}"><div class="rank">#${item.rank}</div><div class="pseudo">${escapeHtml(item.pseudo)}</div><div class="meta">${escapeHtml(rowGrade)} · ${escapeHtml(formatPointsValue(rowPoints))}</div></div>`;
     }).join('');
 
     const mode = filter.value || 'top10';
@@ -22417,7 +22481,12 @@ function scheduleWeatherAfterTableSettled(){
       }
     }
     listEl.innerHTML = rows.length
-      ? rows.map((it)=> `<div class="lb-ranking-row${(myRank && it.rank === myRank) ? ' me' : ''}"><span>#${it.rank}</span><span title="${escapeHtml(it.grade)}">${escapeHtml(it.pseudo)}</span><span>${escapeHtml(String(it.points))} 🐮</span></div>`).join('')
+      ? rows.map((it)=>{
+          const isMe = !!(myRank && it.rank === myRank);
+          const rowPoints = normalizeOneDecimal((Number(it.points || 0) || 0) + (isMe ? meBonus : 0));
+          const rowGrade = resolveGradeFromPoints(rowPoints, it.grade);
+          return `<div class="lb-ranking-row${isMe ? ' me' : ''}"><span>#${it.rank}</span><span title="${escapeHtml(rowGrade)}">${escapeHtml(it.pseudo)}</span><span>${escapeHtml(formatPointsValue(rowPoints))} 🐮</span></div>`;
+        }).join('')
       : '<div class="live-wall-empty">Classement indisponible.</div>';
   }
 
@@ -31720,7 +31789,15 @@ body{ padding-bottom: calc(var(--bottom-bar-height, 58px) + 10px) !important; }
     }
     await clearMyPresence({ keepOptIn: true });
     const accountId = getCurrentPresenceIdentity();
-    const payload = { message: `[PRESENCE] TER ${key} — ${toIsoDay()}`, scope:'presence', train_number:key, account_id: accountId };
+    const dayKey = toIsoDay();
+    const shouldAwardDailyBonus = !hasPresenceDailyBonus(accountId, dayKey);
+    const payload = {
+      message: `[PRESENCE] TER ${key} — ${dayKey}`,
+      scope:'presence',
+      train_number:key,
+      account_id: accountId,
+      points_bonus: shouldAwardDailyBonus ? PRESENCE_DAILY_BONUS_POINTS : 0
+    };
     try{
       const res = await window.fetchCommentsApi('', {
         method:'POST',
@@ -31730,8 +31807,12 @@ body{ padding-bottom: calc(var(--bottom-bar-height, 58px) + 10px) !important; }
       let data = null;
       try { data = await res.json(); } catch(_){ }
       if (!res.ok) throw new Error(data?.error || `HTTP ${res.status}`);
+	  if (shouldAwardDailyBonus){
+        grantPresenceDailyBonus(accountId, dayKey);
+      }
       await loadPresences();
       refreshLiveModal();
+	  if (typeof window.refreshGamificationUI === 'function') window.refreshGamificationUI({ force: true }).catch(()=>{});
     }catch(err){
       console.error('PRESENCE_POST_ERROR', err);
       return;
