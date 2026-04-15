@@ -6153,6 +6153,37 @@ body.modal-open{ overflow:hidden; }
   font-size:.74rem;
   padding:5px 7px;
 }
+.lb-ranking-actions{
+  display:flex;
+  align-items:center;
+  gap:6px;
+}
+.lb-ranking-default{
+  font-size:.74rem;
+  font-weight:700;
+  color:#dffbff;
+  padding:5px 7px;
+  border:1px solid rgba(120,220,255,.2);
+  border-radius:9px;
+  background:rgba(6,16,28,.45);
+}
+.lb-ranking-loadmore{
+  min-width:28px;
+  height:28px;
+  padding:0 8px;
+  border-radius:9px;
+  border:1px solid rgba(120,220,255,.42);
+  background:rgba(6,16,28,.9);
+  color:#dffbff;
+  font-size:.98rem;
+  font-weight:800;
+  line-height:1;
+  cursor:pointer;
+}
+.lb-ranking-loadmore[disabled]{
+  opacity:.42;
+  cursor:default;
+}
 .lb-ranking-podium{
   position: relative;
   margin: 10px auto 6px;
@@ -11191,12 +11222,10 @@ body{
           <div class="lb-profile-ranking-top">
             <div class="lb-ranking-head lb-ranking-head--inline">
               <div class="lb-profile-title" style="margin:0;">Classement</div>
-              <select id="lbRankingFilterInline" class="lb-ranking-filter">
-                <option value="top10" selected>Top 10</option>
-                <option value="top3">Top 3</option>
-                <option value="top50">Top 50</option>
-                <option value="around">Autour de moi</option>
-              </select>
+              <div class="lb-ranking-actions">
+                <span class="lb-ranking-default">Top 10</span>
+                <button id="lbRankingLoadMoreInline" class="lb-ranking-loadmore" type="button" aria-label="Afficher plus de rangs">+</button>
+              </div>
             </div>
             <div class="lb-profile-rank-badge"><b>Rang</b><span id="lbProfileRankInline">—</span></div>
           </div>
@@ -11271,12 +11300,10 @@ body{
       <h3 id="lbRankingTitle">Classement du troupeau</h3>
       <div class="lb-ranking-head">
         <div class="lb-profile-title" style="margin:0;">Classement</div>
-        <select id="lbRankingFilter" class="lb-ranking-filter">
-          <option value="top10" selected>Top 10</option>
-          <option value="top3">Top 3</option>
-          <option value="top50">Top 50</option>
-          <option value="around">Autour de moi</option>
-        </select>
+        <div class="lb-ranking-actions">
+          <span class="lb-ranking-default">Top 10</span>
+          <button id="lbRankingLoadMore" class="lb-ranking-loadmore" type="button" aria-label="Afficher plus de rangs">+</button>
+        </div>
       </div>
       <div id="lbRankingPodium" class="lb-ranking-podium"></div>
       <div id="lbRankingList" class="lb-ranking-list"></div>
@@ -22457,6 +22484,7 @@ function scheduleWeatherAfterTableSettled(){
   let currentUser = null;
   window.currentUser = null;
   const lbGamificationState = { profile: null, ranking: [], myRank: null, me: null, lastFetchAt: 0, inflight: null };
+  let lbRankingVisibleCount = 10;
   const LB_GRADE_LEVELS = [
     { name: 'Mouton égaré', min: 0, image: 'Mouton égaré.png' },
     { name: 'Poulet du Quai', min: 120, image: 'Poulet du Quai.png' },
@@ -23164,15 +23192,8 @@ function scheduleWeatherAfterTableSettled(){
     const listEl = $("lbRankingList");
     const podiumInline = $("lbRankingPodiumInline");
     const listElInline = $("lbRankingListInline");
-    const filter = $("lbRankingFilter");
-    const filterInline = $("lbRankingFilterInline");
-    if (filterInline && filter && !filterInline.dataset.lbMirrorBound){
-      filterInline.dataset.lbMirrorBound = '1';
-      filterInline.addEventListener('change', ()=>{
-        if (filter) filter.value = filterInline.value || 'top10';
-        renderGamificationUI();
-      });
-    }
+    const loadMoreBtn = $("lbRankingLoadMore");
+    const loadMoreBtnInline = $("lbRankingLoadMoreInline");
     if (filter && filterInline && filter.value !== filterInline.value){
       filterInline.value = filter.value || 'top10';
     }
@@ -23220,26 +23241,24 @@ function scheduleWeatherAfterTableSettled(){
     if (podium) podium.innerHTML = podiumHtml;
     if (podiumInline) podiumInline.innerHTML = podiumHtml;
 
-    const mode = (filterInline?.value || filter?.value || 'top10');
-    if (filter) filter.value = mode;
-    if (filterInline) filterInline.value = mode;
-    let rows = ranking;
-    if (mode === 'top3') rows = ranking.slice(0, 3);
-    else if (mode === 'top10') rows = ranking.slice(0, 10);
-    else if (mode === 'top50') rows = ranking.slice(0, 50);
-    else if (mode === 'around'){
-      const aroundRank = myRank || Number(lbGamificationState?.me?.rank || 0) || ranking.find((it)=> it.me)?.rank || null;
-      if (aroundRank){
-        rows = ranking.filter((it)=> Math.abs(it.rank - aroundRank) <= 2).slice(0, 7);
-      } else {
-        rows = ranking.slice(0, 10);
-      }
-    }
+    const visibleCount = Math.max(10, Number(lbRankingVisibleCount || 10));
+    const rows = ranking.slice(0, visibleCount);
     const listHtml = rows.length
       ? rows.map((it)=> `<div class="lb-ranking-row${(myRank && it.rank === myRank) ? ' me' : ''}"><span class="lb-rank-cell">${rankDisplayHtml(it.rank)}</span><span title="${escapeHtml(it.grade)}">${escapeHtml(it.pseudo)}</span><span>${escapeHtml(String(it.points))} 🐮</span></div>`).join('')
       : '<div class="live-wall-empty">Classement indisponible.</div>';
     if (listEl) listEl.innerHTML = listHtml;
     if (listElInline) listElInline.innerHTML = listHtml;
+	const canLoadMore = ranking.length > visibleCount;
+    if (loadMoreBtn){
+      loadMoreBtn.style.display = ranking.length > 10 ? "inline-flex" : "none";
+      loadMoreBtn.disabled = !canLoadMore;
+      loadMoreBtn.textContent = canLoadMore ? '+' : '✓';
+    }
+    if (loadMoreBtnInline){
+      loadMoreBtnInline.style.display = ranking.length > 10 ? "inline-flex" : "none";
+      loadMoreBtnInline.disabled = !canLoadMore;
+      loadMoreBtnInline.textContent = canLoadMore ? '+' : '✓';
+    }
   }
 
   function resetGamificationUI(){
@@ -23249,6 +23268,7 @@ function scheduleWeatherAfterTableSettled(){
     lbGamificationState.me = null;
     lbGamificationState.lastFetchAt = 0;
     lbGamificationState.inflight = null;
+	lbRankingVisibleCount = 10;
     lbProfileCache = null;
     lbRankingCache = null;
     lbCurrentMe = null;
@@ -24624,8 +24644,8 @@ if (statsEl){
   const prefsSaveBtn = $("lbSavePrefs");
   const prefsAddListBtn = $("lbAddPrefsList");
   const prefsResetBtn = $("lbResetPresets");
-  const rankingFilter = $("lbRankingFilter");
-  const rankingFilterInline = $("lbRankingFilterInline");
+  const rankingLoadMoreBtn = $("lbRankingLoadMore");
+  const rankingLoadMoreBtnInline = $("lbRankingLoadMoreInline");
   const quickAddListBtn = $("lbQuickAddList");
   const registerModal = $("lbRegisterModal");
   const rankingModal = $("lbRankingModal");
@@ -24642,17 +24662,17 @@ if (statsEl){
 
   if (!openBtn || !closeBtn || !modal || !submitBtn || !logoutBtn) return;
 
-  if (rankingFilter && !rankingFilter.dataset.bound){
-    rankingFilter.dataset.bound = '1';
-    rankingFilter.addEventListener('change', ()=>{
-      if (rankingFilterInline) rankingFilterInline.value = rankingFilter.value || 'top10';
+  if (rankingLoadMoreBtn && !rankingLoadMoreBtn.dataset.bound){
+    rankingLoadMoreBtn.dataset.bound = '1';
+    rankingLoadMoreBtn.addEventListener('click', ()=>{
+      lbRankingVisibleCount += 10;
       renderGamificationUI();
     });
   }
-  if (rankingFilterInline && !rankingFilterInline.dataset.bound){
-    rankingFilterInline.dataset.bound = '1';
-    rankingFilterInline.addEventListener('change', ()=>{
-      if (rankingFilter) rankingFilter.value = rankingFilterInline.value || 'top10';
+  if (rankingLoadMoreBtnInline && !rankingLoadMoreBtnInline.dataset.bound){
+    rankingLoadMoreBtnInline.dataset.bound = '1';
+    rankingLoadMoreBtnInline.addEventListener('click', ()=>{
+      lbRankingVisibleCount += 10;
       renderGamificationUI();
     });
   }
