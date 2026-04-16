@@ -26489,9 +26489,35 @@ function lbRenderHomeFavPreview(){
   // lecture des infos déjà calculées par le widget favoris (AM/PM)
   const read = (k) => {
     const train = (document.getElementById('favTrain'+k)?.textContent || '').trim();
-    const meta  = (document.getElementById('favMeta'+k)?.textContent || '').trim();
+    const metaEl = document.getElementById('favMeta'+k);
+    const meta  = (metaEl?.textContent || '').trim();
     const state = (document.getElementById('favState'+k)?.textContent || '').trim();
-    return { train, meta, state };
+    const routeRaw = (metaEl?.querySelector('.fav-primary-route')?.textContent || '').trim();
+    const routeMatch = routeRaw.match(/^(.+?)\s*→\s*(.+)$/);
+    const routeFrom = routeMatch ? routeMatch[1].trim() : '';
+    const routeTo = routeMatch ? routeMatch[2].trim() : '';
+
+    const readTimePart = (partEl) => {
+      if (!partEl) return { planned: '—', live: null };
+      const planned = (partEl.querySelector('.fav-time-planned')?.textContent || '').trim() || '—';
+      const live = (partEl.querySelector('.fav-time-rt.delay')?.textContent || '').trim() || null;
+      return { planned, live };
+    };
+    const timeParts = Array.from(metaEl?.querySelectorAll('.fav-primary-times .fav-time-part') || []);
+    const depPart = readTimePart(timeParts[0]);
+    const arrPart = readTimePart(timeParts[1]);
+
+    return {
+      train,
+      meta,
+      state,
+      routeFrom,
+      routeTo,
+      plannedDep: depPart.planned,
+      liveDep: depPart.live,
+      plannedArr: arrPart.planned,
+      liveArr: arrPart.live
+    };
   };
 
   const am = read('AM');
@@ -26528,7 +26554,21 @@ function lbRenderHomeFavPreview(){
     return map[base] || base;
   };
 
-  const parseFavMeta = (metaTxt) => {
+  const parseFavMeta = (metaTxt, structuredMeta) => {
+    if (structuredMeta && (structuredMeta.routeFrom || structuredMeta.routeTo || structuredMeta.plannedDep !== '—' || structuredMeta.plannedArr !== '—')) {
+      const routeFrom = compactStationLabel(structuredMeta.routeFrom || '');
+      const routeTo = compactStationLabel(structuredMeta.routeTo || '');
+      const route = (routeFrom && routeTo) ? `${routeFrom} → ${routeTo}` : (routeFrom || routeTo || '—');
+      const renderTimePart = (planned, live) => {
+        if (live && live !== planned) {
+          return `<span class="home-fav-time-part is-delayed"><span class="home-fav-time-planned is-strike">${planned}</span><span class="home-fav-time-live">${live}</span></span>`;
+        }
+        return `<span class="home-fav-time-part"><span class="home-fav-time-planned">${planned || '—'}</span></span>`;
+      };
+      const timeHtml = `${renderTimePart(structuredMeta.plannedDep || '—', structuredMeta.liveDep)} <span class="home-fav-time-sep">→</span> ${renderTimePart(structuredMeta.plannedArr || '—', structuredMeta.liveArr)}`;
+      return { route, timeHtml };
+    }
+	  
     const raw = String(metaTxt || '').replace(/\s+/g, ' ').trim();
     if (!raw) return { route: '—', timeHtml: '<span class="home-fav-time-planned">—</span>' };
 
@@ -26585,7 +26625,7 @@ function lbRenderHomeFavPreview(){
   const buildRow = (k, data, label) => {
     const trainTxt = data.train && data.train !== '—' ? data.train : '—';
     const metaTxt  = data.meta && data.meta !== '—' ? data.meta : '';
-    const parsed = parseFavMeta(metaTxt);
+    const parsed = parseFavMeta(metaTxt, data);
 	const trainParts = String(trainTxt).split(/\s+/).filter(Boolean);
     let trainNo = trainParts.length ? trainParts[0] : '—';
     let trainCompo = trainParts.length > 1 ? trainParts.slice(1).join(' ') : '';
