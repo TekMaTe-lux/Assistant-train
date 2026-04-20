@@ -14019,6 +14019,48 @@ function normalizeCflVoiesPayload(data){
   return out;
 }
 
+function normalizeCflByStationPayload(data){
+  const out = new Map();
+  if (!data || typeof data !== 'object' || !data.stations || typeof data.stations !== 'object') return out;
+
+  for (const [stationName, stationInfo] of Object.entries(data.stations)){
+    const stopKey = normalizeVoiesTrainKey(stationName);
+    if (!stopKey) continue;
+    const departures = Array.isArray(stationInfo?.departures) ? stationInfo.departures : [];
+    for (const dep of departures){
+      if (!dep || typeof dep !== 'object') continue;
+      const trainRaw = dep.train ?? dep.name ?? dep.number ?? dep.trainNumber ?? dep.line;
+      const trainKey = normalizeCflVoiesTrainKey(trainRaw);
+      if (!trainKey) continue;
+      const voieRaw = dep.platform ?? dep.track ?? dep.voie ?? dep.quai;
+      const voie = String(voieRaw || '').trim();
+      if (!voie) continue;
+      if (!out.has(trainKey)) out.set(trainKey, new Map());
+      out.get(trainKey).set(stopKey, voie);
+    }
+  }
+
+  return out;
+}
+
+function mergeCflVoiesMaps(primary, secondary){
+  const merged = new Map();
+  const sources = [primary, secondary];
+  for (const src of sources){
+    if (!(src instanceof Map)) continue;
+    for (const [trainKey, stopMap] of src.entries()){
+      if (!(stopMap instanceof Map) || !stopMap.size) continue;
+      if (!merged.has(trainKey)) merged.set(trainKey, new Map());
+      const target = merged.get(trainKey);
+      for (const [stopKey, voie] of stopMap.entries()){
+        if (!stopKey || !voie) continue;
+        if (!target.has(stopKey)) target.set(stopKey, voie);
+      }
+    }
+  }
+  return merged;
+}
+
 async function loadCflVoiesByTrain({ forceFresh = false, onlyIfChanged = false } = {}){
   if (forceFresh) cflVoiesByTrainPromise = null;
   if (cflVoiesByTrainPromise) return cflVoiesByTrainPromise;
@@ -14026,6 +14068,11 @@ async function loadCflVoiesByTrain({ forceFresh = false, onlyIfChanged = false }
   cflVoiesByTrainPromise = (async () => {
     try {
       let lastErr = null;
+	  let mapFromRetards = new Map();
+      let mapFromByStation = new Map();
+      let sourceRetards = null;
+      let sourceByStation = null;
+
       for (const candidate of HAFAS_PROXY_CANDIDATES){
         if (!candidate) continue;
         const url = candidate + (forceFresh ? `?t=${Date.now()}` : '');
@@ -14033,16 +14080,39 @@ async function loadCflVoiesByTrain({ forceFresh = false, onlyIfChanged = false }
           const res = await fetch(url, { cache: forceFresh ? 'no-store' : 'default' });
           if (!res.ok) throw new Error(`HTTP ${res.status}`);
           const json = await res.json();
-          window.cflVoiesByTrainMap = normalizeCflVoiesPayload(json);
-          window.__cflVoiesSource = candidate;
-          return window.cflVoiesByTrainMap;
+          mapFromRetards = normalizeCflVoiesPayload(json);
+          sourceRetards = candidate;
+          break;
         } catch (errCandidate){
           lastErr = errCandidate;
           console.warn('[CFL][Voies] Source indisponible', candidate, errCandidate?.message || errCandidate);
         }
       }
+
+	  for (const candidate of HAFAS_BY_STATION_CANDIDATES){
+        if (!candidate) continue;
+        const url = candidate + (forceFresh ? `?t=${Date.now()}` : '');
+        try {
+          const res = await fetch(url, { cache: forceFresh ? 'no-store' : 'default' });
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          const json = await res.json();
+          mapFromByStation = normalizeCflByStationPayload(json);
+          sourceByStation = candidate;
+          break;
+        } catch (errCandidate){
+          console.warn('[CFL][Voies by station] Source indisponible', candidate, errCandidate?.message || errCandidate);
+        }
+      }
+
+      const merged = mergeCflVoiesMaps(mapFromByStation, mapFromRetards);
+      if (merged.size){
+        window.cflVoiesByTrainMap = merged;
+        window.__cflVoiesSource = sourceByStation || sourceRetards || '';
+        return window.cflVoiesByTrainMap;
+      }
+
       if (lastErr) throw lastErr;
-      throw new Error('Aucune source retards_cfl disponible');
+      throw new Error('Aucune source retards_cfl / retards_cfl_by_station disponible');
     } catch (err) {
       console.warn('[CFL][Voies] Chargement échoué', err?.message || err);
 	  if (window.cflVoiesByTrainMap instanceof Map && window.cflVoiesByTrainMap.size) return window.cflVoiesByTrainMap;
@@ -15487,6 +15557,13 @@ const VOIES_BY_TRAIN_CANDIDATES = [
   location.origin + location.pathname.replace(/\/[^\/]*$/, '/') + 'voies_by_train.json',
   'https://raw.githubusercontent.com/TekMaTe-lux/Assistant-train/main/Assistant-train/voies_by_train.json',
   'https://cdn.jsdelivr.net/gh/TekMaTe-lux/Assistant-train@main/Assistant-train/voies_by_train.json'
+];
+
+const HAFAS_BY_STATION_CANDIDATES = [
+  'https://vps.labetaillere.fr/gtfs/retards_cfl_by_station.json',
+  location.origin + location.pathname.replace(/\/[^\/]*$/, '/') + 'retards_cfl_by_station.json',
+  'https://raw.githubusercontent.com/TekMaTe-lux/Assistant-train/main/Assistant-train/retards_cfl_by_station.json',
+  'https://cdn.jsdelivr.net/gh/TekMaTe-lux/Assistant-train@main/Assistant-train/retards_cfl_by_station.json'
 ];
 
 const HAFAS_PROXY_TTL_MS = 110000;
