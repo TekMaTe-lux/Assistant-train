@@ -4503,6 +4503,12 @@ const mapContainerEl = map.getContainer();
 
   function resolveStationBoardTrack(eventRow, mode){
     const stationNorm = normalizeStationName(eventRow?.stationLabel || '');
+    const stationNormLoose = stationNorm
+      ? stationNorm
+        .replace(/\bgare(?:\s+centrale)?\b/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim()
+      : '';
     const candidateKeys = [];
     const pushKey = (value)=>{
       if (value == null) return;
@@ -4511,16 +4517,40 @@ const mapContainerEl = map.getContainer();
       const key = String(normalized);
       if (!key || candidateKeys.includes(key)) return;
       candidateKeys.push(key);
+      for (const equiv of equivalentTrainNumbers(key)){
+        const equivKey = String(equiv ?? '');
+        if (!equivKey || candidateKeys.includes(equivKey)) continue;
+        candidateKeys.push(equivKey);
+      }
     };
     pushKey(eventRow?.number);
     pushKey(eventRow?.trainId);
+    pushKey(eventRow?.stationBoardCanonicalNumber);
+    pushKey(eventRow?.numberRaw);
+    pushKey(eventRow?.numberDigits);
+    if (Array.isArray(eventRow?.delayNumberKeys)){
+      for (const key of eventRow.delayNumberKeys) pushKey(key);
+    }
 
     for (const key of candidateKeys){
       const records = tracksByTrainNumber.get(key);
       if (!Array.isArray(records) || !records.length) continue;
-      const stationSpecific = stationNorm ? records.find(rec => rec.stationNorm && rec.stationNorm === stationNorm) : null;
+      const stationSpecific = stationNorm
+        ? records.find(rec => rec.stationNorm && rec.stationNorm === stationNorm)
+        : null;
+      const stationSpecificLoose = !stationSpecific && stationNormLoose
+        ? records.find(rec=>{
+            const recLoose = rec.stationNorm
+              ? rec.stationNorm
+                .replace(/\bgare(?:\s+centrale)?\b/g, ' ')
+                .replace(/\s+/g, ' ')
+                .trim()
+              : '';
+            return !!recLoose && recLoose === stationNormLoose;
+          })
+        : null;
       const genericRecord = records.find(rec => !rec.stationNorm);
-      const record = stationSpecific || genericRecord || null;
+      const record = stationSpecific || stationSpecificLoose || genericRecord || null;
       if (!record) continue;
       const value = mode === 'dep'
         ? (record.depTrack || record.genericTrack || record.arrTrack)
