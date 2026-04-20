@@ -515,7 +515,12 @@ function escapeHTML(str){
     ['88500','88501'],
     ['88529','88530'],
     ['88531','88532'],
-    ['88533','88534']
+    ['88533','88534'],
+    ['88520','88521'],
+    ['88522','88523'],
+    ['88524','88525'],
+    ['88526','88527'],
+    ['88528','88529']
   ];
 
   function registerTrainNumberEquivalenceGroup(targetMap, values){
@@ -861,6 +866,14 @@ function escapeHTML(str){
     'https://raw.githubusercontent.com/TekMaTe-lux/Assistant-train/main/Assistant-train/voies_by_train.json',
     'https://cdn.jsdelivr.net/gh/TekMaTe-lux/Assistant-train@main/Assistant-train/voies_by_train.json'
   ];
+
+  const HAFAS_BY_STATION_CANDIDATES = [
+    'https://vps.labetaillere.fr/gtfs/retards_cfl_by_station.json',
+    location.origin + location.pathname.replace(/\/[^\/]*$/, '/') + 'retards_cfl_by_station.json',
+    'https://raw.githubusercontent.com/TekMaTe-lux/Assistant-train/main/Assistant-train/retards_cfl_by_station.json',
+    'https://cdn.jsdelivr.net/gh/TekMaTe-lux/Assistant-train@main/Assistant-train/retards_cfl_by_station.json'
+  ];
+
   const TRACK_REFRESH_INTERVAL_MS = 120000;
 
   const HAFAS_LOOKAHEAD_MINUTES = 120;
@@ -4450,6 +4463,20 @@ const mapContainerEl = map.getContainer();
       }
     }
 
+    if (sourceLabel === 'retards_cfl_by_station' && payload && typeof payload === 'object' && payload.stations && typeof payload.stations === 'object'){
+      for (const [stationName, stationInfo] of Object.entries(payload.stations)){
+        const departures = Array.isArray(stationInfo?.departures) ? stationInfo.departures : [];
+        for (const dep of departures){
+          if (!dep || typeof dep !== 'object') continue;
+          const trainCandidate = extractTrainNumberCandidate(dep.train ?? dep.name ?? dep.number ?? dep.trainNumber);
+          if (trainCandidate == null) continue;
+          const platform = normalizeTrackValue(dep.platform ?? dep.track ?? dep.voie ?? dep.quai);
+          if (!platform) continue;
+          ingestTrackRecord(trainCandidate, { station: stationName, voie: platform }, sourceLabel);
+        }
+      }
+    }
+
     const queue = [payload];
     while (queue.length){
       const node = queue.shift();
@@ -4460,7 +4487,7 @@ const mapContainerEl = map.getContainer();
       }
       if (typeof node !== 'object') continue;
 
-      const trainKey = node.train_number ?? node.trainNo ?? node.train ?? node.numero ?? node.num ?? node.trip_number ?? node.tripNo ?? node.id;
+      const trainKey = node.trainNumber ?? node.train_number ?? node.trainNo ?? node.train ?? node.numero ?? node.num ?? node.trip_number ?? node.tripNo ?? node.id;
       if (trainKey != null){
         ingestTrackRecord(trainKey, node, sourceLabel);
       }
@@ -4501,14 +4528,25 @@ const mapContainerEl = map.getContainer();
     }
   }
 
-  function resolveStationBoardTrack(eventRow, mode){
-    const stationNorm = normalizeStationName(eventRow?.stationLabel || '');
-    const stationNormLoose = stationNorm
-      ? stationNorm
-        .replace(/\bgare(?:\s+centrale)?\b/g, ' ')
-        .replace(/\s+/g, ' ')
-        .trim()
-      : '';
+  function getStationBoardContext(stationContext){
+    let station = null;
+    if (typeof stationContext === 'string' && stationContext){
+      station = axisStationsById.get(stationContext) || null;
+    } else if (stationContext && typeof stationContext === 'object'){
+      station = stationContext;
+    }
+    const label = station?.label || station?.name || station?.stationLabel || '';
+    const stationNorm = normalizeStationName(label || '');
+    const stopArea = String(station?.stopArea || '');
+    const stopIds = Array.isArray(station?.stopIds) ? station.stopIds.map(v => String(v || '')) : [];
+    const isFrench = /^StopArea:OCE87/i.test(stopArea);
+    const isCfl = !isFrench && (stopIds.some(v => /^CFL:/i.test(v)) || /^StopArea:OCE82/i.test(stopArea));
+    return { station, stationNorm, isFrench, isCfl };
+  }
+
+  function resolveStationBoardTrack(eventRow, mode, stationContext){
+    const ctx = getStationBoardContext(stationContext);
+    const stationNorm = ctx.stationNorm || normalizeStationName(eventRow?.stationLabel || '');
     const candidateKeys = [];
     const pushKey = (value)=>{
       if (value == null) return;
@@ -4517,44 +4555,53 @@ const mapContainerEl = map.getContainer();
       const key = String(normalized);
       if (!key || candidateKeys.includes(key)) return;
       candidateKeys.push(key);
-      for (const equiv of equivalentTrainNumbers(key)){
-        const equivKey = String(equiv ?? '');
-        if (!equivKey || candidateKeys.includes(equivKey)) continue;
-        candidateKeys.push(equivKey);
+
+      const equivalents = equivalentTrainNumbers(key);
+      for (const alt of equivalents){
+        const altKey = String(alt);
+        if (altKey && !candidateKeys.includes(altKey)){
+          candidateKeys.push(altKey);
+        }
       }
     };
-    pushKey(eventRow?.number);
-    pushKey(eventRow?.trainId);
+
     pushKey(eventRow?.stationBoardCanonicalNumber);
-    pushKey(eventRow?.numberRaw);
+    pushKey(eventRow?.number);
     pushKey(eventRow?.numberDigits);
+    pushKey(eventRow?.numberRaw);
+    pushKey(eventRow?.trainId);
+
     if (Array.isArray(eventRow?.delayNumberKeys)){
       for (const key of eventRow.delayNumberKeys) pushKey(key);
     }
+    if (Array.isArray(eventRow?.numberList)){
+      for (const key of eventRow.numberList) pushKey(key);
+    }
+
+    const stationMatches = (recNorm)=>{
+      if (!stationNorm || !recNorm) return false;
+      if (recNorm === stationNorm) return true;
+      return recNorm.startsWith(stationNorm) || stationNorm.startsWith(recNorm);
+    };
+
+    const sourceAllowed = (rec)=>{
+      const src = String(rec?.source || '').toLowerCase();
+      if (ctx.isFrench){
+        return src !== 'retards_cfl' && src !== 'retards_cfl_by_station';
+      }
+      return true;
+    };
 
     for (const key of candidateKeys){
       const records = tracksByTrainNumber.get(key);
       if (!Array.isArray(records) || !records.length) continue;
-      const stationSpecific = stationNorm
-        ? records.find(rec => rec.stationNorm && rec.stationNorm === stationNorm)
-        : null;
-      const stationSpecificLoose = !stationSpecific && stationNormLoose
-        ? records.find(rec=>{
-            const recLoose = rec.stationNorm
-              ? rec.stationNorm
-                .replace(/\bgare(?:\s+centrale)?\b/g, ' ')
-                .replace(/\s+/g, ' ')
-                .trim()
-              : '';
-            return !!recLoose && recLoose === stationNormLoose;
-          })
-        : null;
-      const genericRecord = records.find(rec => !rec.stationNorm);
-      const record = stationSpecific || stationSpecificLoose || genericRecord || null;
-      if (!record) continue;
+
+      const stationSpecific = records.find(rec => sourceAllowed(rec) && stationMatches(rec.stationNorm)) || null;
+      if (!stationSpecific) continue;
+
       const value = mode === 'dep'
-        ? (record.depTrack || record.genericTrack || record.arrTrack)
-        : (record.arrTrack || record.genericTrack || record.depTrack);
+        ? (stationSpecific.depTrack || stationSpecific.genericTrack || stationSpecific.arrTrack)
+        : (stationSpecific.arrTrack || stationSpecific.genericTrack || stationSpecific.depTrack);
       if (value) return value;
     }
     return null;
@@ -4567,7 +4614,8 @@ const mapContainerEl = map.getContainer();
       tracksByTrainNumber.clear();
       const sources = [
         { label:'voies_by_train', candidates: VOIES_BY_TRAIN_CANDIDATES },
-        { label:'retards_cfl', candidates: HAFAS_PROXY_CANDIDATES }
+        { label:'retards_cfl', candidates: HAFAS_PROXY_CANDIDATES },
+        { label:'retards_cfl_by_station', candidates: HAFAS_BY_STATION_CANDIDATES }
       ];
       for (const source of sources){
         for (const candidate of source.candidates){
@@ -4635,7 +4683,7 @@ const mapContainerEl = map.getContainer();
     return deduped;
   }
 
-  function stationBoardRows(events, mode, limit = 8){
+  function stationBoardRows(events, mode, limit = 8, stationContext = null){
     const now = nowSecLocal();
     const rows = [];
     for (const ev of events){
@@ -4670,7 +4718,7 @@ const mapContainerEl = map.getContainer();
         routeStopCount: ev.routeStopCount,
         routeEndSec: ev.routeEndSec,
         etaSec,
-        track: resolveStationBoardTrack(ev, mode),
+        track: resolveStationBoardTrack(ev, mode, stationContext),
         place: mode === 'dep'
           ? (ev.destination || ev.headsign || 'Destination inconnue')
           : (ev.origin || 'Provenance inconnue')
@@ -4763,8 +4811,8 @@ const mapContainerEl = map.getContainer();
       stationBoardPaginationState.dep = 8;
       stationBoardPaginationState.arr = 8;
     }
-    const departuresAll = stationBoardRows(events, 'dep', Number.POSITIVE_INFINITY);
-    const arrivalsAll = stationBoardRows(events, 'arr', Number.POSITIVE_INFINITY);
+    const departuresAll = stationBoardRows(events, 'dep', Number.POSITIVE_INFINITY, station);
+    const arrivalsAll = stationBoardRows(events, 'arr', Number.POSITIVE_INFINITY, station);
     const departures = departuresAll.slice(0, stationBoardPaginationState.dep);
     const arrivals = arrivalsAll.slice(0, stationBoardPaginationState.arr);
     tripStopsTitleEl.classList.add('hidden');
