@@ -14185,8 +14185,9 @@ function resolveVoieForStop({ voiesMap, stopName, baseTimeRaw, timeCandidates })
     if (voie) return voie;
   }
 
-  // (2) Fallback "secours": match sur le stop uniquement (ignore l'heure)
-  // Utile quand le flux des voies est décalé de quelques minutes vs Navitia (ex: 88526)
+  // (2) Fallback "secours": même logique prudente que la carte.
+  // On ne prend une voie du même arrêt que si l'heure est proche,
+  // pour éviter les mauvais quais/voies (ex: Thionville voie 1 alors que B/C).
   const stopNorm = normalizeVoiesTrainKey(stopName);
   if (!stopNorm) return null;
 
@@ -14206,16 +14207,14 @@ function resolveVoieForStop({ voiesMap, stopName, baseTimeRaw, timeCandidates })
 
   let bestVoie = null;
   let bestDiff = Infinity;
+  const MAX_FALLBACK_DIFF_MIN = 7;
 
   for (const [k, v] of voiesMap.entries()){
     // k est du type "pagnysurmoselle|14:06"
     if (typeof k !== 'string') continue;
     if (!k.startsWith(stopNorm + '|')) continue;
 
-    if (refMin == null) {
-      // Pas de référence horaire -> 1ère voie trouvée
-      return v || null;
-    }
+    if (refMin == null) continue;
 
     const hhmm = k.slice((stopNorm + '|').length);
     const km = parseMin(hhmm);
@@ -14228,7 +14227,8 @@ function resolveVoieForStop({ voiesMap, stopName, baseTimeRaw, timeCandidates })
     }
   }
 
-  return bestVoie;
+  if (bestDiff <= MAX_FALLBACK_DIFF_MIN) return bestVoie;
+  return null;
 }
 
 function formatVoieLabel(raw){
