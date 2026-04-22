@@ -15538,6 +15538,36 @@ function getEquivalentCflStopKeys(stopName){
 function isLikelyCflStopName(stopName){
   return getEquivalentCflStopKeys(stopName).length > 0;
 }
+
+const FRENCH_BORDER_STOPS = new Set([
+  'thionville',
+  'uckange',
+  'hagondange',
+  'maiziereslesmetz',
+  'woippy',
+  'metznord',
+  'metz',
+  'pagnysurmoselle',
+  'pontamousson',
+  'nancy',
+  'hettangegrande'
+]);
+
+function isLikelyFrenchStopContext({ stopName, stopPointId } = {}){
+  const stopNorm = normalizeVoiesTrainKey(stopName);
+  const rawId = String(stopPointId || '').trim();
+
+  // Navitia SNCF ids: stop_area / stop_point OCE* (réseau France)
+  if (/^stop(area|point):oce/i.test(rawId) || /:OCE/i.test(rawId) || /^OCE/i.test(rawId)) return true;
+
+  // Si le stop est clairement CFL (alias connu), on ne le marque pas FR.
+  if (stopNorm && isLikelyCflStopName(stopName)) return false;
+
+  // Arrêts frontaliers/côté France fréquemment présents dans le tableau.
+  if (stopNorm && FRENCH_BORDER_STOPS.has(stopNorm)) return true;
+
+  return false;
+}
     
 function stripLeadingZerosForDisplay(value){
   const raw = String(value ?? '').trim();
@@ -19409,7 +19439,9 @@ const stopHasSchedule = (result, stopName) => {
           stop?.arrival_time,
           base
         ];
-        const preferCflVoie = !!result.cflVoies && isLikelyCflStopName(stopName);
+        const stopPointId = stop?.stop_point?.id || imp?.stop_point?.id || '';
+        const allowCflFallback = !isLikelyFrenchStopContext({ stopName, stopPointId });
+        const preferCflVoie = allowCflFallback && !!result.cflVoies && isLikelyCflStopName(stopName);
         let voieLabel = null;
         if (!preferCflVoie) {
           voieLabel = resolveVoieForStop({
@@ -19419,7 +19451,7 @@ const stopHasSchedule = (result, stopName) => {
             timeCandidates: voieTimeCandidates
           });
         }
-        if (!voieLabel) {
+        if (!voieLabel && allowCflFallback) {
           voieLabel = resolveCflVoieForStop({ voiesMap: result.cflVoies || result.voies, stopName });
         }
         if (!voieLabel && preferCflVoie) {
@@ -24301,7 +24333,8 @@ function getGtfsDelayForStop(trainNumber, stopName){
         }
         voieLabel = resolveVoieForStop({ voiesMap, stopName: name, baseTimeRaw: plannedRaw, timeCandidates: candidates });
       }
-	if (!voieLabel && cflVoiesMap && typeof resolveCflVoieForStop === 'function') {
+	  const allowCflFallback = !isLikelyFrenchStopContext({ stopName: name });
+	if (!voieLabel && allowCflFallback && cflVoiesMap && typeof resolveCflVoieForStop === 'function') {
         voieLabel = resolveCflVoieForStop({ voiesMap: cflVoiesMap, stopName: name });
       }
 
@@ -24508,7 +24541,9 @@ function getGtfsDelayForStop(trainNumber, stopName){
         }
         voieLabel = resolveVoieForStop({ voiesMap, stopName: name, baseTimeRaw: plannedRaw, timeCandidates: candidates });
       }
-      if (!voieLabel && cflVoiesMap && typeof resolveCflVoieForStop === 'function') {
+      const stopPointId = st?.stop_point?.id || imp?.stop_point?.id || '';
+      const allowCflFallback = !isLikelyFrenchStopContext({ stopName: name, stopPointId });
+      if (!voieLabel && allowCflFallback && cflVoiesMap && typeof resolveCflVoieForStop === 'function') {
         voieLabel = resolveCflVoieForStop({ voiesMap: cflVoiesMap, stopName: name });
       }
 
@@ -26015,7 +26050,8 @@ if (statsEl){
         const voies = (typeof getVoiesForTrain === 'function') ? getVoiesForTrain(trainNumber) : null;
         const cflVoies = (typeof getCflVoiesForTrain === 'function') ? getCflVoiesForTrain(trainNumber) : null;
         const voieTimeCandidates = [baseTimeRaw];
-        const preferCflVoie = !!cflVoies && isLikelyCflStopName(stopName);
+        const allowCflFallback = !isLikelyFrenchStopContext({ stopName });
+        const preferCflVoie = allowCflFallback && !!cflVoies && isLikelyCflStopName(stopName);
         let voieLabel = null;
 
         if (!preferCflVoie && typeof resolveVoieForStop === 'function') {
@@ -26027,7 +26063,7 @@ if (statsEl){
           });
         }
 
-        if (!voieLabel && typeof resolveCflVoieForStop === 'function') {
+        if (!voieLabel && allowCflFallback && typeof resolveCflVoieForStop === 'function') {
           voieLabel = resolveCflVoieForStop({ voiesMap: cflVoies || voies, stopName });
         }
 
