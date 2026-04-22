@@ -1,8 +1,9 @@
-const CACHE_NAME = 'lbetaillere-v8';
+const CACHE_NAME = 'lbetaillere-v9';
 const ASSETS = [
   './',
   './index63.html',
-  './index63.html#home',
+  './index63.html?source=pwa',
+  './carte.html',
   './manifest.webmanifest',
   './service-worker.js',
   './logoText.png',
@@ -28,6 +29,7 @@ self.addEventListener('fetch', (event) => {
   if (event.request.method !== 'GET') return;
   const url = new URL(event.request.url);
   const sameOrigin = url.origin === self.location.origin;
+  const isNavigate = event.request.mode === 'navigate';
   event.respondWith(
     caches.match(event.request).then((cached) => {
       if (cached) return cached;
@@ -48,7 +50,13 @@ self.addEventListener('fetch', (event) => {
           }
           return response;
         })
-        .catch(() => caches.match('./index63.html'));
+        .catch(() => {
+          if (!isNavigate) return caches.match('./index63.html');
+          if (/\/carte(?:\.html)?$/i.test(url.pathname)){
+            return caches.match('./carte.html') || caches.match('./index63.html');
+          }
+          return caches.match('./index63.html');
+        });
     })
   );
 });
