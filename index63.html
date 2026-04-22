@@ -13861,6 +13861,36 @@ function pickVoieFromEntry(entry, mode = 'dep'){
     : (dep || generic || arr);
 }
 
+function resolveVoieByStopOnlyLikeCarte({ voiesMap, stopName, mode = 'dep' }){
+  if (!(voiesMap instanceof Map) || !stopName) return null;
+  const stopNorm = normalizeVoiesTrainKey(stopName);
+  if (!stopNorm) return null;
+
+  // Priorité aux entrées explicites dep/arr, puis fallback générique.
+  let genericCandidate = null;
+  for (const [k, entry] of voiesMap.entries()){
+    if (typeof k !== 'string' || !k.startsWith(stopNorm + '|')) continue;
+    if (!entry || typeof entry !== 'object') {
+      const asText = pickVoieFromEntry(entry, mode);
+      if (!genericCandidate && asText) genericCandidate = asText;
+      continue;
+    }
+    const dep = normalizeVoieValue(entry.depTrack ?? entry.departure_track ?? entry.dep ?? entry.voie_depart);
+    const arr = normalizeVoieValue(entry.arrTrack ?? entry.arrival_track ?? entry.arr ?? entry.voie_arrivee);
+    const generic = normalizeVoieValue(entry.genericTrack ?? entry.track ?? entry.platform ?? entry.voie ?? entry.quai);
+    if (mode === 'arr'){
+      if (arr) return arr;
+      if (!genericCandidate && generic) genericCandidate = generic;
+      if (!genericCandidate && dep) genericCandidate = dep;
+    } else {
+      if (dep) return dep;
+      if (!genericCandidate && generic) genericCandidate = generic;
+      if (!genericCandidate && arr) genericCandidate = arr;
+    }
+  }
+  return genericCandidate;
+}
+
 const LB_ENDPOINTS = Object.freeze({
   voiesByTrain: 'https://vps.labetaillere.fr/gtfs/voies_by_train.json',
   retardsCfl: 'https://vps.labetaillere.fr/gtfs/retards_cfl.json',
@@ -14205,11 +14235,37 @@ function resolveCflVoieForStop({ voiesMap, stopName }){
   return null;
 }
 
-function resolveVoieForStop({ voiesMap, stopName, baseTimeRaw, timeCandidates, mode = 'dep' }){
+function resolveVoieForStop({ voiesMap, stopName, baseTimeRaw, timeCandidates, mode = 'dep', preferStationResolver = false }){
   if (!(voiesMap instanceof Map) || !stopName) return null;
+  const candidates = Array.isArray(timeCandidates) ? timeCandidates : [baseTimeRaw];
+  const parseMinFromRaw = (raw) => {
+    const hhmm = normalizeVoiesBaseTime(raw);
+    if (!hhmm) return null;
+    const m = /^([0-2]\d):([0-5]\d)$/.exec(hhmm);
+    if (!m) return null;
+    return (parseInt(m[1], 10) * 60) + parseInt(m[2], 10);
+  };
+  let refMin = null;
+  for (const raw of candidates){
+    const mm = parseMinFromRaw(raw);
+    if (mm != null) { refMin = mm; break; }
+  }
+
+  // Même logique que la carte: pas de voie "parasite" projetée trop loin dans le futur.
+  // Si on est en mode station-first (gares FR), on n'affiche une voie que proche de l'horaire courant.
+  if (preferStationResolver && refMin != null){
+    const now = new Date();
+    const nowMin = now.getHours() * 60 + now.getMinutes();
+    const delta = Math.min(Math.abs(refMin - nowMin), 1440 - Math.abs(refMin - nowMin));
+    if (delta > 40) return null;
+  }
+
+  const stopOnlyVoie = preferStationResolver
+    ? resolveVoieByStopOnlyLikeCarte({ voiesMap, stopName, mode })
+    : null;
+  if (preferStationResolver && stopOnlyVoie) return stopOnlyVoie;
 
   // (1) Match strict: stop + heure (comportement actuel)
-  const candidates = Array.isArray(timeCandidates) ? timeCandidates : [baseTimeRaw];
   for (const raw of candidates) {
     if (!raw) continue;
     const timeHHMM = normalizeVoiesBaseTime(raw);
@@ -14219,6 +14275,8 @@ function resolveVoieForStop({ voiesMap, stopName, baseTimeRaw, timeCandidates, m
     const voie = pickVoieFromEntry(voiesMap.get(key), mode);
     if (voie) return voie;
   }
+
+  if (stopOnlyVoie) return stopOnlyVoie;
 
   // (2) Fallback "secours": même logique prudente que la carte.
   // On ne prend une voie du même arrêt que si l'heure est proche,
@@ -14233,12 +14291,6 @@ function resolveVoieForStop({ voiesMap, stopName, baseTimeRaw, timeCandidates, m
   };
 
   // heure "référence" pour choisir la voie la plus proche si plusieurs entrées pour le même stop
-  let refMin = null;
-  for (const raw of candidates) {
-    const t = normalizeVoiesBaseTime(raw);
-    const mm = parseMin(t);
-    if (mm != null) { refMin = mm; break; }
-  }
 
   let bestVoie = null;
   let bestDiff = Infinity;
@@ -19485,7 +19537,8 @@ const stopHasSchedule = (result, stopName) => {
             stopName,
             baseTimeRaw: base,
             timeCandidates: voieTimeCandidates,
-            mode: voieMode
+            mode: voieMode,
+            preferStationResolver: !allowCflFallback
           });
         }
         if (!voieLabel && allowCflFallback) {
@@ -19497,7 +19550,8 @@ const stopHasSchedule = (result, stopName) => {
             stopName,
             baseTimeRaw: base,
             timeCandidates: voieTimeCandidates,
-            mode: voieMode
+            mode: voieMode,
+            preferStationResolver: !allowCflFallback
           });
         }
         const baseClock = ft(base);
@@ -24355,6 +24409,7 @@ function getGtfsDelayForStop(trainNumber, stopName){
 
       // Voie (si dispo) : résolue à partir de l'heure base / amendée (même logique que le tableau)
       let voieLabel = null;
+      const allowCflFallback = !isLikelyFrenchStopContext({ stopName: name, stopPointId: stopId });
       if (voiesMap && (typeof resolveVoieForStop === 'function')) {
         const candidates = [];
         if (baseHHMM) candidates.push(baseHHMM);
@@ -24371,9 +24426,8 @@ function getGtfsDelayForStop(trainNumber, stopName){
           candidates.push(String(hh).padStart(2,'0') + String(mm).padStart(2,'0'));
         }
         const voieMode = (impAny?.base_departure_time || impAny?.amended_departure_time || st?.departure_time) ? 'dep' : 'arr';
-        voieLabel = resolveVoieForStop({ voiesMap, stopName: name, baseTimeRaw: plannedRaw, timeCandidates: candidates, mode: voieMode });
+        voieLabel = resolveVoieForStop({ voiesMap, stopName: name, baseTimeRaw: plannedRaw, timeCandidates: candidates, mode: voieMode, preferStationResolver: !allowCflFallback });
       }
-      const allowCflFallback = !isLikelyFrenchStopContext({ stopName: name });
 	if (!voieLabel && allowCflFallback && cflVoiesMap && typeof resolveCflVoieForStop === 'function') {
         voieLabel = resolveCflVoieForStop({ voiesMap: cflVoiesMap, stopName: name });
       }
@@ -24562,6 +24616,8 @@ function getGtfsDelayForStop(trainNumber, stopName){
       const effectiveMin = (amendedMin != null) ? amendedMin : plannedMin;
 
       let voieLabel = null;
+      const stopPointId = st?.stop_point?.id || imp?.stop_point?.id || '';
+      const allowCflFallback = !isLikelyFrenchStopContext({ stopName: name, stopPointId });
       if (voiesMap && typeof resolveVoieForStop === 'function'){
         const candidates = [
           imp?.base_departure_time,
@@ -24580,10 +24636,8 @@ function getGtfsDelayForStop(trainNumber, stopName){
           candidates.push(String(hh).padStart(2,'0') + String(mm).padStart(2,'0'));
         }
         const voieMode = (imp?.base_departure_time || imp?.amended_departure_time || st?.departure_time) ? 'dep' : 'arr';
-        voieLabel = resolveVoieForStop({ voiesMap, stopName: name, baseTimeRaw: plannedRaw, timeCandidates: candidates, mode: voieMode });
+        voieLabel = resolveVoieForStop({ voiesMap, stopName: name, baseTimeRaw: plannedRaw, timeCandidates: candidates, mode: voieMode, preferStationResolver: !allowCflFallback });
       }
-      const stopPointId = st?.stop_point?.id || imp?.stop_point?.id || '';
-      const allowCflFallback = !isLikelyFrenchStopContext({ stopName: name, stopPointId });
       if (!voieLabel && allowCflFallback && cflVoiesMap && typeof resolveCflVoieForStop === 'function') {
         voieLabel = resolveCflVoieForStop({ voiesMap: cflVoiesMap, stopName: name });
       }
@@ -26101,7 +26155,8 @@ if (statsEl){
             stopName,
             baseTimeRaw,
             timeCandidates: voieTimeCandidates,
-            mode: 'dep'
+            mode: 'dep',
+            preferStationResolver: !allowCflFallback
           });
         }
 
@@ -26115,7 +26170,8 @@ if (statsEl){
             stopName,
             baseTimeRaw,
             timeCandidates: voieTimeCandidates,
-            mode: 'dep'
+            mode: 'dep',
+            preferStationResolver: !allowCflFallback
           });
         }
 
