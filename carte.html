@@ -658,8 +658,22 @@ function escapeHTML(str){
     return Array.isArray(baseOrder) && baseOrder.length ? baseOrder : DEFAULT_REALTIME_SOURCE_ORDER;
   }
 
-  function realtimeOptionsForTrain(train){
-    return { preferredSources: resolvePreferredRealtimeSourceOrder(train), trainContext: train || null };
+  function resolveRealtimeSourcesForStation(stationContext, fallbackOrder){
+    const baseOrder = Array.isArray(fallbackOrder) && fallbackOrder.length
+      ? fallbackOrder.map(normalizeRealtimeSourceKey).filter(Boolean)
+      : DEFAULT_REALTIME_SOURCE_ORDER;
+    if (!stationContext) return baseOrder;
+    const stationInfo = getStationBoardContext(stationContext);
+    if (stationInfo?.isFrench) return ['sncf'];
+    if (stationInfo?.isCfl) return CFL_REALTIME_SOURCE_ORDER;
+    return baseOrder;
+  }
+
+  function realtimeOptionsForTrain(train, context = null){
+    const preferred = resolvePreferredRealtimeSourceOrder(train);
+    const stationContext = context && typeof context === 'object' ? (context.stationContext || null) : null;
+    const preferredSources = resolveRealtimeSourcesForStation(stationContext, preferred);
+    return { preferredSources, trainContext: train || null };
   }
 
   function getRealtimePerStationMaps(normalizedKey, preferredOrder){
@@ -2911,6 +2925,7 @@ function adaptDelayEntryForStop(entry, stopMeta){
     const preferredSources = Array.isArray(options.preferredSources) && options.preferredSources.length
       ? options.preferredSources
       : resolvePreferredRealtimeSourceOrder(trainContext || null);
+    const allowedSources = new Set(preferredSources.map(normalizeRealtimeSourceKey).filter(Boolean));
     const perSourceMaps = new Map();
     if (normalizedKey != null){
       const matches = getRealtimePerStationMaps(String(normalizedKey), preferredSources);
@@ -2981,6 +2996,10 @@ function adaptDelayEntryForStop(entry, stopMeta){
       }
       if (!entry && combinedFallback){
         entry = findDelayEntryForStop(combinedFallback, stopMeta);
+        const entrySource = normalizeRealtimeSourceKey(entry?.sourceKey || entry?.source);
+        if (entry && allowedSources.size && entrySource && !allowedSources.has(entrySource)){
+          entry = null;
+        }
       }
       if (!entry) continue;
       if (entry.value == null){
@@ -4885,7 +4904,7 @@ const mapContainerEl = map.getContainer();
           tripId,
           seq,
           numberKey,
-          realtimeOptionsForTrain(train)
+          realtimeOptionsForTrain(train, { stationContext: station })
         );
       const profileStop = targetIdx >= 0 ? realtimeProfile?.stops?.[targetIdx] : null;
       const cancellationInfo = realtimeProfile?.cancellation;
