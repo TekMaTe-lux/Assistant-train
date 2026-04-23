@@ -893,6 +893,38 @@ body {
 .live-wall-form input{ flex:1; min-width:0; }
 .live-wall-empty,
 .live-wall-cta{ opacity:.7; font-size:.82rem; }
+.live-wall-tools{ margin-top:8px; display:flex; gap:6px; flex-wrap:wrap; }
+.live-wall-tool-btn{
+  border:1px solid rgba(0,240,255,.35);
+  background:rgba(0,24,40,.55);
+  color:#dffbff;
+  border-radius:999px;
+  padding:5px 10px;
+  font-size:.72rem;
+  font-weight:800;
+  cursor:pointer;
+}
+.live-wall-tool-btn--signal{ border-color:rgba(255,210,102,.52); color:#ffe8b0; }
+.live-wall-tool-btn[disabled]{ opacity:.45; cursor:not-allowed; }
+.live-signal-modal{ position:fixed; inset:0; z-index:3600; display:none; align-items:center; justify-content:center; background:rgba(3,9,16,.75); padding:14px; }
+.live-signal-modal.is-open{ display:flex; }
+.live-signal-card{ width:min(520px, 100%); border:1px solid rgba(0,240,255,.35); border-radius:16px; background:linear-gradient(170deg, rgba(8,18,35,.97), rgba(5,13,24,.98)); padding:14px; box-shadow:0 16px 38px rgba(0,0,0,.45); }
+.live-signal-head{ display:flex; justify-content:space-between; align-items:center; gap:8px; margin-bottom:8px; }
+.live-signal-title{ margin:0; color:#8ff3ff; font-size:1rem; }
+.live-signal-close{ border:none; background:transparent; color:#dffbff; font-size:1.2rem; cursor:pointer; }
+.live-signal-form{ display:grid; gap:8px; }
+.live-signal-form label{ font-size:.75rem; color:#9ec0d8; }
+.live-signal-form select,
+.live-signal-form textarea{
+  width:100%; border-radius:10px; border:1px solid rgba(0,240,255,.24);
+  background:rgba(8,20,36,.9); color:#e8f5ff; padding:8px; font:inherit;
+}
+.live-signal-types{ display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:6px; }
+.live-signal-type-btn{
+  border:1px solid rgba(0,240,255,.25); border-radius:10px; background:rgba(8,21,35,.72);
+  color:#dffbff; font-size:.72rem; font-weight:700; padding:7px 8px; cursor:pointer;
+}
+.live-signal-type-btn.is-active{ border-color:rgba(255,210,102,.65); color:#ffe6b0; box-shadow:0 0 0 1px rgba(255,210,102,.2) inset; }
 
 .fav-comments-row{ display:inline; }
 .fav-comment-btn{
@@ -8849,6 +8881,10 @@ body{
         <input id="homeLiveWallInput" type="text" maxlength="180" placeholder="Partager une info rapide">
         <button type="submit" class="auth-button">Envoyer</button>
       </form>
+      <div class="live-wall-tools">
+        <button id="homeLiveOpenSignals" class="live-wall-tool-btn" type="button">📡 Trains live</button>
+        <button id="homeLiveOpenSignalReport" class="live-wall-tool-btn live-wall-tool-btn--signal" type="button">⚠️ Signaler</button>
+      </div>
     </article>
 
     <article class="home-card" aria-label="Météo sur votre ligne">
@@ -8887,6 +8923,29 @@ body{
   </article>
 
 </section>
+
+<div id="liveSignalModal" class="live-signal-modal" aria-hidden="true">
+  <div class="live-signal-card" role="dialog" aria-modal="true" aria-labelledby="liveSignalModalTitle">
+    <div class="live-signal-head">
+      <h3 id="liveSignalModalTitle" class="live-signal-title">⚠️ Signaler un train en live</h3>
+      <button id="liveSignalClose" class="live-signal-close" type="button" aria-label="Fermer">✕</button>
+    </div>
+    <form id="liveSignalForm" class="live-signal-form" autocomplete="off">
+      <label for="liveSignalTrainSelect">Train en circulation</label>
+      <select id="liveSignalTrainSelect" required></select>
+      <label>Type de signalement</label>
+      <div class="live-signal-types" id="liveSignalTypes">
+        <button class="live-signal-type-btn is-active" type="button" data-signal-type="retard">⏱ Retard</button>
+        <button class="live-signal-type-btn" type="button" data-signal-type="suppression">❌ Suppression</button>
+        <button class="live-signal-type-btn" type="button" data-signal-type="affluence">👥 Affluence</button>
+        <button class="live-signal-type-btn" type="button" data-signal-type="info">ℹ️ Information</button>
+      </div>
+      <label for="liveSignalMessage">Message (visible dans le mur de commentaires)</label>
+      <textarea id="liveSignalMessage" rows="4" maxlength="180" placeholder="Ex: TER 88528 stoppé à Metz, +12 min"></textarea>
+      <button type="submit" class="auth-button">Publier le signalement</button>
+    </form>
+  </div>
+</div>
 
   <div id="lbAuthModal" class="lb-auth-modal" aria-hidden="true">
     <div class="lb-auth-card" role="dialog" aria-modal="true" aria-labelledby="lbAuthTitle">
@@ -20037,6 +20096,7 @@ function scheduleWeatherAfterTableSettled(){
   };
 
   const LB_COMMENTS_API = `${LB_API}/comments`;
+  const LB_SIGNALS_API = `${LB_API}/signals`;
   const commentApiCandidates = (path = '') => {
     const normalized = String(path || '').startsWith('/') ? String(path || '') : `/${String(path || '')}`;
     const rel = `/api/comments${normalized === '/' ? '' : normalized}`;
@@ -20058,7 +20118,7 @@ function scheduleWeatherAfterTableSettled(){
     }
     throw lastError || new Error('Impossible de joindre l’API commentaires');
   }
-  let lbCommentState = { wall: [], trains: {} };
+  let lbCommentState = { wall: [], trains: {}, signals: [] };
   window.lbCommentState = lbCommentState;
   let lbCurrentDetailTrain = '';
   let lbCommentsPoller = null;
@@ -20081,6 +20141,21 @@ function scheduleWeatherAfterTableSettled(){
     };
   }
 
+  function normalizeSignalItem(raw){
+    if (!raw || typeof raw !== 'object') return null;
+    const createdAt = raw.created_at || raw.createdAt || raw.ts || raw.timestamp || Date.now();
+    const createdTs = Number.isFinite(Number(createdAt)) ? Number(createdAt) : Date.parse(createdAt) || Date.now();
+    const type = String(raw.type || raw.signal_type || 'info').trim().toLowerCase();
+    return {
+      id: raw.id || `sig_${createdTs}_${Math.random().toString(36).slice(2, 7)}`,
+      pseudo: String(raw.pseudo || raw.username || raw.user_pseudo || 'Voyageur').trim().slice(0, 24),
+      text: String(raw.message || raw.text || '').trim().slice(0, 180),
+      trainNumber: String(raw.train_number || raw.trainNumber || raw.train || '').trim(),
+      type,
+      ts: createdTs
+    };
+  }
+
   const fmtHour = (ts) => {
     try{ return new Date(ts || Date.now()).toLocaleTimeString('fr-FR', { hour:'2-digit', minute:'2-digit' }); }
     catch(e){ return '—'; }
@@ -20091,20 +20166,26 @@ function scheduleWeatherAfterTableSettled(){
     const form = $('homeLiveWallForm');
     const input = $('homeLiveWallInput');
     const submitBtn = form?.querySelector('button[type="submit"], button:not([type]), .auth-button');
+    const signalBtn = $('homeLiveOpenSignalReport');
     const cta = $('homeLiveWallCta');
     const countEl = $('homeLiveWallCount');
     if (!feed || !form || !input || !countEl) return;
 
     const wallSource = Array.isArray(messages) ? messages : lbCommentState.wall;
     const wall = Array.isArray(wallSource) ? wallSource.slice(0, 50) : [];
-    countEl.textContent = String(Array.isArray(lbCommentState.wall) ? lbCommentState.wall.length : 0);
+    const signals = Array.isArray(lbCommentState.signals) ? lbCommentState.signals : [];
+    const merged = [...signals, ...wall]
+      .sort((a, b) => Number(b?.ts || 0) - Number(a?.ts || 0))
+      .slice(0, 50);
+    countEl.textContent = String(merged.length);
 
-    if (!wall.length) {
+    if (!merged.length) {
       feed.innerHTML = '<div class="live-wall-empty">Aucun commentaire pour le moment.</div>';
     } else {
-      feed.innerHTML = wall.map((it) => `
+      const signalLabels = { retard: '⏱ Retard', suppression: '❌ Suppression', affluence: '👥 Affluence', info: 'ℹ️ Info' };
+      feed.innerHTML = merged.map((it) => `
         <div class="live-wall-item live-wall-item--home live-wall-item--compact">
-          <div class="live-wall-item-text"><strong>${escapeHtml(it.pseudo || 'Voyageur')}</strong><span class="live-wall-inline-meta">${escapeHtml(fmtHour(it.ts))}</span> : ${escapeHtml(it.text || '')}${currentUser?.role === 'admin' && it.id ? `<span class="fav-comments-row"><span class="fav-comment-btn" role="button" tabindex="0" data-comment-delete="${escapeHtml(String(it.id))}" aria-label="Supprimer le commentaire" title="Supprimer le commentaire">❌</span></span>` : ''}</div>
+          <div class="live-wall-item-text"><strong>${escapeHtml(it.pseudo || 'Voyageur')}</strong><span class="live-wall-inline-meta">${escapeHtml(fmtHour(it.ts))}</span>${it.type ? ` <span class="live-wall-inline-meta">• ${escapeHtml(signalLabels[it.type] || 'Signalement')}</span>` : ''}${it.trainNumber ? ` <span class="live-wall-inline-meta">#${escapeHtml(it.trainNumber)}</span>` : ''} : ${escapeHtml(it.text || '')}${currentUser?.role === 'admin' && it.id && !it.type ? `<span class="fav-comments-row"><span class="fav-comment-btn" role="button" tabindex="0" data-comment-delete="${escapeHtml(String(it.id))}" aria-label="Supprimer le commentaire" title="Supprimer le commentaire">❌</span></span>` : ''}</div>
         </div>
       `).join('');
       feed.scrollTop = 0;
@@ -20114,6 +20195,7 @@ function scheduleWeatherAfterTableSettled(){
     const can = isCommentingAllowed();
     input.disabled = !can;
     if (submitBtn) submitBtn.disabled = !can;
+    if (signalBtn) signalBtn.disabled = !can;
     input.placeholder = can ? 'Partager une info rapide' : 'Connectez-vous pour commenter';
     cta.hidden = can;
     if (!can) cta.textContent = 'Connectez-vous pour commenter en direct.';
@@ -20200,6 +20282,29 @@ function scheduleWeatherAfterTableSettled(){
     }
   }
 
+  async function loadSignals(){
+    try{
+      const res = await fetch(`${LB_SIGNALS_API}?scope=live`, { credentials: 'include' });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      const list = Array.isArray(data) ? data : (Array.isArray(data?.signals) ? data.signals : []);
+      lbCommentState.signals = list
+        .map(normalizeSignalItem)
+        .filter(Boolean)
+        .sort((a, b) => Number(b?.ts || 0) - Number(a?.ts || 0))
+        .slice(0, 50);
+      window.lbCommentState = lbCommentState;
+      renderCommentsUI();
+      return lbCommentState.signals;
+    }catch(err){
+      console.warn('Impossible de charger les signalements live', err);
+      if (!Array.isArray(lbCommentState.signals)) lbCommentState.signals = [];
+      window.lbCommentState = lbCommentState;
+      renderCommentsUI();
+      return lbCommentState.signals;
+    }
+  }
+
   async function sendMessage(text){
     const message = String(text || '').trim().slice(0, 180);
     if (!message) throw new Error('Commentaire vide');
@@ -20216,6 +20321,28 @@ function scheduleWeatherAfterTableSettled(){
     if (!res.ok) throw new Error(data?.error || `HTTP ${res.status}`);
 
     await loadMessages();
+    return data;
+  }
+
+  async function sendSignal({ trainNumber, type, message }){
+    const cleanTrain = String(trainNumber || '').trim();
+    const cleanType = String(type || '').trim().toLowerCase() || 'info';
+    const cleanMessage = String(message || '').trim().slice(0, 180);
+    if (!cleanTrain) throw new Error('Sélectionnez un train live');
+    if (!cleanMessage) throw new Error('Le message de signalement est vide');
+    if (!isCommentingAllowed()) throw new Error('Connexion requise');
+
+    const res = await fetch(LB_SIGNALS_API, {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ train_number: cleanTrain, type: cleanType, message: cleanMessage, scope: 'live' })
+    });
+    let data = null;
+    try { data = await res.json(); } catch(_err) {}
+    if (!res.ok) throw new Error(data?.error || `HTTP ${res.status}`);
+
+    await loadSignals();
     return data;
   }
 
@@ -20240,6 +20367,7 @@ function scheduleWeatherAfterTableSettled(){
   window.checkAuth = checkAuth;
   window.loadMessages = loadMessages;
   window.sendMessage = sendMessage;
+  window.sendSignal = sendSignal;
   window.deleteComment = deleteComment;
 
   function bindCommentForms(){
@@ -20255,6 +20383,109 @@ function scheduleWeatherAfterTableSettled(){
           renderCommentsUI();
         }catch(err){
           alert(err?.message || "Impossible d'ajouter le commentaire.");
+        }
+      });
+    }
+
+    const openSignalBtn = $('homeLiveOpenSignalReport');
+    const openSignalsBtn = $('homeLiveOpenSignals');
+    const signalModal = $('liveSignalModal');
+    const signalClose = $('liveSignalClose');
+    const signalForm = $('liveSignalForm');
+    const signalTrain = $('liveSignalTrainSelect');
+    const signalText = $('liveSignalMessage');
+    const signalTypes = $('liveSignalTypes');
+    let selectedSignalType = 'retard';
+
+    function getLiveTrains(){
+      const numbers = new Set();
+      document.querySelectorAll('th.train-header[data-train-number], th[data-train-number]').forEach((th) => {
+        const raw = String(th.getAttribute('data-train-number') || '').trim();
+        if (!raw) return;
+        const pretty = raw.replace(/^CFL-/, '').trim();
+        if (pretty) numbers.add(pretty);
+      });
+      return Array.from(numbers).slice(0, 80);
+    }
+
+    function hydrateSignalTrainSelect(){
+      if (!signalTrain) return;
+      const trains = getLiveTrains();
+      if (!trains.length){
+        signalTrain.innerHTML = '<option value="">Aucun train live détecté</option>';
+        signalTrain.value = '';
+        return;
+      }
+      signalTrain.innerHTML = trains.map((num) => `<option value="${escapeHtml(num)}">${escapeHtml(num)}</option>`).join('');
+    }
+
+    function openSignalModal(){
+      if (!signalModal) return;
+      hydrateSignalTrainSelect();
+      signalModal.classList.add('is-open');
+      signalModal.setAttribute('aria-hidden', 'false');
+    }
+
+    function closeSignalModal(){
+      if (!signalModal) return;
+      signalModal.classList.remove('is-open');
+      signalModal.setAttribute('aria-hidden', 'true');
+    }
+
+    if (openSignalBtn && !openSignalBtn.dataset.bound){
+      openSignalBtn.dataset.bound = '1';
+      openSignalBtn.addEventListener('click', () => {
+        if (!isCommentingAllowed()){
+          alert('Connectez-vous pour signaler un événement en live.');
+          return;
+        }
+        openSignalModal();
+      });
+    }
+
+    if (openSignalsBtn && !openSignalsBtn.dataset.bound){
+      openSignalsBtn.dataset.bound = '1';
+      openSignalsBtn.addEventListener('click', async () => {
+        await Promise.allSettled([loadMessages(), loadSignals()]);
+      });
+    }
+
+    if (signalClose && !signalClose.dataset.bound){
+      signalClose.dataset.bound = '1';
+      signalClose.addEventListener('click', closeSignalModal);
+    }
+    if (signalModal && !signalModal.dataset.bound){
+      signalModal.dataset.bound = '1';
+      signalModal.addEventListener('click', (e) => {
+        if (e.target === signalModal) closeSignalModal();
+      });
+    }
+    if (signalTypes && !signalTypes.dataset.bound){
+      signalTypes.dataset.bound = '1';
+      signalTypes.addEventListener('click', (e) => {
+        const btn = e.target.closest('[data-signal-type]');
+        if (!btn) return;
+        selectedSignalType = String(btn.getAttribute('data-signal-type') || 'info');
+        signalTypes.querySelectorAll('[data-signal-type]').forEach((node) => {
+          node.classList.toggle('is-active', node === btn);
+        });
+      });
+    }
+    if (signalForm && !signalForm.dataset.bound){
+      signalForm.dataset.bound = '1';
+      signalForm.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        try{
+          await sendSignal({
+            trainNumber: signalTrain?.value || '',
+            type: selectedSignalType,
+            message: signalText?.value || ''
+          });
+          if (signalText) signalText.value = '';
+          closeSignalModal();
+          await loadMessages();
+        }catch(err){
+          alert(err?.message || "Impossible d'envoyer le signalement.");
         }
       });
     }
@@ -20297,7 +20528,10 @@ function scheduleWeatherAfterTableSettled(){
 
   function startCommentsPolling(){
     if (lbCommentsPoller) clearInterval(lbCommentsPoller);
-    lbCommentsPoller = setInterval(loadMessages, 5000);
+    lbCommentsPoller = setInterval(() => {
+      loadMessages();
+      loadSignals();
+    }, 5000);
   }
 
   window.lbComments = {
@@ -20314,7 +20548,10 @@ function scheduleWeatherAfterTableSettled(){
 
   bindCommentForms();
   renderCommentsUI();
-  checkAuth().finally(loadMessages);
+  checkAuth().finally(() => {
+    loadMessages();
+    loadSignals();
+  });
   startCommentsPolling();
   const openModal = () => {
     const modal = $("lbAuthModal");
