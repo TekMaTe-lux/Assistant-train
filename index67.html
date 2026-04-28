@@ -8422,7 +8422,7 @@ body.modal-open{ overflow:hidden; }
 @media (max-width: 768px){ .fav-grid{ grid-template-columns: minmax(0, 1fr); } }
 
 
-/* ===== Favoris: badge composition (US/UM/UM3) + réduit ===== */
+/* ===== Favoris: badge composition (US/UM/UM3/US5/UM Mixte) + réduit ===== */
 .fav-train-wrap{display:inline-flex;align-items:center;gap:10px}
 .fav-train-num{font-weight:900}
 .fav-type-wrap{display:inline-flex;align-items:center;gap:8px;margin-left:6px}
@@ -14525,9 +14525,11 @@ async function loadCompoData({ forceFresh = false, background = false } = {}) {
 
 // Mapping composition → classe CSS (couleur du numéro de train)
 function compoClassFromValue(comp){
-  const c = String(comp || '').trim().toUpperCase().replace(/\s+/g,'');
+  const c = String(comp || '').trim().toUpperCase().replace(/[\s_-]+/g,'');
   if (c === 'US') return 'us-train';
+  if (c === 'US5') return 'us-train';
   if (c === 'UM3' || c === 'UMX3' || c === 'UM-3') return 'um3-train';
+  if (c === 'UMMIXTE' || c === 'UMMIX') return 'um-train';
   if (c.startsWith('UM')) return 'um-train';
   return 'no-compo-text'; // compo inconnue -> texte blanc uniquement
 }
@@ -27826,19 +27828,30 @@ function selectAffTrain(num,stopIndex=0){
 }
 
   
-  // ===== Favoris: badge composition US/UM/UM3 + réduction =====
+  // ===== Favoris: badge composition US/UM/UM3/US5/UM Mixte + réduction =====
   (function(){
     if (!window.lbReducedSeats) window.lbReducedSeats = new Set();
 
     const _normType = (t)=>{
-      t = String(t||'').toUpperCase().trim();
-      return (t==='US'||t==='UM'||t==='UM3') ? t : '';
+      t = String(t||'').toUpperCase().trim().replace(/[\s_-]+/g,'');
+      if (t === 'US' || t === 'UM' || t === 'UM3' || t === 'US5' || t === 'UMMIXTE' || t === 'UMMIX') return t;
+      return '';
     };
     const _downgrade = (t)=>{
       if (t==='UM3') return 'UM';
+      if (t==='UMMIXTE' || t==='UMMIX') return 'US5';
       if (t==='UM')  return 'US';
+      if (t==='US5') return 'US5';
       if (t==='US')  return 'US';
       return '';
+    };
+    const _iconsByType = (t)=>{
+      if (t === 'US') return ['US3.png'];
+      if (t === 'UM') return ['US3.png', 'US3.png'];
+      if (t === 'UM3') return ['US3.png', 'US3.png', 'US3.png'];
+      if (t === 'US5') return ['US5.png'];
+      if (t === 'UMMIXTE' || t === 'UMMIX') return ['US5.png', 'US3.png'];
+      return [];
     };
     const _getBaseType = (trainNum, fallbackType)=>{
       // 1) fallbackType (ex: trainType from affluence JSON)
@@ -27860,10 +27873,9 @@ function selectAffTrain(num,stopIndex=0){
       if (!base) return '';
       const isReduced = window.lbReducedSeats && window.lbReducedSeats.has(num);
       const shown = (isReduced ? _downgrade(base) : base) || base;
-	  const iconCount = (shown === 'UM3') ? 3 : (shown === 'UM') ? 2 : (shown === 'US') ? 1 : 0;
-      const icon = `<img class="lb-compo-icon" src="US3.png" alt="Rame TER" loading="eager" decoding="async" onerror="this.onerror=null;this.replaceWith(document.createTextNode('🚆'));">`;
-      const compoHtml = iconCount > 0
-        ? `<span class="lb-compo-inline" aria-label="${iconCount} rame(s)">${icon.repeat(iconCount)}</span>`
+      const iconSources = _iconsByType(shown);
+      const compoHtml = iconSources.length > 0
+        ? `<span class="lb-compo-inline" aria-label="${iconSources.length} rame(s)">${iconSources.map(src => `<img class="lb-compo-icon" src="${src}" alt="Rame TER" loading="eager" decoding="async" onerror="this.onerror=null;this.replaceWith(document.createTextNode('🚆'));">`).join('')}</span>`
         : `<span>${shown}</span>`;
 
       const reducedBadge = isReduced
@@ -31969,6 +31981,8 @@ body{ padding-bottom: calc(var(--bottom-bar-height, 58px) + 10px) !important; }
         <button type="button" class="lb-info-quick-btn" data-info-tag="composition-simple">🚆 Composition simple</button>
         <button type="button" class="lb-info-quick-btn" data-info-tag="composition-double">🚆🚆 Composition double</button>
         <button type="button" class="lb-info-quick-btn" data-info-tag="composition-triple">🚆🚆🚆 Composition triple</button>
+        <button type="button" class="lb-info-quick-btn" data-info-tag="composition-us5">🚅 Composition US5</button>
+        <button type="button" class="lb-info-quick-btn" data-info-tag="composition-um-mixte">🚅🚆 Composition UM Mixte</button>
         <button type="button" class="lb-info-quick-btn" data-info-tag="climatisation-hs">❄️ Climatisation HS</button>
         <button type="button" class="lb-info-quick-btn" data-info-tag="chauffage-hs">🌡️ Chauffage HS</button>
         <button type="button" class="lb-info-quick-btn" data-info-tag="forte-affluence">👥 Forte affluence</button>
@@ -32118,10 +32132,12 @@ body{ padding-bottom: calc(var(--bottom-bar-height, 58px) + 10px) !important; }
   };
   const getCompoForTrain = (trainNumber)=>{
     const raw = window.compoData?.[String(trainNumber || '').trim()] || '';
-    const normalized = String(raw || '').trim().toUpperCase();
+    const normalized = String(raw || '').trim().toUpperCase().replace(/[\s_-]+/g, '');
     if (!normalized) return '';
     if (normalized === 'US') return 'US';
+    if (normalized === 'US5') return 'US5';
     if (normalized.startsWith('UM3')) return 'UM3';
+    if (normalized === 'UMMIXTE' || normalized === 'UMMIX') return 'UMMIXTE';
     if (normalized.startsWith('UM')) return 'UM';
     return '';
   };
@@ -32129,20 +32145,33 @@ body{ padding-bottom: calc(var(--bottom-bar-height, 58px) + 10px) !important; }
     if (code === 'US') return '🚆';
     if (code === 'UM') return '🚆🚆';
     if (code === 'UM3') return '🚆🚆🚆';
+    if (code === 'US5') return '🚅';
+    if (code === 'UMMIXTE') return '🚅🚆';
     return '🚆?';
   };
   const compoMeaningLabel = (code)=>{
     if (code === 'US') return '🐮 Composition simple (US)';
     if (code === 'UM') return '🐮🐮 Composition double (UM)';
     if (code === 'UM3') return '🐮🐮🐮 Composition triple (UM3)';
+    if (code === 'US5') return '🐮 Composition US5';
+    if (code === 'UMMIXTE') return '🐮🐮 Composition UM Mixte';
     return '🐮 Composition inconnue';
   };
   const COMPO_ICON_SRC = 'US3.png';
+  const COMPO_ICON_US5_SRC = 'US5.png';
+  const compoIconSources = (code)=>{
+    if (code === 'US') return [COMPO_ICON_SRC];
+    if (code === 'UM') return [COMPO_ICON_SRC, COMPO_ICON_SRC];
+    if (code === 'UM3') return [COMPO_ICON_SRC, COMPO_ICON_SRC, COMPO_ICON_SRC];
+    if (code === 'US5') return [COMPO_ICON_US5_SRC];
+    if (code === 'UMMIXTE') return [COMPO_ICON_US5_SRC, COMPO_ICON_SRC];
+    return [];
+  };
   const compoVisualHtml = (code)=>{
-    const count = code === 'UM3' ? 3 : code === 'UM' ? 2 : code === 'US' ? 1 : 0;
-    if (!count) return safeEscape(compoVisual(code));
-    const img = '<img class="lb-compo-icon" src="' + COMPO_ICON_SRC + '" alt="Rame TER" loading="eager" decoding="async" onerror="this.onerror=null;this.replaceWith(document.createTextNode(\'🚆\'));">';
-    return '<span class="lb-compo-inline" aria-label="' + count + ' rame(s)">' + img.repeat(count) + '</span>';
+    const sources = compoIconSources(code);
+    if (!sources.length) return safeEscape(compoVisual(code));
+    const imgs = sources.map((src)=> '<img class="lb-compo-icon" src="' + src + '" alt="Rame TER" loading="eager" decoding="async" onerror="this.onerror=null;this.replaceWith(document.createTextNode(\'🚆\'));">').join('');
+    return '<span class="lb-compo-inline" aria-label="' + sources.length + ' rame(s)">' + imgs + '</span>';
   };
   const buildLiveRouteLineHtml = (train, info)=>{
     const from = safeEscape(train?.from || '—');
@@ -32159,6 +32188,8 @@ body{ padding-bottom: calc(var(--bottom-bar-height, 58px) + 10px) !important; }
       case 'composition-simple': return 'US';
       case 'composition-double': return 'UM';
       case 'composition-triple': return 'UM3';
+      case 'composition-us5': return 'US5';
+      case 'composition-um-mixte': return 'UMMIXTE';
       default: return '';
     }
   };
@@ -32166,6 +32197,8 @@ body{ padding-bottom: calc(var(--bottom-bar-height, 58px) + 10px) !important; }
     'composition-simple': '🚆 Composition simple',
     'composition-double': '🚆🚆 Composition double',
     'composition-triple': '🚆🚆🚆 Composition triple',
+    'composition-us5': '🚅 Composition US5',
+    'composition-um-mixte': '🚅🚆 Composition UM Mixte',
     'climatisation-hs': '❄️ Climatisation HS',
     'chauffage-hs': '🌡️ Chauffage HS',
     'forte-affluence': '👥 Forte affluence',
