@@ -3044,6 +3044,17 @@ table[data-snapshotting="true"] .delay-voie{
 }
 table[data-snapshotting="true"] .voie-badge{
   margin-left:0 !important;
+  white-space:nowrap !important;
+  word-break:keep-all !important;
+  overflow-wrap:normal !important;
+  display:inline-flex !important;
+}
+
+/* Colonne Gare: largeur renforcée en snapshot pour éviter débordements (gare + météo) */
+table[data-snapshotting="true"] th.gare-head,
+table[data-snapshotting="true"] td:first-child,
+table[data-snapshotting="true"] th:first-child{
+  min-width: 220px !important;
 }
     
   th, td {
@@ -14995,6 +15006,7 @@ async function loadVoiesByTrain({ forceFresh = false, onlyIfChanged = false } = 
   }
 
   voiesByTrainPromise = (async () => {
+	let prevFirstColMinWidths = [];
     try {
       let text = null;
       let loadedFrom = null;
@@ -16343,6 +16355,19 @@ if (!document.getElementById('css-row-focus')) {
       }
 
       const tableRect = table.getBoundingClientRect();
+	  const firstColCells = Array.from(table.querySelectorAll('tr > *:first-child'));
+      prevFirstColMinWidths = firstColCells.map((el) => el instanceof HTMLElement ? el.style.minWidth : '');
+      // Mesure "réelle": on prend la cellule gare/météo la plus large et on applique partout
+      let computedFirstColWidth = 220;
+      for (const cell of firstColCells) {
+        if (!(cell instanceof HTMLElement)) continue;
+        const w = Math.ceil(cell.scrollWidth || cell.getBoundingClientRect().width || 0);
+        if (w > computedFirstColWidth) computedFirstColWidth = w;
+      }
+      computedFirstColWidth = Math.min(340, Math.max(220, computedFirstColWidth + 14));
+      for (const cell of firstColCells) {
+        if (cell instanceof HTMLElement) cell.style.minWidth = `${computedFirstColWidth}px`;
+      }
       const scale = Math.min(2, Math.max(1, window.devicePixelRatio || 1));
       const canvas = await html2canvas(table, {
         backgroundColor: '#0b0f1a',
@@ -16364,15 +16389,42 @@ if (!document.getElementById('css-row-focus')) {
             cloneTable.style.setProperty('box-shadow', 'none', 'important');
             cloneTable.style.setProperty('filter', 'none', 'important');
           }
+		  const cloneFirstCol = Array.from(doc.querySelectorAll('table[data-snapshotting="true"] tr > *:first-child'));
+          cloneFirstCol.forEach((el) => {
+            if (el instanceof HTMLElement) el.style.setProperty('min-width', `${computedFirstColWidth}px`, 'important');
+          });
         }
       });
 
+	  // Bandeau titre + date/heure (au-dessus du tableau)
+      const titlePadding = 58;
+      const titledCanvas = document.createElement('canvas');
+      titledCanvas.width = canvas.width;
+      titledCanvas.height = canvas.height + titlePadding;
+      const tctx = titledCanvas.getContext('2d');
+      if (tctx) {
+        tctx.fillStyle = '#0b0f1a';
+        tctx.fillRect(0, 0, titledCanvas.width, titledCanvas.height);
+        tctx.fillStyle = 'rgba(0,240,255,0.20)';
+        tctx.fillRect(0, titlePadding - 2, titledCanvas.width, 2);
+        tctx.drawImage(canvas, 0, titlePadding);
+        const dt = new Date();
+        const generatedAt = dt.toLocaleString('fr-FR', { dateStyle: 'short', timeStyle: 'medium' });
+        tctx.fillStyle = '#00f0ff';
+        tctx.font = `700 ${Math.max(18, Math.round(titledCanvas.width * 0.026))}px Arial, sans-serif`;
+        tctx.textAlign = 'left';
+        tctx.fillText('Tableau des circulations', 14, 28);
+        tctx.fillStyle = '#bfefff';
+        tctx.font = `500 ${Math.max(12, Math.round(titledCanvas.width * 0.016))}px Arial, sans-serif`;
+        tctx.fillText(`Généré le ${generatedAt}`, 14, 48);
+      }
+
 	  // Filigrane léger "labetaillere.fr" sur la capture finale
       try {
-        const ctx = canvas.getContext('2d');
+        const ctx = titledCanvas.getContext('2d');
         if (ctx) {
-          const w = canvas.width;
-          const h = canvas.height;
+          const w = titledCanvas.width;
+          const h = titledCanvas.height;
           ctx.save();
           ctx.globalAlpha = 0.08;
           ctx.fillStyle = '#8cf6ff';
@@ -16393,7 +16445,7 @@ if (!document.getElementById('css-row-focus')) {
         }
       } catch (_) {}
 
-      const dataUrl = canvas.toDataURL('image/png', 0.92);
+      const dataUrl = titledCanvas.toDataURL('image/png', 0.92);
       const img = document.createElement('img');
       img.src = dataUrl;
       img.alt = 'Capture du tableau des trains';
@@ -16406,6 +16458,12 @@ if (!document.getElementById('css-row-focus')) {
       modalInner.innerHTML = '<p class="table-modal-error">Impossible de créer la capture automatiquement. Réessayez plus tard ou effectuez une capture d’écran manuelle.</p>';
       status.textContent = 'Erreur de capture';
     } finally {
+	  // restauration largeur colonne gare
+      const firstColCellsAfter = Array.from(table.querySelectorAll('tr > *:first-child'));
+      firstColCellsAfter.forEach((el, idx) => {
+        if (!(el instanceof HTMLElement)) return;
+        el.style.minWidth = prevFirstColMinWidths[idx] || '';
+      });
       if (snapshotAttrApplied && tableEl) {
         tableEl.removeAttribute('data-snapshotting');
       }  
