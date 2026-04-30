@@ -3012,6 +3012,51 @@ table[data-snapshotting="true"] tbody tr:nth-child(odd) {
 table[data-snapshotting="true"] tbody tr:nth-child(even) {
   background-color: #121926 !important;
 }
+
+/* Snapshot: éviter tout chevauchement (heures + voies + retards) */
+table[data-snapshotting="true"] td,
+table[data-snapshotting="true"] th{
+  overflow: visible !important;
+  white-space: nowrap !important;
+  vertical-align: middle !important;
+}
+table[data-snapshotting="true"] .voie-info{
+  display:flex !important;
+  flex-direction:column !important;
+  align-items:center !important;
+  justify-content:center !important;
+  gap:2px !important;
+  white-space:normal !important;
+}
+table[data-snapshotting="true"] .delay-stack{
+  display:flex !important;
+  flex-direction:column !important;
+  align-items:center !important;
+  justify-content:center !important;
+  gap:2px !important;
+  line-height:1.05 !important;
+}
+table[data-snapshotting="true"] .delay-strike,
+table[data-snapshotting="true"] .delayed,
+table[data-snapshotting="true"] .new-start,
+table[data-snapshotting="true"] .delay-voie{
+  display:block !important;
+}
+table[data-snapshotting="true"] .voie-badge{
+  margin-left:0 !important;
+  white-space:nowrap !important;
+  word-break:keep-all !important;
+  overflow-wrap:normal !important;
+  display:inline-flex !important;
+}
+
+/* Colonne Gare: largeur renforcée en snapshot pour éviter débordements (gare + météo) */
+table[data-snapshotting="true"] th.gare-head,
+table[data-snapshotting="true"] td:first-child,
+table[data-snapshotting="true"] th:first-child{
+  min-width: 260px !important;
+  white-space: nowrap !important;
+}
     
   th, td {
     padding: 3px 4px;
@@ -14962,6 +15007,7 @@ async function loadVoiesByTrain({ forceFresh = false, onlyIfChanged = false } = 
   }
 
   voiesByTrainPromise = (async () => {
+    let prevFirstColMinWidths = [];
     try {
       let text = null;
       let loadedFrom = null;
@@ -16310,6 +16356,39 @@ if (!document.getElementById('css-row-focus')) {
       }
 
       const tableRect = table.getBoundingClientRect();
+      const firstColCells = Array.from(table.querySelectorAll('tr > *:first-child'));
+      prevFirstColMinWidths = firstColCells.map((el) => el instanceof HTMLElement ? el.style.minWidth : '');
+      // Mesure "réelle": on prend l'emprise visuelle max (gare + météo + badges) et on applique partout
+      let computedFirstColWidth = 260;
+      const measureVisualWidth = (cell) => {
+        if (!(cell instanceof HTMLElement)) return 0;
+        const cellRect = cell.getBoundingClientRect();
+        let maxRight = cellRect.left + (cell.scrollWidth || cellRect.width || 0);
+        const descendants = cell.querySelectorAll('*');
+        descendants.forEach((node) => {
+          if (!(node instanceof HTMLElement)) return;
+          const st = window.getComputedStyle(node);
+          if (st.display === 'none' || st.visibility === 'hidden') return;
+          const r = node.getBoundingClientRect();
+          if (r.width <= 0 || r.height <= 0) return;
+          const mr = parseFloat(st.marginRight || '0') || 0;
+          maxRight = Math.max(maxRight, r.right + mr);
+        });
+        const pr = parseFloat(window.getComputedStyle(cell).paddingRight || '0') || 0;
+        return Math.ceil(maxRight - cellRect.left + pr);
+      };
+      for (const cell of firstColCells) {
+        if (!(cell instanceof HTMLElement)) continue;
+        const w = measureVisualWidth(cell);
+        if (w > computedFirstColWidth) computedFirstColWidth = w;
+      }
+      computedFirstColWidth = Math.min(680, Math.max(260, computedFirstColWidth + 18));
+      for (const cell of firstColCells) {
+        if (!(cell instanceof HTMLElement)) continue;
+        cell.style.minWidth = `${computedFirstColWidth}px`;
+        cell.style.width = `${computedFirstColWidth}px`;
+        cell.style.maxWidth = `${computedFirstColWidth}px`;
+      }
       const scale = Math.min(2, Math.max(1, window.devicePixelRatio || 1));
       const canvas = await html2canvas(table, {
         backgroundColor: '#0b0f1a',
@@ -16331,10 +16410,82 @@ if (!document.getElementById('css-row-focus')) {
             cloneTable.style.setProperty('box-shadow', 'none', 'important');
             cloneTable.style.setProperty('filter', 'none', 'important');
           }
+          const cloneFirstCol = Array.from(doc.querySelectorAll('table[data-snapshotting="true"] tr > *:first-child'));
+          cloneFirstCol.forEach((el) => {
+            if (!(el instanceof HTMLElement)) return;
+            el.style.setProperty('min-width', `${computedFirstColWidth}px`, 'important');
+            el.style.setProperty('width', `${computedFirstColWidth}px`, 'important');
+            el.style.setProperty('max-width', `${computedFirstColWidth}px`, 'important');
+          });
         }
       });
 
-      const dataUrl = canvas.toDataURL('image/png', 0.92);
+      // Bandeau titre + date/heure (au-dessus du tableau)
+      const titlePadding = 82;
+      const titledCanvas = document.createElement('canvas');
+      titledCanvas.width = canvas.width;
+      titledCanvas.height = canvas.height + titlePadding;
+      const tctx = titledCanvas.getContext('2d');
+      if (tctx) {
+        tctx.fillStyle = '#0b0f1a';
+        tctx.fillRect(0, 0, titledCanvas.width, titledCanvas.height);
+        tctx.fillStyle = 'rgba(0,240,255,0.20)';
+        tctx.fillRect(0, titlePadding - 2, titledCanvas.width, 2);
+        tctx.drawImage(canvas, 0, titlePadding);
+        const dt = new Date();
+        const generatedAt = dt.toLocaleString('fr-FR', { dateStyle: 'short', timeStyle: 'medium' });
+        const titleText = 'Tableau des circulations';
+        const dateText = `Généré le ${generatedAt}`;
+        let titleFont = Math.max(18, Math.round(titledCanvas.width * 0.028));
+        const maxTitleWidth = titledCanvas.width - 28;
+        while (titleFont > 16) {
+          tctx.font = `700 ${titleFont}px Arial, sans-serif`;
+          if (tctx.measureText(titleText).width <= maxTitleWidth) break;
+          titleFont -= 1;
+        }
+        tctx.fillStyle = '#00f0ff';
+        tctx.font = `700 ${titleFont}px Arial, sans-serif`;
+        tctx.textAlign = 'left';
+        tctx.textBaseline = 'top';
+        tctx.fillText(titleText, 14, 10);
+        tctx.fillStyle = '#bfefff';
+        let dateFont = Math.max(12, Math.round(titledCanvas.width * 0.017));
+        while (dateFont > 11) {
+          tctx.font = `500 ${dateFont}px Arial, sans-serif`;
+          if (tctx.measureText(dateText).width <= maxTitleWidth) break;
+          dateFont -= 1;
+        }
+        tctx.font = `500 ${dateFont}px Arial, sans-serif`;
+        tctx.fillText(dateText, 14, 46);
+      }
+
+      // Filigrane léger "labetaillere.fr" sur la capture finale
+      try {
+        const ctx = titledCanvas.getContext('2d');
+        if (ctx) {
+          const w = titledCanvas.width;
+          const h = titledCanvas.height;
+          ctx.save();
+          ctx.globalAlpha = 0.08;
+          ctx.fillStyle = '#8cf6ff';
+          const fontSize = Math.max(18, Math.round(Math.min(w, h) * 0.035));
+          ctx.font = `700 ${fontSize}px Arial, sans-serif`;
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          ctx.translate(w / 2, h / 2);
+          ctx.rotate(-Math.PI / 7);
+          const stepX = Math.max(220, fontSize * 7.6);
+          const stepY = Math.max(130, fontSize * 2.8);
+          for (let y = -h; y <= h; y += stepY) {
+            for (let x = -w; x <= w; x += stepX) {
+              ctx.fillText('labetaillere.fr', x, y);
+            }
+          }
+          ctx.restore();
+        }
+      } catch (_) {}
+
+      const dataUrl = titledCanvas.toDataURL('image/png', 0.92);
       const img = document.createElement('img');
       img.src = dataUrl;
       img.alt = 'Capture du tableau des trains';
@@ -16347,6 +16498,14 @@ if (!document.getElementById('css-row-focus')) {
       modalInner.innerHTML = '<p class="table-modal-error">Impossible de créer la capture automatiquement. Réessayez plus tard ou effectuez une capture d’écran manuelle.</p>';
       status.textContent = 'Erreur de capture';
     } finally {
+      // restauration largeur colonne gare
+      const firstColCellsAfter = Array.from(table.querySelectorAll('tr > *:first-child'));
+      firstColCellsAfter.forEach((el, idx) => {
+        if (!(el instanceof HTMLElement)) return;
+        el.style.minWidth = prevFirstColMinWidths[idx] || '';
+        el.style.width = '';
+        el.style.maxWidth = '';
+      });
       if (snapshotAttrApplied && tableEl) {
         tableEl.removeAttribute('data-snapshotting');
       }  
@@ -20625,7 +20784,7 @@ const stopHasSchedule = (result, stopName) => {
           const hasAmended = !!amended;
           const hasBase = !!base;
           const diffMinutes = (hasAmended && hasBase) ? dl(base, amended) : null;
-          const mainTimeRaw = hasAmended && (!hasBase || diffMinutes !== 0) ? ft(amended) : (baseWithVoie || baseClock);
+          const mainTimeRaw = hasAmended && (!hasBase || diffMinutes !== 0) ? ft(amended) : (baseClock || '');
           const baseStrike = (hasAmended && hasBase && diffMinutes > 0)
             ? `<span class="delay-stack"><span class="delay-strike">${baseClock}</span><span class="new-start">${mainTimeRaw}</span>${delayVoieHtml}</span>`
             : '';
@@ -27136,7 +27295,7 @@ if (statsEl){
 
       const delayStrike = cell.querySelector('.delay-strike');
       if (delayStrike) {
-        delayStrike.innerHTML = baseWithVoie;
+        delayStrike.textContent = baseClock;
         return;
       }
 
@@ -35134,27 +35293,21 @@ body{ padding-bottom: calc(var(--bottom-bar-height, 58px) + 10px) !important; }
 }
 
 
-/* ===== Correctif safe : voie sous l'heure retardée, sans agrandir les cases ===== */
+/* ===== Correctif safe : voie sous l'heure retardée (taille normale, une seule fois) ===== */
 #trainInfo .delay-stack .delay-voie{
   display:block;
   line-height:1;
-  margin-top:0;
-  transform:scale(.82);
-  transform-origin:center top;
-  max-height:16px;
+  margin-top:2px;
 }
 #trainInfo .delay-stack .delay-voie .voie-badge{
   margin-left:0 !important;
-  padding:1px 5px;
-  font-size:.58rem;
-  line-height:1;
+  line-height:1.1;
 }
 @media (max-width: 768px){
   #trainInfo .delay-stack{ gap:0 !important; line-height:.98 !important; }
   #trainInfo .delay-stack .delay-strike,
   #trainInfo .delay-stack .delayed,
   #trainInfo .delay-stack .new-start{ line-height:.98 !important; }
-  #trainInfo .delay-stack .delay-voie{ transform:scale(.76); max-height:14px; }
 }
 
 /* ===== Légende du tableau dynamique — bouton discret dans l'en-tête Gare ===== */
