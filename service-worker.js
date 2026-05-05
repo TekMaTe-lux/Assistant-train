@@ -1,8 +1,8 @@
-const CACHE_NAME = 'lbetaillere-v10';
+const CACHE_NAME = 'lbetaillere-v11';
 const ASSETS = [
   './',
-  './index63.html',
-  './index63.html#home',
+  ./index.html',
+  './index.html#home',
   './manifest.webmanifest',
   './service-worker.js',
   './logoText.png',
@@ -48,7 +48,7 @@ self.addEventListener('fetch', (event) => {
           }
           return response;
         })
-        .catch(() => caches.match('./index63.html'));
+        .catch(() => caches.match('./index.html'));
     })
   );
 });
