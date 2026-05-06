@@ -33469,6 +33469,14 @@ body{ padding-bottom: calc(var(--bottom-bar-height, 58px) + 10px) !important; }
     staticInfoCache: new Map(),
     localSignals: []
   };
+
+  // LIVE: base horaires publique pré-générée sur le VPS.
+  // Objectif: 1 seul fetch pour tous les trains au lieu de /api/train-static train par train.
+  const LB_TRAIN_STATIC_TODAY_URL = 'https://vps.labetaillere.fr/gtfs/train_static_today.json';
+  let LB_TRAIN_STATIC_TODAY = {};
+  let LB_TRAIN_STATIC_TODAY_DATE = '';
+  let LB_TRAIN_STATIC_TODAY_PROMISE = null;
+
   try{
     const savedDirection = localStorage.getItem('lbLiveDirectionMode');
     if (savedDirection && ['all','lux_to_nancy','nancy_to_lux'].includes(savedDirection)){
@@ -34129,6 +34137,80 @@ body{ padding-bottom: calc(var(--bottom-bar-height, 58px) + 10px) !important; }
     return !!mine && normalizeKey(mine.trainNumber) === key;
   }
 
+  async function loadTrainStaticToday(force = false){
+    const today = toYmd();
+    if (!force && LB_TRAIN_STATIC_TODAY_DATE === today && LB_TRAIN_STATIC_TODAY && Object.keys(LB_TRAIN_STATIC_TODAY).length){
+      return LB_TRAIN_STATIC_TODAY;
+    }
+    if (!force && LB_TRAIN_STATIC_TODAY_PROMISE) return LB_TRAIN_STATIC_TODAY_PROMISE;
+
+    LB_TRAIN_STATIC_TODAY_PROMISE = fetch(`${LB_TRAIN_STATIC_TODAY_URL}?v=${Date.now()}`, { cache:'no-store' })
+      .then((res)=>{
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        return res.json();
+      })
+      .then((data)=>{
+        LB_TRAIN_STATIC_TODAY = (data && typeof data === 'object' && data.trains && typeof data.trains === 'object') ? data.trains : {};
+        LB_TRAIN_STATIC_TODAY_DATE = String(data?.date || today);
+        console.log('[LIVE static today] chargé', Object.keys(LB_TRAIN_STATIC_TODAY).length, 'trains');
+        return LB_TRAIN_STATIC_TODAY;
+      })
+      .catch((err)=>{
+        console.warn('[LIVE static today] indisponible', err?.message || err);
+        LB_TRAIN_STATIC_TODAY = {};
+        LB_TRAIN_STATIC_TODAY_DATE = '';
+        return LB_TRAIN_STATIC_TODAY;
+      })
+      .finally(()=>{ LB_TRAIN_STATIC_TODAY_PROMISE = null; });
+
+    return LB_TRAIN_STATIC_TODAY_PROMISE;
+  }
+
+  function getTrainStaticTodayInfo(trainNumber){
+    const key = normalizeKey(trainNumber);
+    if (!key || !LB_TRAIN_STATIC_TODAY || typeof LB_TRAIN_STATIC_TODAY !== 'object') return null;
+    const row = LB_TRAIN_STATIC_TODAY[key];
+    if (!row || typeof row !== 'object') return null;
+    const origin = String(row.origin || '').trim();
+    const destination = String(row.destination || '').trim();
+    const departure = formatGtfsHHMM(row.departure || row.departure_time || '');
+    const arrival = formatGtfsHHMM(row.arrival || row.arrival_time || '');
+
+    // Nouveau format VPS: stopRows contient tous les arrêts.
+    // Ancien format: seulement origine/destination => utilisé uniquement comme résumé.
+    let stopRows = [];
+    if (Array.isArray(row.stopRows)){
+      stopRows = row.stopRows.map((s)=>({
+        name: String(s?.name || s?.stop_name || '').trim(),
+        time: formatGtfsHHMM(s?.time || s?.arrival_time || s?.departure_time || ''),
+        amendedTime: formatGtfsHHMM(s?.amendedTime || s?.amended_arrival_time || s?.amended_departure_time || ''),
+        delayMin: Number.isFinite(Number(s?.delayMin ?? s?.delay_minutes)) ? Number(s?.delayMin ?? s?.delay_minutes) : null
+      })).filter((s)=> s.name);
+    } else if (Array.isArray(row.stops)){
+      stopRows = row.stops.map((s, idx)=>({
+        name: String(s?.name || s?.stop_name || s || '').trim(),
+        time: formatGtfsHHMM(s?.time || s?.arrival_time || s?.departure_time || (idx === 0 ? departure : (idx === row.stops.length - 1 ? arrival : ''))),
+        amendedTime: formatGtfsHHMM(s?.amendedTime || s?.amended_arrival_time || s?.amended_departure_time || ''),
+        delayMin: Number.isFinite(Number(s?.delayMin ?? s?.delay_minutes)) ? Number(s?.delayMin ?? s?.delay_minutes) : null
+      })).filter((s)=> s.name);
+    }
+
+    const hasFullStops = stopRows.length > 2;
+    const stops = hasFullStops ? stopRows.map((s)=> s.name) : [origin, destination].filter(Boolean);
+
+    return {
+      departure: departure || '—',
+      arrival: arrival || '—',
+      trainType: getCompoForTrain(key),
+      stops,
+      stopRows: hasFullStops ? stopRows : [],
+      origin,
+      destination,
+      summaryOnly: !hasFullStops,
+      source: 'train_static_today'
+    };
+  }
+
   function getGtfsRtDelayForStop(trainNumber, stopName){
     const trainKey = normalizeKey(trainNumber);
     const station = String(stopName || '').trim();
@@ -34190,9 +34272,22 @@ body{ padding-bottom: calc(var(--bottom-bar-height, 58px) + 10px) !important; }
     };
 
     let info = null;
+    let summaryInfo = null;
 
+    // Source ultra-légère: JSON public unique déjà pré-généré sur le VPS.
+    // Si ce JSON contient tous les arrêts, on l'utilise directement.
+    // Si c'est l'ancien format origine/destination, on le garde pour secours mais on charge le détail au clic seulement.
+    await loadTrainStaticToday();
+    const todayInfo = getTrainStaticTodayInfo(key);
+    if (todayInfo && !todayInfo.summaryOnly){
+      info = todayInfo;
+    } else if (todayInfo){
+      summaryInfo = todayInfo;
+    }
+
+    // Fallback détaillé par train uniquement au clic fiche/signalement, jamais pour le rendu initial des cartes.
     // Source légère VPS : le navigateur ne télécharge plus stop_times.txt (73 Mo).
-    try {
+    if (!info) try {
       const url = `https://vps.labetaillere.fr/api/train-static?date=${encodeURIComponent(day)}&train=${encodeURIComponent(key)}`;
       const res = await fetch(url, { cache: 'default' });
       if (res.ok) {
@@ -34223,6 +34318,10 @@ body{ padding-bottom: calc(var(--bottom-bar-height, 58px) + 10px) !important; }
 
     // Secours legacy uniquement si explicitement autorisé à la main.
     // Ne pas utiliser au clic LIVE, sinon stop_times.txt revient dans le navigateur.
+    if (!info && summaryInfo){
+      info = summaryInfo;
+    }
+
     if (!info && window.LB_ALLOW_HEAVY_GTFS === true && typeof buildGtfsFallbackResult === 'function'){
       try{
         const fallback = await buildGtfsFallbackResult(key, { ymd: day });
@@ -34483,8 +34582,9 @@ body{ padding-bottom: calc(var(--bottom-bar-height, 58px) + 10px) !important; }
     modal.classList.add('is-open');
     modal.setAttribute('aria-hidden', 'false');
     if (id === 'lbLiveModal') {
-      // LIVE léger : les horaires viennent du VPS /api/train-static, pas de stop_times.txt côté navigateur.
+      // LIVE léger : les horaires viennent du JSON public train_static_today, pas de stop_times.txt côté navigateur.
       window.LB_ALLOW_HEAVY_GTFS = false;
+      loadTrainStaticToday().finally(()=> refreshLiveModal());
       refreshLiveModal();
     }
     if (id === 'lbSignalModal') refreshSignalModal();
@@ -34547,7 +34647,7 @@ body{ padding-bottom: calc(var(--bottom-bar-height, 58px) + 10px) !important; }
         if (train.statusClass === 'ok' && travelerDisruption?.type === 'retard') return 'delay';
         return 'ok';
       })();
-      const gtfsInfo = COMMUNITY.staticInfoCache.get(`${normalizeKey(train.trainNumber)}_${toYmd()}`) || null;
+      const gtfsInfo = COMMUNITY.staticInfoCache.get(`${normalizeKey(train.trainNumber)}_${toYmd()}`) || getTrainStaticTodayInfo(train.trainNumber) || null;
       const chips = [];
       const groupedSignals = mergeSignalGroup(signals);
       if (wallComments.length) chips.push(`<span class="lb-live-chip">💬 ${wallComments.length} commentaire(s)</span>`);
@@ -34607,14 +34707,17 @@ body{ padding-bottom: calc(var(--bottom-bar-height, 58px) + 10px) !important; }
           </div>
         </div>`;
     }).join('');
-    hydrateLiveTrainStaticInfos();
+    hydrateLiveTrainStaticInfos(displayTrains);
   }
 
-  async function hydrateLiveTrainStaticInfos(){
-    const trains = Array.isArray(COMMUNITY.liveTrains) ? COMMUNITY.liveTrains.slice(0, 20) : [];
+  async function hydrateLiveTrainStaticInfos(sourceTrains){
+    const trains = Array.isArray(sourceTrains) ? sourceTrains : (Array.isArray(COMMUNITY.liveTrains) ? COMMUNITY.liveTrains : []);
     if (!trains.length) return;
-    await Promise.all(trains.map(async (train)=>{
-      const info = await getLiveTrainStaticInfo(train.trainNumber);
+    await loadTrainStaticToday();
+    trains.forEach((train)=>{
+      // Important: ici on utilise seulement le JSON déjà chargé.
+      // On ne lance plus /api/train-static en cascade pour chaque carte LIVE.
+      const info = getTrainStaticTodayInfo(train.trainNumber);
       const effectiveCompo = getEffectiveCompositionCode(train.trainNumber);
       const node = document.querySelector(`[data-lb-train-route-line="${String(train.trainNumber)}"]`);
       if (node && info) node.innerHTML = buildLiveRouteLineHtml(train, info);
@@ -34626,7 +34729,7 @@ body{ padding-bottom: calc(var(--bottom-bar-height, 58px) + 10px) !important; }
         compoNode.setAttribute('title', compoHelp);
         compoNode.setAttribute('aria-label', compoHelp);
       }
-    }));
+    });
   }
 
   function renderLiveFeed(trainNumber){
@@ -34666,6 +34769,11 @@ body{ padding-bottom: calc(var(--bottom-bar-height, 58px) + 10px) !important; }
   }
 
   function refreshLiveModal(){
+    if (!LB_TRAIN_STATIC_TODAY_DATE && !LB_TRAIN_STATIC_TODAY_PROMISE){
+      loadTrainStaticToday().then(()=>{
+        if ($id('lbLiveModal')?.classList.contains('is-open')) renderLiveTrainCards();
+      });
+    }
     renderLiveTrainCards();
     const displayTrains = sortAndFilterLiveTrainsByDirection(COMMUNITY.liveTrains, COMMUNITY.liveDirection);
     renderLiveFeed(COMMUNITY.selectedTrain || (displayTrains[0]?.trainNumber || ''));
