@@ -22166,6 +22166,11 @@ function buildDisplayedFilters(ymd){
   const routeIds = new Set();
   const stopIds = new Set();
 
+  // Mode léger : si GTFS statique n'est pas chargé, on filtre seulement par n° de train.
+  if (!Array.isArray(GTFS?.trips) || !Array.isArray(GTFS?.stopTimes)) {
+    return { displayedNums, tripIds, routeIds, stopIds, gtfsLoaded: false };
+  }
+
   for (const t of GTFS.trips){
     if (!serviceActiveForDate(t.trip_id, ymd)) continue;
     const n = extractTrainNumber(t.trip_short_name || '');
@@ -22175,7 +22180,7 @@ function buildDisplayedFilters(ymd){
     if (t.route_id) routeIds.add(t.route_id);
     for (const sid of getStopsForTripQuick(t.trip_id)) stopIds.add(sid);
   }
-  return { displayedNums, tripIds, routeIds, stopIds };
+  return { displayedNums, tripIds, routeIds, stopIds, gtfsLoaded: true };
 }
 
 // Une entité touche nos trains/ligne affichés ?
@@ -22259,9 +22264,13 @@ async function chargerEtAfficherAlertes() {
 
   const ymd = `${selectedDate.getFullYear()}${String(selectedDate.getMonth()+1).padStart(2,'0')}${String(selectedDate.getDate()).padStart(2,'0')}`;
 
-  try { await ensureGTFSLoaded({ silent: true }); } catch(e){ console.warn('GTFS non chargé pour alertes:', e); }
-  ensureTransferIndexesBuilt();   // accélère getStopsForTripQuick
-  buildStationGroups();
+  // IMPORTANT PERF: ne pas charger GTFS statique (stop_times.txt ~73 Mo) pour les alertes.
+  // On fonctionne en mode léger (matching par numéros de train + mots-clés).
+  const hasGtfsStatic = Array.isArray(GTFS?.trips) && GTFS.trips.length > 0 && Array.isArray(GTFS?.stopTimes);
+  if (hasGtfsStatic) {
+    ensureTransferIndexesBuilt();   // accélère getStopsForTripQuick
+    buildStationGroups();
+  }
 
   // petit utilitaire local
   const stripHtml = (s) => (s || '').replace(/<[^>]*>?/gm, '');
