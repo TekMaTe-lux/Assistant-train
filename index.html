@@ -18,8 +18,7 @@
   <script src="https://cdn.jsdelivr.net/npm/nouislider@15.7.1/dist/nouislider.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.2/Sortable.min.js"></script>
   <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
-  <script src="sncf-api-key.js"></script>
-  <script src="sncf-api-manager.js"></script>
+  <!-- SNCF: aucune clé / aucun manager API côté front. Tous les appels passent par le proxy VPS /sncf/... -->
   <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
@@ -20164,15 +20163,34 @@ function vpsVehicleJourneyUrl(date, num) {
 
 // Fetch JSON + lecture du header X-Cache (HIT/MISS/REFRESH) pour debug
 async function fetchJSON(url, { timeoutMs = 15000 } = {}) {
-  // Guard léger: nos appels temps-réel doivent passer par le VPS
+  // GARDE STRICTE #BER :
+  // - le navigateur ne doit JAMAIS appeler directement l'API SNCF / data.gouv / proxy.transport.data.gouv
+  // - les vehicle_journey doivent passer uniquement par https://vps.labetaillere.fr/sncf/vehicle_journey/...
   try {
-    const u = String(url || '');
-    const isRealtime = /\/sncf\//.test(u) && /vehicle_journey\//.test(u);
-    if (isRealtime && !u.startsWith('https://vps.labetaillere.fr/')) {
-      throw new Error('URL interdit (court-circuit proxy): ' + u);
+    const u = String(url || '').trim();
+    const absolute = new URL(u, window.location.origin);
+    const href = absolute.href;
+
+    const isForbiddenDirectSncf =
+      /(^|\.)api\.sncf\.com$/i.test(absolute.hostname) ||
+      /(^|\.)ressources\.data\.sncf\.com$/i.test(absolute.hostname) ||
+      /(^|\.)transport\.data\.gouv\.fr$/i.test(absolute.hostname) ||
+      /(^|\.)proxy\.transport\.data\.gouv\.fr$/i.test(absolute.hostname);
+
+    if (isForbiddenDirectSncf) {
+      throw new Error('Appel direct SNCF/data.gouv interdit côté front: ' + href);
+    }
+
+    const isVehicleJourney = /\/vehicle_journey\//.test(absolute.pathname) || /\/vehicle_journeys\//.test(absolute.pathname);
+    const isProxyVehicleJourney =
+      absolute.hostname === 'vps.labetaillere.fr' &&
+      /^\/sncf\/vehicle_journey\/\d{4}-\d{2}-\d{2}\/[A-Za-z0-9_.:-]+\/?$/.test(absolute.pathname);
+
+    if (isVehicleJourney && !isProxyVehicleJourney) {
+      throw new Error('vehicle_journey doit passer par le proxy VPS: ' + href);
     }
   } catch(e) {
-    console.warn('[fetchJSON] Guard:', e.message || e);
+    console.warn('[fetchJSON] Guard proxy SNCF:', e.message || e);
     return { ok:false, status:0, data:null, cache:null, error: String(e.message||e) };
   }
 
@@ -20186,7 +20204,7 @@ async function fetchJSON(url, { timeoutMs = 15000 } = {}) {
   }
   const data = await r.json().catch(() => null);
   const cache = r.headers.get('x-cache');
-  if (cache) console.debug('[SNCF]', cache, url);
+  if (cache) console.debug('[Proxy SNCF]', cache, url);
   return { ok: r.ok, status: r.status, data, cache };
 }
 
