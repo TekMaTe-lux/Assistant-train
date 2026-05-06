@@ -17330,7 +17330,7 @@ async function fetchAndParseCFLCSV(filename, opt = {}){
   for (const base of CFL_BASES){
     const url = base + filename;
     try {
-      const resp = await fetch(url, { cache: 'no-store' });
+      const resp = await fetch(url, { cache: 'default' });
       if (!resp.ok) throw new Error('HTTP '+resp.status+' on '+url);
       if (resp.body && typeof resp.body.getReader === 'function' && typeof TextDecoder === 'function'){
         return await parseCSVFromStream(resp.body, opt);
@@ -17900,7 +17900,7 @@ async function fetchCflHafasDepartures({ stopId, dateYmd, baseTimeHHMM, duration
     try {
       const params = new URLSearchParams({ accessId: LB_ENDPOINTS.hafasAccessId, id: hafasId, date: dateStr, time: timeParam, duration: String(duration), maxJourneys: '50', format: 'json' });
       const url = `${LB_ENDPOINTS.hafasDepartureBoard}?${params.toString()}`;
-      const resp = await fetch(url, { cache: 'no-store' });
+      const resp = await fetch(url, { cache: 'default' });
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
       const data = await resp.json();
       const departures = Array.isArray(data?.Departure) ? data.Departure : [];
@@ -18465,7 +18465,13 @@ async function fetchAndParseCSV(filename, opt = {}){
   throw lastErr || new Error('Impossible de charger '+filename);
 }
 
-async function ensureGTFSLoaded({ silent = false } = {}){
+async function ensureGTFSLoaded({ silent = false, allowHeavy = false } = {}){
+  const liveModalOpen = !!document.getElementById('lbLiveModal')?.classList.contains('is-open');
+  const manualAllowed = window.LB_ALLOW_HEAVY_GTFS === true;
+  if (!allowHeavy && !manualAllowed && !liveModalOpen) {
+    console.warn('[GTFS lourd] Chargement stop_times.txt bloqué au démarrage.');
+    return;
+  }
   if (GTFS.stops && GTFS.stopTimes && GTFS.trips && GTFS.tripById && GTFS.stopNameToId && GTFS.allowedByDate) return;
     if (GTFS_LOADING_PROMISE) {
     try {
@@ -21847,7 +21853,8 @@ async function refreshLiveDataInBackground({ forceFresh = false } = {}){
     await Promise.allSettled([
       loadCompoData({ forceFresh, background: true }),
       loadVoiesByTrain({ forceFresh, onlyIfChanged: true }),
-      (typeof loadCflVoiesByTrain === 'function' ? loadCflVoiesByTrain({ forceFresh, onlyIfChanged: true }) : Promise.resolve()),
+      (typeof loadCflVoiesByTrain === 'function' ? loadCflVoiesByTrain({ forceFresh, onlyIfChanged: true }) : Promise.resolve())
+      // Pas de loadGtfsRetards() ici : évite les déclenchements lourds au démarrage.
     ]);
   } finally {
     LB_BG_REFRESH_STATE.inFlight = false;
@@ -21865,9 +21872,8 @@ function scheduleBackgroundRefresh(immediate = false){
 }
 
 window.addEventListener('load', () => {
-  // Charge uniquement le strict nécessaire au démarrage.
+  // Charge d'abord le strict nécessaire puis échelonne le reste pour éviter un pic CPU/réseau au démarrage.
   loadCompoData({ forceFresh: false, background: false });
-
   setTimeout(() => {
     lbRunInBackground(() => {
       loadVoiesByTrain({ forceFresh: false, onlyIfChanged: false })
@@ -21875,9 +21881,7 @@ window.addEventListener('load', () => {
     });
   }, 180);
 
-  // IMPORTANT :
-  // Ne pas appeler loadGtfsRetards() ici.
-  // Sinon ça déclenche stop_times.txt de 73 Mo au démarrage.
+  // Pas de loadGtfsRetards() au démarrage : évite le chargement de stop_times.txt.
 
   lbRunInBackground(() => {
     refreshLiveDataInBackground({ forceFresh: true });
@@ -21888,9 +21892,8 @@ window.addEventListener('load', () => {
 window.addEventListener('online', () => scheduleBackgroundRefresh(true));
 document.addEventListener('visibilitychange', () => scheduleBackgroundRefresh(true));
 
-// GTFS lourd désactivé au démarrage.
-// La recherche par trajet utilise /api/search-static.
-// On ne charge ensureGTFSLoaded() que si une fonction legacy en a vraiment besoin.
+// GTFS lourd désactivé au démarrage : ne pas lancer ensureGTFSLoaded() automatiquement.
+// Le chargement statique complet reste possible uniquement à la demande (ex: LIVE ouvert).
 
 // applique si tableau présent + date = aujourd’hui
 function tryApplyGtfsToCurrentTable() {
@@ -22166,11 +22169,6 @@ function buildDisplayedFilters(ymd){
   const routeIds = new Set();
   const stopIds = new Set();
 
-  // Mode léger : si GTFS statique n'est pas chargé, on filtre seulement par n° de train.
-  if (!Array.isArray(GTFS?.trips) || !Array.isArray(GTFS?.stopTimes)) {
-    return { displayedNums, tripIds, routeIds, stopIds, gtfsLoaded: false };
-  }
-
   for (const t of GTFS.trips){
     if (!serviceActiveForDate(t.trip_id, ymd)) continue;
     const n = extractTrainNumber(t.trip_short_name || '');
@@ -22180,7 +22178,7 @@ function buildDisplayedFilters(ymd){
     if (t.route_id) routeIds.add(t.route_id);
     for (const sid of getStopsForTripQuick(t.trip_id)) stopIds.add(sid);
   }
-  return { displayedNums, tripIds, routeIds, stopIds, gtfsLoaded: true };
+  return { displayedNums, tripIds, routeIds, stopIds };
 }
 
 // Une entité touche nos trains/ligne affichés ?
@@ -22264,13 +22262,9 @@ async function chargerEtAfficherAlertes() {
 
   const ymd = `${selectedDate.getFullYear()}${String(selectedDate.getMonth()+1).padStart(2,'0')}${String(selectedDate.getDate()).padStart(2,'0')}`;
 
-  // IMPORTANT PERF: ne pas charger GTFS statique (stop_times.txt ~73 Mo) pour les alertes.
-  // On fonctionne en mode léger (matching par numéros de train + mots-clés).
-  const hasGtfsStatic = Array.isArray(GTFS?.trips) && GTFS.trips.length > 0 && Array.isArray(GTFS?.stopTimes);
-  if (hasGtfsStatic) {
-    ensureTransferIndexesBuilt();   // accélère getStopsForTripQuick
-    buildStationGroups();
-  }
+  try { await ensureGTFSLoaded({ silent: true }); } catch(e){ console.warn('GTFS non chargé pour alertes:', e); }
+  ensureTransferIndexesBuilt();   // accélère getStopsForTripQuick
+  buildStationGroups();
 
   // petit utilitaire local
   const stripHtml = (s) => (s || '').replace(/<[^>]*>?/gm, '');
@@ -34164,8 +34158,65 @@ body{ padding-bottom: calc(var(--bottom-bar-height, 58px) + 10px) !important; }
     if (!key) return null;
     const cacheKey = `${key}_${day}`;
     if (COMMUNITY.staticInfoCache.has(cacheKey)) return COMMUNITY.staticInfoCache.get(cacheKey);
+
+    const liveTrain = (Array.isArray(COMMUNITY.liveTrains) ? COMMUNITY.liveTrains : [])
+      .find((it)=> normalizeKey(it?.trainNumber) === key) || null;
+    const knownStops = Array.isArray(liveTrain?.stops)
+      ? liveTrain.stops.map((s)=> String(s || '').trim()).filter(Boolean)
+      : [];
+
+    const chooseBestStaticTrip = (rows)=>{
+      const groups = new Map();
+      (Array.isArray(rows) ? rows : []).forEach((row)=>{
+        const tid = String(row?.trip_id || 'unknown');
+        if (!groups.has(tid)) groups.set(tid, []);
+        groups.get(tid).push(row);
+      });
+      const candidates = Array.from(groups.values()).map((list)=>{
+        const sorted = list.slice().sort((a,b)=> Number(a?.stop_sequence || 0) - Number(b?.stop_sequence || 0));
+        let score = sorted.length;
+        if (knownStops.length && sorted.length === knownStops.length) score += 1000;
+        if (knownStops.length && sorted.length > 1) score -= Math.abs(sorted.length - knownStops.length) * 10;
+        return { score, sorted };
+      }).sort((a,b)=> b.score - a.score);
+      return candidates[0]?.sorted || [];
+    };
+
     let info = null;
-    if (typeof buildGtfsFallbackResult === 'function'){
+
+    // Source légère VPS : le navigateur ne télécharge plus stop_times.txt (73 Mo).
+    try {
+      const url = `https://vps.labetaillere.fr/api/train-static?date=${encodeURIComponent(day)}&train=${encodeURIComponent(key)}`;
+      const res = await fetch(url, { cache: 'default' });
+      if (res.ok) {
+        const data = await res.json();
+        const selected = chooseBestStaticTrip(data?.stop_times || []);
+        if (selected.length) {
+          const stopRows = selected.map((row, idx)=>{
+            const fallbackName = knownStops[idx] || String(row?.stop_name || row?.name || row?.stop_id || '').replace(/^StopPoint:OCETrain TER-/, '').trim();
+            return {
+              name: String(row?.stop_name || row?.name || fallbackName || '').trim(),
+              time: formatGtfsHHMM(row?.arrival_time || row?.departure_time || ''),
+              amendedTime: formatGtfsHHMM(row?.amended_arrival_time || row?.amended_departure_time || ''),
+              delayMin: Number.isFinite(Number(row?.delay_minutes)) ? Number(row.delay_minutes) : null
+            };
+          }).filter((s)=> s.name);
+          info = {
+            departure: formatGtfsHHMM(selected[0]?.departure_time || selected[0]?.arrival_time),
+            arrival: formatGtfsHHMM(selected[selected.length - 1]?.arrival_time || selected[selected.length - 1]?.departure_time),
+            trainType: getCompoForTrain(key),
+            stops: stopRows.map((s)=> s.name),
+            stopRows
+          };
+        }
+      }
+    } catch (err) {
+      console.warn('[LIVE static] /api/train-static indisponible', err?.message || err);
+    }
+
+    // Secours legacy uniquement si explicitement autorisé à la main.
+    // Ne pas utiliser au clic LIVE, sinon stop_times.txt revient dans le navigateur.
+    if (!info && window.LB_ALLOW_HEAVY_GTFS === true && typeof buildGtfsFallbackResult === 'function'){
       try{
         const fallback = await buildGtfsFallbackResult(key, { ymd: day });
         const stops = fallback?.train?.stop_times || [];
@@ -34186,8 +34237,9 @@ body{ padding-bottom: calc(var(--bottom-bar-height, 58px) + 10px) !important; }
         }
       }catch(_){}
     }
+
     if (!info){
-      info = { departure:'—', arrival:'—', trainType:getCompoForTrain(key), stops:[], stopRows:[] };
+      info = { departure:'—', arrival:'—', trainType:getCompoForTrain(key), stops:knownStops, stopRows:knownStops.map((name)=>({ name, time:'—' })) };
     }
     COMMUNITY.staticInfoCache.set(cacheKey, info);
     return info;
@@ -34423,7 +34475,11 @@ body{ padding-bottom: calc(var(--bottom-bar-height, 58px) + 10px) !important; }
     if (!modal) return;
     modal.classList.add('is-open');
     modal.setAttribute('aria-hidden', 'false');
-    if (id === 'lbLiveModal') refreshLiveModal();
+    if (id === 'lbLiveModal') {
+      // LIVE léger : les horaires viennent du VPS /api/train-static, pas de stop_times.txt côté navigateur.
+      window.LB_ALLOW_HEAVY_GTFS = false;
+      refreshLiveModal();
+    }
     if (id === 'lbSignalModal') refreshSignalModal();
   }
 
@@ -35460,7 +35516,7 @@ body{ padding-bottom: calc(var(--bottom-bar-height, 58px) + 10px) !important; }
 (() => {
   if ('serviceWorker' in navigator) {
     window.addEventListener('load', () => {
-      navigator.serviceWorker.register('./service-worker.js?v=12').catch((err) => {
+      navigator.serviceWorker.register('./service-worker.js?v=16').catch((err) => {
         console.warn('[PWA] Service worker non enregistré', err);
       });
     });
