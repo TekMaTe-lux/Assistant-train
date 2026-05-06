@@ -1,4 +1,4 @@
-const CACHE_NAME = 'lbetaillere-v12';
+const CACHE_NAME = 'lbetaillere-v13';
 
 const ASSETS = [
   './',
