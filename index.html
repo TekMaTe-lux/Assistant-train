@@ -34158,14 +34158,57 @@ body{ padding-bottom: calc(var(--bottom-bar-height, 58px) + 10px) !important; }
     return Number.isFinite(num) ? num : null;
   }
 
-  async function getLiveTrainStaticInfo(trainNumber){
-    const key = normalizeKey(trainNumber);
+  async function getLiveTrainStaticInfo(trainInput){
+    const trainObj = (trainInput && typeof trainInput === 'object') ? trainInput : null;
+    const rawNumber = trainObj?.trainNumber || trainInput;
+    const key = normalizeKey(rawNumber);
     const day = toYmd();
     if (!key) return null;
     const cacheKey = `${key}_${day}`;
     if (COMMUNITY.staticInfoCache.has(cacheKey)) return COMMUNITY.staticInfoCache.get(cacheKey);
     let info = null;
-    if (typeof buildGtfsFallbackResult === 'function'){
+
+    // Priorité: endpoint léger /api/search-static (évite GTFS statique local de 73 Mo).
+    try {
+      const fromName = String(trainObj?.from || '').trim();
+      const toName = String(trainObj?.to || '').trim();
+      if (fromName && toName && LB_SEARCH_STATIC_API_URL) {
+        const params = new URLSearchParams({
+          from: fromName,
+          to: toName,
+          date: day,
+          start: '00:00',
+          end: '23:59',
+          includeCfl: '1',
+          allowTransfers: '0',
+          transferLimit: '0'
+        });
+        const resp = await fetch(`${LB_SEARCH_STATIC_API_URL}?${params.toString()}`, { cache: 'no-store' });
+        if (resp.ok) {
+          const payload = await resp.json();
+          const directs = Array.isArray(payload?.directs) ? payload.directs : (Array.isArray(payload?.results) ? payload.results : []);
+          const candidates = directs
+            .map(lbVpsDirectToProposal)
+            .filter(Boolean)
+            .filter((r)=> normalizeKey(r.numero || r.train) === key)
+            .sort((a,b)=> Number(a.depMin ?? 1e9) - Number(b.depMin ?? 1e9));
+          const best = candidates[0] || null;
+          if (best) {
+            info = {
+              departure: String(best.dep || '').trim() || '—',
+              arrival: String(best.arr || '').trim() || '—',
+              trainType: getCompoForTrain(key),
+              stops: [],
+              stopRows: []
+            };
+          }
+        }
+      }
+    } catch (err) {
+      console.warn('[LIVE] search-static indisponible pour', key, err?.message || err);
+    }
+
+    if (!info && typeof buildGtfsFallbackResult === 'function'){
       try{
         const fallback = await buildGtfsFallbackResult(key, { ymd: day });
         const stops = fallback?.train?.stop_times || [];
@@ -34551,7 +34594,7 @@ body{ padding-bottom: calc(var(--bottom-bar-height, 58px) + 10px) !important; }
     const trains = Array.isArray(COMMUNITY.liveTrains) ? COMMUNITY.liveTrains.slice(0, 20) : [];
     if (!trains.length) return;
     await Promise.all(trains.map(async (train)=>{
-      const info = await getLiveTrainStaticInfo(train.trainNumber);
+      const info = await getLiveTrainStaticInfo(train);
       const effectiveCompo = getEffectiveCompositionCode(train.trainNumber);
       const node = document.querySelector(`[data-lb-train-route-line="${String(train.trainNumber)}"]`);
       if (node && info) node.innerHTML = buildLiveRouteLineHtml(train, info);
@@ -34655,7 +34698,7 @@ body{ padding-bottom: calc(var(--bottom-bar-height, 58px) + 10px) !important; }
     }
 
     let stops = Array.isArray(train.stops) ? train.stops.filter(Boolean) : [];
-    const info = await getLiveTrainStaticInfo(train.trainNumber);
+    const info = await getLiveTrainStaticInfo(train);
     if (info?.stops?.length) stops = info.stops;
     const stopRows = Array.isArray(info?.stopRows) && info.stopRows.length
       ? info.stopRows
@@ -34781,7 +34824,7 @@ body{ padding-bottom: calc(var(--bottom-bar-height, 58px) + 10px) !important; }
     const trainSelect = $id('lbSignalTrainSelect');
     if (!trainSelect || !COMMUNITY.liveTrains.length) return;
     await Promise.all(COMMUNITY.liveTrains.slice(0, 30).map(async (train)=>{
-      const info = await getLiveTrainStaticInfo(train.trainNumber);
+      const info = await getLiveTrainStaticInfo(train);
       const option = trainSelect.querySelector(`option[value="${String(train.trainNumber)}"]`);
       if (!option || !info) return;
       option.textContent = `${train.label} — ${train.route} (${info.departure} - ${info.arrival})`;
