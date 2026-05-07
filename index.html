@@ -22456,8 +22456,13 @@ async function chargerEtAfficherAlertes() {
   updateDisruptionsSummaryVisibility();
 
   fetch(urlAlertes + "?t=" + new Date().getTime())
-    .then(response => response.json())
-    .then(alertes => {
+    .then(response => {
+      if (!response.ok) throw new Error(`HTTP ${response.status} sur ${urlAlertes}`);
+      return response.json();
+    })
+    .then(alertesRaw => {
+      const alertes = Array.isArray(alertesRaw) ? alertesRaw : [];
+
       let infoWrapper = document.getElementById('alertesInline');
       if (!infoWrapper) {
         infoWrapper = document.createElement('div');
@@ -22481,7 +22486,9 @@ async function chargerEtAfficherAlertes() {
       });
 
       // 1) Filtrage strict : actif + touche nos trips/routes/stops affichés
-      let alertesFiltres = alertes.filter(a => {
+      let alertesFiltres = alertes.filter((a) => {
+        if (!a || typeof a !== 'object') return false;
+
         const activeNow = alertActiveForDate(a, selectedDate);
         if (!activeNow) return false;
 
@@ -22489,7 +22496,7 @@ async function chargerEtAfficherAlertes() {
         if (alertTargetsDisplayed(a, sets)) return true;
 
         // 2) fallback mots-clés strict SEULEMENT si pas d’entités
-        const ents = a.informed_entities || [];
+        const ents = Array.isArray(a.informed_entities) ? a.informed_entities : [];
         if (ents.length === 0) {
           const titre = a.header_text || '';
           const desc  = stripHtml(a.description_text || '');
@@ -22512,22 +22519,24 @@ async function chargerEtAfficherAlertes() {
       }
 
       // 3) Rendu : titre + “trains concernés” (uniquement nos trains affichés)
-      alertesFiltres.forEach(alerte => {
+      alertesFiltres.forEach((alerte) => {
+        if (!alerte || typeof alerte !== 'object') return;
         const effetCode = Number.parseInt(alerte.effect, 10);
         const causeCode = Number.parseInt(alerte.cause, 10);
         const code = Number.isFinite(effetCode) ? effetCode : causeCode;
         const styleMeta = getStyleParCauseCode(code);
 
-        const titre = (alerte.header_text || styleMeta.label).trim();
-        const description = stripHtml(alerte.description_text || '');
+        const titre = String(alerte.header_text ?? styleMeta.label ?? '').trim();
+        const description = stripHtml(String(alerte.description_text ?? ''));
         // Ne PAS se baser uniquement sur code === 2 : certaines alertes SNCF de retard global
         // remontent avec ce code et provoquent à tort une "composition réduite" sur tous les trains.
         // On marque réduit seulement si le libellé parle explicitement de capacité / places assises / composition courte.
         const reductionKeywords = /réduction\s+du\s+nombre\s+de\s+places\s+assises|reduction\s+du\s+nombre\s+de\s+places\s+assises|capacit[ée]\s+r[ée]duite|composition\s+(?:plus\s+)?courte|rame\s+(?:plus\s+)?courte|nombre\s+de\s+places/i;
         const isReducedSeats = reductionKeywords.test(titre) || reductionKeywords.test(description);
 
-        const trainsFromEntities = (alerte.informed_entities || []).map(ent => {
+        const trainsFromEntities = (Array.isArray(alerte.informed_entities) ? alerte.informed_entities : []).map((ent) => {
             // 1) trip structuré → on cherche le n° de train depuis GTFS
+            if (!ent || typeof ent !== 'object') return null;
             const tripId = ent.trip_id || ent.vehicle_journey_id || null;
             if (tripId && sets.tripIds.has(tripId)) {
               const t = GTFS.tripById?.get(tripId);
