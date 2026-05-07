@@ -22328,11 +22328,19 @@ function getDisplayedTrainNumbers() {
 
 // Récupère vite les arrêts d'un trip
 function getStopsForTripQuick(trip_id){
+  if (!trip_id || !window.GTFS) return [];
+
   if (GTFS._stopTimesByTripSec && GTFS._stopTimesByTripSec.get(trip_id)) {
-    return GTFS._stopTimesByTripSec.get(trip_id).map(r=>r.stop_id);
+    const rows = GTFS._stopTimesByTripSec.get(trip_id);
+    return Array.isArray(rows) ? rows.map(r => r.stop_id).filter(Boolean) : [];
   }
-  // fallback si l'index n'est pas prêt
-  return GTFS.stopTimes.filter(st=>st.trip_id===trip_id).map(st=>st.stop_id);
+
+  // fallback sécurisé : depuis le passage à /api/search-static, stop_times.txt peut être absent côté front.
+  // On ne doit pas casser tout le bloc alertes si l'index lourd n'est pas chargé.
+  const stopTimes = Array.isArray(GTFS.stopTimes) ? GTFS.stopTimes : [];
+  if (!stopTimes.length) return [];
+
+  return stopTimes.filter(st => st && st.trip_id === trip_id).map(st => st.stop_id).filter(Boolean);
 }
 
 // Construit les sets à partir des colonnes du tableau (trains affichés)
@@ -22342,12 +22350,18 @@ function buildDisplayedFilters(ymd){
   const routeIds = new Set();
   const stopIds = new Set();
 
-  for (const t of GTFS.trips){
-    if (!serviceActiveForDate(t.trip_id, ymd)) continue;
-    const n = extractTrainNumber(t.trip_short_name || '');
+  // Sécurité #BER : le tableau vient maintenant de /api/search-static.
+  // Les données GTFS lourdes peuvent donc être absentes, et les alertes ne doivent pas planter pour autant.
+  const trips = Array.isArray(window.GTFS?.trips) ? window.GTFS.trips : [];
+  const hasServiceChecker = typeof serviceActiveForDate === 'function';
+
+  for (const t of trips){
+    if (!t) continue;
+    if (hasServiceChecker && t.trip_id && !serviceActiveForDate(t.trip_id, ymd)) continue;
+    const n = extractTrainNumber(t.trip_short_name || t.trip_id || '');
     if (!n || !displayedNums.has(n)) continue;
 
-    tripIds.add(t.trip_id);
+    if (t.trip_id) tripIds.add(t.trip_id);
     if (t.route_id) routeIds.add(t.route_id);
     for (const sid of getStopsForTripQuick(t.trip_id)) stopIds.add(sid);
   }
@@ -22376,7 +22390,7 @@ function entityTargetsDisplayed(ent, sets){
 
 // Une alerte touche nos trains/ligne affichés ?
 function alertTargetsDisplayed(alert, sets){
-  const ents = alert.informed_entities || [];
+  const ents = Array.isArray(alert?.informed_entities) ? alert.informed_entities : [];
   if (ents.length === 0) return false;
   return ents.some(ent => entityTargetsDisplayed(ent, sets));
 }
@@ -22435,9 +22449,10 @@ async function chargerEtAfficherAlertes() {
 
   const ymd = `${selectedDate.getFullYear()}${String(selectedDate.getMonth()+1).padStart(2,'0')}${String(selectedDate.getDate()).padStart(2,'0')}`;
 
-  try { await ensureGTFSLoaded({ silent: true }); } catch(e){ console.warn('GTFS non chargé pour alertes:', e); }
-  ensureTransferIndexesBuilt();   // accélère getStopsForTripQuick
-  buildStationGroups();
+  // Depuis le passage à /api/search-static, on ne force plus le chargement GTFS lourd ici.
+  // Objectif : éviter que le bloc alertes relance stop_times.txt ou plante si les index ne sont pas présents.
+  try { if (Array.isArray(window.GTFS?.trips) && window.GTFS.trips.length) ensureTransferIndexesBuilt(); } catch(e){ console.warn('[alertes] index transfert indisponible:', e); }
+  try { if (Array.isArray(window.GTFS?.stops) && window.GTFS.stops.length) buildStationGroups(); } catch(e){ console.warn('[alertes] groupes gares indisponibles:', e); }
 
   // petit utilitaire local
   const stripHtml = (s) => (s || '').replace(/<[^>]*>?/gm, '');
