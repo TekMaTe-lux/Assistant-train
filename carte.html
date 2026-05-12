@@ -3468,14 +3468,19 @@ function sanitizeCflStationName(name){
     return `${glyph}|${displayNum}|${badgeLabel}|${badgeClass}|${title}|${cancelled}|${brandClass}`;
   }
 
-    // ---------- Remontée des trains visibles vers le VPS (carte/seen-tails) ----------
+    // ---------- API SNCF CARTE via HUB CENTRALISE ----------
+  // La carte ne pousse plus des tails vers un backend séparé.
+  // Elle demande directement au HUB SNCF du VPS, qui applique cache + quota + coalescing.
+  const CARTE_SNCF_HUB_URL = 'https://vps.labetaillere.fr/sncf/hub';
+  const CARTE_SNCF_CLIENT = 'front-carte';
 
-  // Endpoint FastAPI sur ton VPS
-  const CARTE_SEEN_TAILS_ENDPOINT = 'https://vps.labetaillere.fr/carte/seen-tails';
-
-  // On limite les envois toutes les 5 minutes
+  // On limite l'enrichissement SNCF carte toutes les 5 minutes.
+  // Le HUB VPS garde ensuite son propre TTL/quota : HIT = cache, MISS/REFRESH = vrai appel SNCF compté.
   const CARTE_SEEN_INTERVAL_MS = 5 * 60 * 1000;
   let lastCarteSeenPost = 0;
+  let pendingCarteHubPromise = null;
+  const carteHubNumbersCache = new Map(); // key=date:num -> { t, data }
+  const CARTE_HUB_FRONT_TTL_MS = 60 * 1000;
 
   /**
    * Construit le tail SNCF pour un train affiché sur la carte.
@@ -3540,22 +3545,110 @@ function sanitizeCflStationName(name){
   }
 
   /**
-   * Envoie au VPS la liste de tails des trains actuellement visibles sur la carte.
+   * Extrait les numéros SNCF/TGV visibles sur la carte.
+   * Ces numéros sont ensuite envoyés au HUB central /sncf/hub.
    */
-  async function sendVisibleTrainTails(trains) {
-    const tails = computeVisibleTrainTails(trains);
-    if (!tails.length) return;
-
-    try {
-      await fetch(CARTE_SEEN_TAILS_ENDPOINT, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ tails })
-      });
-      // console.log('[CARTE SNCF] Tails envoyés au VPS:', tails);
-    } catch (e) {
-      console.warn('[CARTE SNCF] Impossible d’envoyer les tails visibles', e);
+  function computeVisibleTrainNumbersForHub(trains) {
+    if (!Array.isArray(trains) || !trains.length) return [];
+    const set = new Set();
+    for (const train of trains) {
+      const category = train?.branding?.category || 'sncf';
+      if (category !== 'sncf' && category !== 'tgv-roi') continue;
+      const rawNumber =
+        train?.branding?.digits ||
+        train?.branding?.rawDigits ||
+        train?.number ||
+        train?.tripNumber ||
+        train?.numberKey ||
+        null;
+      const num = extractTrainNumberCandidate(rawNumber);
+      if (num) set.add(String(num));
     }
+    return Array.from(set).slice(0, 80);
+  }
+
+  function mergeHubVehicleJourneysIntoSncfRealtime(hub, dateKey){
+    if (!hub || typeof hub !== 'object' || !hub.trains) return false;
+
+    const merged = {
+      vehicle_journeys: [],
+      disruptions: [],
+      context: {}
+    };
+
+    let newestCtx = null;
+
+    for (const [num, item] of Object.entries(hub.trains || {})){
+      if (!item || !item.ok || !item.data) continue;
+      const data = item.data;
+
+      carteHubNumbersCache.set(`${dateKey}:${num}`, { t: Date.now(), data });
+
+      if (Array.isArray(data.vehicle_journeys)) {
+        merged.vehicle_journeys.push(...data.vehicle_journeys);
+      }
+      if (Array.isArray(data.disruptions)) {
+        merged.disruptions.push(...data.disruptions);
+      }
+
+      const ctx = data.context?.current_datetime;
+      if (ctx && (!newestCtx || parseNavitiaDateTime(ctx) > parseNavitiaDateTime(newestCtx))) {
+        newestCtx = ctx;
+      }
+    }
+
+    if (!merged.vehicle_journeys.length && !merged.disruptions.length) return false;
+    if (newestCtx) merged.context.current_datetime = newestCtx;
+
+    const parsed = parseSncfRealtimeData(merged);
+    realtimeSources.sncf.origin = 'HUB SNCF VPS';
+    realtimeSources.sncf.rawSource = CARTE_SNCF_HUB_URL;
+    registerSncfVehicleJourneys(parsed.perTrain, { fetchedAt: parsed.updatedAt || Date.now(), disruptions: parsed.disruptions });
+    setRealtimeSourceError('sncf', null);
+    return true;
+  }
+
+  /**
+   * Enrichit les trains visibles via le HUB SNCF central.
+   * Aucun appel direct API SNCF/Navitia ici : le quota/cache est géré par le VPS.
+   */
+  async function refreshVisibleTrainDataViaHub(trains) {
+    const nums = computeVisibleTrainNumbersForHub(trains);
+    if (!nums.length) return;
+    if (pendingCarteHubPromise) return pendingCarteHubPromise;
+
+    const dateKey = formatLuxDateISO(new Date());
+    const now = Date.now();
+    const missing = nums.filter(num => {
+      const cached = carteHubNumbersCache.get(`${dateKey}:${num}`);
+      return !(cached && cached.data && (now - cached.t) < CARTE_HUB_FRONT_TTL_MS);
+    });
+
+    if (!missing.length) {
+      console.debug('[CARTE SNCF HUB] FRONT-HIT', nums.length, 'train(s)');
+      return;
+    }
+
+    pendingCarteHubPromise = (async()=>{
+      const url = `${CARTE_SNCF_HUB_URL}?date=${encodeURIComponent(dateKey)}&nums=${encodeURIComponent(missing.join(','))}&client=${encodeURIComponent(CARTE_SNCF_CLIENT)}`;
+      try {
+        console.log('[CARTE SNCF HUB] tentative:', url);
+        const res = await fetchWithTimeoutNoHeaders(url, 15000);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const hub = await res.json();
+        const ok = mergeHubVehicleJourneysIntoSncfRealtime(hub, dateKey);
+        console.log('[CARTE SNCF HUB] ✅', hub?.summary || {}, hub?.quota || {});
+        if (!ok) console.warn('[CARTE SNCF HUB] réponse sans vehicle_journeys exploitable');
+      } catch (e) {
+        console.warn('[CARTE SNCF HUB] échec enrichissement visible', e);
+        const hadData = realtimeSources.sncf.lastUpdated != null;
+        setRealtimeSourceError('sncf', hadData ? 'hub carte en échec' : 'hub carte indisponible');
+      } finally {
+        pendingCarteHubPromise = null;
+      }
+    })();
+
+    return pendingCarteHubPromise;
   }
 
   const COW_EMOJIS = ['🐄','🐮','🐃','🐂','🐄'];
@@ -6967,7 +7060,7 @@ function stationNameMatchesKeywords(name, keywords){
     if (nowMs - lastCarteSeenPost >= CARTE_SEEN_INTERVAL_MS) {
       lastCarteSeenPost = nowMs;
       const visibleTrains = getVisibleTrainsForCarte();
-      sendVisibleTrainTails(visibleTrains);
+      refreshVisibleTrainDataViaHub(visibleTrains);
     }
   }
 
