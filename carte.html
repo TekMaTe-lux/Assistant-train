@@ -1598,6 +1598,54 @@ const GTFS_RT_STOP_META_KEYS = new Set([
     return `${label} : ${primaryText}`;
   }
 
+  function collectSncfDisruptionCauseTexts(disruptions){
+    const causes = [];
+    const push = (value)=>{
+      const text = String(value || '').trim();
+      if (text && !causes.includes(text)) causes.push(text);
+    };
+    if (!Array.isArray(disruptions)) return causes;
+    for (const disruption of disruptions){
+      if (!disruption || typeof disruption !== 'object') continue;
+      push(disruption.cause);
+      if (Array.isArray(disruption.messages)){
+        for (const msg of disruption.messages){
+          if (!msg) continue;
+          push(msg.text || msg.message || msg.title);
+        }
+      }
+      if (Array.isArray(disruption.comments)){
+        for (const msg of disruption.comments){
+          if (!msg) continue;
+          push(msg.text || msg.comment || msg.title);
+        }
+      }
+      const fallback = buildNavitiaDisruptionMessage(disruption);
+      if (fallback){
+        // Si buildNavitiaDisruptionMessage renvoie déjà "Retard : xxx", on garde surtout le texte utile.
+        push(fallback.replace(/^\s*(Retard|Suppression(?: partielle)?)\s*:\s*/i, ''));
+      }
+    }
+    return causes;
+  }
+
+  function buildSncfDirectTrainDisruptionText(data){
+    if (!data || typeof data !== 'object') return null;
+    const disruptions = Array.isArray(data.disruptions) ? data.disruptions : [];
+    if (!disruptions.length) return null;
+    const causes = collectSncfDisruptionCauseTexts(disruptions);
+    if (!causes.length) return null;
+
+    const raw = JSON.stringify(disruptions).toLowerCase();
+    let label = 'Retard';
+    if (/no_service|cancel|cancell|supprim|trip canceled|deleted/.test(raw)){
+      label = 'Suppression';
+    } else if (/partial|reduced|partiel/.test(raw)){
+      label = 'Suppression partielle';
+    }
+    return `${label} : ${causes.slice(0, 2).join(' • ')}`;
+  }
+
   function registerSncfDisruptionTarget(map, ptObject, disruptionText){
     if (!ptObject || !disruptionText) return;
     const candidates = new Set();
@@ -3573,6 +3621,7 @@ function sanitizeCflStationName(name){
     const merged = {
       vehicle_journeys: [],
       disruptions: [],
+      direct_train_disruptions: [],
       context: {}
     };
 
@@ -3589,6 +3638,10 @@ function sanitizeCflStationName(name){
       }
       if (Array.isArray(data.disruptions)) {
         merged.disruptions.push(...data.disruptions);
+        const directText = buildSncfDirectTrainDisruptionText(data);
+        if (directText){
+          merged.direct_train_disruptions.push({ trainKey: String(num), text: directText });
+        }
       }
 
       const ctx = data.context?.current_datetime;
