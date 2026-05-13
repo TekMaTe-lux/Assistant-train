@@ -1598,54 +1598,6 @@ const GTFS_RT_STOP_META_KEYS = new Set([
     return `${label} : ${primaryText}`;
   }
 
-  function collectSncfDisruptionCauseTexts(disruptions){
-    const causes = [];
-    const push = (value)=>{
-      const text = String(value || '').trim();
-      if (text && !causes.includes(text)) causes.push(text);
-    };
-    if (!Array.isArray(disruptions)) return causes;
-    for (const disruption of disruptions){
-      if (!disruption || typeof disruption !== 'object') continue;
-      push(disruption.cause);
-      if (Array.isArray(disruption.messages)){
-        for (const msg of disruption.messages){
-          if (!msg) continue;
-          push(msg.text || msg.message || msg.title);
-        }
-      }
-      if (Array.isArray(disruption.comments)){
-        for (const msg of disruption.comments){
-          if (!msg) continue;
-          push(msg.text || msg.comment || msg.title);
-        }
-      }
-      const fallback = buildNavitiaDisruptionMessage(disruption);
-      if (fallback){
-        // Si buildNavitiaDisruptionMessage renvoie déjà "Retard : xxx", on garde surtout le texte utile.
-        push(fallback.replace(/^\s*(Retard|Suppression(?: partielle)?)\s*:\s*/i, ''));
-      }
-    }
-    return causes;
-  }
-
-  function buildSncfDirectTrainDisruptionText(data){
-    if (!data || typeof data !== 'object') return null;
-    const disruptions = Array.isArray(data.disruptions) ? data.disruptions : [];
-    if (!disruptions.length) return null;
-    const causes = collectSncfDisruptionCauseTexts(disruptions);
-    if (!causes.length) return null;
-
-    const raw = JSON.stringify(disruptions).toLowerCase();
-    let label = 'Retard';
-    if (/no_service|cancel|cancell|supprim|trip canceled|deleted/.test(raw)){
-      label = 'Suppression';
-    } else if (/partial|reduced|partiel/.test(raw)){
-      label = 'Suppression partielle';
-    }
-    return `${label} : ${causes.slice(0, 2).join(' • ')}`;
-  }
-
   function registerSncfDisruptionTarget(map, ptObject, disruptionText){
     if (!ptObject || !disruptionText) return;
     const candidates = new Set();
@@ -3596,20 +3548,26 @@ function sanitizeCflStationName(name){
    * Extrait les numéros SNCF/TGV visibles sur la carte.
    * Ces numéros sont ensuite envoyés au HUB central /sncf/hub.
    */
+  function extractSncfHubNumberForTrain(train) {
+    if (!train) return null;
+    const category = train?.branding?.category || 'sncf';
+    if (category !== 'sncf' && category !== 'tgv-roi') return null;
+    const rawNumber =
+      train?.branding?.digits ||
+      train?.branding?.rawDigits ||
+      train?.number ||
+      train?.tripNumber ||
+      train?.numberKey ||
+      null;
+    const num = extractTrainNumberCandidate(rawNumber);
+    return num ? String(num) : null;
+  }
+
   function computeVisibleTrainNumbersForHub(trains) {
     if (!Array.isArray(trains) || !trains.length) return [];
     const set = new Set();
     for (const train of trains) {
-      const category = train?.branding?.category || 'sncf';
-      if (category !== 'sncf' && category !== 'tgv-roi') continue;
-      const rawNumber =
-        train?.branding?.digits ||
-        train?.branding?.rawDigits ||
-        train?.number ||
-        train?.tripNumber ||
-        train?.numberKey ||
-        null;
-      const num = extractTrainNumberCandidate(rawNumber);
+      const num = extractSncfHubNumberForTrain(train);
       if (num) set.add(String(num));
     }
     return Array.from(set).slice(0, 80);
@@ -3621,11 +3579,11 @@ function sanitizeCflStationName(name){
     const merged = {
       vehicle_journeys: [],
       disruptions: [],
-      direct_train_disruptions: [],
       context: {}
     };
 
     let newestCtx = null;
+    const directTrainDisruptions = new Map();
 
     for (const [num, item] of Object.entries(hub.trains || {})){
       if (!item || !item.ok || !item.data) continue;
@@ -3638,9 +3596,18 @@ function sanitizeCflStationName(name){
       }
       if (Array.isArray(data.disruptions)) {
         merged.disruptions.push(...data.disruptions);
-        const directText = buildSncfDirectTrainDisruptionText(data);
-        if (directText){
-          merged.direct_train_disruptions.push({ trainKey: String(num), text: directText });
+
+        // Même logique que LIVE/tableau : le HUB répond pour CE numéro.
+        // Si Navitia ne fournit pas impacted_objects exploitable mais donne une cause,
+        // on rattache directement cette cause au numéro demandé.
+        for (const disruption of data.disruptions){
+          const text = buildNavitiaDisruptionMessage(disruption);
+          if (!text) continue;
+          const trainKey = normalizeTrainNumberKey(num) || String(num);
+          registerSncfDisruptionTarget(directTrainDisruptions, { id:String(trainKey), name:String(trainKey) }, text);
+
+          const tail = `vehicle_journey:SNCF:${dateKey}:${trainKey}:1187:Train`;
+          registerSncfDisruptionTarget(directTrainDisruptions, { id:tail, name:tail }, text);
         }
       }
 
@@ -3650,10 +3617,16 @@ function sanitizeCflStationName(name){
       }
     }
 
-    if (!merged.vehicle_journeys.length && !merged.disruptions.length) return false;
+    if (!merged.vehicle_journeys.length && !merged.disruptions.length && !directTrainDisruptions.size) return false;
     if (newestCtx) merged.context.current_datetime = newestCtx;
 
     const parsed = parseSncfRealtimeData(merged);
+    if (directTrainDisruptions.size){
+      if (!(parsed.disruptions instanceof Map)) parsed.disruptions = new Map();
+      for (const [k, v] of directTrainDisruptions.entries()){
+        if (!parsed.disruptions.has(k)) parsed.disruptions.set(k, v);
+      }
+    }
     realtimeSources.sncf.origin = 'HUB SNCF VPS';
     realtimeSources.sncf.rawSource = CARTE_SNCF_HUB_URL;
     registerSncfVehicleJourneys(parsed.perTrain, { fetchedAt: parsed.updatedAt || Date.now(), disruptions: parsed.disruptions });
@@ -3702,6 +3675,35 @@ function sanitizeCflStationName(name){
     })();
 
     return pendingCarteHubPromise;
+  }
+
+
+  const carteSelectedHubRefreshAt = new Map();
+  const CARTE_SELECTED_HUB_REFRESH_MS = 15 * 1000;
+
+  function refreshSelectedTrainViaHubIfNeeded(train){
+    if (!train) return;
+    const num = extractSncfHubNumberForTrain(train);
+    if (!num) return;
+
+    // Si la cause est déjà là, inutile d'appeler le HUB.
+    if (findSncfDisruptionForTrain(train)) return;
+
+    const dateKey = formatLuxDateISO(new Date());
+    const key = `${dateKey}:${num}`;
+    const now = Date.now();
+    const last = carteSelectedHubRefreshAt.get(key) || 0;
+    if (now - last < CARTE_SELECTED_HUB_REFRESH_MS) return;
+    carteSelectedHubRefreshAt.set(key, now);
+
+    refreshVisibleTrainDataViaHub([train]).then(()=>{
+      if (activeTripId && trainDataById.has(activeTripId)){
+        const activeTrain = trainDataById.get(activeTripId);
+        if (activeTrain && extractSncfHubNumberForTrain(activeTrain) === num){
+          renderTripPanel();
+        }
+      }
+    }).catch(()=>{});
   }
 
   const COW_EMOJIS = ['🐄','🐮','🐃','🐂','🐄'];
@@ -4292,6 +4294,10 @@ const mapContainerEl = map.getContainer();
     }
     const delayInfo = data.delayInfo || computeTrainDelayInfo(data);
     if (delayInfo && data.delayInfo !== delayInfo) data.delayInfo = delayInfo;
+
+    // Au clic sur une fiche train, on interroge immédiatement le HUB VPS pour CE train
+    // afin d'obtenir la cause si elle est déjà en cache côté proxy SNCF.
+    refreshSelectedTrainViaHubIfNeeded(data);
     
     const seq = stopTimesByTrip.get(activeTripId);
     const realtimeProfile = seq && seq.length ? (realtimeStopDataByTrip.get(activeTripId)
