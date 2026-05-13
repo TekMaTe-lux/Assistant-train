@@ -15125,7 +15125,6 @@ const LB_ENDPOINTS = Object.freeze({
   retardsCfl: 'https://vps.labetaillere.fr/gtfs/retards_cfl.json',
   compotrains: 'https://vps.labetaillere.fr/gtfs/Compotrains.json',
   hafasDepartureBoard: 'https://vps.labetaillere.fr/hafas/departureBoard',
-  hafasAccessId: '58ef9a71-6837-4405-bd5d-23beaf92864c',
   cflStaticBase: 'https://vps.labetaillere.fr/gtfs/static/CFL/',
   // FIX 2026-05-02 : les fichiers GTFS SNCF sont servis par le VPS, pas par GitHub/www.
   gtfsBase: 'https://vps.labetaillere.fr/gtfs/static/'
@@ -18071,7 +18070,7 @@ async function fetchCflHafasDepartures({ stopId, dateYmd, baseTimeHHMM, duration
 
   if (!CFL_HAFAS_CACHE.has(cacheKey)){
     try {
-      const params = new URLSearchParams({ accessId: LB_ENDPOINTS.hafasAccessId, id: hafasId, date: dateStr, time: timeParam, duration: String(duration), maxJourneys: '50', format: 'json' });
+      const params = new URLSearchParams({ id: hafasId, date: dateStr, time: timeParam, duration: String(duration), maxJourneys: '50', format: 'json' });
       const url = `${LB_ENDPOINTS.hafasDepartureBoard}?${params.toString()}`;
       const resp = await fetch(url, { cache: 'default' });
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
@@ -20332,12 +20331,14 @@ $(function () {
 // === PROXY SNCF (VPS) ===
 const VPS_BASE = 'https://vps.labetaillere.fr';
 
-// Accepte "YYYY-MM-DD" ou "YYYYMMDD"
+// Accepte "YYYY-MM-DD" ou "YYYYMMDD".
+// IMPORTANT : cette fonction renvoie désormais le HUB central, jamais l'ancien endpoint /sncf/vehicle_journey.
 function vpsVehicleJourneyUrl(date, num) {
-  const d = /^\d{8}$/.test(date)
-    ? date.replace(/(\d{4})(\d{2})(\d{2})/, '$1-$2-$3')
-    : date;
-  return `${VPS_BASE}/sncf/vehicle_journey/${d}/${num}`;
+  const d = /^\d{8}$/.test(String(date || ''))
+    ? String(date).replace(/(\d{4})(\d{2})(\d{2})/, '$1-$2-$3')
+    : String(date || '').trim();
+  const n = String(num || '').trim();
+  return `${VPS_BASE}/sncf/hub?date=${encodeURIComponent(d)}&nums=${encodeURIComponent(n)}`;
 }
 
 // Fetch JSON + lecture du header X-Cache (HIT/MISS/REFRESH) pour debug
@@ -20352,6 +20353,22 @@ function parseVpsVehicleJourneyUrl(url) {
     const m = absolute.pathname.match(/^\/sncf\/vehicle_journey\/(\d{4}-\d{2}-\d{2})\/([A-Za-z0-9_.:-]+)\/?$/);
     if (!m || absolute.hostname !== 'vps.labetaillere.fr') return null;
     return { date: m[1], num: m[2], absolute };
+  } catch (_) {
+    return null;
+  }
+}
+
+function parseVpsHubSingleTrainUrl(url) {
+  try {
+    const absolute = new URL(String(url || '').trim(), window.location.origin);
+    if (absolute.hostname !== 'vps.labetaillere.fr' || absolute.pathname !== '/sncf/hub') return null;
+    const date = absolute.searchParams.get('date');
+    const nums = String(absolute.searchParams.get('nums') || '')
+      .split(',')
+      .map(v => v.trim())
+      .filter(Boolean);
+    if (!date || nums.length !== 1) return null;
+    return { date, num: nums[0], absolute };
   } catch (_) {
     return null;
   }
@@ -20380,7 +20397,7 @@ async function fetchVehicleJourneyViaHub(date, num, { client = 'front-central', 
     const t = setTimeout(() => controller.abort(), timeoutMs);
 
     try {
-      // Client déjà transmis dans l'URL (?client=...), pas de header custom côté navigateur
+      // Client transmis dans l'URL (?client=...), pas de header custom côté navigateur
       // => évite les pré-vérifications CORS et reste compatible avec toutes les versions.
       const r = await fetch(hubUrl, {
         credentials: 'omit',
@@ -20410,12 +20427,11 @@ async function fetchVehicleJourneyViaHub(date, num, { client = 'front-central', 
   return promise;
 }
 
-// Fetch JSON + lecture du header X-Cache (HIT/MISS/REFRESH) pour debug
+// Fetch JSON générique avec garde stricte SNCF :
+// - aucun appel direct api.sncf.com / data.gouv côté navigateur
+// - aucun fallback navigateur vers /sncf/vehicle_journey
+// - les trains SNCF passent par /sncf/hub, puis le VPS décide cache/quota/API réelle
 async function fetchJSON(url, { timeoutMs = 15000, client = 'front-central' } = {}) {
-  // GARDE STRICTE #BER :
-  // - le navigateur ne doit JAMAIS appeler directement l'API SNCF / data.gouv / proxy.transport.data.gouv
-  // - les vehicle_journey passent par le HUB central /sncf/hub quand c'est possible
-  // - fallback conservé vers /sncf/vehicle_journey pour ne rien casser si le hub est KO
   let absolute;
   try {
     const u = String(url || '').trim();
@@ -20432,23 +20448,19 @@ async function fetchJSON(url, { timeoutMs = 15000, client = 'front-central' } = 
       throw new Error('Appel direct SNCF/data.gouv interdit côté front: ' + href);
     }
 
-    const isVehicleJourney = /\/vehicle_journey\//.test(absolute.pathname) || /\/vehicle_journeys\//.test(absolute.pathname);
-    const isProxyVehicleJourney =
-      absolute.hostname === 'vps.labetaillere.fr' &&
-      /^\/sncf\/vehicle_journey\/\d{4}-\d{2}-\d{2}\/[A-Za-z0-9_.:-]+\/?$/.test(absolute.pathname);
-
-    if (isVehicleJourney && !isProxyVehicleJourney) {
-      throw new Error('vehicle_journey doit passer par le proxy VPS: ' + href);
+    const parsedHub = parseVpsHubSingleTrainUrl(href);
+    if (parsedHub) {
+      return await fetchVehicleJourneyViaHub(parsedHub.date, parsedHub.num, { client, timeoutMs });
     }
 
     const parsedVj = parseVpsVehicleJourneyUrl(href);
     if (parsedVj) {
-      try {
-        return await fetchVehicleJourneyViaHub(parsedVj.date, parsedVj.num, { client, timeoutMs });
-      } catch (hubErr) {
-        console.warn('[SNCF HUB] fallback vehicle_journey:', hubErr?.message || hubErr);
-        // On continue plus bas sur l'ancien endpoint pour ne pas casser l'existant.
-      }
+      return await fetchVehicleJourneyViaHub(parsedVj.date, parsedVj.num, { client, timeoutMs });
+    }
+
+    const isVehicleJourney = /\/vehicle_journey\//.test(absolute.pathname) || /\/vehicle_journeys\//.test(absolute.pathname);
+    if (isVehicleJourney) {
+      throw new Error('vehicle_journey interdit côté navigateur: utiliser /sncf/hub');
     }
   } catch(e) {
     console.warn('[fetchJSON] Guard proxy SNCF:', e.message || e);
@@ -20459,9 +20471,7 @@ async function fetchJSON(url, { timeoutMs = 15000, client = 'front-central' } = 
   const t = setTimeout(() => controller.abort(), timeoutMs);
   let r;
   try {
-    // Fallback ancien endpoint : pas de header custom côté navigateur
-    // pour éviter tout blocage CORS si une ancienne conf Nginx est servie.
-    r = await fetch(url, {
+    r = await fetch(absolute.href, {
       credentials: 'omit',
       signal: controller.signal
     });
@@ -20470,7 +20480,7 @@ async function fetchJSON(url, { timeoutMs = 15000, client = 'front-central' } = 
   }
   const data = await r.json().catch(() => null);
   const cache = r.headers.get('x-cache');
-  if (cache) console.debug('[Proxy SNCF]', cache, url);
+  if (cache) console.debug('[Proxy]', cache, absolute.href);
   return { ok: r.ok, status: r.status, data, cache };
 }
 
@@ -20478,7 +20488,7 @@ async function fetchJSON(url, { timeoutMs = 15000, client = 'front-central' } = 
 	window.vpsVehicleJourneyUrl = vpsVehicleJourneyUrl;
 	window.fetchJSON = fetchJSON;
 	window.fetchVehicleJourneyViaHub = fetchVehicleJourneyViaHub;
-  
+
   // Date par défaut + menus
   $('#trainDate').val(formatDateInputValue(new Date()));
   buildGareDropdown();
