@@ -20341,13 +20341,85 @@ function vpsVehicleJourneyUrl(date, num) {
 }
 
 // Fetch JSON + lecture du header X-Cache (HIT/MISS/REFRESH) pour debug
-async function fetchJSON(url, { timeoutMs = 15000 } = {}) {
+// Cache frontal unique pour éviter que Favoris/Tableau redemandent le même train en boucle
+const SNCF_FRONT_CACHE = new Map();
+const SNCF_FRONT_INFLIGHT = new Map();
+const SNCF_FRONT_TTL_MS = 60 * 1000;
+
+function parseVpsVehicleJourneyUrl(url) {
+  try {
+    const absolute = new URL(String(url || '').trim(), window.location.origin);
+    const m = absolute.pathname.match(/^\/sncf\/vehicle_journey\/(\d{4}-\d{2}-\d{2})\/([A-Za-z0-9_.:-]+)\/?$/);
+    if (!m || absolute.hostname !== 'vps.labetaillere.fr') return null;
+    return { date: m[1], num: m[2], absolute };
+  } catch (_) {
+    return null;
+  }
+}
+
+async function fetchVehicleJourneyViaHub(date, num, { client = 'front-central', timeoutMs = 15000 } = {}) {
+  const safeDate = String(date || '').trim();
+  const safeNum = String(num || '').trim();
+  const safeClient = String(client || 'front-central').trim() || 'front-central';
+  const key = `${safeDate}:${safeNum}`;
+  const now = Date.now();
+
+  const cached = SNCF_FRONT_CACHE.get(key);
+  if (cached && cached.data && (now - cached.t) < SNCF_FRONT_TTL_MS) {
+    return { ok: true, status: 200, data: cached.data, cache: 'FRONT-HIT' };
+  }
+
+  if (SNCF_FRONT_INFLIGHT.has(key)) {
+    return SNCF_FRONT_INFLIGHT.get(key);
+  }
+
+  const hubUrl = `${VPS_BASE}/sncf/hub?date=${encodeURIComponent(safeDate)}&nums=${encodeURIComponent(safeNum)}&client=${encodeURIComponent(safeClient)}`;
+
+  const promise = (async () => {
+    const controller = new AbortController();
+    const t = setTimeout(() => controller.abort(), timeoutMs);
+
+    try {
+      // Client déjà transmis dans l'URL (?client=...), pas de header custom côté navigateur
+      // => évite les pré-vérifications CORS et reste compatible avec toutes les versions.
+      const r = await fetch(hubUrl, {
+        credentials: 'omit',
+        signal: controller.signal
+      });
+
+      const hub = await r.json().catch(() => null);
+      const item = hub?.trains?.[safeNum];
+
+      if (!r.ok || !item) {
+        throw new Error(`hub_error_${r.status}`);
+      }
+
+      if (item.ok && item.data) {
+        SNCF_FRONT_CACHE.set(key, { t: Date.now(), data: item.data });
+      }
+
+      if (item.cache) console.debug('[SNCF HUB]', safeClient, safeNum, item.cache, hub?.quota || '');
+      return { ok: !!item.ok, status: item.status || r.status, data: item.data, cache: item.cache || null, hub };
+    } finally {
+      clearTimeout(t);
+      SNCF_FRONT_INFLIGHT.delete(key);
+    }
+  })();
+
+  SNCF_FRONT_INFLIGHT.set(key, promise);
+  return promise;
+}
+
+// Fetch JSON + lecture du header X-Cache (HIT/MISS/REFRESH) pour debug
+async function fetchJSON(url, { timeoutMs = 15000, client = 'front-central' } = {}) {
   // GARDE STRICTE #BER :
   // - le navigateur ne doit JAMAIS appeler directement l'API SNCF / data.gouv / proxy.transport.data.gouv
-  // - les vehicle_journey doivent passer uniquement par https://vps.labetaillere.fr/sncf/vehicle_journey/...
+  // - les vehicle_journey passent par le HUB central /sncf/hub quand c'est possible
+  // - fallback conservé vers /sncf/vehicle_journey pour ne rien casser si le hub est KO
+  let absolute;
   try {
     const u = String(url || '').trim();
-    const absolute = new URL(u, window.location.origin);
+    absolute = new URL(u, window.location.origin);
     const href = absolute.href;
 
     const isForbiddenDirectSncf =
@@ -20368,6 +20440,16 @@ async function fetchJSON(url, { timeoutMs = 15000 } = {}) {
     if (isVehicleJourney && !isProxyVehicleJourney) {
       throw new Error('vehicle_journey doit passer par le proxy VPS: ' + href);
     }
+
+    const parsedVj = parseVpsVehicleJourneyUrl(href);
+    if (parsedVj) {
+      try {
+        return await fetchVehicleJourneyViaHub(parsedVj.date, parsedVj.num, { client, timeoutMs });
+      } catch (hubErr) {
+        console.warn('[SNCF HUB] fallback vehicle_journey:', hubErr?.message || hubErr);
+        // On continue plus bas sur l'ancien endpoint pour ne pas casser l'existant.
+      }
+    }
   } catch(e) {
     console.warn('[fetchJSON] Guard proxy SNCF:', e.message || e);
     return { ok:false, status:0, data:null, cache:null, error: String(e.message||e) };
@@ -20377,7 +20459,12 @@ async function fetchJSON(url, { timeoutMs = 15000 } = {}) {
   const t = setTimeout(() => controller.abort(), timeoutMs);
   let r;
   try {
-    r = await fetch(url, { credentials: 'omit', signal: controller.signal });
+    // Fallback ancien endpoint : pas de header custom côté navigateur
+    // pour éviter tout blocage CORS si une ancienne conf Nginx est servie.
+    r = await fetch(url, {
+      credentials: 'omit',
+      signal: controller.signal
+    });
   } finally {
     clearTimeout(t);
   }
@@ -20390,6 +20477,7 @@ async function fetchJSON(url, { timeoutMs = 15000 } = {}) {
 	// Expose au scope global (utilisé par le widget Favoris)
 	window.vpsVehicleJourneyUrl = vpsVehicleJourneyUrl;
 	window.fetchJSON = fetchJSON;
+	window.fetchVehicleJourneyViaHub = fetchVehicleJourneyViaHub;
   
   // Date par défaut + menus
   $('#trainDate').val(formatDateInputValue(new Date()));
@@ -20730,7 +20818,7 @@ function addManualTrain(){
 
   try {
 
-    const response = await fetchJSON(url);
+    const response = await fetchJSON(url, { client: 'front-tableau' });
 
     // 🔎 LOG 2 — voir le statut HTTP exact
     if (!response.ok) {
@@ -22328,19 +22416,11 @@ function getDisplayedTrainNumbers() {
 
 // Récupère vite les arrêts d'un trip
 function getStopsForTripQuick(trip_id){
-  if (!trip_id || !window.GTFS) return [];
-
   if (GTFS._stopTimesByTripSec && GTFS._stopTimesByTripSec.get(trip_id)) {
-    const rows = GTFS._stopTimesByTripSec.get(trip_id);
-    return Array.isArray(rows) ? rows.map(r => r.stop_id).filter(Boolean) : [];
+    return GTFS._stopTimesByTripSec.get(trip_id).map(r=>r.stop_id);
   }
-
-  // fallback sécurisé : depuis le passage à /api/search-static, stop_times.txt peut être absent côté front.
-  // On ne doit pas casser tout le bloc alertes si l'index lourd n'est pas chargé.
-  const stopTimes = Array.isArray(GTFS.stopTimes) ? GTFS.stopTimes : [];
-  if (!stopTimes.length) return [];
-
-  return stopTimes.filter(st => st && st.trip_id === trip_id).map(st => st.stop_id).filter(Boolean);
+  // fallback si l'index n'est pas prêt
+  return GTFS.stopTimes.filter(st=>st.trip_id===trip_id).map(st=>st.stop_id);
 }
 
 // Construit les sets à partir des colonnes du tableau (trains affichés)
@@ -22350,18 +22430,12 @@ function buildDisplayedFilters(ymd){
   const routeIds = new Set();
   const stopIds = new Set();
 
-  // Sécurité #BER : le tableau vient maintenant de /api/search-static.
-  // Les données GTFS lourdes peuvent donc être absentes, et les alertes ne doivent pas planter pour autant.
-  const trips = Array.isArray(window.GTFS?.trips) ? window.GTFS.trips : [];
-  const hasServiceChecker = typeof serviceActiveForDate === 'function';
-
-  for (const t of trips){
-    if (!t) continue;
-    if (hasServiceChecker && t.trip_id && !serviceActiveForDate(t.trip_id, ymd)) continue;
-    const n = extractTrainNumber(t.trip_short_name || t.trip_id || '');
+  for (const t of GTFS.trips){
+    if (!serviceActiveForDate(t.trip_id, ymd)) continue;
+    const n = extractTrainNumber(t.trip_short_name || '');
     if (!n || !displayedNums.has(n)) continue;
 
-    if (t.trip_id) tripIds.add(t.trip_id);
+    tripIds.add(t.trip_id);
     if (t.route_id) routeIds.add(t.route_id);
     for (const sid of getStopsForTripQuick(t.trip_id)) stopIds.add(sid);
   }
@@ -22390,7 +22464,7 @@ function entityTargetsDisplayed(ent, sets){
 
 // Une alerte touche nos trains/ligne affichés ?
 function alertTargetsDisplayed(alert, sets){
-  const ents = Array.isArray(alert?.informed_entities) ? alert.informed_entities : [];
+  const ents = alert.informed_entities || [];
   if (ents.length === 0) return false;
   return ents.some(ent => entityTargetsDisplayed(ent, sets));
 }
@@ -22449,10 +22523,9 @@ async function chargerEtAfficherAlertes() {
 
   const ymd = `${selectedDate.getFullYear()}${String(selectedDate.getMonth()+1).padStart(2,'0')}${String(selectedDate.getDate()).padStart(2,'0')}`;
 
-  // Depuis le passage à /api/search-static, on ne force plus le chargement GTFS lourd ici.
-  // Objectif : éviter que le bloc alertes relance stop_times.txt ou plante si les index ne sont pas présents.
-  try { if (Array.isArray(window.GTFS?.trips) && window.GTFS.trips.length) ensureTransferIndexesBuilt(); } catch(e){ console.warn('[alertes] index transfert indisponible:', e); }
-  try { if (Array.isArray(window.GTFS?.stops) && window.GTFS.stops.length) buildStationGroups(); } catch(e){ console.warn('[alertes] groupes gares indisponibles:', e); }
+  try { await ensureGTFSLoaded({ silent: true }); } catch(e){ console.warn('GTFS non chargé pour alertes:', e); }
+  ensureTransferIndexesBuilt();   // accélère getStopsForTripQuick
+  buildStationGroups();
 
   // petit utilitaire local
   const stripHtml = (s) => (s || '').replace(/<[^>]*>?/gm, '');
@@ -24599,16 +24672,27 @@ function scheduleWeatherAfterTableSettled(){
   };
 
   const api = async (path, opts = {}) => {
-    const res = await fetch(LB_API + path, {
-      ...opts,
-      headers: { "Content-Type": "application/json", ...(opts.headers || {}) },
-      credentials: "include"
-    });
-    const text = await res.text();
-    let data;
-    try { data = JSON.parse(text); } catch { data = { raw: text }; }
-    if (!res.ok) throw (data?.error || `HTTP ${res.status}`);
-    return data;
+    const cleanPath = String(path || '');
+    const candidates = [LB_API + cleanPath, '/api' + cleanPath];
+    let lastErr = null;
+    for (const url of candidates) {
+      try {
+        const res = await fetch(url, {
+          ...opts,
+          headers: { "Content-Type": "application/json", ...(opts.headers || {}) },
+          credentials: "include"
+        });
+        const text = await res.text();
+        let data;
+        try { data = JSON.parse(text); } catch { data = { raw: text }; }
+        if (!res.ok) throw (data?.error || `HTTP ${res.status}`);
+        return data;
+      } catch (err) {
+        lastErr = err;
+        console.warn('[AUTH API] tentative échouée', url, err?.message || err);
+      }
+    }
+    throw (lastErr?.message || lastErr || 'Failed to fetch');
   };
 
   const LB_COMMENTS_API = `${LB_API}/comments`;
@@ -26662,7 +26746,13 @@ if (statsEl){
     }
 
     const url = vpsVehicleJourneyUrl(ymd, String(selectionKey));
-    const response = await fetchJSON(url);
+    let response;
+    try {
+      response = await fetchJSON(url, { client: 'front-favoris' });
+    } catch (e) {
+      console.warn('[Favoris SNCF] Erreur fetch:', e?.message || e);
+      return { error: 'Erreur API' };
+    }
     if (!response?.ok) return { error: 'Non prévu (ou API KO)' };
 
     const train = response?.data?.vehicle_journeys?.[0];
@@ -34812,6 +34902,121 @@ body{ padding-bottom: calc(var(--bottom-bar-height, 58px) + 10px) !important; }
     if ($id('lbSignalModal')?.classList.contains('is-open')) refreshSignalModal();
   }
 
+
+  function extractSncfHubLiveInfo(data){
+    const train = data?.vehicle_journeys?.[0] || null;
+    const disruptions = Array.isArray(data?.disruptions) ? data.disruptions : [];
+    const causes = [];
+    disruptions.forEach((d)=>{
+      const cause = String(d?.cause || '').trim();
+      if (cause) causes.push(cause);
+      const msg = String(d?.messages?.[0]?.text || '').trim();
+      if (msg) causes.push(msg);
+    });
+    let statusClass = '';
+    let statusLabel = '';
+    let maxDelay = 0;
+    const disruptionText = JSON.stringify(disruptions).toLowerCase();
+    if (/no_service|cancell|cancel|supprim|trip canceled/.test(disruptionText)){
+      statusClass = 'cancel';
+      statusLabel = 'Supprimé';
+    }
+    const stops = Array.isArray(train?.stop_times) ? train.stop_times : [];
+    stops.forEach((st)=>{
+      const planned = String(st?.base_departure_time || st?.base_arrival_time || st?.departure_time || st?.arrival_time || '').trim();
+      const amended = String(st?.amended_departure_time || st?.amended_arrival_time || '').trim();
+      let d = 0;
+      if (typeof dl === 'function' && planned && amended) {
+        try { d = Number(dl(planned, amended) || 0); } catch(_) { d = 0; }
+      }
+      const explicit = Number(st?.delay_minutes ?? st?.delay ?? 0);
+      if (Number.isFinite(explicit) && explicit > d) d = explicit;
+      if (Number.isFinite(d) && d > maxDelay) maxDelay = d;
+    });
+    if (!statusClass && maxDelay > 0){
+      statusClass = 'delay';
+      statusLabel = `+${maxDelay} min`;
+    }
+    if (!statusClass){
+      statusClass = 'ok';
+      statusLabel = 'À l\'heure';
+    }
+    return {
+      train,
+      statusClass,
+      statusLabel,
+      maxDelay,
+      sncfCause: Array.from(new Set(causes)).slice(0, 2).join(' • ')
+    };
+  }
+
+  async function hydrateLiveSncfViaHub(sourceTrains){
+    const trains = Array.isArray(sourceTrains) ? sourceTrains : [];
+    if (!trains.length) return;
+    if (typeof window.fetchVehicleJourneyViaHub !== 'function') return;
+    const day = toYmd();
+    const targets = trains
+      .map((t)=> normalizeKey(t?.trainNumber))
+      .filter(Boolean)
+      .filter((n, idx, arr)=> arr.indexOf(n) === idx)
+      .slice(0, 30);
+    if (!targets.length) return;
+
+    await Promise.allSettled(targets.map(async (num)=>{
+      const response = await window.fetchVehicleJourneyViaHub(day, num, { client: 'front-live', timeoutMs: 12000 });
+      if (!response?.ok || !response?.data) return;
+      const info = extractSncfHubLiveInfo(response.data);
+      const liveTrain = COMMUNITY.liveTrains.find((it)=> normalizeKey(it?.trainNumber) === num);
+      const currentClass = liveTrain?.statusClass || 'ok';
+      const currentDelay = Number(liveTrain?.maxDelay || 0);
+      let finalInfo = { ...info };
+
+      // Priorité identique au tableau :
+      // 1) suppression SNCF/HUB prioritaire
+      // 2) retard SNCF/HUB si > 0 prioritaire
+      // 3) si HUB dit "À l'heure" mais GTFS-RT/HAFAS avait déjà un retard/suppression,
+      //    on conserve le GTFS-RT/HAFAS au lieu de l'écraser.
+      if (info.statusClass === 'ok' && currentClass !== 'ok') {
+        finalInfo.statusClass = currentClass;
+        finalInfo.statusLabel = liveTrain?.statusLabel || (currentClass === 'delay' ? `+${currentDelay} min` : 'Supprimé');
+        finalInfo.maxDelay = currentDelay;
+        finalInfo.sncfCause = liveTrain?.sncfCause || finalInfo.sncfCause || '';
+      } else if (info.statusClass === 'delay' && currentClass === 'delay' && currentDelay > Number(info.maxDelay || 0)) {
+        finalInfo.statusLabel = liveTrain?.statusLabel || `+${currentDelay} min`;
+        finalInfo.maxDelay = currentDelay;
+        finalInfo.sncfCause = info.sncfCause || liveTrain?.sncfCause || '';
+      }
+
+      if (liveTrain){
+        liveTrain.statusClass = finalInfo.statusClass || liveTrain.statusClass;
+        liveTrain.statusLabel = finalInfo.statusLabel || liveTrain.statusLabel;
+        liveTrain.maxDelay = Number(finalInfo.maxDelay || liveTrain.maxDelay || 0);
+        if (finalInfo.sncfCause) liveTrain.sncfCause = finalInfo.sncfCause;
+      }
+      const card = document.querySelector(`[data-lb-live-train="${String(num).replace(/"/g, '\"')}"]`);
+      if (!card) return;
+      card.classList.remove('lb-live-card--ok','lb-live-card--delay','lb-live-card--cancel');
+      card.classList.add(`lb-live-card--${finalInfo.statusClass || 'ok'}`);
+      const statusEl = card.querySelector('.lb-live-status');
+      if (statusEl){
+        statusEl.className = `lb-live-status lb-live-status--${finalInfo.statusClass || 'ok'}`;
+        statusEl.textContent = finalInfo.statusLabel || 'À l\'heure';
+      }
+      if (finalInfo.sncfCause && (finalInfo.statusClass === 'delay' || finalInfo.statusClass === 'cancel')){
+        let causeEl = card.querySelector('.lb-live-sncf-cause');
+        if (!causeEl){
+          const right = card.querySelector('.lb-live-right');
+          if (right){
+            causeEl = document.createElement('div');
+            causeEl.className = 'lb-live-sncf-cause';
+            right.appendChild(causeEl);
+          }
+        }
+        if (causeEl) causeEl.textContent = `${finalInfo.statusClass === 'cancel' ? 'Suppression' : 'Retard'} : ${finalInfo.sncfCause}`;
+      }
+    }));
+  }
+
   function renderLiveTrainCards(){
     const liveExtractor = (typeof window.extractLiveTrains === 'function' ? window.extractLiveTrains : (()=>[]));
     COMMUNITY.liveTrains = liveExtractor();
@@ -34909,6 +35114,7 @@ body{ padding-bottom: calc(var(--bottom-bar-height, 58px) + 10px) !important; }
         </div>`;
     }).join('');
     hydrateLiveTrainStaticInfos(displayTrains);
+    hydrateLiveSncfViaHub(displayTrains).catch((err)=> console.warn('[LIVE SNCF HUB] indisponible', err?.message || err));
   }
 
   async function hydrateLiveTrainStaticInfos(sourceTrains){
@@ -36622,5 +36828,293 @@ body.lb-train-detail-open::after{
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeLegend(); }, true);
 })();
 </script>
+
+
+<!-- FIX FINAL: favoris mobile badges à droite + cause LIVE propre -->
+<style id="lb-fix-fav-badges-right-visible-final">
+/* Ne touche pas à l'API/cache/quota : affichage uniquement */
+@media (max-width: 700px){
+  #homeFavSlot .home-fav-row{
+    display: block !important;
+    position: relative !important;
+    overflow: hidden !important;
+    padding: 7px 8px !important;
+  }
+
+  #homeFavSlot .home-fav-head{
+    display: grid !important;
+    grid-template-columns: minmax(0, 1fr) max-content !important;
+    align-items: center !important;
+    width: 100% !important;
+    min-width: 0 !important;
+    column-gap: 4px !important;
+  }
+
+  #homeFavSlot .home-fav-trainline{
+    min-width: 0 !important;
+    max-width: 100% !important;
+    overflow: hidden !important;
+    padding-right: 0 !important;
+  }
+
+  #homeFavSlot .home-fav-badge{
+    display: flex !important;
+    justify-content: flex-end !important;
+    justify-self: end !important;
+    align-self: center !important;
+    width: auto !important;
+    min-width: 0 !important;
+    margin: 0 -1px 0 0 !important; /* colle visuellement au bord droit interne */
+    padding: 0 !important;
+    position: static !important;
+    transform: none !important;
+  }
+
+  #homeFavSlot .home-fav-badge .fav-state-badge,
+  #homeFavSlot .home-fav-row .fav-state-badge{
+    display: inline-flex !important;
+    visibility: visible !important;
+    opacity: 1 !important;
+    align-items: center !important;
+    justify-content: center !important;
+    white-space: nowrap !important;
+    width: auto !important;
+    max-width: 58px !important;
+    min-width: 0 !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+    font-size: .50rem !important;
+    line-height: 1 !important;
+    padding: 3px 6px !important;
+    letter-spacing: .015em !important;
+  }
+
+  #homeFavSlot .home-fav-train,
+  #homeFavSlot .home-fav-train-no{
+    max-width: 100% !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+    white-space: nowrap !important;
+  }
+
+  #homeFavSlot .home-fav-route,
+  #homeFavSlot .home-fav-time{
+    max-width: 100% !important;
+    padding-right: 0 !important;
+  }
+}
+
+/* LIVE : cause SNCF en version compacte, jamais hors carte */
+.lb-live-card{ overflow: hidden !important; }
+.lb-live-sncf-cause{
+  box-sizing: border-box !important;
+  max-width: 100% !important;
+  min-width: 0 !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+  white-space: nowrap !important;
+}
+.lb-live-sncf-cause.lb-live-sncf-cause--full{
+  display:block !important;
+  clear:both !important;
+  margin:5px 0 0 !important;
+}
+@media (max-width: 600px){
+  .lb-live-sncf-cause{
+    font-size:.56rem !important;
+    line-height:1.08 !important;
+    padding:4px 6px !important;
+  }
+}
+</style>
+<script id="lb-fix-live-cause-position-final">
+(() => {
+  'use strict';
+  function normalizeLiveCauses(root=document){
+    const causes = root.querySelectorAll ? root.querySelectorAll('.lb-live-sncf-cause') : [];
+    causes.forEach(cause => {
+      const card = cause.closest('.lb-live-card');
+      if (!card) return;
+      const top = card.querySelector('.lb-live-card-top');
+      if (!top) return;
+      cause.classList.add('lb-live-sncf-cause--full');
+      if (cause.parentElement && cause.parentElement.classList.contains('lb-live-right')) {
+        top.insertAdjacentElement('afterend', cause);
+      }
+    });
+  }
+  const run = () => normalizeLiveCauses(document);
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', run, {once:true});
+  else run();
+  try{
+    new MutationObserver(() => normalizeLiveCauses(document)).observe(document.body,{childList:true,subtree:true});
+  }catch(_){ }
+})();
+</script>
+
+
+
+<!-- FIX ULTIME: favoris mobile - numéro train 6 chiffres garanti + badge à droite sans chevauchement -->
+<style id="lb-fix-fav-6digits-no-overlap-final">
+/* Affichage uniquement : ne touche pas aux appels API / cache / quota */
+@media (max-width: 700px){
+  #homeFavSlot.home-fav-preview{
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    gap: 6px !important;
+  }
+
+  #homeFavSlot .home-fav-row{
+    box-sizing: border-box !important;
+    display: flex !important;
+    flex-direction: column !important;
+    position: relative !important;
+    min-width: 0 !important;
+    overflow: hidden !important;
+    padding: 7px 7px !important;
+  }
+
+  #homeFavSlot .home-fav-head{
+    display: flex !important;
+    align-items: center !important;
+    justify-content: space-between !important;
+    gap: 3px !important;
+    width: 100% !important;
+    min-width: 0 !important;
+  }
+
+  #homeFavSlot .home-fav-trainline{
+    flex: 1 1 auto !important;
+    min-width: 0 !important;
+    max-width: calc(100% - 49px) !important; /* place réservée au badge */
+    overflow: visible !important;
+    padding-right: 0 !important;
+  }
+
+  #homeFavSlot .home-fav-train,
+  #homeFavSlot .home-fav-train-no{
+    display: inline-flex !important;
+    align-items: baseline !important;
+    max-width: none !important;
+    overflow: visible !important;
+    text-overflow: clip !important;
+    white-space: nowrap !important;
+  }
+
+  #homeFavSlot .home-fav-train{
+    font-size: clamp(.66rem, 2.38vw, .73rem) !important;
+    line-height: 1.02 !important;
+    letter-spacing: 0 !important;
+    gap: 2px !important;
+  }
+
+  #homeFavSlot .home-fav-train-no{
+    font-size: inherit !important;
+    font-weight: 900 !important;
+    letter-spacing: 0 !important;
+  }
+
+  #homeFavSlot .home-fav-train-compo{
+    font-size: .54rem !important;
+    letter-spacing: 0 !important;
+    opacity: .82 !important;
+  }
+
+  #homeFavSlot .home-fav-badge{
+    flex: 0 0 auto !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: flex-end !important;
+    justify-self: end !important;
+    margin-left: auto !important;
+    margin-right: 0 !important;
+    width: auto !important;
+    min-width: 0 !important;
+    max-width: 49px !important;
+    padding: 0 !important;
+    position: static !important;
+    transform: none !important;
+  }
+
+  #homeFavSlot .home-fav-badge .fav-state-badge,
+  #homeFavSlot .home-fav-row .fav-state-badge{
+    display: inline-flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    visibility: visible !important;
+    opacity: 1 !important;
+    white-space: nowrap !important;
+    width: auto !important;
+    max-width: 49px !important;
+    min-width: 0 !important;
+    box-sizing: border-box !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+    font-size: clamp(.39rem, 1.42vw, .47rem) !important;
+    line-height: 1 !important;
+    padding: 2px 4px !important;
+    letter-spacing: 0 !important;
+  }
+
+  #homeFavSlot .home-fav-route{
+    margin-top: 2px !important;
+    font-size: clamp(.63rem, 2.08vw, .70rem) !important;
+    line-height: 1.08 !important;
+  }
+
+  #homeFavSlot .home-fav-time{
+    font-size: clamp(.63rem, 2.08vw, .70rem) !important;
+    line-height: 1.08 !important;
+  }
+}
+
+/* Très petits écrans / navigateurs intégrés : on réduit un cran, mais on ne tronque pas le numéro */
+@media (max-width: 380px){
+  #homeFavSlot .home-fav-row{ padding-left:6px !important; padding-right:6px !important; }
+  #homeFavSlot .home-fav-train{ font-size: .64rem !important; }
+  #homeFavSlot .home-fav-badge{ max-width:46px !important; }
+  #homeFavSlot .home-fav-trainline{ max-width: calc(100% - 46px) !important; }
+  #homeFavSlot .home-fav-badge .fav-state-badge,
+  #homeFavSlot .home-fav-row .fav-state-badge{
+    max-width:46px !important;
+    font-size:.38rem !important;
+    padding:2px 3px !important;
+  }
+}
+</style>
+
+
+<!-- FIX #BER: badges état des Bétaillères favorites +20% (raccourcis accueil) -->
+<style id="lb-fix-home-fav-badges-plus20">
+@media (max-width: 700px){
+  #homeFavSlot .home-fav-trainline{
+    max-width: calc(100% - 59px) !important;
+  }
+  #homeFavSlot .home-fav-badge{
+    max-width: 59px !important;
+  }
+  #homeFavSlot .home-fav-badge .fav-state-badge,
+  #homeFavSlot .home-fav-row .fav-state-badge{
+    max-width: 59px !important;
+    font-size: clamp(.47rem, 1.70vw, .56rem) !important;
+    padding: 3px 5px !important;
+    line-height: 1.05 !important;
+  }
+}
+@media (max-width: 380px){
+  #homeFavSlot .home-fav-trainline{
+    max-width: calc(100% - 55px) !important;
+  }
+  #homeFavSlot .home-fav-badge{
+    max-width: 55px !important;
+  }
+  #homeFavSlot .home-fav-badge .fav-state-badge,
+  #homeFavSlot .home-fav-row .fav-state-badge{
+    max-width: 55px !important;
+    font-size: .46rem !important;
+    padding: 3px 4px !important;
+  }
+}
+</style>
+
 </body>
 </html>
