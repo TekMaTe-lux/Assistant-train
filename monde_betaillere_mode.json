@@ -1,0 +1,289 @@
+
+/* Monde Bétaillère — mode d'affichage #BER
+   À inclure dans le HTML après le chargement principal, juste avant </body>.
+   Important : ne modifie PAS les vrais numéros utilisés par les API.
+*/
+(function(){
+  'use strict';
+
+  const CONFIG_URLS = [
+    '/monde_betaillere_trains.json',
+    'https://raw.githubusercontent.com/TekMaTe-lux/Assistant-train/main/monde_betaillere_trains.json'
+  ];
+
+  const STORAGE_KEY = 'labetaillere_monde_betaillere_enabled';
+  const ORIGINAL_TEXT = new WeakMap();
+  let config = null;
+  let enabled = false;
+  let observer = null;
+  let applyTimer = null;
+
+  const SKIP_TAGS = new Set([
+    'SCRIPT','STYLE','NOSCRIPT','TEXTAREA','INPUT','SELECT','OPTION','CODE','PRE'
+  ]);
+
+  function injectStyle(){
+    if (document.getElementById('monde-betaillere-style')) return;
+    const style = document.createElement('style');
+    style.id = 'monde-betaillere-style';
+    style.textContent = `
+      body.monde-betaillere{
+        --ber-prairie: rgba(160,255,0,.10);
+        --ber-paille: rgba(255,214,80,.12);
+        --ber-etable: rgba(90,55,18,.18);
+        filter: saturate(1.08) contrast(1.03);
+      }
+
+      body.monde-betaillere::before{
+        content:"";
+        position:fixed;
+        inset:0;
+        pointer-events:none;
+        z-index:999;
+        background:
+          radial-gradient(circle at 15% 20%, rgba(160,255,0,.10), transparent 28%),
+          radial-gradient(circle at 85% 15%, rgba(255,214,80,.10), transparent 24%),
+          radial-gradient(circle at 50% 95%, rgba(120,75,25,.16), transparent 34%);
+        mix-blend-mode:screen;
+      }
+
+      #monde-betaillere-btn{
+        position:fixed;
+        right:14px;
+        top:50%;
+        transform:translateY(-50%);
+        z-index:9999;
+        border:1px solid rgba(255,230,90,.75);
+        background:linear-gradient(135deg, rgba(28,18,8,.94), rgba(72,44,12,.94));
+        color:#fff4bf;
+        border-radius:999px;
+        padding:10px 13px;
+        font:800 12px/1.1 system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;
+        box-shadow:0 12px 28px rgba(0,0,0,.42), 0 0 18px rgba(255,230,90,.25);
+        cursor:pointer;
+        letter-spacing:.02em;
+        display:flex;
+        align-items:center;
+        gap:7px;
+        max-width:190px;
+      }
+
+      #monde-betaillere-btn:hover{
+        transform:translateY(-50%) scale(1.03);
+        box-shadow:0 14px 30px rgba(0,0,0,.48), 0 0 24px rgba(160,255,0,.32);
+      }
+
+      body.monde-betaillere #monde-betaillere-btn{
+        background:linear-gradient(135deg, rgba(18,52,22,.96), rgba(82,55,12,.96));
+        border-color:rgba(160,255,0,.8);
+        color:#eaffb7;
+      }
+
+      body.monde-betaillere .badge,
+      body.monde-betaillere .train-num,
+      body.monde-betaillere [class*="badge"],
+      body.monde-betaillere [class*="chip"]{
+        box-shadow:0 0 12px rgba(160,255,0,.18) !important;
+      }
+
+      body.monde-betaillere .trip-panel,
+      body.monde-betaillere .panel,
+      body.monde-betaillere header{
+        background-image:
+          linear-gradient(135deg, rgba(120,75,25,.14), rgba(20,50,22,.10)),
+          var(--_existing-bg, none);
+      }
+
+      @media (max-width: 700px){
+        #monde-betaillere-btn{
+          top:auto;
+          right:12px;
+          bottom:68px;
+          transform:none;
+          padding:9px 11px;
+          max-width:160px;
+          font-size:11px;
+        }
+        #monde-betaillere-btn:hover{ transform:scale(1.02); }
+      }
+    `;
+    document.head.appendChild(style);
+  }
+
+  async function loadConfig(){
+    if (config) return config;
+    for (const url of CONFIG_URLS){
+      try{
+        const r = await fetch(url, { cache:'no-store' });
+        if (!r.ok) continue;
+        config = await r.json();
+        return config;
+      }catch(_){}
+    }
+    config = { trains:{}, ui:{} };
+    return config;
+  }
+
+  function trainDisplayFor(num){
+    if (!config || !config.trains) return null;
+    const clean = String(num || '').replace(/^0+(?=\d)/, '');
+    const item = config.trains[clean] || config.trains[String(num || '')];
+    if (!item) return null;
+    const emoji = item.emoji || '🐮';
+    const name = item.displayName || item.shortName;
+    return name ? `${emoji} ${name}` : null;
+  }
+
+  function translateText(text){
+    if (!text || !config) return text;
+    let out = text;
+
+    const ui = config.ui || {};
+    const replacements = [
+      [/Mes favoris/gi, ui.favoris || 'Mes bêtes préférées'],
+      [/Favoris/gi, ui.favoris || 'Mes bêtes préférées'],
+      [/\bLIVE\b/g, ui.live || 'Radio Prairie'],
+      [/Info trafic/gi, ui.infoTrafic || 'Avis de tempête dans l’étable'],
+      [/Tableau dynamique/gi, ui.tableau || 'Tableau des bétaillères'],
+      [/\bTableau\b/g, ui.tableau || 'Tableau des bétaillères'],
+      [/Retard/gi, ui.retard || 'rumination prolongée'],
+      [/Supprimé/gi, ui.supprime || 'rentrée à l’étable'],
+      [/À l'heure/gi, ui.aLheure || 'miracle agricole'],
+      [/A l'heure/gi, ui.aLheure || 'miracle agricole']
+    ];
+
+    for (const [re, rep] of replacements){
+      out = out.replace(re, rep);
+    }
+
+    // Remplace TER 88532 / Train 88532 / 88532 visibles par le nom #BER.
+    out = out.replace(/\b(?:TER|RE|RB|IC|TGV|Train|train)?\s*(\d{4,6})\b/g, (match, num)=>{
+      const name = trainDisplayFor(num);
+      return name || match;
+    });
+
+    return out;
+  }
+
+  function shouldSkipNode(node){
+    const parent = node && node.parentElement;
+    if (!parent) return true;
+    if (SKIP_TAGS.has(parent.tagName)) return true;
+    if (parent.closest('#monde-betaillere-btn')) return true;
+    if (parent.closest('[data-no-betaillere]')) return true;
+    return false;
+  }
+
+  function walkTextNodes(root, callback){
+    if (!root) return;
+    const walker = document.createTreeWalker(
+      root,
+      NodeFilter.SHOW_TEXT,
+      {
+        acceptNode(node){
+          if (shouldSkipNode(node)) return NodeFilter.FILTER_REJECT;
+          if (!node.nodeValue || !node.nodeValue.trim()) return NodeFilter.FILTER_REJECT;
+          return NodeFilter.FILTER_ACCEPT;
+        }
+      }
+    );
+    const nodes = [];
+    while (walker.nextNode()) nodes.push(walker.currentNode);
+    nodes.forEach(callback);
+  }
+
+  function applyTranslations(root=document.body){
+    if (!enabled || !config) return;
+    walkTextNodes(root, node=>{
+      if (!ORIGINAL_TEXT.has(node)) ORIGINAL_TEXT.set(node, node.nodeValue);
+      const original = ORIGINAL_TEXT.get(node);
+      const translated = translateText(original);
+      if (translated !== node.nodeValue) node.nodeValue = translated;
+    });
+  }
+
+  function restoreTranslations(){
+    walkTextNodes(document.body, node=>{
+      if (ORIGINAL_TEXT.has(node)){
+        node.nodeValue = ORIGINAL_TEXT.get(node);
+      }
+    });
+  }
+
+  function scheduleApply(root=document.body){
+    if (!enabled) return;
+    clearTimeout(applyTimer);
+    applyTimer = setTimeout(()=>applyTranslations(root), 80);
+  }
+
+  function startObserver(){
+    if (observer) return;
+    observer = new MutationObserver(mutations=>{
+      if (!enabled) return;
+      for (const m of mutations){
+        if (m.type === 'childList'){
+          for (const node of m.addedNodes){
+            if (node.nodeType === 1) scheduleApply(node);
+            else if (node.nodeType === 3 && node.parentElement) scheduleApply(node.parentElement);
+          }
+        } else if (m.type === 'characterData'){
+          scheduleApply(m.target.parentElement || document.body);
+        }
+      }
+    });
+    observer.observe(document.body, { childList:true, subtree:true, characterData:true });
+  }
+
+  function setEnabled(value){
+    enabled = !!value;
+    localStorage.setItem(STORAGE_KEY, enabled ? '1' : '0');
+    document.body.classList.toggle('monde-betaillere', enabled);
+    updateButton();
+
+    if (enabled){
+      loadConfig().then(()=>{
+        applyTranslations();
+        startObserver();
+      });
+    } else {
+      restoreTranslations();
+    }
+  }
+
+  function updateButton(){
+    const btn = document.getElementById('monde-betaillere-btn');
+    if (!btn) return;
+    const ui = (config && config.ui) || {};
+    btn.innerHTML = enabled
+      ? `<span>🚪</span><span>${ui.buttonOn || 'Sortir de l’étable'}</span>`
+      : `<span>🐮</span><span>${ui.buttonOff || 'Monde Bétaillère'}</span>`;
+    btn.setAttribute('aria-pressed', enabled ? 'true' : 'false');
+  }
+
+  function createButton(){
+    if (document.getElementById('monde-betaillere-btn')) return;
+    const btn = document.createElement('button');
+    btn.id = 'monde-betaillere-btn';
+    btn.type = 'button';
+    btn.setAttribute('aria-pressed', 'false');
+    btn.setAttribute('title', 'Basculer l’affichage en Monde Bétaillère');
+    btn.innerHTML = '<span>🐮</span><span>Monde Bétaillère</span>';
+    btn.addEventListener('click', ()=>setEnabled(!enabled));
+    document.body.appendChild(btn);
+  }
+
+  async function init(){
+    injectStyle();
+    createButton();
+    await loadConfig();
+    enabled = localStorage.getItem(STORAGE_KEY) === '1';
+    updateButton();
+    if (enabled) setEnabled(true);
+  }
+
+  if (document.readyState === 'loading'){
+    document.addEventListener('DOMContentLoaded', init);
+  } else {
+    init();
+  }
+})();
