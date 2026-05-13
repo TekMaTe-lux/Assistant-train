@@ -393,71 +393,17 @@
   // ---------- Helpers fetch multi-bases ----------
   function urlFor(name, baseIndex=0, bases=BASES){ return bases[baseIndex] + name; }
 
-  const STATIC_TEXT_CACHE_VERSION = 'carte-v2';
-  const STATIC_TEXT_CACHE_PREFIX = `assistant-train:${STATIC_TEXT_CACHE_VERSION}:`;
-  const textMemoryCache = new Map();
-
-  function cacheKeyForUrl(url){
-    return STATIC_TEXT_CACHE_PREFIX + url;
-  }
-
-  function getCachedText(url){
-    if (!url) return null;
-    if (textMemoryCache.has(url)) return textMemoryCache.get(url);
-    try {
-      const raw = localStorage.getItem(cacheKeyForUrl(url));
-      if (typeof raw === 'string' && raw.length){
-        textMemoryCache.set(url, raw);
-        return raw;
-      }
-    } catch(_){}
-    return null;
-  }
-
-  function setCachedText(url, text){
-    if (!url || typeof text !== 'string' || !text.length) return;
-    textMemoryCache.set(url, text);
-    try { localStorage.setItem(cacheKeyForUrl(url), text); } catch(_){}
-  }
-
-  async function fetchTextFromUrl(url){
-    const r = await fetch(url, { mode:'cors' });
-    if (!r.ok) throw new Error(`HTTP ${r.status}`);
-    const text = await r.text();
-    setCachedText(url, text);
-    return text;
-  }
-
   async function fetchJSONAny(name, bases = BASES){
-    let cachedFallback = null;
     for (let i=0;i<bases.length;i++){
-      const url = urlFor(name,i,bases);
-      const cachedText = getCachedText(url);
-      if (cachedFallback == null && typeof cachedText === 'string'){
-        try { cachedFallback = JSON.parse(cachedText); } catch(_){}
-      }
-      try {
-        const text = await fetchTextFromUrl(url);
-        return JSON.parse(text);
-      } catch(_){}
+      try { const r = await fetch(urlFor(name,i,bases), {mode:'cors'}); if (r.ok) return await r.json(); } catch(_) {}
     }
-    if (cachedFallback != null) return cachedFallback;
     throw new Error('Introuvable: '+name);
   }
 
   async function fetchTextAny(name, bases = BASES){
-    let cachedFallback = null;
     for (let i=0;i<bases.length;i++){
-      const url = urlFor(name,i,bases);
-      const cachedText = getCachedText(url);
-      if (cachedFallback == null && typeof cachedText === 'string') cachedFallback = cachedText;
-      if (typeof cachedText === 'string' && cachedText.length){
-        fetchTextFromUrl(url).catch(()=>{});
-        return cachedText;
-      }
-      try { return await fetchTextFromUrl(url); } catch(_){}
+      try { const r = await fetch(urlFor(name,i,bases), {mode:'cors'}); if (r.ok) return await r.text(); } catch(_) {}
     }
-    if (cachedFallback != null) return cachedFallback;
     throw new Error('Introuvable: '+name);
   }
 
@@ -568,8 +514,14 @@ function escapeHTML(str){
     ['88502','88503'],
     ['88500','88501'],
     ['88529','88530'],
-    ['88531','88532'],
-    ['88533','88534']
+    ['88531','88530'],
+    ['88533','88532'],
+    ['88535','88534'],
+    ['88520','88521'],
+    ['88522','88523'],
+    ['88524','88525'],
+    ['88526','88527'],
+    ['88528','88529']
   ];
 
   function registerTrainNumberEquivalenceGroup(targetMap, values){
@@ -706,8 +658,22 @@ function escapeHTML(str){
     return Array.isArray(baseOrder) && baseOrder.length ? baseOrder : DEFAULT_REALTIME_SOURCE_ORDER;
   }
 
-  function realtimeOptionsForTrain(train){
-    return { preferredSources: resolvePreferredRealtimeSourceOrder(train), trainContext: train || null };
+  function resolveRealtimeSourcesForStation(stationContext, fallbackOrder){
+    const baseOrder = Array.isArray(fallbackOrder) && fallbackOrder.length
+      ? fallbackOrder.map(normalizeRealtimeSourceKey).filter(Boolean)
+      : DEFAULT_REALTIME_SOURCE_ORDER;
+    if (!stationContext) return baseOrder;
+    const stationInfo = getStationBoardContext(stationContext);
+    if (stationInfo?.isFrench) return ['sncf'];
+    if (stationInfo?.isCfl) return CFL_REALTIME_SOURCE_ORDER;
+    return baseOrder;
+  }
+
+  function realtimeOptionsForTrain(train, context = null){
+    const preferred = resolvePreferredRealtimeSourceOrder(train);
+    const stationContext = context && typeof context === 'object' ? (context.stationContext || null) : null;
+    const preferredSources = resolveRealtimeSourcesForStation(stationContext, preferred);
+    return { preferredSources, trainContext: train || null };
   }
 
   function getRealtimePerStationMaps(normalizedKey, preferredOrder){
@@ -783,6 +749,8 @@ function escapeHTML(str){
       prefix = 'TGV ROI';
     } else if (isCfl && CFL_ROUTE_PREFIXES.has(normalizedShort)){
       prefix = CFL_ROUTE_PREFIXES.get(normalizedShort);
+    } else if (category === 'sncf'){
+      prefix = 'TER';
     }
 
     const rawDigits = rawNumberKey != null ? String(rawNumberKey) : null;
@@ -823,10 +791,9 @@ function escapeHTML(str){
   }
 
   function formatTrainLabel(train, { includeTrainWord = true, fallbackId } = {}){
-    const { label, category } = trainLabelParts(train, fallbackId);
+    const { label } = trainLabelParts(train, fallbackId);
     if (!label) return fallbackId || '';
-    if (!includeTrainWord || category === 'tgv-roi') return label;
-    return `Train ${label}`;
+    return label;
   }
 
   function formatTrainAriaLabel(train, fallbackId){
@@ -915,6 +882,14 @@ function escapeHTML(str){
     'https://raw.githubusercontent.com/TekMaTe-lux/Assistant-train/main/Assistant-train/voies_by_train.json',
     'https://cdn.jsdelivr.net/gh/TekMaTe-lux/Assistant-train@main/Assistant-train/voies_by_train.json'
   ];
+
+  const HAFAS_BY_STATION_CANDIDATES = [
+    'https://vps.labetaillere.fr/gtfs/retards_cfl_by_station.json',
+    location.origin + location.pathname.replace(/\/[^\/]*$/, '/') + 'retards_cfl_by_station.json',
+    'https://raw.githubusercontent.com/TekMaTe-lux/Assistant-train/main/Assistant-train/retards_cfl_by_station.json',
+    'https://cdn.jsdelivr.net/gh/TekMaTe-lux/Assistant-train@main/Assistant-train/retards_cfl_by_station.json'
+  ];
+
   const TRACK_REFRESH_INTERVAL_MS = 120000;
 
   const HAFAS_LOOKAHEAD_MINUTES = 120;
@@ -2691,6 +2666,17 @@ const GTFS_RT_STOP_META_KEYS = new Set([
       : 0;
 
     if (realtimeProfile?.stops?.length){
+      const clampedIdx = Math.max(0, Math.min(startSearchIdx, realtimeProfile.stops.length - 1));
+      const activeStop = realtimeProfile.stops[clampedIdx] || null;
+      const nextStop = realtimeProfile.stops[Math.min(clampedIdx + 1, realtimeProfile.stops.length - 1)] || null;
+      const inCancelledSection = Boolean(activeStop?.cancelled || nextStop?.cancelled);
+      if (inCancelledSection){
+        const activeSeq = seq && seq[clampedIdx] ? seq[clampedIdx] : seq && seq[Math.min(clampedIdx + 1, seq.length - 1)];
+        const stopMeta = activeSeq ? stopsById.get(activeSeq.stop_id) : null;
+        const stopName = stopMeta?.name || activeStop?.delaySource || nextStop?.delaySource || cancellation?.station || null;
+        const info = buildDelayInfo({ value:null, original: stopName }, train);
+        if (info) return info;
+      }
       for (let i=startSearchIdx;i<realtimeProfile.stops.length;i++){
         const st = realtimeProfile.stops[i];
         const minutes = Number.isFinite(st?.delayMinutes)
@@ -2950,6 +2936,7 @@ function adaptDelayEntryForStop(entry, stopMeta){
     const preferredSources = Array.isArray(options.preferredSources) && options.preferredSources.length
       ? options.preferredSources
       : resolvePreferredRealtimeSourceOrder(trainContext || null);
+    const allowedSources = new Set(preferredSources.map(normalizeRealtimeSourceKey).filter(Boolean));
     const perSourceMaps = new Map();
     if (normalizedKey != null){
       const matches = getRealtimePerStationMaps(String(normalizedKey), preferredSources);
@@ -3020,6 +3007,10 @@ function adaptDelayEntryForStop(entry, stopMeta){
       }
       if (!entry && combinedFallback){
         entry = findDelayEntryForStop(combinedFallback, stopMeta);
+        const entrySource = normalizeRealtimeSourceKey(entry?.sourceKey || entry?.source);
+        if (entry && allowedSources.size && entrySource && !allowedSources.has(entrySource)){
+          entry = null;
+        }
       }
       if (!entry) continue;
       if (entry.value == null){
@@ -3149,14 +3140,14 @@ function adaptDelayEntryForStop(entry, stopMeta){
   }
     
   async function fetchWithTimeoutNoHeaders(url, ms = 8000){
-    const ctrl = new AbortController();
-    const timeout = setTimeout(()=>ctrl.abort(), ms);
-    try {
-      return await fetch(url, { cache:'no-store', signal: ctrl.signal });
-    } finally {
-      clearTimeout(timeout);
-    }
+  const ctrl = new AbortController();
+  const timeout = setTimeout(()=>ctrl.abort(), ms);
+  try {
+    return await fetch(url, { cache:'default', signal: ctrl.signal });
+  } finally {
+    clearTimeout(timeout);
   }
+}
 
   async function fetchFromGitHubAPI(){
     const apiUrls = [
@@ -4504,6 +4495,20 @@ const mapContainerEl = map.getContainer();
       }
     }
 
+    if (sourceLabel === 'retards_cfl_by_station' && payload && typeof payload === 'object' && payload.stations && typeof payload.stations === 'object'){
+      for (const [stationName, stationInfo] of Object.entries(payload.stations)){
+        const departures = Array.isArray(stationInfo?.departures) ? stationInfo.departures : [];
+        for (const dep of departures){
+          if (!dep || typeof dep !== 'object') continue;
+          const trainCandidate = extractTrainNumberCandidate(dep.train ?? dep.name ?? dep.number ?? dep.trainNumber);
+          if (trainCandidate == null) continue;
+          const platform = normalizeTrackValue(dep.platform ?? dep.track ?? dep.voie ?? dep.quai);
+          if (!platform) continue;
+          ingestTrackRecord(trainCandidate, { station: stationName, voie: platform }, sourceLabel);
+        }
+      }
+    }
+
     const queue = [payload];
     while (queue.length){
       const node = queue.shift();
@@ -4514,7 +4519,7 @@ const mapContainerEl = map.getContainer();
       }
       if (typeof node !== 'object') continue;
 
-      const trainKey = node.train_number ?? node.trainNo ?? node.train ?? node.numero ?? node.num ?? node.trip_number ?? node.tripNo ?? node.id;
+      const trainKey = node.trainNumber ?? node.train_number ?? node.trainNo ?? node.train ?? node.numero ?? node.num ?? node.trip_number ?? node.tripNo ?? node.id;
       if (trainKey != null){
         ingestTrackRecord(trainKey, node, sourceLabel);
       }
@@ -4555,8 +4560,25 @@ const mapContainerEl = map.getContainer();
     }
   }
 
-  function resolveStationBoardTrack(eventRow, mode){
-    const stationNorm = normalizeStationName(eventRow?.stationLabel || '');
+  function getStationBoardContext(stationContext){
+    let station = null;
+    if (typeof stationContext === 'string' && stationContext){
+      station = axisStationsById.get(stationContext) || null;
+    } else if (stationContext && typeof stationContext === 'object'){
+      station = stationContext;
+    }
+    const label = station?.label || station?.name || station?.stationLabel || '';
+    const stationNorm = normalizeStationName(label || '');
+    const stopArea = String(station?.stopArea || '');
+    const stopIds = Array.isArray(station?.stopIds) ? station.stopIds.map(v => String(v || '')) : [];
+    const isFrench = /^StopArea:OCE87/i.test(stopArea);
+    const isCfl = !isFrench && (stopIds.some(v => /^CFL:/i.test(v)) || /^StopArea:OCE82/i.test(stopArea));
+    return { station, stationNorm, isFrench, isCfl };
+  }
+
+  function resolveStationBoardTrack(eventRow, mode, stationContext){
+    const ctx = getStationBoardContext(stationContext);
+    const stationNorm = ctx.stationNorm || normalizeStationName(eventRow?.stationLabel || '');
     const candidateKeys = [];
     const pushKey = (value)=>{
       if (value == null) return;
@@ -4565,20 +4587,53 @@ const mapContainerEl = map.getContainer();
       const key = String(normalized);
       if (!key || candidateKeys.includes(key)) return;
       candidateKeys.push(key);
+
+      const equivalents = equivalentTrainNumbers(key);
+      for (const alt of equivalents){
+        const altKey = String(alt);
+        if (altKey && !candidateKeys.includes(altKey)){
+          candidateKeys.push(altKey);
+        }
+      }
     };
+
+    pushKey(eventRow?.stationBoardCanonicalNumber);
     pushKey(eventRow?.number);
+    pushKey(eventRow?.numberDigits);
+    pushKey(eventRow?.numberRaw);
     pushKey(eventRow?.trainId);
+
+    if (Array.isArray(eventRow?.delayNumberKeys)){
+      for (const key of eventRow.delayNumberKeys) pushKey(key);
+    }
+    if (Array.isArray(eventRow?.numberList)){
+      for (const key of eventRow.numberList) pushKey(key);
+    }
+
+    const stationMatches = (recNorm)=>{
+      if (!stationNorm || !recNorm) return false;
+      if (recNorm === stationNorm) return true;
+      return recNorm.startsWith(stationNorm) || stationNorm.startsWith(recNorm);
+    };
+
+    const sourceAllowed = (rec)=>{
+      const src = String(rec?.source || '').toLowerCase();
+      if (ctx.isFrench){
+        return src !== 'retards_cfl' && src !== 'retards_cfl_by_station';
+      }
+      return true;
+    };
 
     for (const key of candidateKeys){
       const records = tracksByTrainNumber.get(key);
       if (!Array.isArray(records) || !records.length) continue;
-      const stationSpecific = stationNorm ? records.find(rec => rec.stationNorm && rec.stationNorm === stationNorm) : null;
-      const genericRecord = records.find(rec => !rec.stationNorm);
-      const record = stationSpecific || genericRecord || null;
-      if (!record) continue;
+
+      const stationSpecific = records.find(rec => sourceAllowed(rec) && stationMatches(rec.stationNorm)) || null;
+      if (!stationSpecific) continue;
+
       const value = mode === 'dep'
-        ? (record.depTrack || record.genericTrack || record.arrTrack)
-        : (record.arrTrack || record.genericTrack || record.depTrack);
+        ? (stationSpecific.depTrack || stationSpecific.genericTrack || stationSpecific.arrTrack)
+        : (stationSpecific.arrTrack || stationSpecific.genericTrack || stationSpecific.depTrack);
       if (value) return value;
     }
     return null;
@@ -4591,7 +4646,8 @@ const mapContainerEl = map.getContainer();
       tracksByTrainNumber.clear();
       const sources = [
         { label:'voies_by_train', candidates: VOIES_BY_TRAIN_CANDIDATES },
-        { label:'retards_cfl', candidates: HAFAS_PROXY_CANDIDATES }
+        { label:'retards_cfl', candidates: HAFAS_PROXY_CANDIDATES },
+        { label:'retards_cfl_by_station', candidates: HAFAS_BY_STATION_CANDIDATES }
       ];
       for (const source of sources){
         for (const candidate of source.candidates){
@@ -4659,7 +4715,7 @@ const mapContainerEl = map.getContainer();
     return deduped;
   }
 
-  function stationBoardRows(events, mode, limit = 8){
+  function stationBoardRows(events, mode, limit = 8, stationContext = null){
     const now = nowSecLocal();
     const rows = [];
     for (const ev of events){
@@ -4694,7 +4750,7 @@ const mapContainerEl = map.getContainer();
         routeStopCount: ev.routeStopCount,
         routeEndSec: ev.routeEndSec,
         etaSec,
-        track: resolveStationBoardTrack(ev, mode),
+        track: resolveStationBoardTrack(ev, mode, stationContext),
         place: mode === 'dep'
           ? (ev.destination || ev.headsign || 'Destination inconnue')
           : (ev.origin || 'Provenance inconnue')
@@ -4735,7 +4791,7 @@ const mapContainerEl = map.getContainer();
           : `<div class="station-board-time">${escapeHTML(realtimeText || '—')}</div>`);
       const btnId = escapeAttr(row.trainId);
       const btnLabel = escapeAttr(`Ouvrir le détail du ${row.ariaLabel || (row.number ? `train ${row.number}` : 'service')}`);
-      const trainLabel = row.number ? `Train ${row.number}` : (row.label || row.trainId);
+      const trainLabel = row.number || row.label || row.trainId;
       const rowClass = row.isCancelled
         ? ' class="station-board-row-cancelled"'
         : (row.isImminent ? ' class="station-board-row-imminent"' : '');
@@ -4787,8 +4843,8 @@ const mapContainerEl = map.getContainer();
       stationBoardPaginationState.dep = 8;
       stationBoardPaginationState.arr = 8;
     }
-    const departuresAll = stationBoardRows(events, 'dep', Number.POSITIVE_INFINITY);
-    const arrivalsAll = stationBoardRows(events, 'arr', Number.POSITIVE_INFINITY);
+    const departuresAll = stationBoardRows(events, 'dep', Number.POSITIVE_INFINITY, station);
+    const arrivalsAll = stationBoardRows(events, 'arr', Number.POSITIVE_INFINITY, station);
     const departures = departuresAll.slice(0, stationBoardPaginationState.dep);
     const arrivals = arrivalsAll.slice(0, stationBoardPaginationState.arr);
     tripStopsTitleEl.classList.add('hidden');
@@ -4801,6 +4857,8 @@ const mapContainerEl = map.getContainer();
 
   function computeStationEvents(station){
     const stopIds = station.stopSet || new Set(station.stopIds || []);
+    const stationContext = getStationBoardContext(station);
+    const isFrenchStation = Boolean(stationContext?.isFrench);
     const now = nowSecLocal();
     const events = [];
 
@@ -4844,6 +4902,10 @@ const mapContainerEl = map.getContainer();
         branding
       };
 
+      if (isFrenchStation && train.source === 'CFL'){
+        continue;
+      }
+
       let target = null;
       let targetIdx = -1;
       for (let i=0;i<seq.length;i++){
@@ -4859,7 +4921,7 @@ const mapContainerEl = map.getContainer();
           tripId,
           seq,
           numberKey,
-          realtimeOptionsForTrain(train)
+          realtimeOptionsForTrain(train, { stationContext })
         );
       const profileStop = targetIdx >= 0 ? realtimeProfile?.stops?.[targetIdx] : null;
       const cancellationInfo = realtimeProfile?.cancellation;
@@ -5447,6 +5509,79 @@ function setLayerGroupVisibility(group, visible){
     }
   }
 
+
+  const LB_CARTE_STATIC_CACHE_URL = 'https://vps.labetaillere.fr/gtfs/carte_static_today.json';
+
+  function lbCarteTodayIso(){
+    try { return formatLuxDateISO(new Date()); } catch(_){ return new Date().toISOString().slice(0,10); }
+  }
+
+  function lbHydrateMapFromEntries(targetMap, entries, mapName){
+    if (!targetMap || !Array.isArray(entries)) throw new Error(`${mapName} absent ou invalide`);
+    for (const pair of entries){
+      if (!Array.isArray(pair) || pair.length < 2) continue;
+      targetMap.set(pair[0], pair[1]);
+    }
+  }
+
+  async function tryLoadCarteStaticCache(){
+    try {
+      const url = LB_CARTE_STATIC_CACHE_URL + '?v=' + new Date().toISOString().slice(0,10);
+      const res = await fetch(url, { cache:'default' });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const payload = await res.json();
+      const d = payload && payload.data;
+      if (!d || !Array.isArray(d.stopsById) || !Array.isArray(d.stopTimesByTrip) || !Array.isArray(d.tripsById) || !Array.isArray(d.routesById)){
+        throw new Error('format cache incomplet');
+      }
+      const today = lbCarteTodayIso();
+      if (payload.date && payload.date !== today){
+        throw new Error(`cache daté ${payload.date}, attendu ${today}`);
+      }
+
+      stopsById.clear();
+      stopTimesByTrip.clear();
+      tripsById.clear();
+      routesById.clear();
+      stopChildrenByParent.clear();
+      stopMetaByNumericCode.clear();
+      stopNameCandidatesCache.clear();
+      realtimeStopDataByTrip.clear();
+      tripMergeSignatureCache.clear();
+      staticRelatedNumbersByTrip.clear();
+
+      lbHydrateMapFromEntries(stopsById, d.stopsById, 'stopsById');
+      lbHydrateMapFromEntries(stopTimesByTrip, d.stopTimesByTrip, 'stopTimesByTrip');
+      lbHydrateMapFromEntries(tripsById, d.tripsById, 'tripsById');
+      lbHydrateMapFromEntries(routesById, d.routesById, 'routesById');
+      if (Array.isArray(d.stopChildrenByParent)){
+        lbHydrateMapFromEntries(stopChildrenByParent, d.stopChildrenByParent, 'stopChildrenByParent');
+      }
+
+      for (const meta of stopsById.values()){
+        indexStopMetaForNumericLookup(meta);
+      }
+
+      activeServiceIds = Array.isArray(d.activeServiceIds) && d.activeServiceIds.length
+        ? new Set(d.activeServiceIds)
+        : null;
+
+      rebuildStaticMergeData();
+      prepareStationMetadata();
+      renderAxisStations();
+
+      const c = payload.counters || {};
+      const buildMs = Number(c.build_ms);
+      const msg = `GTFS VPS chargé — ${stopsById.size} gares, ${stopTimesByTrip.size} trips${activeServiceIds ? `, ${activeServiceIds.size} services actifs aujourd'hui` : ''}${Number.isFinite(buildMs) ? ` (cache ${Math.round(buildMs/1000)}s)` : ''}.`;
+      setStatus(msg);
+      console.info('[Carte VPS] cache statique chargé', payload.counters || {});
+      return true;
+    } catch(e){
+      console.warn('[Carte VPS] cache indisponible, fallback GTFS classique', e);
+      return false;
+    }
+  }
+
   // ---------- Chargement GTFS (sans shapes) ----------
   async function loadGTFS(){
     try {
@@ -5462,6 +5597,8 @@ function setLayerGroupVisibility(group, visible){
       realtimeStopDataByTrip.clear();
       tripMergeSignatureCache.clear();
       staticRelatedNumbersByTrip.clear();
+
+      if (await tryLoadCarteStaticCache()) return;
 
       const axisStopIds = new Set();
       const axisTripIds = new Set();
