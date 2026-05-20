@@ -1,4 +1,4 @@
-const CACHE_NAME = 'lbetaillere-v13';
+const CACHE_NAME = 'lbetaillere-v14';
 
 const ASSETS = [
   './',
@@ -45,7 +45,15 @@ self.addEventListener('fetch', (event) => {
   if (event.request.mode === 'navigate' || url.pathname.endsWith('/index.html')) {
     event.respondWith(
       fetch(event.request, { cache: 'no-store' })
-        .then((response) => response)
+        .then((response) => {
+          if (response && response.ok) {
+            const copy = response.clone();
+            caches.open(CACHE_NAME)
+              .then((cache) => cache.put('./index.html', copy))
+              .catch(() => {});
+          }
+          return response;
+        })
         .catch(() => caches.match('./index.html'))
     );
     return;
