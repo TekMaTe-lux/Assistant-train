@@ -1,4 +1,4 @@
-const CACHE_NAME = 'lbetaillere-v16';
+const CACHE_NAME = 'lbetaillere-v17';
 
 const ASSETS = [
   './',
@@ -59,21 +59,28 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // Assets locaux : cache puis réseau
+  // Assets locaux : cache puis réseau, sans erreur console bloquante
   if (sameOrigin) {
     event.respondWith(
       caches.match(event.request).then((cached) => {
         if (cached) return cached;
 
-        return fetch(event.request).then((response) => {
-          if (response && response.ok && response.type === 'basic') {
-            const copy = response.clone();
-            caches.open(CACHE_NAME)
-              .then((cache) => cache.put(event.request, copy))
-              .catch(() => {});
-          }
-          return response;
-        });
+        return fetch(event.request)
+          .then((response) => {
+            if (response && response.ok && response.type === 'basic') {
+              const copy = response.clone();
+              caches.open(CACHE_NAME)
+                .then((cache) => cache.put(event.request, copy))
+                .catch(() => {});
+            }
+            return response;
+          })
+          .catch(() => {
+            return new Response('', {
+              status: 504,
+              statusText: 'Offline / fetch failed'
+            });
+          });
       })
     );
   }
