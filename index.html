@@ -36359,58 +36359,69 @@ body{ padding-bottom: calc(var(--bottom-bar-height, 58px) + 10px) !important; }
   }
 
   window.lbEnablePushNotifications = async function lbEnablePushNotifications() {
-    try {
-      setPushStatus('Préparation des notifications…');
+  try {
+    setPushStatus('Préparation des notifications…');
 
-      if (!('Notification' in window)) {
-        throw new Error('Notifications non supportées sur ce navigateur.');
-      }
-      if (!('PushManager' in window)) {
-        throw new Error('PushManager non supporté sur ce navigateur.');
-      }
-      if (!window.lbIsAuthed) {
-        throw new Error('Connecte-toi d’abord à ton compte La Bétaillère.');
-      }
-
-      const permission = await Notification.requestPermission();
-      if (permission !== 'granted') {
-        throw new Error('Notifications refusées par le navigateur.');
-      }
-
-      const reg = await ensureServiceWorkerReady();
-
-      const keyRes = await fetch(`${PUSH_API_BASE}/public-key`, { credentials: 'include' });
-      if (!keyRes.ok) throw new Error('Impossible de récupérer la clé push publique.');
-      const { publicKey } = await keyRes.json();
-      if (!publicKey) throw new Error('Clé push publique vide côté VPS.');
-
-      let subscription = await reg.pushManager.getSubscription();
-      if (!subscription) {
-        subscription = await reg.pushManager.subscribe({
-          userVisibleOnly: true,
-          applicationServerKey: urlBase64ToUint8Array(publicKey)
-        });
-      }
-
-      const saveRes = await fetch(`${PUSH_API_BASE}/subscribe`, {
-        method: 'POST',
-        credentials: 'include',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ subscription })
-      });
-
-      const saveData = await saveRes.json().catch(() => ({}));
-      if (!saveRes.ok || !saveData.ok) {
-        throw new Error(saveData.error || 'Abonnement push refusé par le VPS.');
-      }
-
-      setPushStatus('✅ Notifications activées sur cet appareil.');
-    } catch (err) {
-      console.warn('[Push] activation impossible', err);
-      setPushStatus('❌ ' + (err?.message || 'Erreur activation notifications.'), true);
-      alert(err?.message || 'Erreur activation notifications.');
+    if (!('Notification' in window)) {
+      throw new Error('Notifications non supportées sur ce navigateur.');
     }
-  };
+    if (!('PushManager' in window)) {
+      throw new Error('PushManager non supporté sur ce navigateur.');
+    }
+    if (!window.lbIsAuthed) {
+      throw new Error('Connecte-toi d’abord à ton compte La Bétaillère.');
+    }
+
+    if (Notification.permission === 'denied') {
+      throw new Error('Notifications bloquées dans les réglages du navigateur.');
+    }
+
+    let permission = Notification.permission;
+
+    if (permission !== 'granted') {
+      permission = await Notification.requestPermission();
+    }
+
+    if (permission !== 'granted') {
+      throw new Error('Notifications non autorisées.');
+    }
+
+    const reg = await ensureServiceWorkerReady();
+
+    const keyRes = await fetch(`${PUSH_API_BASE}/public-key`, { credentials: 'include' });
+    if (!keyRes.ok) throw new Error('Impossible de récupérer la clé push publique.');
+    const { publicKey } = await keyRes.json();
+    if (!publicKey) throw new Error('Clé push publique vide côté VPS.');
+
+    let subscription = await reg.pushManager.getSubscription();
+
+    if (!subscription) {
+      subscription = await reg.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: urlBase64ToUint8Array(publicKey)
+      });
+    }
+
+    const saveRes = await fetch(`${PUSH_API_BASE}/subscribe`, {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ subscription })
+    });
+
+    const saveData = await saveRes.json().catch(() => ({}));
+
+    if (!saveRes.ok || !saveData.ok) {
+      throw new Error(saveData.error || 'Abonnement push refusé par le VPS.');
+    }
+
+    setPushStatus('✅ Notifications activées sur cet appareil.');
+  } catch (err) {
+    console.warn('[Push] activation impossible', err);
+    setPushStatus('❌ ' + (err?.message || 'Erreur activation notifications.'), true);
+    alert(err?.message || 'Erreur activation notifications.');
+  }
+};
 
   window.lbSendTestPush = async function lbSendTestPush() {
     try {
