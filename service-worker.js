@@ -1,4 +1,4 @@
-const CACHE_NAME = 'lbetaillere-v18';
+const CACHE_NAME = 'lbetaillere-v19';
 
 const ASSETS = [
   './',
@@ -6,8 +6,6 @@ const ASSETS = [
   './manifest.webmanifest',
   './logoText.png',
   './logobetailleresanstexte.png',
-  './icon-192.png',
-  './icon-512.png',
   './favicon.jpg'
 ];
 
@@ -103,8 +101,8 @@ self.addEventListener('push', (event) => {
 
   const options = {
     body: data.body || 'Nouvelle alerte de La Bétaillère.',
-    icon: data.icon || './icon-192.png',
-    badge: data.badge || './icon-192.png',
+    icon: data.icon || './favicon.jpg',
+    badge: data.badge || './favicon.jpg',
     data: {
       url: data.url || './'
     }
