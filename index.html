@@ -12806,6 +12806,17 @@ body.monde-betaillere #homeFavSlot .home-fav-badge .fav-state-badge{
 		<button id="lbBtnRanking" class="auth-button auth-button--ghost" type="button" style="display:none;">Classement</button>
 		<button id="lbBtnLogout" class="auth-button auth-button--ghost" type="button" style="display:none;">Déconnexion</button>
       </div>
+      <div id="lbPushTestBox" class="lb-account-box" style="display:none;">
+        <h4>🔔 Notifications PWA</h4>
+        <p style="margin:0 0 8px; font-size:.78rem; line-height:1.35; color:rgba(223,251,255,.78);">
+          Test sans spam : active les notifications, puis envoie une seule alerte test sur cet appareil.
+        </p>
+        <div class="lb-auth-actions" style="margin-top:6px;">
+          <button id="lbBtnEnablePush" class="auth-button" type="button">🔔 Activer les notifs</button>
+          <button id="lbBtnTestPush" class="auth-button auth-button--ghost" type="button">🧪 Notif test</button>
+        </div>
+        <div id="lbPushStatus" class="lb-auth-msg" style="margin-top:6px;"></div>
+      </div>
       <div id="lbForgotWrap" class="lb-auth-links">
         <a id="forgotLink" href="#">Mot de passe oublié ?</a>
       </div>
@@ -27151,6 +27162,7 @@ if (statsEl){
     const contactBtn = $("lbBtnContact");
     const footerContactLink = $("lbFooterContactLink");
     const deleteLinkWrap = $("lbDeleteLinkWrap");
+    const pushBox = $("lbPushTestBox");
     if (!openBtn || !logoutBtn) return;
     try {
       const me = await api("/me");
@@ -27170,6 +27182,7 @@ if (statsEl){
       if (authSwitch) authSwitch.style.display = "none";
       if (contactBtn) contactBtn.style.display = "inline-flex";
       if (deleteLinkWrap) deleteLinkWrap.style.display = "block";
+      if (pushBox) pushBox.style.display = "block";
       msg(`✅ Connecté : ${me?.user?.email || "utilisateur"}`);
       await loadPreferences();
       await refreshGamificationUI({ force: true });
@@ -27187,6 +27200,7 @@ if (statsEl){
       if (authSwitch) authSwitch.style.display = "grid";
       if (contactBtn) contactBtn.style.display = "none";
       if (deleteLinkWrap) deleteLinkWrap.style.display = "none";
+      if (pushBox) pushBox.style.display = "none";
       const prefsModal = $("lbPrefsModal");
       const rankingModal = $("lbRankingModal");
       if (prefsModal) {
@@ -27242,6 +27256,8 @@ if (statsEl){
   const rankingBtn = $("lbBtnRanking");
   const contactBtn = $("lbBtnContact");
   const footerContactLink = $("lbFooterContactLink");
+  const enablePushBtn = $("lbBtnEnablePush");
+  const testPushBtn = $("lbBtnTestPush");
   const forgotLink = $("forgotLink");
   const prefsModal = $("lbPrefsModal");
   const prefsCloseBtn = $("lbBtnClosePrefs");
@@ -36315,10 +36331,129 @@ body{ padding-bottom: calc(var(--bottom-bar-height, 58px) + 10px) !important; }
 </script>
 
 <script>
+// ===============================
+// PUSH NOTIFICATIONS - TEST MVP
+// ===============================
+(() => {
+  const PUSH_API_BASE = 'https://vps.labetaillere.fr/api/push';
+
+  function setPushStatus(message, isError = false) {
+    const el = document.getElementById('lbPushStatus');
+    if (!el) return;
+    el.textContent = message || '';
+    el.style.color = isError ? '#ff8d8d' : '#9ffcff';
+  }
+
+  function urlBase64ToUint8Array(base64String) {
+    const padding = '='.repeat((4 - base64String.length % 4) % 4);
+    const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
+    const rawData = atob(base64);
+    return Uint8Array.from([...rawData].map((char) => char.charCodeAt(0)));
+  }
+
+  async function ensureServiceWorkerReady() {
+    if (!('serviceWorker' in navigator)) {
+      throw new Error('Service worker non supporté sur ce navigateur.');
+    }
+    return navigator.serviceWorker.ready;
+  }
+
+  window.lbEnablePushNotifications = async function lbEnablePushNotifications() {
+    try {
+      setPushStatus('Préparation des notifications…');
+
+      if (!('Notification' in window)) {
+        throw new Error('Notifications non supportées sur ce navigateur.');
+      }
+      if (!('PushManager' in window)) {
+        throw new Error('PushManager non supporté sur ce navigateur.');
+      }
+      if (!window.lbIsAuthed) {
+        throw new Error('Connecte-toi d’abord à ton compte La Bétaillère.');
+      }
+
+      const permission = await Notification.requestPermission();
+      if (permission !== 'granted') {
+        throw new Error('Notifications refusées par le navigateur.');
+      }
+
+      const reg = await ensureServiceWorkerReady();
+
+      const keyRes = await fetch(`${PUSH_API_BASE}/public-key`, { credentials: 'include' });
+      if (!keyRes.ok) throw new Error('Impossible de récupérer la clé push publique.');
+      const { publicKey } = await keyRes.json();
+      if (!publicKey) throw new Error('Clé push publique vide côté VPS.');
+
+      let subscription = await reg.pushManager.getSubscription();
+      if (!subscription) {
+        subscription = await reg.pushManager.subscribe({
+          userVisibleOnly: true,
+          applicationServerKey: urlBase64ToUint8Array(publicKey)
+        });
+      }
+
+      const saveRes = await fetch(`${PUSH_API_BASE}/subscribe`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ subscription })
+      });
+
+      const saveData = await saveRes.json().catch(() => ({}));
+      if (!saveRes.ok || !saveData.ok) {
+        throw new Error(saveData.error || 'Abonnement push refusé par le VPS.');
+      }
+
+      setPushStatus('✅ Notifications activées sur cet appareil.');
+    } catch (err) {
+      console.warn('[Push] activation impossible', err);
+      setPushStatus('❌ ' + (err?.message || 'Erreur activation notifications.'), true);
+      alert(err?.message || 'Erreur activation notifications.');
+    }
+  };
+
+  window.lbSendTestPush = async function lbSendTestPush() {
+    try {
+      setPushStatus('Envoi de la notification test…');
+      if (!window.lbIsAuthed) {
+        throw new Error('Connecte-toi d’abord à ton compte La Bétaillère.');
+      }
+
+      const res = await fetch(`${PUSH_API_BASE}/test`, {
+        method: 'POST',
+        credentials: 'include'
+      });
+
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.ok) {
+        throw new Error(data.error || 'Erreur envoi notification test.');
+      }
+
+      setPushStatus(`✅ Notif test envoyée : ${data.sent || 0} appareil(s).`);
+      if (!data.sent) {
+        alert('Aucun appareil enregistré. Clique d’abord sur “Activer les notifs”.');
+      }
+    } catch (err) {
+      console.warn('[Push] test impossible', err);
+      setPushStatus('❌ ' + (err?.message || 'Erreur notification test.'), true);
+      alert(err?.message || 'Erreur notification test.');
+    }
+  };
+
+  document.addEventListener('DOMContentLoaded', () => {
+    const enableBtn = document.getElementById('lbBtnEnablePush');
+    const testBtn = document.getElementById('lbBtnTestPush');
+    if (enableBtn) enableBtn.addEventListener('click', window.lbEnablePushNotifications);
+    if (testBtn) testBtn.addEventListener('click', window.lbSendTestPush);
+  });
+})();
+</script>
+
+<script>
 (() => {
   if ('serviceWorker' in navigator) {
     window.addEventListener('load', () => {
-      navigator.serviceWorker.register('./service-worker.js?v=16').catch((err) => {
+      navigator.serviceWorker.register('./service-worker.js?v=17').catch((err) => {
         console.warn('[PWA] Service worker non enregistré', err);
       });
     });
