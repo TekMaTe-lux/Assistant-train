@@ -1,4 +1,4 @@
-const CACHE_NAME = 'lbetaillere-v19';
+const CACHE_NAME = 'lbetaillere-v20';
 
 const ASSETS = [
   './',
@@ -6,7 +6,9 @@ const ASSETS = [
   './manifest.webmanifest',
   './logoText.png',
   './logobetailleresanstexte.png',
-  './favicon.jpg'
+  './favicon.jpg',
+  './icon-192.png',
+  './icon-512.png'
 ];
 
 self.addEventListener('install', (event) => {
@@ -39,25 +41,28 @@ self.addEventListener('fetch', (event) => {
   const url = new URL(event.request.url);
   const sameOrigin = url.origin === self.location.origin;
 
-  // HTML/navigation : priorité au réseau = prend les modifs GitHub
+  // HTML/navigation : priorité réseau
   if (event.request.mode === 'navigate' || url.pathname.endsWith('/index.html')) {
     event.respondWith(
       fetch(event.request, { cache: 'no-store' })
         .then((response) => {
           if (response && response.ok) {
             const copy = response.clone();
+
             caches.open(CACHE_NAME)
               .then((cache) => cache.put('./index.html', copy))
               .catch(() => {});
           }
+
           return response;
         })
         .catch(() => caches.match('./index.html'))
     );
+
     return;
   }
 
-  // Assets locaux : cache puis réseau, sans erreur console bloquante
+  // Assets locaux
   if (sameOrigin) {
     event.respondWith(
       caches.match(event.request).then((cached) => {
@@ -67,10 +72,12 @@ self.addEventListener('fetch', (event) => {
           .then((response) => {
             if (response && response.ok && response.type === 'basic') {
               const copy = response.clone();
+
               caches.open(CACHE_NAME)
                 .then((cache) => cache.put(event.request, copy))
                 .catch(() => {});
             }
+
             return response;
           })
           .catch(() => {
@@ -85,7 +92,7 @@ self.addEventListener('fetch', (event) => {
 });
 
 // ===============================
-// PUSH NOTIFICATIONS - MVP TEST
+// PUSH NOTIFICATIONS
 // ===============================
 
 self.addEventListener('push', (event) => {
@@ -101,8 +108,8 @@ self.addEventListener('push', (event) => {
 
   const options = {
     body: data.body || 'Nouvelle alerte de La Bétaillère.',
-    icon: data.icon || './favicon.jpg',
-    badge: data.badge || './favicon.jpg',
+    icon: data.icon || './icon-192.png',
+    badge: data.badge || './icon-192.png',
     data: {
       url: data.url || './'
     }
