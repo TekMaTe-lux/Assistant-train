@@ -11248,6 +11248,22 @@ body > .legal-links{ display:none !important; }
   font-weight:900 !important;
   text-shadow:none !important;
 }
+
+/* Opt-in notifications à la création de compte */
+.lb-reg-alerts-optin{
+  margin-top:8px;
+  border:1px solid rgba(255, 207, 90, .35);
+  background:rgba(255, 207, 90, .08);
+  border-radius:12px;
+  padding:10px;
+}
+.lb-reg-alerts-optin small{
+  display:block;
+  margin-top:3px;
+  color:rgba(224,240,255,.82);
+  line-height:1.3;
+}
+
 </style>
   <style>
 @supports (-webkit-touch-callout: none) {
@@ -13081,6 +13097,10 @@ body.monde-betaillere #homeFavSlot .home-fav-badge .fav-state-badge{
         <label id="lbRegRgpdWrap" class="rgpd">
           <input id="lbRegRgpd" type="checkbox">
           <span class="rgpd-text">J’accepte que La Bétaillère utilise mon email et mes préférences pour personnaliser mon expérience, conformément à la <a href="/confidentialite.html" target="_blank">politique de confidentialité</a>.</span>
+        </label>
+        <label id="lbRegAlertsWrap" class="rgpd lb-reg-alerts-optin">
+          <input id="lbRegAlertsOptin" type="checkbox">
+          <span class="rgpd-text"><strong>🔔 Recevoir les alertes importantes de La Bétaillère</strong><br><small>Retards importants, suppressions et trafic très perturbé. C’est facultatif, désactivable à tout moment dans Mes préférences. L’autorisation de notification sera demandée séparément par ton navigateur après connexion.</small></span>
         </label>
       </div>
       <div class="lb-auth-actions">
@@ -20142,6 +20162,40 @@ const PRESET_PM = "88741,88743,88745,88747,88530,88749,88751,88753,88532,88755,8
 const DEFAULT_PRESET_LABELS = { AM: "Matin", PM: "Soir", L3: "Liste 3", L4: "Liste 4" };
 const customRapidPresets = { AM: null, PM: null, L3: null, L4: null };
 
+// BER FIX — Routes des listes personnalisées : une liste créée via Mes préférences
+// garde aussi son tronçon De → À, afin que le tableau n'affiche que ces gares.
+const lbPresetRouteMeta = { AM: null, PM: null, L3: null, L4: null };
+function lbNormalizePresetRoute(route){
+  if (!route || typeof route !== 'object') return null;
+  const from = String(route.from || route.startName || route.start || '').trim();
+  const to = String(route.to || route.endName || route.end || '').trim();
+  return (from && to) ? { from, to } : null;
+}
+function lbSetTableRoute(from, to){
+  const start = String(from || '').trim();
+  const end = String(to || '').trim();
+  if (!start || !end) return false;
+  const $start = $('#startStation');
+  const $end = $('#endStation');
+  let ok = true;
+  if ($start && $start.length) {
+    if ($start.find(`option[value="${start.replace(/"/g, '\\"')}"]`).length) $start.val(start);
+    else { $start.val(start); ok = false; }
+  }
+  if ($end && $end.length) {
+    if ($end.find(`option[value="${end.replace(/"/g, '\\"')}"]`).length) $end.val(end);
+    else { $end.val(end); ok = false; }
+  }
+  if (typeof syncStationSearchInputs === 'function') syncStationSearchInputs();
+  if (typeof updateItineraryPreview === 'function') updateItineraryPreview();
+  return ok;
+}
+function lbRememberPresetRoute(kind, from, to){
+  if (!kind) return;
+  const route = lbNormalizePresetRoute({ from, to });
+  if (route) lbPresetRouteMeta[kind] = route;
+}
+
 function normalizePresetLabel(label, fallback){
   const trimmed = String(label || '').trim();
   return trimmed ? trimmed : fallback;
@@ -20234,10 +20288,11 @@ function applyCustomRapidPresets(prefs){
   const pm = raw.PM || raw.pm || null;
   const l3 = raw.L3 || raw.l3 || null;
   const l4 = raw.L4 || raw.l4 || null;
-  customRapidPresets.AM = am ? { label: String(am.label || ''), trains: normalizeTrainList(am.trains) } : null;
-  customRapidPresets.PM = pm ? { label: String(pm.label || ''), trains: normalizeTrainList(pm.trains) } : null;
-  customRapidPresets.L3 = l3 ? { label: String(l3.label || ''), trains: normalizeTrainList(l3.trains) } : null;
-  customRapidPresets.L4 = l4 ? { label: String(l4.label || ''), trains: normalizeTrainList(l4.trains) } : null;
+  customRapidPresets.AM = am ? { label: String(am.label || ''), trains: normalizeTrainList(am.trains), route: lbNormalizePresetRoute(am.route) } : null;
+  customRapidPresets.PM = pm ? { label: String(pm.label || ''), trains: normalizeTrainList(pm.trains), route: lbNormalizePresetRoute(pm.route) } : null;
+  customRapidPresets.L3 = l3 ? { label: String(l3.label || ''), trains: normalizeTrainList(l3.trains), route: lbNormalizePresetRoute(l3.route) } : null;
+  customRapidPresets.L4 = l4 ? { label: String(l4.label || ''), trains: normalizeTrainList(l4.trains), route: lbNormalizePresetRoute(l4.route) } : null;
+  ['AM','PM','L3','L4'].forEach((k)=>{ lbPresetRouteMeta[k] = customRapidPresets[k]?.route || null; });
   applyRapidPresetLabels();
   updateRapidPresetVisibility();
 }    
@@ -20664,7 +20719,12 @@ async function applyRapidPreset(kind, options = {}){
   
   const shouldAlignStations = !opts.auto || opts.forceDirection;
   if (shouldAlignStations) {
-    setDirectionForPreset(kind, config);
+    const customRoute = lbNormalizePresetRoute(customRapidPresets[kind]?.route || lbPresetRouteMeta[kind]);
+    if (customRoute) {
+      lbSetTableRoute(customRoute.from, customRoute.to);
+    } else {
+      setDirectionForPreset(kind, config);
+    }
   }
   if (typeof syncStationSearchInputs === 'function') syncStationSearchInputs();
   if (typeof updateItineraryPreview === 'function') updateItineraryPreview();
@@ -27563,6 +27623,85 @@ if (statsEl){
   const resetPwdLink = $("lbResetPwdLink");
   const switchBtn = $("lbAuthSwitchBtn");
 
+  const LB_PENDING_PUSH_OPTIN = "lbPendingPushOptIn.v1";
+  const LB_PUSH_SETTINGS_KEY = "lbPushAlertSettings.v1";
+
+  const normalizeEmailForOptin = (value) => String(value || "").trim().toLowerCase();
+
+  const rememberRegistrationPushOptin = (email) => {
+    try {
+      localStorage.setItem(LB_PENDING_PUSH_OPTIN, JSON.stringify({
+        email: normalizeEmailForOptin(email),
+        favorites: true,
+        trafficSevere: true,
+        createdAt: Date.now()
+      }));
+    } catch (_) {}
+  };
+
+  const readPendingRegistrationPushOptin = (email) => {
+    try {
+      const raw = JSON.parse(localStorage.getItem(LB_PENDING_PUSH_OPTIN) || "null");
+      if (!raw || !raw.email) return null;
+      if (email && raw.email !== normalizeEmailForOptin(email)) return null;
+      return raw;
+    } catch (_) {
+      return null;
+    }
+  };
+
+  const clearPendingRegistrationPushOptin = () => {
+    try { localStorage.removeItem(LB_PENDING_PUSH_OPTIN); } catch (_) {}
+  };
+
+  const saveLocalPushSettingsFromOptin = () => {
+    try {
+      const current = JSON.parse(localStorage.getItem(LB_PUSH_SETTINGS_KEY) || "{}");
+      localStorage.setItem(LB_PUSH_SETTINGS_KEY, JSON.stringify({
+        ...current,
+        favorites: true,
+        trafficSevere: true
+      }));
+    } catch (_) {
+      try {
+        localStorage.setItem(LB_PUSH_SETTINGS_KEY, JSON.stringify({ favorites: true, trafficSevere: true }));
+      } catch (_) {}
+    }
+  };
+
+  const syncPushOptinPrefsToAccount = async () => {
+    try {
+      const existing = await api("/prefs", { method: "GET" }).catch(() => ({}));
+      const prefs = existing?.prefs || {};
+      const merged = {
+        ...prefs,
+        favoriteAlerts: true,
+        trafficSevere: true
+      };
+      await api("/prefs", {
+        method: "POST",
+        body: JSON.stringify({ prefs: merged })
+      });
+      applyPreferences(merged, { auto: false });
+    } catch (err) {
+      console.warn("PUSH_OPTIN_PREFS_SYNC_ERROR", err);
+    }
+  };
+
+  const maybeHandlePendingRegistrationPushOptin = async (email) => {
+    const pending = readPendingRegistrationPushOptin(email);
+    if (!pending) return;
+
+    saveLocalPushSettingsFromOptin();
+    await syncPushOptinPrefsToAccount();
+
+    const ok = confirm("🔔 Tu avais demandé les alertes importantes à la création du compte.\n\nActiver les notifications sur cet appareil maintenant ?");
+    if (ok && typeof window.lbEnablePushNotifications === "function") {
+      try { await window.lbEnablePushNotifications(); } catch (_) {}
+    }
+    clearPendingRegistrationPushOptin();
+  };
+
   if (!openBtn || !closeBtn || !modal || !submitBtn || !logoutBtn) return;
 
   if (rankingFilter && !rankingFilter.dataset.bound){
@@ -27596,6 +27735,7 @@ if (statsEl){
       msg("✅ Connecté");	  
       await refreshAuthState();
       await refreshGamificationUI({ force: true });
+      await maybeHandlePendingRegistrationPushOptin(email);
       closeModal();
     } catch (e) {
       msg("❌ " + e, true);
@@ -27933,8 +28073,10 @@ if (statsEl){
       if (pmFields?.label) pmFields.label.value = "Soir";
       if (amFields?.trains) amFields.trains.value = PRESET_AM.join(", ");
       if (pmFields?.trains) pmFields.trains.value = PRESET_PM.join(", ");
-      customRapidPresets.AM = { label: "Matin", trains: PRESET_AM.slice() };
-      customRapidPresets.PM = { label: "Soir", trains: PRESET_PM.slice() };
+      customRapidPresets.AM = { label: "Matin", trains: PRESET_AM.slice(), route: null };
+      customRapidPresets.PM = { label: "Soir", trains: PRESET_PM.slice(), route: null };
+      lbPresetRouteMeta.AM = null;
+      lbPresetRouteMeta.PM = null;
       applyRapidPresetLabels();
       updateDefaultListOptions();
       updatePrefsAddButton();
@@ -27993,6 +28135,10 @@ if (statsEl){
           mainDate.dispatchEvent(new Event('change', { bubbles: true }));
         }
       }
+      // Même logique que “Recherche par trajet” : on aligne aussi les gares du tableau.
+      // Ainsi une liste Thionville → Luxembourg n'affichera pas Nancy → Luxembourg.
+      lbSetTableRoute(startName, endName);
+      lbRememberPresetRoute(prefsSelectionTargetKey, startName, endName);
       if (typeof closeModal === "function") {
         closeModal();
       }
@@ -28018,6 +28164,8 @@ if (statsEl){
       if (!fields?.section) return;
       if (fields.label) fields.label.value = "";
       if (fields.trains) fields.trains.value = "";
+      lbPresetRouteMeta[key] = null;
+      if (customRapidPresets[key]) customRapidPresets[key].route = null;
       fields.section.style.display = "none";
       updateDefaultListOptions();
       updatePrefsAddButton();
@@ -28040,6 +28188,14 @@ if (statsEl){
     const unique = Array.from(new Set(numbers)).slice(0, 10);
     openPrefsModal({ skipLoad: true });
     fields.trains.value = unique.join(", ");
+    const rememberedRoute = lbNormalizePresetRoute(lbPresetRouteMeta[prefsSelectionTargetKey]);
+    if (rememberedRoute) {
+      customRapidPresets[prefsSelectionTargetKey] = {
+        label: fields.label?.value || fields.config?.name || '',
+        trains: unique.slice(),
+        route: rememberedRoute
+      };
+    }
     if (fields.section) fields.section.style.display = "grid";
     if (fields.label && !fields.label.value.trim()) {
       fields.label.value = fields.config?.name || "";
@@ -28068,9 +28224,11 @@ if (statsEl){
         if (raw.trim() && list.length === 0) {
           return prefsMsg(`❌ Aucun numéro valide trouvé pour la ${item.name.toLowerCase()}.`, true);
         }
+        const route = lbNormalizePresetRoute(lbPresetRouteMeta[item.key] || customRapidPresets[item.key]?.route);
         payloadPresets[item.key] = {
           label: fields?.label?.value || "",
-          trains: list
+          trains: list,
+          ...(route ? { route } : {})
         };
       }
 
@@ -28085,6 +28243,8 @@ if (statsEl){
         favoriteEveningTrain: favEvening,
         favoriteFromStation: (document.getElementById('lbFavFromStation')?.value || '').trim(),
         favoriteToStation: (document.getElementById('lbFavToStation')?.value || '').trim(),
+        favoriteAlerts: (() => { try { return JSON.parse(localStorage.getItem("lbPushAlertSettings.v1") || "{}").favorites !== false; } catch (_) { return true; } })(),
+        trafficSevere: (() => { try { return JSON.parse(localStorage.getItem("lbPushAlertSettings.v1") || "{}").trafficSevere !== false; } catch (_) { return true; } })(),
         // Compat + fallback : on garde aussi weatherStations mais aligné sur les gares favorites
         weatherStations: {
           from: (document.getElementById('lbFavFromStation')?.value || '').trim(),
@@ -28141,6 +28301,7 @@ if (statsEl){
       const password = $("lbRegPassword").value;
       const passwordConfirm = $("lbRegPasswordConfirm").value;
       const rgpdInput = $("lbRegRgpd");
+      const alertsOptin = $("lbRegAlertsOptin");
       const regMsg = $("lbRegMsg");
       if (!email || !password) {
         if (regMsg) regMsg.textContent = "❌ Email + mot de passe requis";
@@ -28154,6 +28315,7 @@ if (statsEl){
         if (regMsg) regMsg.textContent = "❌ Merci d’accepter la politique de confidentialité";
         return;
       }
+      const wantsAlertsAtRegister = !!(alertsOptin && alertsOptin.checked);
       if (regMsg) {
         regMsg.textContent = "⏳ Création du compte…";
         regMsg.style.color = "#aab6c8";
@@ -28161,16 +28323,22 @@ if (statsEl){
       try {
         await api("/auth/register", { method: "POST", body: JSON.stringify({ email, password }) });
 
+        if (wantsAlertsAtRegister) {
+          rememberRegistrationPushOptin(email);
+          saveLocalPushSettingsFromOptin();
+        }
+
         $("lbRegPassword").value = "";
         $("lbRegPasswordConfirm").value = "";
-        if (rgpdInput) rgpdInput.checked = false
+        if (rgpdInput) rgpdInput.checked = false;
+        if (alertsOptin) alertsOptin.checked = false;
 
 		closeRegisterModal();
         openModal();
 
         const authMsg = $("lbAuthMsg");
         if (authMsg) {
-          authMsg.innerHTML = "Compte créé ✅<br>Un email de validation vous a été envoyé.<br>Merci de cliquer sur le lien avant de vous connecter.<br>Vérifiez aussi vos spams.";
+          authMsg.innerHTML = "Compte créé ✅<br>Un email de validation vous a été envoyé.<br>Merci de cliquer sur le lien avant de vous connecter.<br>Vérifiez aussi vos spams." + (wantsAlertsAtRegister ? "<br><br>🔔 Après validation et connexion, on te proposera d’activer les alertes sur cet appareil." : "");
           authMsg.style.color = "#b8ffd6";
         }
         $("lbEmail").value = email;
