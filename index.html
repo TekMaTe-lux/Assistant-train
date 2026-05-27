@@ -4083,9 +4083,10 @@ body.page-carte .train-detail-panel{
   }
 
   .gtfs-retard-new {
-    color: #ff8a00;
-    font-weight: 700;
+    color: #ff8a00 !important;
+    font-weight: 900;
     margin-top: 0;
+    text-shadow:0 0 7px rgba(255,126,0,.90),0 0 14px rgba(255,126,0,.45) !important;
   }
 
 @media (max-width: 600px) {
@@ -11230,6 +11231,22 @@ body > .legal-links{ display:none !important; }
   #lbRegisterModal .rgpd{
     font-size:.72rem;
   }
+}
+
+/* GTFS-RT prioritaire quand l’API SNCF garde une suppression périmée
+   IMPORTANT : on garde la priorité GTFS-RT, mais on ne transforme PAS un retard en “nouveau terminus” bleu.
+   - remise en circulation + retard GTFS-RT => ORANGE
+   - remise en circulation + 0 min => horaire normal/neutre
+*/
+.gtfs-retard--restored .gtfs-retard-new{
+  color:#ff8a00 !important;
+  font-weight:900 !important;
+  text-shadow:0 0 7px rgba(255,126,0,.90),0 0 14px rgba(255,126,0,.45) !important;
+}
+.gtfs-restored{
+  color:#e0f0ff !important;
+  font-weight:900 !important;
+  text-shadow:none !important;
 }
 </style>
   <style>
@@ -22285,6 +22302,7 @@ function persistGtfsRetardsCache(){
 }
 
     const GTFS_NORMALIZED_STATION_MAP_KEY = '__gtfsNormalizedStationMap';
+const GTFS_TRAIN_META_KEY = '__gtfsTrainMeta';
 
 function getOrInitGtfsNormalizedMap(bucket) {
   let map = bucket[GTFS_NORMALIZED_STATION_MAP_KEY];
@@ -22338,6 +22356,31 @@ function storeGtfsDelay(bucket, stopName, delay) {
   map.set(norm, finalValue);
 }
 
+function setGtfsTrainMeta(bucket, meta) {
+  if (!bucket || !meta || typeof meta !== 'object') return;
+  const current = bucket[GTFS_TRAIN_META_KEY] || {};
+  const next = { ...current, ...meta };
+  Object.defineProperty(bucket, GTFS_TRAIN_META_KEY, {
+    value: next,
+    enumerable: false,
+    configurable: true,
+    writable: true
+  });
+}
+
+function getGtfsTrainMeta(bucket) {
+  return (bucket && bucket[GTFS_TRAIN_META_KEY]) || {};
+}
+
+function isGtfsTrainClearlyRunning(bucket) {
+  const meta = getGtfsTrainMeta(bucket);
+  const status = String(meta.status || '').toUpperCase();
+  const src = String(meta.data_source || meta.source || '').toLowerCase();
+  if (['DELAYED','ON_TIME','SCHEDULED','NO_DELAY'].includes(status)) return true;
+  if (src.includes('siri') && !['CANCELED','CANCELLED','NO_SERVICE','PARTIAL_CANCELLATION'].includes(status)) return true;
+  return false;
+}
+
 function mergeGtfsNormalizedPayloads(payloads) {
   const merged = {};
   if (!Array.isArray(payloads)) return merged;
@@ -22347,6 +22390,7 @@ function mergeGtfsNormalizedPayloads(payloads) {
     Object.entries(payload).forEach(([trainNumber, stops]) => {
       if (!stops || typeof stops !== 'object') return;
       if (!merged[trainNumber]) merged[trainNumber] = {};
+      setGtfsTrainMeta(merged[trainNumber], getGtfsTrainMeta(stops));
       Object.entries(stops).forEach(([stopName, delayValue]) => {
         if (!stopName) return;
         storeGtfsDelay(merged[trainNumber], stopName, delayValue);
@@ -22430,6 +22474,13 @@ function normalizeGtfsRetardsPayload(raw) {
     if (!payload) return;
     const trainNum = String(payload.train_number || payload.train || payload.number || trainKey || '').trim();
     if (!trainNum) return;
+    const bucket = normalized[trainNum] || (normalized[trainNum] = {});
+    setGtfsTrainMeta(bucket, {
+      status: payload.status || payload.trip_status || payload.state || payload.effect || null,
+      data_source: payload.data_source || payload.source || null,
+      train_id: payload.train_id || payload.trip_id || null,
+      updated_at: payload.updated_at || payload.timestamp || payload.generated_at || null
+    });
 
     const candidates = [];
     if (payload.stops !== undefined) candidates.push(payload.stops);
@@ -22764,48 +22815,29 @@ function resetGtfsRetards(scope) {
   const table = document.querySelector("#trainInfo table");
   if (!table) { console.log("⛔ Le tableau n'est pas encore généré !"); return; }
 
-  // 1) Récupérer les numéros de train depuis la 1ʳᵉ ligne d’en-tête (<thead> tr:first-child)
   const headRow = table.querySelector('thead tr:first-child');
   if (!headRow) { console.log("[GTFS-RT] Pas d'en-tête."); return; }
 
   const headerThs = Array.from(headRow.querySelectorAll('th[data-train-number]'));
   if (!headerThs.length) { console.log("[GTFS-RT] Aucun th[data-train-number]."); return; }
 
-  // Tableau des numéros de train (dans l’ordre des colonnes du body)
   const headerNumbers = headerThs.map(th => (th.dataset.trainNumber || '').trim()).filter(Boolean);
-
-  // 2) Récupérer les lignes du corps
   const tbody = table.tBodies && table.tBodies[0];
   const bodyRows = tbody ? Array.from(tbody.rows) : Array.from(table.querySelectorAll('tbody tr'));
-  if (!bodyRows.length) { 
-    console.log("[GTFS-RT] Aucun body row — rien à appliquer."); 
-    return; 
-  }
+  if (!bodyRows.length) { console.log("[GTFS-RT] Aucun body row — rien à appliquer."); return; }
 
-  // 3) Parcourir chaque ligne gare
   for (const row of bodyRows) {
     if (!row) continue;
-
-    // Nom de gare (robuste)
-    const gare =
-      row.dataset.gare ||
-      row.querySelector('.gare-label')?.textContent?.trim() ||
-      row.cells?.[0]?.textContent?.trim() ||
-      '';
-
+    const gare = row.dataset.gare || row.querySelector('.gare-label')?.textContent?.trim() || row.cells?.[0]?.textContent?.trim() || '';
     if (!gare) continue;
 
-    // 4) Appliquer pour chaque colonne train (offset +1 : la col 0 = gare)
     for (let i = 0; i < headerNumbers.length; i++) {
       const trainNumber = headerNumbers[i];
-      const cell = row.cells?.[i + 1]; // +1 car 1ʳᵉ colonne = gare
+      const cell = row.cells?.[i + 1];
       if (!trainNumber || !cell) continue;
 
       const perTrain = data?.[trainNumber];
-      if (!perTrain) {
-        resetGtfsRetards(cell);
-        continue;
-      }
+      if (!perTrain) { resetGtfsRetards(cell); continue; }
 
       let retardMinutesValue = perTrain[gare];
       if (retardMinutesValue == null && typeof normalizeStationName === 'function') {
@@ -22819,9 +22851,7 @@ function resetGtfsRetards(scope) {
             for (const [stopName, value] of Object.entries(perTrain)) {
               if (normalizeStationName(stopName) === targetNorm) {
                 retardMinutesValue = value;
-                if (normalizedLookup instanceof Map) {
-                  normalizedLookup.set(targetNorm, value);
-                }
+                if (normalizedLookup instanceof Map) normalizedLookup.set(targetNorm, value);
                 break;
               }
             }
@@ -22830,20 +22860,25 @@ function resetGtfsRetards(scope) {
       }
 
       const retardMinutes = retardMinutesValue == null ? null : Number(retardMinutesValue);
+      const gtfsSaysRunning = (typeof isGtfsTrainClearlyRunning === 'function') && isGtfsTrainClearlyRunning(perTrain);
 
-      // Pas d'affichage GTFS si suppression/strike déjà visible (API SNCF)
+      // IMPORTANT #BER : si GTFS-RT/SIRI dit que le train circule, on écrase les suppressions SNCF/HUB périmées.
+      // C'est le cas typique 88505 : API SNCF restée bloquée en suppression partielle, GTFS-RT revenu en DELAYED.
       const hasSuppression = cell.querySelector('.deleted, .delay-strike, .strike, .cancelled');
-
       const baseTimeRaw = cell.dataset.baseTime || null;
-      const hasDelay = Number.isFinite(retardMinutes) && retardMinutes > 0 && !hasSuppression;
+      const canOverrideStaleSncfSuppression = gtfsSaysRunning && Number.isFinite(retardMinutes) && baseTimeRaw;
+      const hasDelay = Number.isFinite(retardMinutes) && retardMinutes > 0 && (!hasSuppression || canOverrideStaleSncfSuppression);
+
+      if (gtfsSaysRunning && Number.isFinite(retardMinutes) && retardMinutes <= 0 && hasSuppression && baseTimeRaw) {
+        if (cell.__gtfsOriginalContent == null) cell.__gtfsOriginalContent = cell.innerHTML;
+        cell.innerHTML = `<span class="gtfs-restored">${escapeHtml(ft(baseTimeRaw))}</span>`;
+        cell.dataset.gtfsDelayMinutes = '0';
+        continue;
+      }
 
       if (hasDelay) {
-        const originalHtml = cell.__gtfsOriginalContent != null
-          ? cell.__gtfsOriginalContent
-          : cell.innerHTML;
-        if (cell.__gtfsOriginalContent == null) {
-          cell.__gtfsOriginalContent = originalHtml;
-        }
+        const originalHtml = cell.__gtfsOriginalContent != null ? cell.__gtfsOriginalContent : cell.innerHTML;
+        if (cell.__gtfsOriginalContent == null) cell.__gtfsOriginalContent = originalHtml;
 
         const delayedClock = computeRetardedTime(baseTimeRaw, retardMinutes);
         const roundedDelay = Math.round(retardMinutes);
@@ -22854,8 +22889,9 @@ function resetGtfsRetards(scope) {
           wrapper = document.createElement('div');
           wrapper.className = 'gtfs-retard';
         }
+        if (canOverrideStaleSncfSuppression) wrapper.classList.add('gtfs-retard--restored');
 
-		const originalVoie = cell.querySelector('.voie-badge');
+        const originalVoie = cell.querySelector('.voie-badge');
         const voieLabelRaw = originalVoie ? (originalVoie.textContent || '').trim() : '';
         const baseSpan = document.createElement('span');
         baseSpan.className = 'gtfs-retard-base';
@@ -22868,7 +22904,7 @@ function resetGtfsRetards(scope) {
         while (wrapper.firstChild) wrapper.removeChild(wrapper.firstChild);
         wrapper.appendChild(baseSpan);
         wrapper.appendChild(newSpan);
-		if (voieLabelRaw) {
+        if (voieLabelRaw) {
           const voieWrap = document.createElement('span');
           voieWrap.className = 'delay-voie';
           voieWrap.innerHTML = `<span class="voie-badge">${escapeHtml(voieLabelRaw)}</span>`;
@@ -22878,13 +22914,12 @@ function resetGtfsRetards(scope) {
 
         const baseClock = baseTimeRaw ? ft(baseTimeRaw) : null;
         if (baseClock && Number.isFinite(roundedDelay)) {
-          let tooltip = `Heure théorique ${baseClock} – retard ${roundedDelay} min`;
-          if (delayedClock) {
-            tooltip += ` → passage attendu ${delayedClock}`;
-          }
+          let tooltip = `Heure théorique ${baseClock} – retard GTFS-RT ${roundedDelay} min`;
+          if (delayedClock) tooltip += ` → passage attendu ${delayedClock}`;
+          if (canOverrideStaleSncfSuppression) tooltip += ' · suppression SNCF ignorée car GTFS-RT indique que le train circule';
           wrapper.setAttribute('title', tooltip);
         } else if (Number.isFinite(roundedDelay)) {
-          wrapper.setAttribute('title', `Retard estimé ${roundedDelay} min`);
+          wrapper.setAttribute('title', `Retard GTFS-RT estimé ${roundedDelay} min`);
         } else {
           wrapper.removeAttribute('title');
         }
