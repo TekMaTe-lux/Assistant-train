@@ -1483,6 +1483,11 @@ body {
   padding:5px 8px;
   line-height:1.2;
 }
+.lb-live-sncf-cause.lb-live-sncf-cause--cancel{
+  border-color:rgba(255,77,109,.52);
+  background:rgba(110,20,42,.34);
+  color:#ff9fb3;
+}
 .lb-live-card-actions{
   display:flex;
   align-items:center;
@@ -8980,6 +8985,11 @@ body.modal-open{ overflow:hidden; }
   border: 1px solid rgba(255, 154, 60, .22);
   color: #ffb36b;
   font-weight: 700;
+}
+.fav-cause-inline.fav-cause-inline--cancel{
+  background: rgba(255, 77, 109, .14);
+  border-color: rgba(255, 77, 109, .35);
+  color: #ff8ea8;
 }
 
 
@@ -21321,6 +21331,78 @@ if (!newStart) {
       }
     }
 
+
+    const applyGtfsLivePriorityToTableResults = (tableResults, trainNumbers, targetDateYmd) => {
+      if (!tableResults || !Array.isArray(trainNumbers) || !trainNumbers.length) return;
+      if (typeof isSelectedDateToday === 'function' && !isSelectedDateToday()) return;
+      const selectedYmd = String(targetDateYmd || '').trim();
+      const todayYmd = (typeof toYmd === 'function') ? String(toYmd()) : '';
+      if (selectedYmd && todayYmd && selectedYmd !== todayYmd) return;
+      if (typeof extractLiveTrains !== 'function') return;
+
+      const liveMap = new Map();
+      try {
+        const liveTrains = extractLiveTrains();
+        (Array.isArray(liveTrains) ? liveTrains : []).forEach((t)=>{
+          const k = normalizeKey(t?.trainNumber || t?.key || '');
+          if (k) liveMap.set(k, t);
+        });
+      } catch(_){ return; }
+      if (!liveMap.size) return;
+
+      trainNumbers.forEach((trainNo)=>{
+        const key = normalizeKey(trainNo);
+        if (!key) return;
+        const live = liveMap.get(key);
+        const result = tableResults[trainNo];
+        if (!live || !result || result.error || !result.train) return;
+
+        const liveStatus = String(live.statusClass || '').toLowerCase();
+        // GTFS-RT/LIVE prioritaire pour dire "en circulation" : ok + retard écrasent les suppressions SNCF.
+        if (liveStatus === 'cancel' || !['ok','delay'].includes(liveStatus)) return;
+
+        const disruptions = Array.isArray(result.disruptions) ? result.disruptions : [];
+        const hadSncfCancel = disruptions.some((d)=> ['NO_SERVICE','CANCELLATION'].includes(String(d?.severity?.effect || '').toUpperCase()));
+        const hadPartial = !!(result.newStart || result.newEnd);
+
+        // Rien à corriger côté SNCF => on quitte.
+        if (!hadSncfCancel && !hadPartial && !result.impacted) return;
+
+        result.disruptions = disruptions.filter((d)=> !['NO_SERVICE','CANCELLATION'].includes(String(d?.severity?.effect || '').toUpperCase()));
+        result.newStart = null;
+        result.newEnd = null;
+
+        // IMPORTANT: neutraliser les drapeaux deleted hérités SNCF quand LIVE confirme que le train circule.
+        if (result.impacted && typeof result.impacted === 'object') {
+          Object.values(result.impacted).forEach((imp)=>{
+            if (!imp || typeof imp !== 'object') return;
+
+            const hasBaseDep = !!(imp.base_departure_time || imp.amended_departure_time);
+            const hasBaseArr = !!(imp.base_arrival_time || imp.amended_arrival_time);
+
+            if (String(imp.departure_status || '').toLowerCase() === 'deleted' && hasBaseDep) {
+              imp.departure_status = 'unchanged';
+            }
+            if (String(imp.arrival_status || '').toLowerCase() === 'deleted' && hasBaseArr) {
+              imp.arrival_status = 'unchanged';
+            }
+
+            if (String(imp.stop_time_effect || '').toLowerCase() === 'deleted') {
+              const depDeleted = String(imp.departure_status || '').toLowerCase() === 'deleted';
+              const arrDeleted = String(imp.arrival_status || '').toLowerCase() === 'deleted';
+              if (!depDeleted && !arrDeleted) imp.stop_time_effect = '';
+            }
+          });
+        }
+
+        try {
+          console.info('[Tableau][Priorité LIVE]', trainNo, 'SNCF suppression/partielle neutralisée via GTFS-RT LIVE:', liveStatus, live.statusLabel || '');
+        } catch(_){ }
+      });
+    };
+
+    applyGtfsLivePriorityToTableResults(results, sncfNumbers, ymdDate);
+
     for (const key of cflKeys) {
       try {
         const cflResult = await buildCflResult(key, { ymd: ymdDate });
@@ -27154,7 +27236,7 @@ function getGtfsDelayForStop(trainNumber, stopName){
     const isDelayed = (maxDelay != null && Number.isFinite(maxDelay) && maxDelay >= 1);
     let causeHtml = '';
     if ((isDelayed || isPartialAny) && causeText){
-      causeHtml = `<div class="fav-cause-inline">${escapeHtml(causeText)}</div>`;
+      causeHtml = `<div class="fav-cause-inline ${isPartialAny ? 'fav-cause-inline--cancel' : ''}">${escapeHtml(causeText)}</div>`;
     }
     if (causeEl){
       // on garde le noeud pour compat mais on le vide (la cause est rendue dans fav-line)
@@ -35544,7 +35626,10 @@ body{ padding-bottom: calc(var(--bottom-bar-height, 58px) + 10px) !important; }
             right.appendChild(causeEl);
           }
         }
-        if (causeEl) causeEl.textContent = `${finalInfo.statusClass === 'cancel' ? 'Suppression' : 'Retard'} : ${finalInfo.sncfCause}`;
+        if (causeEl){
+          causeEl.classList.toggle('lb-live-sncf-cause--cancel', finalInfo.statusClass === 'cancel');
+          causeEl.textContent = `${finalInfo.statusClass === 'cancel' ? 'Suppression' : 'Retard'} : ${finalInfo.sncfCause}`;
+        }
       }
     }));
   }
@@ -35635,7 +35720,7 @@ body{ padding-bottom: calc(var(--bottom-bar-height, 58px) + 10px) !important; }
 	                    : `<span class="lb-live-user-alert" title="Signalement usager récent (visible même avec statut SNCF existant)">Signalé: +${safeEscape(travelerDisruption.delayMin || '?')} min</span>`)
 	                : ''}
 			  ${(train.statusClass === 'delay' || train.statusClass === 'cancel') && train.sncfCause
-                ? `<div class="lb-live-sncf-cause">${safeEscape(train.statusClass === 'cancel' ? 'Suppression' : 'Retard')} : ${safeEscape(train.sncfCause)}</div>`
+                ? `<div class="lb-live-sncf-cause ${train.statusClass === 'cancel' ? 'lb-live-sncf-cause--cancel' : ''}">${safeEscape(train.statusClass === 'cancel' ? 'Suppression' : 'Retard')} : ${safeEscape(train.sncfCause)}</div>`
                 : ''}  
             </div>
           </div>
