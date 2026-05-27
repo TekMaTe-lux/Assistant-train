@@ -21330,6 +21330,58 @@ if (!newStart) {
       }
     }
 
+	const applyGtfsLivePriorityToTableResults = (tableResults, trainNumbers, targetDateYmd) => {
+      if (!tableResults || !Array.isArray(trainNumbers) || !trainNumbers.length) return;
+      if (typeof isSelectedDateToday === 'function' && !isSelectedDateToday()) return;
+      const selectedYmd = String(targetDateYmd || '').trim();
+      const todayYmd = (typeof toYmd === 'function') ? String(toYmd()) : '';
+      if (selectedYmd && todayYmd && selectedYmd !== todayYmd) return;
+      if (typeof extractLiveTrains !== 'function') return;
+
+      const liveMap = new Map();
+      try {
+        const liveTrains = extractLiveTrains();
+        (Array.isArray(liveTrains) ? liveTrains : []).forEach((t)=>{
+          const k = normalizeKey(t?.trainNumber || t?.key || '');
+          if (k) liveMap.set(k, t);
+        });
+      } catch(_){ return; }
+      if (!liveMap.size) return;
+
+      trainNumbers.forEach((trainNo)=>{
+        const key = normalizeKey(trainNo);
+        if (!key) return;
+        const live = liveMap.get(key);
+        const result = tableResults[trainNo];
+        if (!live || !result || result.error || !result.train) return;
+
+        const liveStatus = String(live.statusClass || '').toLowerCase();
+        if (liveStatus === 'cancel') return;
+
+        const disruptions = Array.isArray(result.disruptions) ? result.disruptions : [];
+        const hasSncfCancel = disruptions.some((d)=> ['NO_SERVICE','CANCELLATION'].includes(String(d?.severity?.effect || '').toUpperCase()));
+        const hasPartial = !!(result.newStart || result.newEnd);
+        if (!hasSncfCancel && !hasPartial) return;
+
+        result.disruptions = disruptions.filter((d)=> !['NO_SERVICE','CANCELLATION'].includes(String(d?.severity?.effect || '').toUpperCase()));
+        result.newStart = null;
+        result.newEnd = null;
+
+        if (result.impacted && typeof result.impacted === 'object') {
+          Object.values(result.impacted).forEach((imp)=>{
+            if (!imp || typeof imp !== 'object') return;
+            if (imp.stop_time_effect === 'deleted') {
+              if (imp.arrival_status === 'deleted' || !imp.arrival_status) imp.arrival_status = 'unchanged';
+              if (imp.departure_status === 'deleted' || !imp.departure_status) imp.departure_status = 'unchanged';
+              imp.stop_time_effect = imp.stop_time_effect === 'deleted' ? '' : imp.stop_time_effect;
+            }
+          });
+        }
+      });
+    };
+
+    applyGtfsLivePriorityToTableResults(results, sncfNumbers, ymdDate);
+
     for (const key of cflKeys) {
       try {
         const cflResult = await buildCflResult(key, { ymd: ymdDate });
