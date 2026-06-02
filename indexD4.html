@@ -20718,7 +20718,7 @@ function updateSelectionUI(){
   }
   // 2) rendu des chips sélection
   const detailsToggle = document.getElementById('selectionDetailsToggle');
-  const hasDetails = arr.some(num => !!formatSelectionTrainMeta(num));
+  const hasDetails = arr.length > 0 && arr.every(num => !!formatSelectionTrainMeta(num));
   if (detailsToggle) {
     detailsToggle.hidden = !hasDetails;
     detailsToggle.textContent = selectionDetailsVisible ? 'Masquer' : 'Détails';
@@ -20927,6 +20927,9 @@ async function applyRapidPreset(kind, options = {}){
           arr: train.arr
         });
       });
+	  if (typeof hydrateSelectionMetaFromVehicleJourneys === 'function') {
+        await hydrateSelectionMetaFromVehicleJourneys(numbers, { date: ymd, startName, endName });
+      }
     } catch (err) {
       console.error('Impossible de calculer le preset rapide', err);
     }
@@ -21146,6 +21149,95 @@ async function fetchJSON(url, { timeoutMs = 15000, client = 'front-central' } = 
   const cache = r.headers.get('x-cache');
   if (cache) console.debug('[Proxy]', cache, absolute.href);
   return { ok: r.ok, status: r.status, data, cache };
+}
+
+function lbSelectionHHMMFromRaw(raw){
+  const s = String(raw || '').trim();
+  if (!s) return '';
+  const digits = s.replace(/[^0-9]/g, '');
+  if (digits.length >= 4) return `${digits.slice(0,2)}:${digits.slice(2,4)}`;
+  return s;
+}
+
+function lbSelectionStopName(stop){
+  return String(stop?.stop_point?.name || stop?.stop_point?.label || stop?.name || '').trim();
+}
+
+function lbSelectionStopTime(stop, mode = 'dep'){
+  const raw = mode === 'arr'
+    ? (stop?.arrival_time || stop?.base_arrival_time || stop?.departure_time || stop?.base_departure_time)
+    : (stop?.departure_time || stop?.base_departure_time || stop?.arrival_time || stop?.base_arrival_time);
+  return lbSelectionHHMMFromRaw(raw);
+}
+
+function lbSelectionSameStation(a, b){
+  const na = normalizeStationName(a || '');
+  const nb = normalizeStationName(b || '');
+  if (!na || !nb) return false;
+  return na === nb || na.includes(nb) || nb.includes(na);
+}
+
+function lbLineStopRank(name){
+  const norm = normalizeStationName(name || '');
+  if (!norm || !Array.isArray(garesParLigne)) return -1;
+  return garesParLigne.findIndex(g => lbSelectionSameStation(g?.nom, norm));
+}
+
+function lbBuildSelectionMetaFromJourneyData(data, { startName = '', endName = '' } = {}){
+  const train = data?.vehicle_journeys?.[0];
+  const stops = Array.isArray(train?.stop_times) ? train.stop_times : [];
+  if (!stops.length) return null;
+
+  const requestedStartIdx = stops.findIndex(s => lbSelectionSameStation(lbSelectionStopName(s), startName));
+  const requestedEndIdx = stops.findIndex((s, idx) => idx > requestedStartIdx && lbSelectionSameStation(lbSelectionStopName(s), endName));
+  if (requestedStartIdx >= 0 && requestedEndIdx > requestedStartIdx) {
+    const depStop = stops[requestedStartIdx];
+    const arrStop = stops[requestedEndIdx];
+    return {
+      from: startName || lbSelectionStopName(depStop),
+      to: endName || lbSelectionStopName(arrStop),
+      dep: lbSelectionStopTime(depStop, 'dep'),
+      arr: lbSelectionStopTime(arrStop, 'arr')
+    };
+  }
+
+  const lineStops = stops
+    .map((stop, idx) => ({ stop, idx, rank: lbLineStopRank(lbSelectionStopName(stop)) }))
+    .filter(item => item.rank >= 0);
+  if (lineStops.length < 2) return null;
+
+  const dep = lineStops[0];
+  const arr = lineStops[lineStops.length - 1];
+  if (arr.idx <= dep.idx) return null;
+  return {
+    from: lbSelectionStopName(dep.stop),
+    to: lbSelectionStopName(arr.stop),
+    dep: lbSelectionStopTime(dep.stop, 'dep'),
+    arr: lbSelectionStopTime(arr.stop, 'arr')
+  };
+}
+
+async function hydrateSelectionMetaFromVehicleJourneys(numbers, { date, startName = '', endName = '' } = {}){
+  const list = (Array.isArray(numbers) ? numbers : [])
+    .map(n => String(n || '').trim())
+    .filter(n => /^\d{5,6}$/.test(n));
+  if (!list.length || typeof fetchJSON !== 'function' || typeof vpsVehicleJourneyUrl !== 'function') return;
+
+  const unique = Array.from(new Set(list));
+  const batchSize = 4;
+  for (let i = 0; i < unique.length; i += batchSize) {
+    const batch = unique.slice(i, i + batchSize);
+    await Promise.all(batch.map(async (num) => {
+      try {
+        const response = await fetchJSON(vpsVehicleJourneyUrl(date, num), { client: 'front-selection-meta', timeoutMs: 12000 });
+        if (!response?.ok) return;
+        const meta = lbBuildSelectionMetaFromJourneyData(response.data, { startName, endName });
+        if (meta?.from && meta?.to) registerTrainSelectionMeta(num, meta);
+      } catch (err) {
+        console.warn('[Sélection] Métadonnées train indisponibles', num, err?.message || err);
+      }
+    }));
+  }
 }
 
 	// Expose au scope global (utilisé par le widget Favoris)
