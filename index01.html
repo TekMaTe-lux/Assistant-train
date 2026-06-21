@@ -466,6 +466,15 @@ body {
   outline: none;
 }
 
+.bottom-nav__item{ transition: transform .12s ease, filter .18s ease, color .18s ease; }
+.bottom-nav__item:active{ transform: translateY(1px) scale(0.96); }
+.bottom-nav__item.click-ack{ animation: navClickPulse .22s ease; }
+@keyframes navClickPulse{
+  0%{ transform: scale(1); filter: brightness(1); }
+  45%{ transform: scale(0.92); filter: brightness(1.25); }
+  100%{ transform: scale(1); filter: brightness(1); }
+}
+
 @media (max-width: 600px){
   :root{
     --top-bar-height: 64px;
@@ -7111,6 +7120,24 @@ html, body{ overflow-x: hidden; }
   display: block;
   background: #07101b;
 }
+#carte .map-loading-state{
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  min-height: 90px;
+  margin: 10px;
+  border-radius: 12px;
+  border: 1px solid rgba(0,240,255,.25);
+  color: #bff7ff;
+  background: linear-gradient(100deg, rgba(0,16,28,.65), rgba(0,34,52,.8), rgba(0,16,28,.65));
+  background-size: 200% 100%;
+  animation: mapLoadingSweep 1.2s linear infinite;
+}
+#carte .map-embed-shell.is-loaded .map-loading-state{ display:none; }
+@keyframes mapLoadingSweep{
+  from{ background-position: 0% 0; }
+  to{ background-position: 200% 0; }
+}
 
 /* Mode carte plein écran sur smartphone: entre les barres fixes */
 :root{ --carte-top-offset: 72px; --carte-bottom-offset: 84px; }
@@ -7190,7 +7217,7 @@ html, body{ overflow-x: hidden; }
 /* === Navigation pages (1 onglet = 1 page) === */
 .app-page{ display:none; }
 .app-page.is-page-active{ display:block; }
-body.page-home #home{ display:flex; }
+body.page-home #home{ display:grid; }
 body.page-favoris #favTrainsWidget{ display:block !important; }
 body.page-search #search,
 body.page-carte #carte,
@@ -8364,9 +8391,11 @@ html, body{
 <section id="carte" class="media-section app-page" data-page="carte" aria-label="Carte en direct">
   <h2>Carte en direct</h2>
   <p>Accès complet à la carte La Bétaillère sans quitter l’application.</p>
-  <div class="map-embed-shell">
+  <div class="map-embed-shell" id="mapEmbedShell">
+    <div class="map-loading-state" id="mapLoadingState" aria-live="polite">🛰️ Chargement fluide de la carte…</div>
     <iframe
-      src="carte.html?embed=1"
+      id="carteIframe"
+      data-src="carte.html?embed=1"
       title="Carte La Bétaillère"
       loading="lazy"
       referrerpolicy="strict-origin-when-cross-origin"
@@ -22577,6 +22606,32 @@ async function loadAffluenceDate(dateStr){
     });
   }
 
+  const mapIframe = document.getElementById('carteIframe');
+  const mapShell = document.getElementById('mapEmbedShell');
+  const mapLoading = document.getElementById('mapLoadingState');
+  let mapRequested = false;
+
+  function pulseNav(item){
+    if (!item) return;
+    item.classList.remove('click-ack');
+    item.offsetWidth;
+    item.classList.add('click-ack');
+  }
+
+  function requestMapLoad(){
+    if (!mapIframe || mapRequested) return;
+    mapRequested = true;
+    const src = mapIframe.dataset.src;
+    if (src) mapIframe.src = src;
+    if (mapLoading) mapLoading.textContent = '🛰️ Connexion à la carte…';
+  }
+
+  if (mapIframe && mapShell){
+    mapIframe.addEventListener('load', () => {
+      mapShell.classList.add('is-loaded');
+    }, { once: true });
+  }
+
   function syncPages(){
     const hash = location.hash || '#home';
     const page = pageFromHash(hash);
@@ -22597,12 +22652,34 @@ async function loadAffluenceDate(dateStr){
       if (fav) fav.style.display = 'block';
     }
 
+    if (page === 'carte'){
+      requestAnimationFrame(() => requestMapLoad());
+    }
+
     syncActiveNav(page);
 
     if (hash && /^#[A-Za-z][\w:-]*$/.test(hash)){
       const target = document.querySelector(hash);
-      if (target) requestAnimationFrame(() => target.scrollIntoView({ behavior:'smooth', block:'start' }));
+      if (target && !target.closest('.bottom-nav')){
+        requestAnimationFrame(() => target.scrollIntoView({ behavior:'smooth', block:'start' }));
+      }
     }
+  }
+
+  navItems.forEach((item) => {
+    item.addEventListener('click', () => {
+      pulseNav(item);
+      if (pageFromHash(item.getAttribute('href') || '') === 'carte'){
+        setTimeout(requestMapLoad, 0);
+      }
+    }, { passive: true });
+  });
+
+  if ('requestIdleCallback' in window){
+    requestIdleCallback(() => {
+      const page = pageFromHash(location.hash || '#home');
+      if (page === 'carte') requestMapLoad();
+    }, { timeout: 2500 });
   }
 
   window.addEventListener('hashchange', syncPages);
