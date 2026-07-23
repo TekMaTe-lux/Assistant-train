@@ -4350,6 +4350,13 @@ body.page-carte .train-detail-panel{
   flex-wrap:wrap;
   text-align:right;
 }
+#lastUpdated .refresh-inline-btn__label{
+  margin-left:6px;
+  font-size:.72rem;
+  font-weight:800;
+  letter-spacing:.02em;
+  white-space:nowrap;
+}
 #lastUpdated .last-updated-text{
   min-width:0;
 }
@@ -4360,8 +4367,9 @@ body.page-carte .train-detail-panel{
   background:rgba(0, 240, 255, 0.10);
   color:#9ffcff;
   border-radius:999px;
-  width:34px;
-  height:34px;
+  min-width:44px;
+  min-height:44px;
+  padding:0 12px;
   display:inline-flex;
   align-items:center;
   justify-content:center;
@@ -4385,6 +4393,30 @@ body.page-carte .train-detail-panel{
   animation:lbspin 0.9s linear infinite;
 }
 @keyframes lbspin{ from{transform:rotate(0deg);} to{transform:rotate(360deg);} }
+@media (max-width: 768px){
+  #lastUpdated{
+    justify-content:center;
+    text-align:center;
+    margin:8px max(8px, env(safe-area-inset-left, 0px)) 0;
+  }
+  #lastUpdated .last-updated-text{
+    flex:1 1 100%;
+  }
+  #lastUpdated .refresh-inline-btn{
+    width:min(100%, 320px);
+    min-height:46px;
+    border-color:rgba(0, 240, 255, 0.58);
+    background:linear-gradient(135deg, rgba(0,240,255,.18), rgba(0,120,255,.14));
+  }
+  #lastUpdated .refresh-inline-btn__label{
+    display:inline;
+  }
+}
+@media (min-width: 769px){
+  #lastUpdated .refresh-inline-btn__label{
+    display:none;
+  }
+}
 
 /* Ancien bouton centré : on le masque (remplacé par l'icône à droite du "Généré le…") */
 #refreshContainer{ display:none !important; }
@@ -13638,6 +13670,7 @@ body.monde-betaillere #homeFavSlot .home-fav-badge .fav-state-badge{
   <button type="button" class="tableau-view-tab" role="tab" aria-selected="false" data-tableau-view="perturbations">Perturbations</button>
   <button type="button" class="tableau-view-tab tableau-view-tab--search" role="tab" aria-selected="false" data-tableau-view="search">Nouvelle recherche</button>
   <button type="button" class="tableau-view-tab" role="tab" aria-selected="true" data-tableau-view="global">Image tableau</button>
+  <button id="refreshMobile" type="button" class="tableau-view-tab tableau-view-tab--refresh" data-tableau-action="refresh" title="Actualiser les données" aria-label="Actualiser les données du tableau">↻ Actualiser</button>
 </div>
 
 <div id="loisirsViewNav" role="tablist" aria-label="Sous-navigation Loisirs" hidden>
@@ -14399,6 +14432,22 @@ html, body{
   box-shadow: 0 0 0 1px rgba(170,255,255,.38) inset, 0 0 16px rgba(0,240,255,.45), inset 0 0 12px rgba(0,220,255,.28);
 }
 #tableauViewNav .tableau-view-tab--search{ font-weight: 800; letter-spacing: .03em; }
+#tableauViewNav .tableau-view-tab--refresh{
+  flex: 0.9 1 0;
+  border-color: rgba(0, 240, 255, 0.58);
+  background: linear-gradient(135deg, rgba(0,255,255,.20), rgba(0,150,255,.18));
+  color:#9ffcff;
+  font-weight: 800;
+}
+#tableauViewNav .tableau-view-tab--refresh[disabled]{
+  opacity:.62;
+  cursor:wait;
+  transform:none;
+}
+#tableauViewNav .tableau-view-tab--refresh .spin{
+  display:inline-block;
+  animation:lbspin 0.9s linear infinite;
+}
 @media (max-width: 768px){
   body.tableau-view-nav-visible{ --tableau-viewbar-h: 64px; }
   #tableauViewNav.is-visible{
@@ -22329,11 +22378,14 @@ scheduleWeatherAfterTableSettled();
   // Bouton "Actualiser" (icône à droite du "Généré le…") : refetch FRESH puis régénère
 const __lbDoRefresh = async () => {
   const statusEl = document.getElementById('lastUpdated');
-  const btn = document.getElementById('refreshInline') || document.getElementById('refreshButton');
-  if (btn){
+  const buttons = Array.from(document.querySelectorAll('#refreshInline, #refreshMobile, #refreshButton'));
+  buttons.forEach((btn) => {
     btn.disabled = true;
-    btn.innerHTML = '<span class="spin">🔄</span>';
-  }
+    btn.dataset.refreshing = 'true';
+    if (!btn.dataset.originalHtml) btn.dataset.originalHtml = btn.innerHTML;
+    const label = btn.id === 'refreshMobile' ? ' Actualisation…' : '<span class="refresh-inline-btn__label">Actualisation…</span>';
+    btn.innerHTML = `<span class="spin" aria-hidden="true">🔄</span>${label}`;
+  });
   if (statusEl) statusEl.querySelector?.('.last-updated-text') 
     ? (statusEl.querySelector('.last-updated-text').textContent = 'Actualisation en cours…')
     : (statusEl.textContent = 'Actualisation en cours…');
@@ -22353,10 +22405,12 @@ const __lbDoRefresh = async () => {
   } catch (e) {
     console.error('[GTFS-RT] Actualiser ->', e);
     alert("Échec de l'actualisation GTFS-RT.\n" + (e && e.message ? e.message : ''));
-    if (btn){
+    buttons.forEach((btn) => {
       btn.disabled = false;
-      btn.textContent = '🔄';
-    }
+      btn.removeAttribute('data-refreshing');
+      btn.innerHTML = btn.dataset.originalHtml || (btn.id === 'refreshMobile' ? '↻ Actualiser' : '<span aria-hidden="true">🔄</span><span class="refresh-inline-btn__label">Actualiser</span>');
+      delete btn.dataset.originalHtml;
+    });
     return; // on ne régénère pas avec des données inchangées
   }
 
@@ -22368,6 +22422,10 @@ const __lbDoRefresh = async () => {
 // Ancien bouton (si un jour tu le réactives) + nouveau bouton inline
 $('#refreshButton').off('click').on('click', __lbDoRefresh);
 $(document).off('click', '#refreshInline').on('click', '#refreshInline', (e) => {
+  e.preventDefault();
+  __lbDoRefresh();
+});
+$(document).off('click', '#refreshMobile').on('click', '#refreshMobile', (e) => {
   e.preventDefault();
   __lbDoRefresh();
 });
@@ -22895,7 +22953,7 @@ function setLastUpdated() {
     const [y, m, day] = d.split('-');
     validTxt = `${day}/${m}/${y}`;
   }
-  el.innerHTML = `<span class="last-updated-text">Généré le ${nowTxt} — Données valables le <strong>${validTxt}</strong></span>` + ` <button id="refreshInline" class="refresh-inline-btn" type="button" title="Actualiser les données" aria-label="Actualiser les données">🔄</button>`;
+  el.innerHTML = `<span class="last-updated-text">Généré le ${nowTxt} — Données valables le <strong>${validTxt}</strong></span>` + ` <button id="refreshInline" class="refresh-inline-btn" type="button" title="Actualiser les données" aria-label="Actualiser les données"><span aria-hidden="true">🔄</span><span class="refresh-inline-btn__label">Actualiser</span></button>`;
 }
 function todayYMDLux(){
   const parts = new Intl.DateTimeFormat('en-CA', {
