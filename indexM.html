@@ -13612,11 +13612,11 @@ body.monde-betaillere #homeFavSlot .home-fav-badge .fav-state-badge{
   </div>
   <div class="lb-sheet-grid">
     <div class="lb-sheet-main">
-      <section class="train-detail-card lb-sheet-compo"><div class="lb-sheet-heading"><div><span>COMPOSITION PRÉVUE</span><h4 id="trainDetailCompo">—</h4></div><b>● DONNÉE PRÉVUE</b></div><div class="lb-sheet-metrics"><span>Affluence maximale<strong id="trainDetailAffluence">—</strong></span></div><div id="trainDetailAffluenceDetails" class="train-detail-aff-details">—</div></section>
+      <section class="train-detail-card lb-sheet-compo"><div class="lb-sheet-heading"><div><span>COMPOSITION PRÉVUE</span><h4 id="trainDetailCompo">—</h4></div><b>● CONFIRMÉE</b></div><div id="trainDetailDrawing" class="lb-sheet-train-drawing" aria-label="Schéma de la composition"></div><div id="trainDetailCompoMeta" class="lb-sheet-compo-meta"></div><div class="lb-sheet-crowding"><span>Affluence prévue</span><b id="trainDetailCrowdingLabel">—</b><div><i id="trainDetailCrowdingBar"></i></div><strong id="trainDetailAffluence">—</strong></div><div id="trainDetailAffluenceDetails" class="train-detail-aff-details">—</div></section>
       <section class="train-detail-card lb-sheet-route"><div class="lb-sheet-heading"><div><span>PARCOURS</span><h4 id="trainDetailPath">—</h4></div><b>LIVE</b></div><div class="train-detail-route" id="trainDetailStops"></div></section>
     </div>
     <aside class="lb-sheet-side">
-      <section class="train-detail-card lb-sheet-reliability"><div class="lb-sheet-heading"><div><span>SUR 30 JOURS</span><h4>Fiabilité</h4></div></div><div class="lb-sheet-score"><strong id="trainDetailReliability">—</strong><span>À L’HEURE</span></div><div id="trainDetailReliabilityDetails">—</div></section>
+      <section class="train-detail-card lb-sheet-reliability"><div class="lb-sheet-heading"><div><span>SUR 30 JOURS</span><h4>FIABILITÉ</h4></div><b id="trainDetailTrend">—</b></div><div class="lb-sheet-reliability-body"><div class="lb-sheet-score"><div><strong id="trainDetailReliability">—</strong><span>À L’HEURE</span></div></div><div id="trainDetailReliabilityDetails" class="lb-sheet-rel-stats">—</div></div><div class="lb-sheet-last-runs"><span>30 DERNIÈRES CIRCULATIONS</span><div id="trainDetailLastRuns" aria-label="État des 30 dernières circulations"></div></div></section>
       <section class="train-detail-card lb-sheet-community"><span aria-hidden="true">🐮</span><div><b>LA VOIX DU BÉTAIL</b><p>Les signalements de la communauté restent accessibles depuis la page Communauté.</p></div></section>
       <div class="train-detail-actions"><a id="trainDetailStatsBtn" class="train-detail-btn" href="#stats">📊 Statistiques du train</a></div>
     </aside>
@@ -30667,7 +30667,8 @@ async function loadAffluenceDate(dateStr){
       return {
         pct: Math.round((onTime / total) * 100),
         onTime, delayed, canceled, partial,
-        avgDelay, maxDelay
+        avgDelay, maxDelay,
+        series: s.slice(-30)
       };
     }catch(_){ return null; }
   }
@@ -30815,6 +30816,10 @@ async function loadAffluenceDate(dateStr){
     const affDetailsEl = document.getElementById('trainDetailAffluenceDetails');
     if (!info){
       affEl.textContent = 'Non disponible';
+	  const crowdingBar = document.getElementById('trainDetailCrowdingBar');
+      const crowdingLabel = document.getElementById('trainDetailCrowdingLabel');
+      if (crowdingBar) crowdingBar.style.width = '0%';
+      if (crowdingLabel) crowdingLabel.textContent = 'NON DISPONIBLE';
       if (affDetailsEl) affDetailsEl.innerHTML = '<div class=\"train-detail-aff-empty\">Pas de détail d’affluence disponible pour ce train ce jour-là.</div>';
       destroyAffChart();
       return null;
@@ -30826,6 +30831,10 @@ async function loadAffluenceDate(dateStr){
         }, 0)
       : (Number.isFinite(Number(info.depPct)) ? Math.round(Number(info.depPct)) : null);
     affEl.textContent = Number.isFinite(maxPct) ? `${maxPct}%` : 'Non disponible';
+	const crowdingBar = document.getElementById('trainDetailCrowdingBar');
+    const crowdingLabel = document.getElementById('trainDetailCrowdingLabel');
+    if (crowdingBar) crowdingBar.style.width = Number.isFinite(maxPct) ? `${maxPct}%` : '0%';
+    if (crowdingLabel) crowdingLabel.textContent = !Number.isFinite(maxPct) ? 'NON DISPONIBLE' : maxPct >= 85 ? 'TRÈS FORTE' : maxPct >= 70 ? 'FORTE' : maxPct >= 50 ? 'MODÉRÉE' : 'FAIBLE';
     destroyAffChart();
     renderTrainDetailAffluenceDetails(info);
     return info;
@@ -30906,13 +30915,26 @@ async function loadAffluenceDate(dateStr){
     const rel = await getReliabilityData(trainNumber);
     if (rel){
       relEl.textContent = `${rel.pct}%`;
+	  document.querySelector('.lb-sheet-score')?.style.setProperty('--score', `${rel.pct * 3.6}deg`);
+      const trend = document.getElementById('trainDetailTrend');
+      if (trend) trend.textContent = `${rel.pct >= 80 ? '↑' : '↓'} ${Math.abs(rel.pct - 80)}%`;
       relDetailsEl.innerHTML = `
-        <div>✅ ${rel.onTime} à l'heure ⏰ ${rel.delayed} retard ❌ ${rel.canceled} supprimé 🟠 ${rel.partial} suppr. partielle</div>
-        <div style="margin-top:4px">Retard moyen : ${rel.avgDelay} min</div>
-        <div>Retard max : ${rel.maxDelay} min</div>`;
+        <div><span>Retard moyen</span><b>${rel.avgDelay} min</b></div>
+        <div><span>Retard maximum</span><b>${rel.maxDelay} min</b></div>
+        <div><span>Suppressions</span><b>${rel.canceled}</b></div>
+        <div><span>Suppr. partielles</span><b>${rel.partial}</b></div>`;
+      const lastRuns = document.getElementById('trainDetailLastRuns');
+      if (lastRuns) lastRuns.innerHTML = rel.series.map((run) => {
+        const bucket = String(run?.bucket || 'UNKNOWN');
+        const cls = bucket === 'ON_TIME' ? 'is-ok' : bucket === 'DELAYED' ? 'is-delay' : bucket === 'PARTIAL' ? 'is-partial' : bucket === 'CANCELED' ? 'is-cancel' : 'is-unknown';
+        const label = bucket === 'ON_TIME' ? 'À l’heure' : bucket === 'DELAYED' ? `Retard ${Number(run?.value)||0} min` : bucket === 'PARTIAL' ? 'Suppression partielle' : bucket === 'CANCELED' ? 'Supprimé' : 'Donnée inconnue';
+        return `<i class="${cls}" title="${esc(label)}"><span class="sr-only">${esc(label)}</span></i>`;
+      }).join('');
     } else {
       relEl.textContent = '—';
       relDetailsEl.textContent = 'Données indisponibles.';
+	  const lastRuns = document.getElementById('trainDetailLastRuns');
+      if (lastRuns) lastRuns.innerHTML = '<span class="lb-sheet-empty">Historique indisponible</span>';
     }
 
     const affInfo = await renderAffluenceBlock(trainNumber, selectedDate);
@@ -30927,6 +30949,14 @@ async function loadAffluenceDate(dateStr){
         compoEl.textContent = affInfo?.trainType || 'Inconnue';
       }
     }
+	const compoText = String(compoEl?.textContent || affInfo?.trainType || '').toUpperCase();
+    const unitCount = compoText.includes('UM3') ? 3 : compoText.includes('UM') ? 2 : 1;
+    const carsPerUnit = compoText.includes('Z26500') || compoText.includes('US5') ? 5 : 3;
+    const carCount = unitCount * carsPerUnit;
+    const drawing = document.getElementById('trainDetailDrawing');
+    if (drawing) drawing.innerHTML = Array.from({length:Math.min(carCount,10)}, (_, i) => `<i class="${i===0?'front ':''}${i===Math.min(carCount,10)-1?'rear':''}"><span></span><span></span><span></span></i>`).join('');
+    const meta = document.getElementById('trainDetailCompoMeta');
+    if (meta) meta.innerHTML = `<span><b>${unitCount > 1 ? `UM${unitCount}` : 'US'}</b> ${unitCount > 1 ? 'UNITÉ MULTIPLE' : 'UNITÉ SIMPLE'}</span><span><b>${carCount}</b> VOITURES</span><span><b>${carCount * 110}</b> PLACES ENV.</span>`;
 
     if (statsBtn){
       statsBtn.onclick = (e) => {
@@ -41805,5 +41835,11 @@ body.monde-betaillere #trainInfo td[data-terminal-arrival="1"]{
 })();
 </script>
 
+<style id="lb-train-sheet-polish">
+/* Finition de la fiche train : proportions et densité de la maquette de référence. */
+.lb-train-sheet{font-family:"Arial Narrow","Roboto Condensed",Arial,sans-serif;line-height:1.25}.lb-train-sheet .lb-sheet-top h3{font-size:1.1rem!important;letter-spacing:.06em}.lb-sheet-hero{min-height:224px}.lb-sheet-identity strong{font-size:clamp(3.25rem,7vw,5.7rem);font-weight:900;line-height:.86}.lb-sheet-identity em{margin-top:7px}.lb-sheet-journey strong{font-size:1.9rem;line-height:1}.lb-sheet-journey>div:last-child strong{color:#ff9f43}.lb-sheet-grid{grid-template-columns:minmax(0,1.85fr) minmax(300px,.9fr)}.lb-sheet-main{grid-template-columns:1fr}.lb-sheet-compo{min-height:297px}.lb-sheet-heading h4{font-size:1.22rem;letter-spacing:.025em}.lb-sheet-train-drawing{display:flex;align-items:end;width:100%;height:82px;padding:22px 2px 10px;border-bottom:1px solid rgba(40,229,212,.2);overflow:hidden}.lb-sheet-train-drawing>i{position:relative;display:flex;gap:4px;align-items:center;height:42px;min-width:34px;flex:1;border:2px solid #72c8d0;border-left:0;background:linear-gradient(#e9faf7 0 26%,#67b8c3 27% 36%,#effaf7 37% 71%,#0d3440 72%);box-shadow:inset 0 -5px #194955}.lb-sheet-train-drawing>i:first-child{border-left:2px solid #72c8d0}.lb-sheet-train-drawing>i.front{border-radius:22px 0 0 8px}.lb-sheet-train-drawing>i.rear{border-radius:0 22px 8px 0}.lb-sheet-train-drawing>i span{display:block;width:8px;height:13px;background:#083442}.lb-sheet-train-drawing>i span:first-child{margin-left:auto}.lb-sheet-train-drawing>i span:last-child{margin-right:auto}.lb-sheet-compo-meta{display:grid;grid-template-columns:repeat(3,1fr);padding:13px 0;border-bottom:1px solid rgba(40,229,212,.18)}.lb-sheet-compo-meta span{text-align:center;color:#84a4ad;font-size:.61rem;letter-spacing:.06em;border-right:1px solid rgba(40,229,212,.18)}.lb-sheet-compo-meta span:last-child{border:0}.lb-sheet-compo-meta b{display:block;color:#fff;font-size:.9rem;margin-bottom:2px}.lb-sheet-crowding{display:grid;grid-template-columns:145px 1fr auto;align-items:center;gap:10px;padding:14px 0}.lb-sheet-crowding>span{grid-column:1;color:#84a4ad;font-size:.68rem}.lb-sheet-crowding>b{grid-column:1;color:#ff5364;font-size:.72rem}.lb-sheet-crowding>div{grid-column:2;grid-row:1/3;height:7px;border-radius:8px;background:#18313a;overflow:hidden}.lb-sheet-crowding>div i{display:block;height:100%;background:linear-gradient(90deg,#ffb347,#ff5364);transition:width .35s}.lb-sheet-crowding>strong{grid-column:3;grid-row:1/3;color:#ff5364;font-size:.8rem}.lb-sheet-compo .train-detail-aff-details{max-height:255px;overflow:auto;border-top:1px solid rgba(40,229,212,.12);padding-top:10px}.lb-sheet-reliability{min-height:297px}.lb-sheet-reliability-body{display:grid;grid-template-columns:145px 1fr;align-items:center;gap:14px}.lb-sheet-score{--score:0deg;width:136px!important;margin:3px auto 12px!important;border:0!important;background:conic-gradient(#28e5d4 var(--score),#142a33 0);padding:10px}.lb-sheet-score>div{width:100%;height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;border-radius:50%;background:#0b1b24}.lb-sheet-score strong{font-size:1.8rem}.lb-sheet-rel-stats{display:grid!important;line-height:1.2!important}.lb-sheet-rel-stats>div{display:flex;justify-content:space-between;gap:8px;padding:8px 0;border-bottom:1px solid rgba(40,229,212,.16);font-size:.68rem}.lb-sheet-rel-stats span{color:#84a4ad}.lb-sheet-rel-stats b{color:#fff}.lb-sheet-last-runs{padding-top:15px;border-top:1px solid rgba(40,229,212,.18)}.lb-sheet-last-runs>span{color:#84a4ad;font-size:.61rem;letter-spacing:.1em}.lb-sheet-last-runs>div{display:flex;align-items:end;gap:3px;height:35px;margin-top:7px}.lb-sheet-last-runs i{display:block;flex:1;min-width:4px;max-width:8px;height:18px;border-radius:2px;background:#65757b}.lb-sheet-last-runs i.is-ok{background:#4ade80}.lb-sheet-last-runs i.is-delay{background:#ff9f43}.lb-sheet-last-runs i.is-partial{height:23px;background:#ff6b43}.lb-sheet-last-runs i.is-cancel{height:25px;background:#ff5364}.lb-sheet-heading #trainDetailTrend{padding:7px 9px;border-radius:4px;background:rgba(255,83,100,.1);color:#ff5364}.lb-sheet-route{min-height:260px}.lb-sheet-route .train-detail-stop .left{width:100%}.lb-sheet-route .train-detail-stop .time{font-size:.82rem}.lb-sheet-route .train-detail-stop .name{font-size:.82rem}.lb-sheet-empty{color:#84a4ad;font-size:.7rem}.sr-only{position:absolute!important;width:1px!important;height:1px!important;padding:0!important;margin:-1px!important;overflow:hidden!important;clip:rect(0,0,0,0)!important;white-space:nowrap!important;border:0!important}
+@media(max-width:800px){.lb-sheet-grid{grid-template-columns:1fr}.lb-sheet-hero{min-height:270px}.lb-sheet-reliability-body{grid-template-columns:135px 1fr}.lb-sheet-train-drawing>i:nth-child(n+7){display:none}.lb-sheet-crowding{grid-template-columns:120px 1fr auto}}
+@media(max-width:430px){.lb-train-sheet{padding:8px}.lb-sheet-identity strong{font-size:3.6rem}.lb-sheet-journey strong{font-size:1.45rem}.lb-sheet-reliability-body{grid-template-columns:1fr}.lb-sheet-rel-stats{grid-template-columns:1fr 1fr!important;gap:0 10px}.lb-sheet-search input{font-size:1rem}.lb-sheet-compo-meta span{font-size:.54rem}.lb-sheet-crowding{grid-template-columns:105px 1fr auto}}
+</style>
 </body>
 </html>
