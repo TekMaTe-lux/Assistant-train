@@ -45442,55 +45442,152 @@ body.monde-betaillere #trainInfo td[data-terminal-arrival="1"]{
   }
 
   async function loadReliability(number) {
-    const stats = window.__lbStats || {};
-    if (typeof stats.getLastDaysRange !== 'function'
-      || typeof stats.getRawRange !== 'function'
-      || typeof stats.computeTrainSeriesFromRawDays !== 'function') {
-      return null;
-    }
-    try {
-      const range = stats.getLastDaysRange(30);
-      const rawDays = await stats.getRawRange(range.from, range.to);
-      const result = stats.computeTrainSeriesFromRawDays(rawDays || [], range.from, range.to, number, null);
-      const series = Array.isArray(result?.series) ? result.series : [];
+    const buildReliability = (sourceSeries, range, observedDates = null) => {
+      const allowedBuckets = new Set(['ON_TIME', 'DELAYED', 'CANCELED', 'PARTIAL']);
+      const byDate = new Map();
+
+      (sourceSeries || []).forEach((item) => {
+        const date = String(item?.date || '');
+        if (!date || date < range.from || date > range.to) return;
+
+        const status = String(item?.status || '').trim().toUpperCase();
+        let bucket = String(item?.bucket || '').trim().toUpperCase();
+        const valueNumber = Number(item?.value);
+
+        if (!allowedBuckets.has(bucket)) {
+          if (status.includes('PARTIAL')) bucket = 'PARTIAL';
+          else if (status.includes('CANCELED') || status.includes('CANCELLED') || status.includes('SUPPR')) bucket = 'CANCELED';
+          else if (status.includes('DELAY') || (Number.isFinite(valueNumber) && valueNumber > 0)) bucket = 'DELAYED';
+          else bucket = 'ON_TIME';
+        }
+
+        byDate.set(date, {
+          ...item,
+          date,
+          bucket,
+          value: bucket === 'CANCELED'
+            ? null
+            : (Number.isFinite(valueNumber) ? valueNumber : 0)
+        });
+      });
+
+      const series = Array.from(byDate.values())
+        .sort((a, b) => String(a.date).localeCompare(String(b.date)));
       if (!series.length) return null;
-      const rawDates = new Set(
-        (rawDays || [])
-          .map((day) => String(day?.date || ''))
-          .filter(Boolean)
-      );
-      const runsByDate = new Map(series.map((item) => [String(item?.date || ''), item]));
+
+      const counts = { ON_TIME: 0, DELAYED: 0, CANCELED: 0, PARTIAL: 0 };
+      const delays = [];
+      series.forEach((item) => {
+        const bucket = String(item?.bucket || '');
+        if (bucket in counts) counts[bucket] += 1;
+        if (bucket === 'DELAYED' && Number.isFinite(Number(item?.value))) {
+          delays.push(Number(item.value));
+        }
+      });
+
+      const total = Object.values(counts).reduce((sum, value) => sum + value, 0);
+      if (!total) return null;
+
+      const runsByDate = new Map(series.map((item) => [String(item.date), item]));
       const calendarSeries = [];
       const start = new Date(`${range.from}T12:00:00Z`);
       const end = new Date(`${range.to}T12:00:00Z`);
       if (Number.isFinite(start.getTime()) && Number.isFinite(end.getTime())) {
         for (let cursor = start; cursor <= end; cursor = new Date(cursor.getTime() + 86400000)) {
           const date = cursor.toISOString().slice(0, 10);
-          const run = runsByDate.get(date);
-          calendarSeries.push(run || {
+          calendarSeries.push(runsByDate.get(date) || {
             date,
-            bucket: rawDates.has(date) ? 'NOT_RUNNING' : 'NO_DATA',
+            bucket: observedDates?.has(date) ? 'NOT_RUNNING' : 'NO_DATA',
             value: null
           });
         }
       }
-      const counts = { ON_TIME: 0, DELAYED: 0, CANCELED: 0, PARTIAL: 0 };
-      const delays = [];
-      series.forEach((item) => {
-        const bucket = String(item?.bucket || '');
-        if (bucket in counts) counts[bucket] += 1;
-        if (bucket === 'DELAYED' && Number.isFinite(Number(item?.value))) delays.push(Number(item.value));
-      });
-      const total = Object.values(counts).reduce((sum, value) => sum + value, 0);
-      if (!total) return null;
+
       return {
         series: calendarSeries.length ? calendarSeries : series,
         total,
         counts,
         pct: Math.round((counts.ON_TIME / total) * 100),
-        average: delays.length ? Math.round(delays.reduce((sum, value) => sum + value, 0) / delays.length) : 0,
+        average: delays.length
+          ? Math.round(delays.reduce((sum, value) => sum + value, 0) / delays.length)
+          : 0,
         maximum: delays.length ? Math.max(...delays) : 0
       };
+    };
+
+    const end = new Date(`${todayIso()}T12:00:00Z`);
+    end.setUTCDate(end.getUTCDate() - 1);
+    const start = new Date(end.getTime());
+    start.setUTCDate(start.getUTCDate() - 29);
+    const range = {
+      from: start.toISOString().slice(0, 10),
+      to: end.toISOString().slice(0, 10)
+    };
+
+    try {
+      const trainQuery = new URLSearchParams({
+        from: range.from,
+        to: range.to,
+        trainId: String(number)
+      });
+      const dailyQuery = new URLSearchParams({
+        from: range.from,
+        to: range.to
+      });
+      const fetchStatsJson = async (url) => {
+        const response = await fetch(url, {
+          cache: 'no-store',
+          credentials: 'include'
+        });
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}`);
+        }
+        return response.json();
+      };
+
+      const [trainResult, dailyResult] = await Promise.allSettled([
+        fetchStatsJson(`https://vps.labetaillere.fr/api/stats/gtfs/train?${trainQuery.toString()}`),
+        fetchStatsJson(`https://vps.labetaillere.fr/api/stats/beta/daily?${dailyQuery.toString()}`)
+      ]);
+
+      if (trainResult.status === 'fulfilled') {
+        const series = Array.isArray(trainResult.value?.series)
+          ? trainResult.value.series
+          : [];
+        const observedDates = dailyResult.status === 'fulfilled'
+          ? new Set((dailyResult.value?.series || []).map((day) => String(day?.date || '')).filter(Boolean))
+          : null;
+        const direct = buildReliability(series, range, observedDates);
+        if (direct) return direct;
+      } else {
+        console.warn('[Fiche Bétaillère] endpoint train indisponible', trainResult.reason);
+      }
+    } catch (error) {
+      console.warn('[Fiche Bétaillère] endpoint train indisponible', error);
+    }
+
+    // Compatibilité avec l'ancien module STATS : ce secours évite de perdre
+    // la fiabilité si l'endpoint dédié est momentanément indisponible.
+    try {
+      const stats = window.__lbStats || {};
+      if (typeof stats.getRawRange !== 'function'
+        || typeof stats.computeTrainSeriesFromRawDays !== 'function') {
+        return null;
+      }
+      const rawDays = await stats.getRawRange(range.from, range.to);
+      const result = stats.computeTrainSeriesFromRawDays(
+        rawDays || [],
+        range.from,
+        range.to,
+        String(number),
+        null
+      );
+      const observedDates = new Set(
+        (rawDays || [])
+          .map((day) => String(day?.date || ''))
+          .filter(Boolean)
+      );
+      return buildReliability(result?.series || [], range, observedDates);
     } catch (error) {
       console.warn('[Fiche Bétaillère] statistiques indisponibles', error);
       return null;
