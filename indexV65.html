@@ -21034,7 +21034,7 @@ if (!newStart) {
             const s = train.stop_times[i];
             const id = s.stop_point.id;
             const imp = impacted[id];
-            const departureDeleted = imp?.departure_status === 'deleted' || imp?.stop_time_effect === 'deleted';
+            const departureDeleted = imp?.departure_status === 'deleted' || imp?.stop_time_effect === 'deleted' || (!!imp && !imp.amended_departure_time && !!(imp.base_departure_time || s.departure_time));
             const hasDeparture = !!s.departure_time;
             if (hasDeparture && !departureDeleted) { newStart = id; break; }
           }
@@ -21045,8 +21045,8 @@ if (!newStart) {
             const s = train.stop_times[i];
             const id = s.stop_point.id;
             const imp = impacted[id];
-            const arrivalDeleted = imp?.arrival_status === 'deleted' || imp?.stop_time_effect === 'deleted';
-            const departureDeleted = imp?.departure_status === 'deleted' || imp?.stop_time_effect === 'deleted';
+            const arrivalDeleted = imp?.arrival_status === 'deleted' || imp?.stop_time_effect === 'deleted' || (!!imp && !imp.amended_arrival_time && !!(imp.base_arrival_time || s.arrival_time));
+            const departureDeleted = imp?.departure_status === 'deleted' || imp?.stop_time_effect === 'deleted' || (!!imp && !imp.amended_departure_time && !!(imp.base_departure_time || s.departure_time));
             const hasArrival = !!s.arrival_time;
             const hasDeparture = !!s.departure_time;
             const served = (hasArrival && !arrivalDeleted) || (hasDeparture && !departureDeleted) || (!imp && (hasArrival || hasDeparture));
@@ -21416,13 +21416,15 @@ const stopHasSchedule = (result, stopName) => {
           entry.departure_status === 'deleted' ||
           entry.arrival_status === 'deleted'
         );
-        const isArrivalReallyDeleted = (entry) => !!entry && (
+        const isArrivalReallyDeleted = (entry, scheduledStop = null) => !!entry && (
           entry.arrival_status === 'deleted' ||
-          (!entry.arrival_status && entry.stop_time_effect === 'deleted')
+          (!entry.arrival_status && entry.stop_time_effect === 'deleted') ||
+          (!entry.amended_arrival_time && !!(entry.base_arrival_time || scheduledStop?.arrival_time))
         );
-        const isDepartureReallyDeleted = (entry) => !!entry && (
+        const isDepartureReallyDeleted = (entry, scheduledStop = null) => !!entry && (
           entry.departure_status === 'deleted' ||
-          (!entry.departure_status && entry.stop_time_effect === 'deleted')
+          (!entry.departure_status && entry.stop_time_effect === 'deleted') ||
+          (!entry.amended_departure_time && !!(entry.base_departure_time || scheduledStop?.departure_time))
         );
         const stopAtIndex = index >= 0 ? result.train.stop_times[index] : null;
         const currentIsDeletedByImpact = hasStopDeletedStatus(imp);
@@ -21452,17 +21454,46 @@ const stopHasSchedule = (result, stopName) => {
         // et on utilise le style normal de nouvelle gare de départ/arrivée (.new-start), sans patch visuel additionnel.
         const hasDeletedArrivalAfterCurrent = index >= 0 && result.train.stop_times
           .slice(index + 1)
-          .some((s) => isArrivalReallyDeleted(result.impacted?.[s.stop_point?.id]));
+          .some((s) => isArrivalReallyDeleted(result.impacted?.[s.stop_point?.id], s));
         const hasServedArrivalAfterCurrent = index >= 0 && result.train.stop_times
           .slice(index + 1)
           .some((s) => {
             const nextImp = result.impacted?.[s.stop_point?.id];
-            if (nextImp) return !isArrivalReallyDeleted(nextImp) && !!(nextImp.amended_arrival_time || nextImp.base_arrival_time || s.arrival_time);
+            if (nextImp) return !isArrivalReallyDeleted(nextImp, s) && !!(nextImp.amended_arrival_time || nextImp.base_arrival_time || s.arrival_time);
             return !!s.arrival_time;
           });
+        const hasDeletedDepartureBeforeCurrent = index > 0 && result.train.stop_times
+          .slice(0, index)
+          .some((s) => isDepartureReallyDeleted(result.impacted?.[s.stop_point?.id], s));
+        const hasServedDepartureBeforeCurrent = index > 0 && result.train.stop_times
+          .slice(0, index)
+          .some((s) => {
+            const prevImp = result.impacted?.[s.stop_point?.id];
+            if (prevImp) return !isDepartureReallyDeleted(prevImp, s) && !!(prevImp.amended_departure_time || prevImp.base_departure_time || s.departure_time);
+            return !!s.departure_time;
+          });
+        const isDepartureKeptArrivalDeletedNewStart = !!imp
+          && !isDepartureReallyDeleted(imp, stop)
+          && isArrivalReallyDeleted(imp, stop)
+          && !!(imp.amended_departure_time || imp.base_departure_time || stop?.departure_time)
+          && index > 0
+          && hasDeletedDepartureBeforeCurrent
+          && !hasServedDepartureBeforeCurrent;
+
+        if (isDepartureKeptArrivalDeletedNewStart) {
+          const terminalDepartureRaw = imp.amended_departure_time || imp.base_departure_time || stop?.departure_time;
+          const terminalDepartureClock = ft(terminalDepartureRaw);
+          const terminalBaseAttr = terminalDepartureRaw ? ` data-base-time="${terminalDepartureRaw}" data-terminal-start="1"` : ' data-terminal-start="1"';
+          const terminalClassAttr = cellClasses.length
+            ? ` class="${cellClasses.join(' ')} terminal-start-cell"`
+            : ' class="terminal-start-cell"';
+          html += `<td${terminalClassAttr}${terminalBaseAttr}><span class="new-start terminal-start-time" style="color:#39a8ff !important;font-weight:900 !important;text-decoration:none !important;animation:none !important;opacity:1 !important;text-shadow:0 0 8px rgba(57,168,255,.72),0 0 14px rgba(57,168,255,.34) !important;background:transparent !important;border:0 !important;box-shadow:none !important;padding:0 !important;">${terminalDepartureClock}</span></td>`;
+          continue;
+        }
+
         const isArrivalKeptDepartureDeletedTerminal = !!imp
-          && !isArrivalReallyDeleted(imp)
-          && isDepartureReallyDeleted(imp)
+          && !isArrivalReallyDeleted(imp, stop)
+          && isDepartureReallyDeleted(imp, stop)
           && !!(imp.amended_arrival_time || imp.base_arrival_time || stop?.arrival_time)
           && index >= 0
           && index < lastIndex
@@ -40957,6 +40988,25 @@ body.monde-betaillere #trainInfo td.terminal-arrival-cell,
 body.monde-betaillere #trainInfo td[data-terminal-arrival="1"]{
   background:linear-gradient(180deg, rgba(57,168,255,.16), rgba(57,168,255,.045)) !important;
   box-shadow:inset 0 0 0 1px rgba(57,168,255,.35), inset 0 0 10px rgba(57,168,255,.16) !important;
+}
+
+/* Verrou final: en mode normal comme en mode Bétaillère, une cellule terminal-arrival reste bleu texte. */
+#trainInfo td[data-terminal-arrival="1"],
+#trainInfo td.terminal-arrival-cell{
+  color:#39a8ff !important;
+}
+#trainInfo td[data-terminal-arrival="1"] *,
+#trainInfo td.terminal-arrival-cell *,
+#trainInfo td[data-terminal-start="1"] *,
+#trainInfo td.terminal-start-cell *{
+  color:#39a8ff !important;
+  text-decoration:none !important;
+  text-shadow:0 0 8px rgba(57,168,255,.72), 0 0 14px rgba(57,168,255,.34) !important;
+}
+#trainInfo td[data-terminal-start="1"],
+#trainInfo td.terminal-start-cell{
+  color:#39a8ff !important;
+  background:transparent !important;
 }
 </style>
 </body>
