@@ -30619,14 +30619,6 @@ function selectAffTrain(num,stopIndex=0){
     const code = normalizeType(rawFromCompo) || normalizeType(fallbackType);
     if (!code) return '<span class="train-detail-compo-label">Composition inconnue</span>';
 
-    const icons = (()=>{
-      if (code === 'US') return ['US3.png'];
-      if (code === 'US5') return ['US5.png'];
-      if (code === 'UM') return ['US3.png','US3.png'];
-      if (code === 'UM3') return ['US3.png','US3.png','US3.png'];
-      if (code === 'UMMIXTE') return ['US5.png','US3.png'];
-      return [];
-    })();
     const label = (()=>{
       if (code === 'US') return 'US Z24500';
       if (code === 'US5') return 'US Z26500';
@@ -30635,8 +30627,7 @@ function selectAffTrain(num,stopIndex=0){
       if (code === 'UMMIXTE') return 'UM mixte Z26500 + Z24500';
       return code;
     })();
-    const imgs = icons.map((src)=> '<img class="lb-compo-icon' + (src === 'US5.png' ? ' lb-compo-icon--us5' : '') + '" src="' + safe(src) + '" alt="' + safe(label) + '" loading="eager" decoding="async" onerror="this.onerror=null;this.replaceWith(document.createTextNode(\'🚆\'));"></img>').join('');
-    return '<span class="train-detail-compo-wrap"><span class="lb-compo-inline" aria-label="' + safe(label) + '">' + imgs + '</span><span class="train-detail-compo-label is-' + safe(code.toLowerCase()) + '">' + safe(label) + '</span></span>';
+    return '<span class="train-detail-compo-wrap"><span class="train-detail-compo-label is-' + safe(code.toLowerCase()) + '">' + safe(label) + '</span></span>';
   };
 
   // ===== Favoris: extraction affluence depuis le JSON chargé (detail_YYYY-MM-DD.json) =====
@@ -31240,6 +31231,27 @@ async function loadAffluenceDate(dateStr){
 
   window.lbOpenTrainDetail = openInternalTrainPanel;
 
+  function closeCarteSourcePanel(sourceWindow){
+    try {
+      const frame = Array.from(document.querySelectorAll('#carte iframe')).find(
+        (candidate) => candidate.contentWindow === sourceWindow
+      );
+      if (!frame) return;
+      const frameDocument = frame.contentDocument || sourceWindow?.document;
+      if (!frameDocument) return;
+      const closeButton = frameDocument.getElementById('trip-panel-close');
+      if (closeButton) {
+        closeButton.click();
+        return;
+      }
+      frameDocument.getElementById('trip-panel')?.classList.add('hidden');
+      frameDocument.body?.classList.remove('trip-panel-open');
+    } catch (_) {
+      // La fiche unifiée reste ouvrable même si le contenu de l'iframe
+      // n'est momentanément pas accessible.
+    }
+  }
+
   window.addEventListener('message', (ev) => {
     const d = ev && ev.data;
     if (!d || d.type !== 'lb:open-train-detail') return;
@@ -31250,7 +31262,18 @@ async function loadAffluenceDate(dateStr){
       : (/^\d{8}$/.test(String(d.dateYmd || ''))
           ? `${String(d.dateYmd).slice(0,4)}-${String(d.dateYmd).slice(4,6)}-${String(d.dateYmd).slice(6,8)}`
           : (document.getElementById('trainDate')?.value || luxTodayYMD()));
-    openInternalTrainPanel(raw[0], dateIso);
+    // La carte doit ouvrir la même fiche unifiée que la recherche et les
+    // favoris. L'ancien renderer local n'affichait qu'un sous-ensemble des
+    // données (GTFS, affluence et statistiques).
+    const openProfile = typeof window.lbOpenTrainProfile === 'function'
+      ? window.lbOpenTrainProfile
+      : (typeof window.lbOpenTrainDetail === 'function'
+          ? window.lbOpenTrainDetail
+          : openInternalTrainPanel);
+    closeCarteSourcePanel(ev.source);
+    Promise.resolve(openProfile.call(window, raw[0], dateIso, { origin: 'map' })).catch((error) => {
+      console.error('[Carte] ouverture de la fiche train impossible', error);
+    });
   });
 
   document.addEventListener('click', (e) => {
@@ -37177,6 +37200,7 @@ body{ padding-bottom: calc(var(--bottom-bar-height, 58px) + 10px) !important; }
     panel.hidden = true;
     panel.setAttribute('aria-hidden', 'true');
     document.body.classList.remove('lb-train-detail-open');
+    document.body.classList.remove('lb-train-detail-from-map');
     try{ if (typeof destroyAffChart === 'function') destroyAffChart(); }catch(_){}
   }, true);
 
@@ -42189,6 +42213,7 @@ body.monde-betaillere #trainInfo td[data-terminal-arrival="1"]{
   const state = {
     trainNumber: '',
     dateIso: '',
+    origin: '',
     requestId: 0,
     lastBundle: null
   };
@@ -42580,7 +42605,9 @@ body.monde-betaillere #trainInfo td[data-terminal-arrival="1"]{
     byId('trainDetailCompoConfidence').textContent = 'ESTIMATION';
     byId('trainDetailCompoConfidence').classList.add('is-estimated');
     byId('trainDetailAffluence').textContent = '—';
+    byId('trainDetailAffluence').className = 'is-green';
     byId('trainDetailAffluenceLabel').textContent = '—';
+    byId('trainDetailAffluenceBar').className = 'is-green';
     byId('trainDetailAffluenceBar').style.width = '0%';
     byId('trainDetailAffluenceDetails').innerHTML = '<div class="train-detail-aff-empty">Chargement…</div>';
     byId('trainDetailReliability').textContent = '—';
@@ -43320,15 +43347,21 @@ body.monde-betaillere #trainInfo td[data-terminal-arrival="1"]{
     byId('trainDetailPlatform').textContent = firstPlatform || 'Voie non communiquée';
     byId('trainDetailLiveStatus').className = `lb-train-profile__status ${status.className}`;
     byId('trainDetailLiveStatus').innerHTML = `<i></i> ${safe(status.label)}`;
+    const liveActive = journeyPhase === 'running' && status.live;
     byId('trainDetailRouteMode').textContent = journeyPhase === 'after'
       ? 'ARRIVÉ'
-      : (status.live ? 'LIVE' : 'HORAIRES');
+      : (journeyPhase === 'before'
+          ? 'À VENIR'
+          : (liveActive ? 'LIVE' : 'HORAIRES'));
 
     const source = byId('trainDetailSourceState');
     if (journeyPhase === 'after' && status.className !== 'is-cancel') {
       source.className = 'lb-train-profile__source is-arrived';
       source.innerHTML = '<i></i> ARRIVÉ';
-    } else if (status.live) {
+    } else if (journeyPhase === 'before') {
+      source.className = 'lb-train-profile__source is-upcoming';
+      source.innerHTML = '<i></i> À VENIR';
+    } else if (liveActive) {
       source.className = 'lb-train-profile__source';
       source.innerHTML = '<i></i> LIVE SNCF / CFL';
     } else {
@@ -43355,6 +43388,7 @@ body.monde-betaillere #trainInfo td[data-terminal-arrival="1"]{
     }
     byId('trainDetailNext').textContent = nextLabel;
     renderDisruption(liveBundle, status);
+    return { status, journeyPhase, liveActive };
   }
 
   function renderRoute(number, dateIso, rows, liveBundle) {
@@ -43555,14 +43589,14 @@ body.monde-betaillere #trainInfo td[data-terminal-arrival="1"]{
       : 'Aucune composition exploitable communiquée pour cette circulation.';
   }
 
-  function affluenceLevel(percent) {
+  function affluenceBand(percent) {
     const value = Number(percent);
-    if (!Number.isFinite(value)) return 'NON DISPONIBLE';
-    if (value >= 95) return 'SATURATION';
-    if (value >= 85) return 'TRÈS FORTE';
-    if (value >= 70) return 'FORTE';
-    if (value >= 50) return 'MODÉRÉE';
-    return 'FAIBLE';
+    if (!Number.isFinite(value)) return { className: 'is-green', label: 'NON DISPONIBLE' };
+    if (value >= 100) return { className: 'is-black', label: 'SATURATION' };
+    if (value >= 80) return { className: 'is-red', label: 'TRÈS FORTE' };
+    if (value >= 60) return { className: 'is-orange', label: 'FORTE' };
+    if (value >= 40) return { className: 'is-yellow', label: 'MODÉRÉE' };
+    return { className: 'is-green', label: 'FAIBLE' };
   }
 
   function renderAffluence(info) {
@@ -43573,9 +43607,14 @@ body.monde-betaillere #trainInfo td[data-terminal-arrival="1"]{
     });
     const valid = values.filter(Number.isFinite);
     const max = valid.length ? Math.max(...valid) : null;
-    byId('trainDetailAffluence').textContent = Number.isFinite(max) ? `${max}%` : '—';
-    byId('trainDetailAffluenceLabel').textContent = affluenceLevel(max);
-    byId('trainDetailAffluenceBar').style.width = Number.isFinite(max) ? `${max}%` : '0%';
+    const band = affluenceBand(max);
+    const bar = byId('trainDetailAffluenceBar');
+    const percent = byId('trainDetailAffluence');
+    percent.textContent = Number.isFinite(max) ? `${max}%` : '—';
+    percent.className = band.className;
+    byId('trainDetailAffluenceLabel').textContent = band.label;
+    bar.className = band.className;
+    bar.style.width = Number.isFinite(max) ? `${max}%` : '0%';
     const host = byId('trainDetailAffluenceDetails');
     if (!stops.length) {
       host.innerHTML = '<div class="train-detail-aff-empty">Pas de détail d’affluence disponible pour ce train ce jour-là.</div>';
@@ -43742,6 +43781,7 @@ body.monde-betaillere #trainInfo td[data-terminal-arrival="1"]{
       byId('trainDetailPanel').hidden = true;
       byId('trainDetailPanel').setAttribute('aria-hidden', 'true');
       document.body.classList.remove('lb-train-detail-open');
+      document.body.classList.remove('lb-train-detail-from-map');
       location.hash = '#stats';
       window.setTimeout(() => {
         const details = byId('statsDetails');
@@ -43766,7 +43806,9 @@ body.monde-betaillere #trainInfo td[data-terminal-arrival="1"]{
 
     state.trainNumber = number;
     state.dateIso = dateIso;
+    state.origin = options.origin === 'map' ? 'map' : '';
     state.lastBundle = null;
+    document.body.classList.toggle('lb-train-detail-from-map', state.origin === 'map');
     const requestId = ++state.requestId;
     const forceFresh = !!options.forceFresh;
     rememberTrain(number);
@@ -43817,13 +43859,13 @@ body.monde-betaillere #trainInfo td[data-terminal-arrival="1"]{
         throw new Error(`Aucune circulation ${number} trouvée dans les horaires disponibles.`);
       }
 
-      renderHero(number, dateIso, rows, liveBundle);
+      const heroState = renderHero(number, dateIso, rows, liveBundle);
       renderRoute(number, dateIso, rows, liveBundle);
       renderComposition(number, affluence);
       renderAffluence(affluence);
       renderReliability(reliability);
       state.lastBundle = { number, dateIso, rows, liveBundle, reliability, affluence };
-      setupProfileActions(number, dateIso, !!liveBundle);
+      setupProfileActions(number, dateIso, !!heroState?.liveActive);
       refreshFavoriteButton();
       void ensureProfileTitle(number);
       byId('trainDetailPanel').setAttribute('aria-busy', 'false');
@@ -43868,7 +43910,10 @@ body.monde-betaillere #trainInfo td[data-terminal-arrival="1"]{
       if (!state.trainNumber) return;
       const button = event.currentTarget;
       button.classList.add('is-spinning');
-      openTrainProfile(state.trainNumber, state.dateIso, { forceFresh: true })
+      openTrainProfile(state.trainNumber, state.dateIso, {
+        forceFresh: true,
+        origin: state.origin
+      })
         .finally(() => window.setTimeout(() => button.classList.remove('is-spinning'), 250));
     });
     if (document.body) {
@@ -43886,6 +43931,7 @@ body.monde-betaillere #trainInfo td[data-terminal-arrival="1"]{
       panel.hidden = true;
       panel.setAttribute('aria-hidden', 'true');
       document.body.classList.remove('lb-train-detail-open');
+      document.body.classList.remove('lb-train-detail-from-map');
     });
   }
 
@@ -44202,6 +44248,7 @@ body.page-stats #trainDetailPanel.lb-train-profile{
   letter-spacing:.1em;
 }
 .lb-train-profile__source.is-loading{ color:#ffd166; }
+.lb-train-profile__source.is-upcoming{ color:#7cf7ff; }
 .lb-train-profile__source.is-static{ color:#94b8c4; }
 .lb-train-profile__source.is-error{ color:#ff778d; }
 .lb-train-profile__source.is-arrived{ color:#4ade80; }
@@ -44619,14 +44666,44 @@ body.page-stats #trainDetailPanel.lb-train-profile{
   width:0;
   height:100%;
   border-radius:inherit;
-  background:linear-gradient(90deg,#43df89,#ffd166,#ff8a1a,#ff5364);
+  background:#43df89;
   box-shadow:0 0 8px currentColor;
   transition:width .28s ease;
 }
+.lb-train-profile__crowding-bar i.is-green{
+  color:#43df89;
+  background:#43df89;
+}
+.lb-train-profile__crowding-bar i.is-yellow{
+  color:#ffd166;
+  background:#ffd166;
+}
+.lb-train-profile__crowding-bar i.is-orange{
+  color:#ff8a1a;
+  background:#ff8a1a;
+}
+.lb-train-profile__crowding-bar i.is-red{
+  color:#ff5364;
+  background:#ff5364;
+}
+.lb-train-profile__crowding-bar i.is-black{
+  color:#000;
+  background:#000;
+  box-shadow:0 0 0 1px rgba(255,255,255,.34),0 0 8px rgba(0,0,0,.9);
+}
 .lb-train-profile__crowding > b{
-  color:#ffb75e;
+  color:#43df89;
   font-size:.72rem;
   text-align:right;
+}
+.lb-train-profile__crowding > b.is-green{ color:#43df89; }
+.lb-train-profile__crowding > b.is-yellow{ color:#ffd166; }
+.lb-train-profile__crowding > b.is-orange{ color:#ff8a1a; }
+.lb-train-profile__crowding > b.is-red{ color:#ff5364; }
+.lb-train-profile__crowding > b.is-black{
+  color:#000;
+  -webkit-text-stroke:.3px rgba(255,255,255,.62);
+  text-shadow:0 0 2px rgba(255,255,255,.5);
 }
 .lb-train-profile__timeline{
   display:grid;
@@ -44954,6 +45031,22 @@ body.page-stats #trainDetailPanel.lb-train-profile{
 }
 .lb-train-profile__message:empty{ display:none; }
 .lb-train-profile__message.is-error{ color:#ff778d; }
+
+/* Ouverture depuis la carte : la fiche passe au-dessus du voile sans flou.
+   Le tiroir reste à droite et ses cartes s'empilent pour ne jamais se chevaucher. */
+body.page-carte.lb-train-detail-from-map #trainDetailPanel.lb-train-profile{
+  z-index:4900 !important;
+}
+body.page-carte.lb-train-detail-from-map::after{
+  background:rgba(2,8,14,.38);
+  -webkit-backdrop-filter:none;
+  backdrop-filter:none;
+}
+@media (min-width:761px){
+  body.page-carte.lb-train-detail-from-map #trainDetailPanel.lb-train-profile .lb-train-profile__grid{
+    grid-template-columns:minmax(0,1fr);
+  }
+}
 
 @media (max-width:760px){
   .lb-train-finder{ padding:13px; border-radius:16px; }
