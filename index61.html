@@ -13900,28 +13900,39 @@ async function loadVoiesByTrain({ forceFresh = false, onlyIfChanged = false } = 
 
   voiesByTrainPromise = (async () => {
     try {
-      const baseUrl = LB_ENDPOINTS.voiesByTrain;
-      const url = baseUrl + (forceFresh ? `?t=${Date.now()}` : '');
+      let text = null;
+      let loadedFrom = null;
 
-      // On récupère le body en texte pour pouvoir comparer sans parser si identique
-      const res = await fetch(url, {
-        cache: forceFresh ? 'no-store' : 'default',
-        headers: (window.__voiesEtag && onlyIfChanged && !forceFresh) ? { 'If-None-Match': window.__voiesEtag } : {}
-      });
+      for (const baseUrl of VOIES_BY_TRAIN_CANDIDATES){
+        if (!baseUrl) continue;
+        const url = baseUrl + (forceFresh ? `?t=${Date.now()}` : '');
+        try {
+          const res = await fetch(url, {
+            cache: forceFresh ? 'no-store' : 'default',
+            headers: (window.__voiesEtag && onlyIfChanged && !forceFresh && baseUrl === VOIES_BY_TRAIN_CANDIDATES[0])
+              ? { 'If-None-Match': window.__voiesEtag }
+              : {}
+          });
 
-      // 304 -> rien n'a changé
-      if (res.status === 304) {
-        window.__voiesLastChanged = false;
-        // garde la Map existante
-        return (window.voiesByTrainMap instanceof Map) ? window.voiesByTrainMap : new Map();
+          if (res.status === 304 && baseUrl === VOIES_BY_TRAIN_CANDIDATES[0]) {
+            window.__voiesLastChanged = false;
+            return (window.voiesByTrainMap instanceof Map) ? window.voiesByTrainMap : new Map();
+          }
+
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+
+          const etag = res.headers.get('etag');
+          if (etag && baseUrl === VOIES_BY_TRAIN_CANDIDATES[0]) window.__voiesEtag = etag;
+
+          text = await res.text();
+          loadedFrom = baseUrl;
+          break;
+        } catch (candidateErr){
+          console.warn('[Voies] Source indisponible', baseUrl, candidateErr?.message || candidateErr);
+        }
       }
 
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-
-      const etag = res.headers.get('etag');
-      if (etag) window.__voiesEtag = etag;
-
-      const text = await res.text();
+      if (text == null) throw new Error('Aucune source voies_by_train disponible');
       // Signature légère (djb2) pour éviter de reparser si identique
       let sig = 5381;
       for (let i = 0; i < text.length; i++) {
@@ -13939,6 +13950,7 @@ async function loadVoiesByTrain({ forceFresh = false, onlyIfChanged = false } = 
       window.__voiesSig = sig;
       const json = JSON.parse(text);
       window.voiesByTrainMap = normalizeVoiesPayload(json);
+      window.__voiesSource = loadedFrom;
       window.__voiesLastChanged = true;
       try {
         const serial = Array.from(window.voiesByTrainMap.entries()).map(([k,m]) => [k, Array.from(m.entries())]);
@@ -14007,18 +14019,30 @@ function normalizeCflVoiesPayload(data){
   return out;
 }
 
-async function loadCflVoiesByTrain({ forceFresh = false } = {}){
+async function loadCflVoiesByTrain({ forceFresh = false, onlyIfChanged = false } = {}){
   if (forceFresh) cflVoiesByTrainPromise = null;
   if (cflVoiesByTrainPromise) return cflVoiesByTrainPromise;
 
   cflVoiesByTrainPromise = (async () => {
     try {
-      const url = LB_ENDPOINTS.retardsCfl + (forceFresh ? `?t=${Date.now()}` : '');
-      const res = await fetch(url, { cache: 'no-store' });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const json = await res.json();
-      window.cflVoiesByTrainMap = normalizeCflVoiesPayload(json);
-      return window.cflVoiesByTrainMap;
+      let lastErr = null;
+      for (const candidate of HAFAS_PROXY_CANDIDATES){
+        if (!candidate) continue;
+        const url = candidate + (forceFresh ? `?t=${Date.now()}` : '');
+        try {
+          const res = await fetch(url, { cache: forceFresh ? 'no-store' : 'default' });
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          const json = await res.json();
+          window.cflVoiesByTrainMap = normalizeCflVoiesPayload(json);
+          window.__cflVoiesSource = candidate;
+          return window.cflVoiesByTrainMap;
+        } catch (errCandidate){
+          lastErr = errCandidate;
+          console.warn('[CFL][Voies] Source indisponible', candidate, errCandidate?.message || errCandidate);
+        }
+      }
+      if (lastErr) throw lastErr;
+      throw new Error('Aucune source retards_cfl disponible');
     } catch (err) {
       console.warn('[CFL][Voies] Chargement échoué', err?.message || err);
 	  if (window.cflVoiesByTrainMap instanceof Map && window.cflVoiesByTrainMap.size) return window.cflVoiesByTrainMap;
@@ -15453,7 +15477,16 @@ const HAFAS_PROXY_SAME_ORIGIN = (()=>{
 
 const HAFAS_PROXY_CANDIDATES = [
   LB_ENDPOINTS.retardsCfl,
-  HAFAS_PROXY_SAME_ORIGIN
+  HAFAS_PROXY_SAME_ORIGIN,
+  'https://raw.githubusercontent.com/TekMaTe-lux/Assistant-train/main/Assistant-train/retards_cfl.json',
+  'https://cdn.jsdelivr.net/gh/TekMaTe-lux/Assistant-train@main/Assistant-train/retards_cfl.json'
+];
+
+const VOIES_BY_TRAIN_CANDIDATES = [
+  LB_ENDPOINTS.voiesByTrain,
+  location.origin + location.pathname.replace(/\/[^\/]*$/, '/') + 'voies_by_train.json',
+  'https://raw.githubusercontent.com/TekMaTe-lux/Assistant-train/main/Assistant-train/voies_by_train.json',
+  'https://cdn.jsdelivr.net/gh/TekMaTe-lux/Assistant-train@main/Assistant-train/voies_by_train.json'
 ];
 
 const HAFAS_PROXY_TTL_MS = 110000;
@@ -15506,11 +15539,18 @@ function parseHafasProxyDelayValue(raw){
     return { cancellation, minutes:null, hasMinutes:false };
   }
   if (Array.isArray(raw)){
-    if (!raw.length) return { cancellation:false, minutes:null, hasMinutes:false };
-    if (raw.length === 1) return parseHafasProxyDelayValue(raw[0]);
     let cancellation = false;
     let minutes = null;
     let hasMinutes = false;
+    if (raw.length === 2 && typeof raw[0] === 'string'){
+      const nested = parseHafasProxyDelayValue(raw[1]);
+      const cancellationHint = /cancel|suppr|delete|annul/i.test(raw[0]);
+      return {
+        cancellation: nested.cancellation || cancellationHint,
+        minutes: nested.minutes,
+        hasMinutes: nested.hasMinutes
+      };
+    }
     for (const item of raw){
       const nested = parseHafasProxyDelayValue(item);
       if (nested.cancellation) cancellation = true;
@@ -15549,7 +15589,7 @@ function appendHafasProxyStationEntry(map, stationName, rawValue){
   if (!norm) return;
   const { cancellation, minutes, hasMinutes } = parseHafasProxyDelayValue(rawValue);
   if (cancellation){
-    map.set(norm, { original: stationName, value: null });
+    map.set(norm, { original: stationName, value: null, source: 'HAFAS', sourceKey: 'hafas' });
     return;
   }
   if (!hasMinutes) return;
@@ -15560,7 +15600,7 @@ function appendHafasProxyStationEntry(map, stationName, rawValue){
     const existingVal = Number(existing.value);
     if (Number.isFinite(existingVal) && Math.abs(existingVal) >= Math.abs(value)) return;
   }
-  map.set(norm, { original: stationName, value });
+  map.set(norm, { original: stationName, value, source: 'HAFAS', sourceKey: 'hafas' });
 }
 
 function buildHafasProxyStationMap(raw){
@@ -15614,28 +15654,15 @@ function parseHafasProxyData(data){
     }
   }
   if (container){
-    Object.entries(container).forEach(([trainKey, raw]) => {
-      if (!trainKey) return;
+    for (const [trainKey, raw] of Object.entries(container)){
+      if (!trainKey) continue;
       const stationMap = buildHafasProxyStationMap(raw);
-      if (!stationMap.size) return;
-      const variants = new Set([
-        normalizeTrainNumberKey(trainKey),
-        normalizeTrainNumberKey(trainKey.replace(/\s+/g, '')),
-        normalizeTrainNumberKey(trainKey.replace(/[^0-9]/g, '')),
-        normalizeTrainNumberKey(extractTrainNumberCandidate(trainKey))
-      ]);
-      if (raw && typeof raw === 'object'){
-        ['train_number','trainNumber','number','id','trip_id','tripId','name'].forEach(key => {
-          if (raw[key] != null) variants.add(normalizeTrainNumberKey(raw[key]));
-        });
-      }
-      variants.forEach(variant => {
-        if (!variant) return;
-        if (!perTrain.has(variant)){
-          perTrain.set(variant, stationMap);
-        }
-      });
-    });
+      if (!stationMap.size) continue;
+      const candidate = extractTrainNumberCandidate(trainKey);
+      const rawKey = candidate != null ? String(candidate) : String(trainKey);
+      const normalizedKey = normalizeTrainNumberKey(rawKey) || rawKey;
+      perTrain.set(normalizedKey, stationMap);
+    }
   }
   const updatedAt = parseHafasProxyTimestamp(
     data.updatedAt || data.updated_at || data.generatedAt || data.generated_at || data.lastUpdated || data.timestamp
@@ -19726,10 +19753,7 @@ const GTFS_RT_DATASETS = [
     id: 'cfl-hafas',
     label: 'GTFS-RT CFL / HAFAS',
     filename: 'retards_cfl.json',
-    sources: [
-      LB_ENDPOINTS.retardsCfl,
-      SAME_ORIGIN_JSON
-    ]
+    sources: HAFAS_PROXY_CANDIDATES.slice()
   }
 ];
     const appendGtfsCacheBuster = (url, forceFresh) =>
