@@ -707,6 +707,29 @@ body {
 .traffic-pill--orange{ background:rgba(255,138,26,.14); border-color:rgba(255,138,26,.45); color:#ffba74; }
 .traffic-pill--red{ background:rgba(255,49,49,.14); border-color:rgba(255,49,49,.45); color:#ff8d8d; }
 .traffic-pill--loading{ background:rgba(0,240,255,.12); border-color:rgba(0,240,255,.35); color:#8ff9ff; }
+.comment-wall{ display:grid; gap:10px; }
+.comment-wall__header{ display:flex; align-items:flex-start; justify-content:space-between; gap:10px; }
+.comment-wall__eyebrow{ color:#9dd8e2; font-size:.78rem; text-transform:uppercase; letter-spacing:.08em; }
+.comment-wall__status{ display:inline-flex; align-items:center; gap:6px; padding:5px 10px; border-radius:999px; border:1px solid rgba(0,240,255,.25); background:rgba(0,0,0,.18); color:#d7fbff; font-size:.72rem; font-weight:800; }
+.comment-wall__status::before{ content:""; width:8px; height:8px; border-radius:50%; background:#00f0ff; box-shadow:0 0 8px rgba(0,240,255,.55); }
+.comment-wall__intro{ margin:0; color:#d2ebff; font-size:.86rem; line-height:1.45; }
+.comment-wall__composer{ display:grid; gap:8px; }
+.comment-wall__pseudo{ font-size:.78rem; color:#7ef7ff; font-weight:700; }
+.comment-wall__textarea{ width:100%; min-height:88px; resize:vertical; border-radius:14px; border:1px solid rgba(0,240,255,.24); background:rgba(2,18,33,.78); color:#ebfbff; padding:12px 14px; font:inherit; box-shadow: inset 0 0 14px rgba(0,240,255,.08); }
+.comment-wall__textarea:focus{ outline:none; border-color:rgba(0,240,255,.52); box-shadow: inset 0 0 16px rgba(0,240,255,.12), 0 0 0 3px rgba(0,240,255,.12); }
+.comment-wall__textarea:disabled{ opacity:.68; cursor:not-allowed; }
+.comment-wall__composer-actions{ display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; }
+.comment-wall__hint{ color:#9fd9df; font-size:.75rem; }
+.comment-wall__list{ display:grid; gap:8px; max-height:340px; overflow-y:auto; padding-right:4px; }
+.comment-wall__list::-webkit-scrollbar{ width:8px; }
+.comment-wall__list::-webkit-scrollbar-thumb{ background:rgba(0,240,255,.28); border-radius:999px; }
+.comment-wall__item{ padding:11px 12px; border-radius:14px; border:1px solid rgba(0,240,255,.18); background:rgba(0,0,0,.2); box-shadow: inset 0 0 10px rgba(0,240,255,.06); }
+.comment-wall__meta{ display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:6px; }
+.comment-wall__author{ color:#7ef7ff; font-weight:800; font-size:.84rem; }
+.comment-wall__time{ color:#8eb8c7; font-size:.72rem; white-space:nowrap; }
+.comment-wall__body{ margin:0; color:#ecfbff; white-space:pre-wrap; word-break:break-word; line-height:1.45; font-size:.86rem; }
+.comment-wall__empty{ margin:0; padding:14px 12px; border-radius:14px; border:1px dashed rgba(0,240,255,.22); background:rgba(0,0,0,.14); color:#b8d9e5; font-size:.82rem; text-align:center; }
+.comment-wall__locked{ color:#ffcf8c; }
 .quick-links{
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
@@ -8126,6 +8149,31 @@ html, body{
           <span class="traffic-split-line" id="homeTrafficLineSouth">Nancy - Metz</span>
           <span class="traffic-pill traffic-pill--loading" id="homeTrafficBadgeSouth">Chargement…</span>
         </div>
+      </div>
+    </article>
+
+    <article class="home-card" aria-label="Mur de commentaires de la ligne">
+      <div class="comment-wall">
+        <div class="comment-wall__header">
+          <div>
+            <h2>Mur de la ligne</h2>
+            <div class="comment-wall__eyebrow">Infos partagées entre voyageurs</div>
+          </div>
+          <div class="comment-wall__status" id="homeCommentStatus">Lecture seule</div>
+        </div>
+
+        <p class="comment-wall__intro">Partagez vos infos trafic, contrôles, compositions ou galères du moment. Les 4 derniers messages restent visibles ici, avec scroll pour relire les anciens.</p>
+
+        <div class="comment-wall__composer">
+          <div class="comment-wall__pseudo" id="homeCommentPseudo">Pseudo : —</div>
+          <textarea id="homeCommentInput" class="comment-wall__textarea" maxlength="280" placeholder="Ex : 88532 supprimé à Metz, report sur le train suivant…" aria-label="Écrire un commentaire"></textarea>
+          <div class="comment-wall__composer-actions">
+            <div class="comment-wall__hint" id="homeCommentHint">Connecte-toi pour publier un message.</div>
+            <button class="home-action" id="homeCommentSubmit" type="button">Publier</button>
+          </div>
+        </div>
+
+        <div id="homeCommentList" class="comment-wall__list" aria-live="polite"></div>
       </div>
     </article>
 
@@ -19208,6 +19256,7 @@ function scheduleWeatherAfterTableSettled(){
 
     // Rafraîchir le widget favoris
     try { if (typeof window.updateFavoriteWidgetFromPrefs === "function") window.updateFavoriteWidgetFromPrefs(); } catch(e) {}
+    try { renderCommentWall(); } catch(e) {}
 
     if (!options.auto) return;
   };
@@ -20390,6 +20439,175 @@ if (statsEl){
     }
   });
 
+
+  const LB_COMMENT_STORAGE_KEY = "lb_home_comments_v1";
+  const LB_COMMENT_MAX_LENGTH = 280;
+  const LB_COMMENT_VISIBLE_COUNT = 4;
+
+  const getCommentWallElements = () => ({
+    status: $("homeCommentStatus"),
+    pseudo: $("homeCommentPseudo"),
+    input: $("homeCommentInput"),
+    hint: $("homeCommentHint"),
+    submit: $("homeCommentSubmit"),
+    list: $("homeCommentList")
+  });
+
+  const formatCommentTime = (value) => {
+    const date = value ? new Date(value) : null;
+    if (!date || Number.isNaN(date.getTime())) return "À l’instant";
+    try {
+      return new Intl.DateTimeFormat('fr-FR', { dateStyle: 'short', timeStyle: 'short' }).format(date);
+    } catch(_e) {
+      return date.toLocaleString('fr-FR');
+    }
+  };
+
+  const normalizeCommentEntry = (entry = {}) => {
+    const pseudo = String(entry.pseudo || '').trim().slice(0, 24);
+    const message = String(entry.message || '').trim().slice(0, LB_COMMENT_MAX_LENGTH);
+    const createdAt = entry.createdAt || new Date().toISOString();
+    return pseudo && message ? { pseudo, message, createdAt } : null;
+  };
+
+  const defaultCommentWallAdapter = {
+    async list() {
+      try {
+        const raw = localStorage.getItem(LB_COMMENT_STORAGE_KEY);
+        if (!raw) return [];
+        const parsed = JSON.parse(raw);
+        if (!Array.isArray(parsed)) return [];
+        return parsed.map(normalizeCommentEntry).filter(Boolean);
+      } catch(_e) {
+        return [];
+      }
+    },
+    async add(entry) {
+      const nextEntry = normalizeCommentEntry(entry);
+      if (!nextEntry) throw new Error('Commentaire invalide.');
+      const current = await this.list();
+      current.push(nextEntry);
+      const trimmed = current.slice(-100);
+      localStorage.setItem(LB_COMMENT_STORAGE_KEY, JSON.stringify(trimmed));
+      return nextEntry;
+    }
+  };
+
+  window.lbCommentWallAdapter = window.lbCommentWallAdapter || defaultCommentWallAdapter;
+
+  const getCommentAuthorPseudo = () => {
+    const fromPrefs = String(window.lbPrefsCache?.pseudo || '').trim();
+    if (fromPrefs) return fromPrefs.slice(0, 24);
+    const fromInput = String($("lbPseudo")?.value || '').trim();
+    return fromInput ? fromInput.slice(0, 24) : '';
+  };
+
+  const renderCommentWall = async () => {
+    const els = getCommentWallElements();
+    if (!els.list) return;
+
+    const isAuthed = !!window.lbIsAuthed;
+    const pseudo = getCommentAuthorPseudo();
+    const canPost = isAuthed && !!pseudo;
+    const adapter = window.lbCommentWallAdapter || defaultCommentWallAdapter;
+
+    if (els.status) els.status.textContent = canPost ? 'Connecté · publication active' : 'Lecture seule';
+    if (els.pseudo) els.pseudo.textContent = pseudo ? `Pseudo : ${pseudo}` : 'Pseudo : à définir dans Mes préférences';
+    if (els.input) {
+      els.input.disabled = !canPost;
+      if (!canPost) {
+        els.input.value = '';
+        els.input.placeholder = isAuthed
+          ? 'Ajoute un pseudo dans Mes préférences pour publier.'
+          : 'Les visiteurs peuvent lire les messages, mais pas écrire.';
+      } else {
+        els.input.placeholder = 'Ex : 88532 supprimé à Metz, report sur le train suivant…';
+      }
+    }
+    if (els.submit) els.submit.disabled = !canPost;
+    if (els.hint) {
+      els.hint.textContent = canPost
+        ? `Message signé ${pseudo} · ${LB_COMMENT_MAX_LENGTH} caractères max.`
+        : (isAuthed ? 'Ajoute un pseudo dans Mes préférences pour débloquer la publication.' : 'Connecte-toi pour publier un message.');
+      els.hint.classList.toggle('comment-wall__locked', !canPost);
+    }
+
+    let comments = [];
+    try {
+      comments = await adapter.list();
+    } catch(_e) {
+      comments = [];
+    }
+
+    const ordered = comments
+      .slice()
+      .filter(Boolean)
+      .sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
+
+    els.list.innerHTML = '';
+    if (!ordered.length) {
+      const empty = document.createElement('p');
+      empty.className = 'comment-wall__empty';
+      empty.textContent = 'Pas encore de message sur la ligne. Soyez la première vache à signaler une info utile.';
+      els.list.appendChild(empty);
+      return;
+    }
+
+    ordered.forEach((comment, index) => {
+      const item = document.createElement('article');
+      item.className = 'comment-wall__item';
+      if (index >= LB_COMMENT_VISIBLE_COUNT) item.setAttribute('data-comment-older', '1');
+
+      const meta = document.createElement('div');
+      meta.className = 'comment-wall__meta';
+
+      const author = document.createElement('div');
+      author.className = 'comment-wall__author';
+      author.textContent = comment.pseudo;
+
+      const time = document.createElement('div');
+      time.className = 'comment-wall__time';
+      time.textContent = formatCommentTime(comment.createdAt);
+
+      const body = document.createElement('p');
+      body.className = 'comment-wall__body';
+      body.textContent = comment.message;
+
+      meta.append(author, time);
+      item.append(meta, body);
+      els.list.appendChild(item);
+    });
+  };
+
+  const submitCommentWallMessage = async () => {
+    const els = getCommentWallElements();
+    if (!els.input) return;
+    if (!window.lbIsAuthed) return renderCommentWall();
+
+    const pseudo = getCommentAuthorPseudo();
+    const message = String(els.input.value || '').trim();
+    if (!pseudo) {
+      if (els.hint) els.hint.textContent = 'Ajoute un pseudo dans Mes préférences avant de publier.';
+      return renderCommentWall();
+    }
+    if (!message) {
+      if (els.hint) els.hint.textContent = 'Écris un message avant de publier.';
+      return;
+    }
+
+    const adapter = window.lbCommentWallAdapter || defaultCommentWallAdapter;
+    if (els.submit) els.submit.disabled = true;
+    try {
+      await adapter.add({ pseudo, message, createdAt: new Date().toISOString() });
+      els.input.value = '';
+      await renderCommentWall();
+    } catch (err) {
+      if (els.hint) els.hint.textContent = `Impossible d’enregistrer le message : ${err?.message || err}`;
+    } finally {
+      if (els.submit) els.submit.disabled = false;
+    }
+  };
+
   let lbIsAuthed = false;
   window.lbIsAuthed = false;
   const refreshAccountUI = async () => {
@@ -20423,6 +20641,7 @@ if (statsEl){
       if (deleteLinkWrap) deleteLinkWrap.style.display = "block";
       msg(`✅ Connecté : ${me?.user?.email || "utilisateur"}`);
       await loadPreferences();
+      await renderCommentWall();
       try { if (typeof window.updateFavoriteWidgetFromPrefs === "function") await window.updateFavoriteWidgetFromPrefs(); } catch(e) {}
     } catch {
       openBtn.textContent = "Se connecter";
@@ -20465,6 +20684,7 @@ if (statsEl){
         window.updateStatsConsoleAuth(false);
       }
       msg("ℹ️ Non connecté");
+      await renderCommentWall();
     }
     updateQuickAddButton();
     updateSelectionApplyButton();
@@ -20496,6 +20716,22 @@ if (statsEl){
   const switchBtn = $("lbAuthSwitchBtn");
 
   if (!openBtn || !closeBtn || !modal || !submitBtn || !logoutBtn) return;
+
+  const commentSubmitBtn = $("homeCommentSubmit");
+  const commentInput = $("homeCommentInput");
+  if (commentSubmitBtn) commentSubmitBtn.addEventListener("click", submitCommentWallMessage);
+  if (commentInput) {
+    commentInput.addEventListener("keydown", (event) => {
+      if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
+        event.preventDefault();
+        submitCommentWallMessage();
+      }
+    });
+  }
+  window.addEventListener("storage", (event) => {
+    if (event.key === LB_COMMENT_STORAGE_KEY) renderCommentWall().catch(() => {});
+  });
+  renderCommentWall().catch(() => {});
 
   openBtn.addEventListener("click", openModal);
   closeBtn.addEventListener("click", closeModal);
