@@ -13073,7 +13073,7 @@ body.monde-betaillere #homeFavSlot .home-fav-badge .fav-state-badge{
       </div>
     </article>
 
-    <article class="home-card home-punct-card" aria-label="Ponctualité sur 7 jours">
+    <article class="home-card home-punct-card" aria-label="Ponctualité à J-30 et J-1">
       <h2 id="homePunctCardTitle">Ponctualité</h2>
       <div id="homePunctualityChartHost" class="home-punct-chart-host"></div>
     </article>
@@ -35394,14 +35394,15 @@ async function loadAffluenceDate(dateStr){
 }
 .home-punct-mini-label{
   position:absolute;
-    bottom:-6px;
-  left:-10px;
-  transform:none;
+  bottom:-16px;
+  left:50%;
+  transform:translateX(-50%);
   font-size:.56rem;
   font-weight:800;
   color:#bff8ff;
   letter-spacing:.04em;
   opacity:.9;
+  white-space:nowrap;
   pointer-events:none;
 }
 @media (max-width: 768px){
@@ -35422,20 +35423,27 @@ async function loadAffluenceDate(dateStr){
     margin-bottom: 2px !important;
   }
   #homePunctualityChartHost.home-punct-chart-host{
-    min-height: 68px !important;
-    gap: 6px !important;
+    min-height: 72px !important;
+    gap: 10px !important;
   }
   .home-punct-chart-wrap{
-    width: 43px;
-    height: 43px;
+    width: 46px;
+    height: 46px;
   }
 }
 </style>
 <script id="home-punctuality-visual-fix-script">
 (function(){
-  var homePunctChart7d = null;
+  var homePunctChart30d = null;
   var homePunctChartYesterday = null;
+  var homePunctualityRequest = null;
+  var homePunctualityLoadedKey = '';
+  var homePunctualityLastValues = null;
   var HOME_RING_REST_COLOR = 'rgba(125,217,255,0.18)';
+  var HOME_STATS_ORIGIN = 'https://vps.labetaillere.fr';
+  var HOME_PUNCT_CACHE_KEY = 'lb_home_overview_punctuality_v2';
+  var HOME_CENTER_PLUGIN_ID = 'homePunctCenterText';
+  var homeCenterPluginRegistered = false;
 
   function homeFmtPctShort(x){
     var n = Number(x);
@@ -35454,8 +35462,33 @@ async function loadAffluenceDate(dateStr){
     return '#f97316';
   }
 
+  function ensureHomeCenterTextPlugin(){
+    if (homeCenterPluginRegistered || typeof Chart !== 'function' || typeof Chart.register !== 'function') return;
+    Chart.register({
+      id: HOME_CENTER_PLUGIN_ID,
+      afterDraw: function(chart, args, options){
+        var meta = chart.getDatasetMeta(0);
+        var arc = meta && meta.data && meta.data[0];
+        var lines = options && Array.isArray(options.lines) ? options.lines : [];
+        if (!arc || !lines.length) return;
+        var ctx = chart.ctx;
+        ctx.save();
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        lines.forEach(function(line){
+          ctx.fillStyle = line.color || '#e8fbff';
+          ctx.font = line.font || '900 11px Orbitron, system-ui';
+          ctx.fillText(line.text, arc.x, arc.y);
+        });
+        ctx.restore();
+      }
+    });
+    homeCenterPluginRegistered = true;
+  }
+
   function makeDonutChart(canvas){
     if (!canvas || typeof Chart !== 'function') return null;
+    ensureHomeCenterTextPlugin();
     return new Chart(canvas, {
       type: 'doughnut',
       data: {
@@ -35473,7 +35506,7 @@ async function loadAffluenceDate(dateStr){
         plugins: {
           legend: { display: false },
           tooltip: { enabled: false },
-          centerText: { lineGap: 12, lines: [] }
+          homePunctCenterText: { lines: [] }
         }
       }
     });
@@ -35483,61 +35516,170 @@ async function loadAffluenceDate(dateStr){
     var host = document.getElementById('homePunctualityChartHost');
     if (!host) return null;
     host.classList.add('home-punct-chart-host');
-    if (!document.getElementById('homeWxPunctualityChart7d') || !document.getElementById('homeWxPunctualityChartYesterday')){
+    if (!document.getElementById('homeWxPunctualityChart30d') || !document.getElementById('homeWxPunctualityChartYesterday')){
       host.innerHTML =
-        '<div class="home-punct-chart-wrap"><canvas id="homeWxPunctualityChart7d"></canvas><span class="home-punct-mini-label">J-7</span></div>' +
-        '<div class="home-punct-chart-wrap"><canvas id="homeWxPunctualityChartYesterday"></canvas><span class="home-punct-mini-label">J-1</span></div>';
+        '<div class="home-punct-chart-wrap" title="Ponctualité des 30 derniers jours complets"><canvas id="homeWxPunctualityChart30d" aria-label="Ponctualité à J-30"></canvas><span class="home-punct-mini-label">J-30</span></div>' +
+        '<div class="home-punct-chart-wrap" title="Ponctualité de la journée d’hier"><canvas id="homeWxPunctualityChartYesterday" aria-label="Ponctualité à J-1"></canvas><span class="home-punct-mini-label">J-1</span></div>';
     }
-    if (!homePunctChart7d) homePunctChart7d = makeDonutChart(document.getElementById('homeWxPunctualityChart7d'));
+    if (!homePunctChart30d) homePunctChart30d = makeDonutChart(document.getElementById('homeWxPunctualityChart30d'));
     if (!homePunctChartYesterday) homePunctChartYesterday = makeDonutChart(document.getElementById('homeWxPunctualityChartYesterday'));
-    return { seven: homePunctChart7d, yesterday: homePunctChartYesterday };
+    return { thirty: homePunctChart30d, yesterday: homePunctChartYesterday };
   }
 
-  function setDonutValue(chart, pct){
+  function setDonutValue(chart, pct, label, total){
     if (!chart) return;
     var value = Number(pct);
-    if (!Number.isFinite(value)) value = 0;
-    value = Math.max(0, Math.min(100, value));
-    var ringColor = homeColorForPunctuality(value);
-    chart.data.datasets[0].data = [value, Math.max(0, 100 - value)];
+    var valid = Number.isFinite(value);
+    value = valid ? Math.max(0, Math.min(100, value)) : 0;
+    var ringColor = valid ? homeColorForPunctuality(value) : '#668b95';
+    chart.data.datasets[0].data = valid ? [value, Math.max(0, 100 - value)] : [0, 100];
     chart.data.datasets[0].backgroundColor = [ringColor, HOME_RING_REST_COLOR];
-    chart.options.plugins.centerText.lines = [
-      { text: homeFmtPctShort(value), font: '900 14px Orbitron, system-ui', color: '#e8fbff' }
+    chart.options.plugins.homePunctCenterText.lines = [
+      { text: valid ? homeFmtPctShort(value) : '—', font: '900 11px Orbitron, system-ui', color: '#e8fbff' }
     ];
+    var canvas = chart.canvas;
+    if (canvas) {
+      var description = valid
+        ? 'Ponctualité ' + label + ' : ' + value.toLocaleString('fr-FR', { maximumFractionDigits: 1 }) + ' %, ' + Number(total || 0).toLocaleString('fr-FR') + ' circulations observées'
+        : 'Ponctualité ' + label + ' indisponible';
+      canvas.setAttribute('aria-label', description);
+      if (canvas.parentElement) canvas.parentElement.title = description;
+    }
     chart.update();
   }
 
-  function renderHomePunctualityCharts(p7, py){
+  function renderHomePunctualityCharts(p30, py){
     var charts = ensureHomePunctualityChart();
     if (!charts) return;
-    setDonutValue(charts.seven, p7);
-    setDonutValue(charts.yesterday, py);
+    setDonutValue(charts.thirty, p30 && p30.pct, 'J-30', p30 && p30.total);
+    setDonutValue(charts.yesterday, py && py.pct, 'J-1', py && py.total);
   }
 
-  async function loadHomePunctualityChart(){
+  function homeTodayIso(){
     try{
-      var title = document.getElementById('homePunctCardTitle');
-      if (title) title.textContent = 'Ponctualité';
-      var statsApi = window.__lbStats || {};
-      if (typeof statsApi.getLastDaysRange !== 'function') return;
-      var rangeInfo = statsApi.getLastDaysRange(7);
-      var range = null;
-      if (typeof loadRangeAPI === 'function') range = await loadRangeAPI(rangeInfo.from, rangeInfo.to);
-      else {
-        var qs = 'from=' + encodeURIComponent(rangeInfo.from) + '&to=' + encodeURIComponent(rangeInfo.to);
-        var res = await fetch('https://vps.labetaillere.fr/api/stats/gtfs/range?' + qs, { credentials: 'include', cache: 'no-store' });
-        if (!res.ok) throw new Error('HTTP ' + res.status);
-        range = await res.json();
-      }
-      var series = Array.isArray(range?.series) ? range.series : [];
-      var values = series.map(function(x){ return 100 - Number(x && x.pct_not_on_time || 0); }).filter(function(v){ return Number.isFinite(v); });
-      if (!values.length) throw new Error('Aucune ponctualité 7 jours');
-      var avg = values.reduce(function(a, b){ return a + b; }, 0) / values.length;
-      var last = values[values.length - 1];
-      renderHomePunctualityCharts(avg, Number.isFinite(last) ? last : avg);
+      var parts = Object.fromEntries(
+        new Intl.DateTimeFormat('en-CA', {
+          timeZone:'Europe/Paris',
+          year:'numeric',
+          month:'2-digit',
+          day:'2-digit'
+        }).formatToParts(new Date()).map(function(part){ return [part.type, part.value]; })
+      );
+      return parts.year + '-' + parts.month + '-' + parts.day;
     }catch(e){
-      renderHomePunctualityCharts(0, 0);
+      return new Date().toISOString().slice(0, 10);
     }
+  }
+
+  function homeDateAdd(iso, days){
+    var date = new Date(iso + 'T12:00:00Z');
+    date.setUTCDate(date.getUTCDate() + days);
+    return date.toISOString().slice(0, 10);
+  }
+
+  function homeRanges(){
+    var yesterday = homeDateAdd(homeTodayIso(), -1);
+    return {
+      yesterday: { from:yesterday, to:yesterday },
+      thirty: { from:homeDateAdd(yesterday, -29), to:yesterday }
+    };
+  }
+
+  function overviewMetric(payload){
+    var dashboard = payload && payload.dashboard || {};
+    var cards = payload && payload.cards || dashboard;
+    var total = Number(cards.total_trains != null ? cards.total_trains : dashboard.total_trains);
+    var punctuality = Number(cards.punctuality_rate != null ? cards.punctuality_rate : dashboard.punctuality_rate);
+    if (!Number.isFinite(total) || total <= 0 || !Number.isFinite(punctuality)) return null;
+    return {
+      pct: Math.max(0, Math.min(100, punctuality)),
+      total: total
+    };
+  }
+
+  async function fetchHomeOverview(range){
+    var path = '/api/stats/beta/overview?from=' + encodeURIComponent(range.from) + '&to=' + encodeURIComponent(range.to);
+    var urls = [HOME_STATS_ORIGIN + path, path];
+    var lastError = null;
+    for (var i = 0; i < urls.length; i++){
+      try{
+        var response = await fetch(urls[i], { credentials:'include', cache:'no-store' });
+        if (!response.ok) throw new Error('HTTP ' + response.status);
+        return await response.json();
+      }catch(error){
+        lastError = error;
+      }
+    }
+    throw lastError || new Error('API statistiques indisponible');
+  }
+
+  function readHomePunctualityCache(key){
+    try{
+      var cached = JSON.parse(localStorage.getItem(HOME_PUNCT_CACHE_KEY) || 'null');
+      if (!cached || cached.key !== key) return null;
+      var thirty = cached.thirty;
+      var yesterday = cached.yesterday;
+      if (!overviewMetric({ cards:{ total_trains:thirty && thirty.total, punctuality_rate:thirty && thirty.pct } })) return null;
+      if (!overviewMetric({ cards:{ total_trains:yesterday && yesterday.total, punctuality_rate:yesterday && yesterday.pct } })) return null;
+      return { thirty:thirty, yesterday:yesterday };
+    }catch(e){
+      return null;
+    }
+  }
+
+  function writeHomePunctualityCache(key, values){
+    try{
+      localStorage.setItem(HOME_PUNCT_CACHE_KEY, JSON.stringify({
+        key:key,
+        thirty:values.thirty,
+        yesterday:values.yesterday,
+        savedAt:Date.now()
+      }));
+    }catch(e){}
+  }
+
+  async function loadHomePunctualityChart(force){
+    if (homePunctualityRequest && !force) return homePunctualityRequest;
+    var ranges = homeRanges();
+    var key = ranges.thirty.from + '_' + ranges.thirty.to;
+    if (!force && homePunctualityLoadedKey === key) return homePunctualityLastValues;
+    var cached = readHomePunctualityCache(key);
+    if (cached) {
+      homePunctualityLastValues = cached;
+      renderHomePunctualityCharts(cached.thirty, cached.yesterday);
+    }
+
+    homePunctualityRequest = (async function(){
+      try{
+        var payloads = await Promise.all([
+          fetchHomeOverview(ranges.thirty),
+          fetchHomeOverview(ranges.yesterday)
+        ]);
+        var values = {
+          thirty:overviewMetric(payloads[0]),
+          yesterday:overviewMetric(payloads[1])
+        };
+        if (!values.thirty || !values.yesterday) throw new Error('Ponctualité invalide');
+        writeHomePunctualityCache(key, values);
+        homePunctualityLastValues = values;
+        renderHomePunctualityCharts(values.thirty, values.yesterday);
+        window.__LB_HOME_PUNCTUALITY = {
+          source:'beta/overview',
+          ranges:ranges,
+          values:values
+        };
+        return values;
+      }catch(error){
+        if (!cached) renderHomePunctualityCharts(null, null);
+        homePunctualityLastValues = cached;
+        console.warn('[Accueil] Ponctualité J-30 / J-1 indisponible', error);
+        return cached;
+      }finally{
+        homePunctualityLoadedKey = key;
+        homePunctualityRequest = null;
+      }
+    })();
+    return homePunctualityRequest;
   }
 
   function applyHomePunctualityVisual(){
@@ -35545,23 +35687,15 @@ async function loadAffluenceDate(dateStr){
       var title = document.getElementById('homePunctCardTitle');
       if (title) title.textContent = 'Ponctualité';
       ensureHomePunctualityChart();
+      renderHomePunctualityCharts(null, null);
     }catch(e){}
-  }
-
-  var _orig = window.updateHomePunctuality;
-  if (typeof _orig === 'function' && !_orig.__lbHomePunctWrapped){
-    window.updateHomePunctuality = function(pct, label){
-      var out = _orig.apply(this, arguments);
-      renderHomePunctualityCharts(pct, pct);
-      return out;
-    };
-    window.updateHomePunctuality.__lbHomePunctWrapped = true;
   }
 
   document.addEventListener('DOMContentLoaded', function(){ applyHomePunctualityVisual(); loadHomePunctualityChart(); });
   window.addEventListener('load', loadHomePunctualityChart);
   setTimeout(loadHomePunctualityChart, 250);
   setTimeout(loadHomePunctualityChart, 1200);
+  window.loadHomePunctualityChart = loadHomePunctualityChart;
 })();
 </script>
 
