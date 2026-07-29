@@ -15947,10 +15947,15 @@ html, body{
 }
 .stats-v2__table{
   width:100%;
+  table-layout:fixed;
   border-collapse:collapse;
   font-family:system-ui,-apple-system,sans-serif;
   font-size:.7rem;
 }
+.stats-v2__table .stats-v2__col-date{ width:25%; }
+.stats-v2__table .stats-v2__col-status{ width:27%; }
+.stats-v2__table .stats-v2__col-delay{ width:16%; }
+.stats-v2__table .stats-v2__col-cause{ width:32%; }
 .stats-v2__table th{
   position:sticky;
   z-index:1;
@@ -15968,8 +15973,20 @@ html, body{
   padding:8px;
   border-top:1px solid rgba(94,231,242,.09);
   color:#bdd4d9;
+  vertical-align:middle;
 }
 .stats-v2__table .is-num{ text-align:right; font-variant-numeric:tabular-nums; }
+.stats-v2__table-cause{
+  color:#91b2ba !important;
+  font-size:.64rem;
+  line-height:1.25;
+  overflow-wrap:anywhere;
+  word-break:normal;
+}
+.stats-v2__table-cause.is-empty{
+  color:#4f727c !important;
+  text-align:center;
+}
 .stats-v2__status-label{
   display:inline-flex;
   align-items:center;
@@ -15983,6 +16000,39 @@ html, body{
   height:7px;
   border-radius:50%;
   background:var(--status-color);
+}
+@media (max-width:520px){
+  .stats-v2__table-wrap{
+    overflow-x:hidden;
+  }
+  .stats-v2__table{
+    font-size:.62rem;
+  }
+  .stats-v2__table .stats-v2__col-date{ width:24%; }
+  .stats-v2__table .stats-v2__col-status{ width:27%; }
+  .stats-v2__table .stats-v2__col-delay{ width:15%; }
+  .stats-v2__table .stats-v2__col-cause{ width:34%; }
+  .stats-v2__table th{
+    padding:7px 4px;
+    font-size:.47rem;
+    letter-spacing:0;
+  }
+  .stats-v2__table td{
+    padding:8px 4px;
+  }
+  .stats-v2__status-label{
+    gap:3px;
+    line-height:1.1;
+  }
+  .stats-v2__status-label::before{
+    width:5px;
+    height:5px;
+    flex:0 0 5px;
+  }
+  .stats-v2__table-cause{
+    font-size:.57rem;
+    line-height:1.18;
+  }
 }
 .stats-v2__empty{
   padding:24px 12px;
@@ -16425,7 +16475,6 @@ html, body{
                 </div>
                 <div class="stats-v2__canvas"><canvas id="statsV2TrainChart">Historique des retards</canvas></div>
                 <div id="statsV2TrainCalendar" class="stats-v2__calendar" hidden></div>
-                <div id="statsV2TrainRunsStrip" class="stats-v2__runs" aria-label="Statut de chaque circulation"></div>
               </article>
               <div class="stats-v2__weekday-grid" aria-label="Fiabilité selon le jour de la semaine">
                 <article class="stats-v2__weekday-card stats-v2__weekday-card--best">
@@ -16443,7 +16492,13 @@ html, body{
                 <div class="stats-v2__card-head"><h3 class="stats-v2__card-title">Détail des circulations</h3><div class="stats-v2__card-meta">Les 60 plus récentes</div></div>
                 <div class="stats-v2__table-wrap">
                   <table class="stats-v2__table">
-                    <thead><tr><th>Date</th><th>Statut</th><th class="is-num">Retard</th></tr></thead>
+                    <colgroup>
+                      <col class="stats-v2__col-date">
+                      <col class="stats-v2__col-status">
+                      <col class="stats-v2__col-delay">
+                      <col class="stats-v2__col-cause">
+                    </colgroup>
+                    <thead><tr><th>Date</th><th>Statut</th><th class="is-num">Retard</th><th>Cause</th></tr></thead>
                     <tbody id="statsV2TrainTable"></tbody>
                   </table>
                 </div>
@@ -27193,6 +27248,42 @@ document.addEventListener('DOMContentLoaded', () => {
     }).join('');
   }
 
+  function circulationCause(row){
+    if (!row || typeof row !== 'object') return '';
+    const candidates = [
+      row.cause,
+      row.reason,
+      row.disruption_cause,
+      row.sncf_disruption_cause,
+      row.sncfCause,
+      row.cause_text,
+      row.causeText,
+      row.message,
+      row.description
+    ];
+    if (Array.isArray(row.causes)) candidates.push(...row.causes);
+    if (Array.isArray(row.disruptions)) {
+      row.disruptions.forEach((item) => {
+        if (typeof item === 'string') candidates.push(item);
+        else if (item && typeof item === 'object') {
+          candidates.push(item.cause, item.reason, item.message, item.description);
+        }
+      });
+    }
+    const texts = candidates
+      .flatMap((value) => Array.isArray(value) ? value : [value])
+      .map((value) => {
+        if (typeof value === 'string' || typeof value === 'number') return String(value).trim();
+        if (value && typeof value === 'object') {
+          return String(value.label || value.name || value.text || value.message || '').trim();
+        }
+        return '';
+      })
+      .filter(Boolean)
+      .filter((value) => !/^(?:à l['’]heure|en retard|retard|supprim[ée]|suppression|partiel(?:le)?)$/i.test(value));
+    return [...new Set(texts)][0] || '';
+  }
+
   function renderTrain(payload, train, stop){
     const rows = [...(Array.isArray(payload?.series) ? payload.series : [])]
       .sort((a, b) => String(a.date).localeCompare(String(b.date)));
@@ -27271,13 +27362,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
     const strip = byId('statsV2TrainRunsStrip');
     if (strip) {
-      strip.hidden = calendarMode;
-      strip.innerHTML = rows.map((row) => {
-        const bucket = bucketOf(row);
-        const info = STATUS[bucket] || STATUS.NO_DATA;
-        const detail = row.value == null ? '' : ` · ${fmtDelay(row.value)}`;
-        return `<i class="stats-v2__run" style="--run-color:${info.color}" title="${escapeHtml(`${row.date} · ${info.label}${detail}`)}"></i>`;
-      }).join('');
+      strip.hidden = true;
+      strip.innerHTML = '';
     }
 
     const tbody = byId('statsV2TrainTable');
@@ -27286,14 +27372,16 @@ document.addEventListener('DOMContentLoaded', () => {
         const bucket = bucketOf(row);
         const info = STATUS[bucket] || STATUS.NO_DATA;
         const value = bucket === 'CANCELED' ? '—' : fmtDelay(toNumber(row.value));
+        const cause = circulationCause(row);
         return `
           <tr>
             <td>${escapeHtml(row.date)}</td>
             <td><span class="stats-v2__status-label" style="--status-color:${info.color}">${escapeHtml(info.label)}</span></td>
             <td class="is-num">${value}</td>
+            <td class="stats-v2__table-cause${cause ? '' : ' is-empty'}"${cause ? ` title="${escapeHtml(cause)}"` : ''}>${cause ? escapeHtml(cause) : '—'}</td>
           </tr>
         `;
-      }).join('') || '<tr><td colspan="3" class="stats-v2__empty">Aucune circulation trouvée.</td></tr>';
+      }).join('') || '<tr><td colspan="4" class="stats-v2__empty">Aucune circulation trouvée.</td></tr>';
     }
 
     const message = byId('statsV2TrainMessage');
@@ -48088,18 +48176,24 @@ body.page-carte.lb-train-detail-from-map::after{
   display:grid;
   place-items:center;
   padding:0;
-  border-radius:4px;
-  font-size:.52rem;
-  box-shadow:none;
+  border:1px solid color-mix(in srgb,var(--day-color) 82%,#dfffff);
+  border-radius:5px;
+  background:color-mix(in srgb,var(--day-color) 68%,#07131b);
+  color:#fff;
+  font-size:.56rem;
+  font-weight:900;
+  line-height:1;
+  text-shadow:0 1px 2px rgba(0,0,0,.78);
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,.16),
+    inset 0 -1px 0 rgba(0,0,0,.2);
   isolation:isolate;
+  opacity:.96;
+  transition:transform .12s ease,filter .12s ease,box-shadow .12s ease;
 }
 .stats-v2__calendar-day::after{
-  position:absolute;
-  right:2px;
-  bottom:2px;
-  width:3px;
-  height:3px;
-  margin:0;
+  content:none;
+  display:none;
 }
 .stats-v2__calendar-day::before{
   content:attr(data-tooltip);
@@ -48126,8 +48220,21 @@ body.page-carte.lb-train-detail-from-map::after{
   transform:translate(-50%,4px);
   transition:opacity .12s ease,transform .12s ease;
 }
-.stats-v2__calendar-day:hover,.stats-v2__calendar-day:focus-visible{z-index:30;outline:1px solid #bdfcff}
+.stats-v2__calendar-day:hover,.stats-v2__calendar-day:focus-visible{
+  z-index:30;
+  outline:1px solid #e9ffff;
+  outline-offset:1px;
+  filter:brightness(1.24) saturate(1.12);
+  transform:translateY(-1px) scale(1.05);
+  box-shadow:0 0 9px color-mix(in srgb,var(--day-color) 62%,transparent);
+}
 .stats-v2__calendar-day:hover::before,.stats-v2__calendar-day:focus-visible::before{opacity:1;transform:translate(-50%,0)}
+
+/* La bande de carrés sous l'historique du train doublonne le calendrier. */
+#statsV2TrainRunsStrip,
+.stats-v2__runs-strip{
+  display:none!important;
+}
 
 /* Comparateur unique : un seul chemin, trois types de comparaison. */
 .stats-v2__compare{display:grid;gap:12px}
@@ -48195,16 +48302,155 @@ body.page-carte.lb-train-detail-from-map::after{
   body.page-stats .stats-v2__compare-form .stats-v2__button{grid-column:1/-1;width:100%}
   body.page-stats .stats-v2__compare-cards{grid-template-columns:1fr 1fr}
   body.page-stats .stats-v2__compare-winner{grid-column:1/-1;grid-row:2}
-  body.page-stats .stats-v2__train-row{grid-template-columns:27px minmax(105px,1fr) minmax(82px,.7fr);gap:6px;min-height:0;padding:9px 8px}
-  body.page-stats .stats-v2__train-stats{grid-column:2/-1;grid-template-columns:repeat(3,minmax(0,1fr));width:100%}
-  body.page-stats .stats-v2__chip{padding:5px 3px;gap:3px}
+  /* Classement mobile : une vraie carte pleine largeur par bétaillère.
+     Les données et le clic restent inchangés, seule leur disposition évolue. */
+  body.page-stats #statsV2RankingCard{
+    padding:12px 10px!important;
+    overflow:hidden;
+  }
+  body.page-stats #statsV2RankingCard .stats-v2__card-head{
+    margin-bottom:10px;
+    padding:0 2px;
+  }
+  body.page-stats #statsV2RankingCard .stats-v2__card-title{
+    font-size:.86rem;
+    line-height:1.2;
+  }
+  body.page-stats #statsV2RankingCard .stats-v2__card-meta{
+    margin-top:3px;
+    font-size:.59rem;
+    line-height:1.3;
+  }
+  body.page-stats #statsV2TrainList{
+    width:100%;
+    gap:8px;
+  }
+  body.page-stats .stats-v2__train-row{
+    position:relative;
+    width:100%!important;
+    min-height:88px;
+    grid-template-columns:30px minmax(0,1fr) auto;
+    grid-template-areas:
+      "rank identity impact"
+      "stats stats stats";
+    align-items:center;
+    column-gap:8px;
+    row-gap:9px;
+    padding:10px;
+    overflow:hidden;
+    border-color:rgba(94,231,242,.2);
+    border-radius:13px;
+    background:
+      linear-gradient(90deg,rgba(0,225,245,.065),transparent 34%),
+      rgba(2,12,20,.74);
+    box-shadow:
+      inset 3px 0 0 rgba(34,224,239,.72),
+      inset 0 1px 0 rgba(255,255,255,.025);
+    touch-action:manipulation;
+  }
+  body.page-stats .stats-v2__train-row::after{
+    content:"›";
+    position:absolute;
+    top:8px;
+    right:9px;
+    color:rgba(103,234,245,.46);
+    font-family:system-ui,-apple-system,sans-serif;
+    font-size:.82rem;
+    line-height:1;
+    pointer-events:none;
+  }
+  body.page-stats .stats-v2__train-row:active{
+    border-color:rgba(94,231,242,.55);
+    background:
+      linear-gradient(90deg,rgba(0,225,245,.12),transparent 42%),
+      rgba(3,20,31,.9);
+    transform:scale(.992);
+  }
+  body.page-stats .stats-v2__rank{
+    grid-area:rank;
+    width:28px;
+    height:28px;
+    align-self:start;
+    border:1px solid rgba(94,231,242,.15);
+    background:rgba(94,231,242,.09);
+    color:#8eb7c0;
+    font-size:.65rem;
+  }
+  body.page-stats .stats-v2__train-identity{
+    grid-area:identity;
+    width:100%;
+    gap:7px;
+    align-self:start;
+    padding-top:2px;
+  }
+  body.page-stats .stats-v2__train-number{
+    overflow:hidden;
+    font-size:.78rem;
+    line-height:1.1;
+    text-overflow:ellipsis;
+    white-space:nowrap;
+  }
+  body.page-stats .stats-v2__train-meter{
+    width:min(112px,100%);
+    height:4px;
+  }
+  body.page-stats .stats-v2__train-impact{
+    grid-area:impact;
+    align-self:start;
+    min-width:76px;
+    padding:1px 14px 0 3px;
+    text-align:right;
+  }
+  body.page-stats .stats-v2__train-impact strong{
+    font-size:.9rem;
+    line-height:1;
+  }
+  body.page-stats .stats-v2__train-impact small{
+    display:block;
+    margin-top:3px;
+    font-size:.56rem;
+    line-height:1.1;
+  }
+  body.page-stats .stats-v2__train-stats{
+    grid-area:stats;
+    width:100%;
+    min-width:0;
+    display:grid;
+    grid-template-columns:repeat(3,minmax(0,1fr));
+    gap:5px;
+  }
+  body.page-stats .stats-v2__chip{
+    min-width:0;
+    min-height:29px;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    gap:4px;
+    padding:5px 4px;
+    border-radius:7px;
+    line-height:1;
+  }
+  body.page-stats .stats-v2__chip strong{font-size:.68rem}
+  body.page-stats .stats-v2__chip small{
+    overflow:hidden;
+    font-size:.52rem;
+    text-overflow:ellipsis;
+  }
 }
 @media (max-width:380px){
   body.page-stats #statsConsole>.section-content{padding-left:6px!important;padding-right:6px!important}
   body.page-stats .stats-v2__tab{font-size:.55rem!important}
-  body.page-stats .stats-v2__train-number{font-size:.66rem}
-  body.page-stats .stats-v2__train-impact strong{font-size:.72rem}
-  body.page-stats .stats-v2__chip{display:grid;gap:1px}
+  body.page-stats .stats-v2__train-row{
+    grid-template-columns:28px minmax(0,1fr) auto;
+    column-gap:6px;
+    padding:9px 8px;
+  }
+  body.page-stats .stats-v2__train-number{font-size:.72rem}
+  body.page-stats .stats-v2__train-impact{min-width:70px;padding-right:12px}
+  body.page-stats .stats-v2__train-impact strong{font-size:.82rem}
+  body.page-stats .stats-v2__chip{display:grid;gap:2px;padding:5px 2px}
+  body.page-stats .stats-v2__chip strong{font-size:.65rem}
+  body.page-stats .stats-v2__chip small{font-size:.49rem}
   body.page-stats .stats-v2__calendar{grid-template-columns:1fr}
 }
 
