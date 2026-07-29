@@ -16298,12 +16298,23 @@ html, body{
                       <span>ponctualité</span>
                     </div>
                   </div>
-                  <div class="stats-v2__punct-copy">
-                    <div id="statsV2Trend" class="stats-v2__trend">
-                      <span>vs période précédente</span>
-                      <strong id="statsV2TrendValue">—</strong>
+                  <div class="stats-v2__punct-evolution">
+                    <div class="stats-v2__punct-evolution-head">
+                      <div>
+                        <strong>Évolution</strong>
+                        <span id="statsV2MiniEvolutionMeta">par semaine</span>
+                      </div>
+                      <button id="statsV2EvolutionToggle" class="stats-v2__expand-button" type="button"
+                        aria-label="Afficher le graphique détaillé de ponctualité"
+                        aria-controls="statsV2EvolutionSummary statsV2EvolutionDetail"
+                        aria-expanded="false">Détails&nbsp;+</button>
                     </div>
-                    <p id="statsV2PunctualityCopy">Calcul sur toutes les circulations observées dans la période.</p>
+                    <div id="statsV2EvolutionSummary" class="stats-v2__evolution-summary" hidden>
+                      <div class="stats-v2__mini-canvas">
+                        <canvas id="statsV2MiniEvolutionChart">Aperçu de l’évolution de la ponctualité</canvas>
+                      </div>
+                      <p id="statsV2PunctualityCopy">Calcul sur toutes les circulations observées dans la période.</p>
+                    </div>
                   </div>
                 </article>
 
@@ -16355,7 +16366,7 @@ html, body{
               </article>
 
               <div class="stats-v2__main-grid stats-v2__main-grid--simple">
-                <article class="stats-v2__card stats-v2__secondary-insights">
+                <article id="statsV2EvolutionDetail" class="stats-v2__card stats-v2__evolution-detail" hidden>
                   <div class="stats-v2__card-head">
                     <div>
                       <h3 class="stats-v2__card-title">Évolution de la ponctualité</h3>
@@ -16429,7 +16440,7 @@ html, body{
                 </div>
                 <div id="statsV2TrainList" class="stats-v2__train-list"></div>
               </article>
-              <p class="stats-v2__method">Source : historique GTFS-RT La Bétaillère. La ponctualité est actuellement stricte : tout retard positif observé est classé « en retard ». Les périodes sont comparées à durée égale.</p>
+              <p class="stats-v2__method">Source : historique GTFS-RT La Bétaillère. La ponctualité est actuellement stricte : tout retard positif observé est classé « en retard ».</p>
             </section>
 
             <section id="statsV2TrainPanel" class="stats-v2__panel" data-view-panel="train" hidden>
@@ -26580,13 +26591,12 @@ document.addEventListener('DOMContentLoaded', () => {
   let granularity = settings.granularity;
   let currentRange = null;
   let currentOverview = null;
-  let previousOverview = null;
   let activeAbort = null;
   let hasUserInteracted = false;
   let hasTargetInteracted = false;
   let trainLoaded = '';
   let stopLoaded = '';
-  const charts = { evolution: null, hourly: null, train: null, stop: null };
+  const charts = { evolutionMini: null, evolution: null, hourly: null, train: null, stop: null };
 
   function escapeHtml(value){
     return String(value ?? '')
@@ -26686,12 +26696,6 @@ document.addEventListener('DOMContentLoaded', () => {
     return clamp({ from: dateAdd(yesterday, -29), to: yesterday });
   }
 
-  function precedingRange(range){
-    const days = dateDiffInclusive(range.from, range.to);
-    const to = dateAdd(range.from, -1);
-    return { from: dateAdd(to, -(days - 1)), to };
-  }
-
   function humanDate(iso, options = {}){
     if (!iso) return '—';
     try {
@@ -26708,6 +26712,13 @@ document.addEventListener('DOMContentLoaded', () => {
 
   function rangeLabel(range){
     return `${humanDate(range.from, { year: true })} → ${humanDate(range.to, { year: true })}`;
+  }
+
+  function granularityForRange(range){
+    const days = range ? dateDiffInclusive(range.from, range.to) : 30;
+    if (days <= 14) return 'day';
+    if (days <= 92) return 'week';
+    return 'month';
   }
 
   async function apiJson(path, options = {}){
@@ -26871,45 +26882,99 @@ document.addEventListener('DOMContentLoaded', () => {
 
   function renderEvolution(){
     const series = aggregateDaily(currentOverview?.daily, granularity);
-    const canvas = byId('statsV2EvolutionChart');
-    if (!canvas || typeof Chart === 'undefined') return;
-    destroyChart('evolution');
     const pointColors = series.map((row) => punctualityColor(row.punctuality_rate));
+    const labels = { day: 'par jour', week: 'par semaine', month: 'par mois' };
+    const detailMeta = byId('statsV2EvolutionMeta');
+    const miniMeta = byId('statsV2MiniEvolutionMeta');
+    if (detailMeta) detailMeta.textContent = `${labels[granularity]} · moyenne pondérée`;
+    if (miniMeta) miniMeta.textContent = labels[granularity];
+    if (typeof Chart === 'undefined') return;
+
+    const dataset = {
+      label: 'Ponctualité',
+      data: series.map((row) => Number(row.punctuality_rate.toFixed(1))),
+      borderColor: pointColors,
+      backgroundColor: pointColors,
+      pointBackgroundColor: pointColors,
+      pointBorderColor: pointColors,
+      borderWidth: 0,
+      borderRadius: 5,
+      maxBarThickness: 34
+    };
+    const tooltipCallbacks = {
+      label: (ctx) => `Ponctualité : ${fmtPct(ctx.parsed.y)}`,
+      afterLabel: (ctx) => {
+        const row = series[ctx.dataIndex];
+        return `${fmtInt(row?.total)} circulation(s) observée(s)`;
+      }
+    };
+
+    const miniCanvas = byId('statsV2MiniEvolutionChart');
+    const evolutionSummary = byId('statsV2EvolutionSummary');
+    if (miniCanvas && !evolutionSummary?.hidden) {
+      destroyChart('evolutionMini');
+      charts.evolutionMini = new Chart(miniCanvas, {
+        type: 'bar',
+        data: { labels: series.map((row) => row.label), datasets: [{ ...dataset, maxBarThickness: 22 }] },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          animation: { duration: 260 },
+          interaction: { mode: 'index', intersect: false },
+          plugins: {
+            legend: { display: false },
+            tooltip: {
+              ...chartBaseOptions().plugins.tooltip,
+              callbacks: tooltipCallbacks
+            }
+          },
+          scales: {
+            x: {
+              grid: { display: false },
+              border: { display: false },
+              ticks: {
+                color: '#6f9ca7',
+                font: { size: 8, weight: '700' },
+                maxRotation: 0,
+                autoSkip: true,
+                maxTicksLimit: 5
+              }
+            },
+            y: {
+              min: 0,
+              max: 100,
+              display: false,
+              grid: { display: false },
+              border: { display: false }
+            }
+          }
+        }
+      });
+    } else {
+      destroyChart('evolutionMini');
+    }
+
+    const canvas = byId('statsV2EvolutionChart');
+    const detail = byId('statsV2EvolutionDetail');
+    if (!canvas || detail?.hidden) {
+      destroyChart('evolution');
+      return;
+    }
+    destroyChart('evolution');
     charts.evolution = new Chart(canvas, {
       type: 'bar',
-      data: {
-        labels: series.map((row) => row.label),
-        datasets: [{
-          label: 'Ponctualité',
-          data: series.map((row) => Number(row.punctuality_rate.toFixed(1))),
-          borderColor: pointColors,
-          backgroundColor: pointColors,
-          pointBackgroundColor: pointColors,
-          pointBorderColor: pointColors,
-          borderWidth: 0,
-          borderRadius: 5,
-          maxBarThickness: 34
-        }]
-      },
+      data: { labels: series.map((row) => row.label), datasets: [dataset] },
       options: {
         ...chartBaseOptions(),
         plugins: {
           ...chartBaseOptions().plugins,
           tooltip: {
             ...chartBaseOptions().plugins.tooltip,
-            callbacks: {
-              label: (ctx) => `Ponctualité : ${fmtPct(ctx.parsed.y)}`,
-              afterLabel: (ctx) => {
-                const row = series[ctx.dataIndex];
-                return `${fmtInt(row?.total)} circulation(s) observée(s)`;
-              }
-            }
+            callbacks: tooltipCallbacks
           }
         }
       }
     });
-    const labels = { day: 'par jour', week: 'par semaine', month: 'par mois' };
-    byId('statsV2EvolutionMeta').textContent = `${labels[granularity]} · moyenne pondérée`;
   }
 
   function renderHourly(payload){
@@ -27043,8 +27108,6 @@ document.addEventListener('DOMContentLoaded', () => {
   function renderOverview(){
     if (!currentOverview) return;
     const current = cardsOf(currentOverview);
-    const previous = previousOverview ? cardsOf(previousOverview) : null;
-    const delta = previous ? current.punctuality - previous.punctuality : null;
     const ring = byId('statsV2Ring');
     const color = punctualityColor(current.punctuality);
     if (ring) {
@@ -27059,10 +27122,6 @@ document.addEventListener('DOMContentLoaded', () => {
       ring.setAttribute('aria-label', `Ponctualité ${fmtPct(current.punctuality)}`);
     }
     byId('statsV2Punctuality').textContent = fmtPct(current.punctuality);
-    byId('statsV2TrendValue').textContent = delta == null ? '—' : `${delta >= 0 ? '+' : ''}${delta.toFixed(1)} pt${Math.abs(delta) >= 2 ? 's' : ''}`;
-    const trend = byId('statsV2Trend');
-    trend?.classList.toggle('is-up', delta != null && delta > .2);
-    trend?.classList.toggle('is-down', delta != null && delta < -.2);
     byId('statsV2PunctualityCopy').textContent =
       `${fmtInt(current.onTime)} circulation(s) à l’heure sur ${fmtInt(current.total)} observée(s).`;
 
@@ -27113,19 +27172,7 @@ document.addEventListener('DOMContentLoaded', () => {
     setBusy(true, 'Analyse des circulations…');
 
     try {
-      const previous = precedingRange(range);
-      const previousRequest = previous.from < DATA_START
-        ? Promise.resolve(null)
-        : apiJson(overviewPath(previous), { signal: activeAbort.signal });
-      const [currentResult, previousResult] = await Promise.allSettled([
-        apiJson(overviewPath(range), { signal: activeAbort.signal }),
-        previousRequest
-      ]);
-      if (currentResult.status !== 'fulfilled') throw currentResult.reason;
-      currentOverview = currentResult.value;
-      previousOverview = previousResult.status === 'fulfilled' && previousResult.value
-        ? previousResult.value
-        : null;
+      currentOverview = await apiJson(overviewPath(range), { signal: activeAbort.signal });
       renderOverview();
       setLiveSuccess(currentOverview);
       showError('');
@@ -27151,9 +27198,9 @@ document.addEventListener('DOMContentLoaded', () => {
     });
     const custom = byId('statsV2CustomRange');
     if (custom) custom.hidden = key !== 'custom';
-    if (key !== 'custom') {
-      const automaticGranularity = key === '7d' ? 'day' : key === '30d' ? 'week' : 'month';
-      setGranularity(automaticGranularity);
+    const automaticRange = rangeForPeriod(key);
+    if (automaticRange && (key !== 'custom' || options.loadCustom)) {
+      setGranularity(granularityForRange(automaticRange));
     }
     if (key !== 'custom' || options.loadCustom) loadOverview();
   }
@@ -27940,6 +27987,39 @@ document.addEventListener('DOMContentLoaded', () => {
   byId('statsV2CompareRun')?.addEventListener('click', runCompare);
   root.querySelectorAll('[data-granularity]').forEach((button) => {
     button.addEventListener('click', () => setGranularity(button.dataset.granularity, { user: true }));
+  });
+  const evolutionToggle = byId('statsV2EvolutionToggle');
+  const evolutionSummary = byId('statsV2EvolutionSummary');
+  const evolutionDetail = byId('statsV2EvolutionDetail');
+  function setEvolutionDetail(open, { render = true } = {}){
+    if (!evolutionToggle || !evolutionSummary || !evolutionDetail) return;
+    const isOpen = Boolean(open);
+    evolutionSummary.hidden = !isOpen;
+    evolutionDetail.hidden = !isOpen;
+    evolutionToggle.closest('.stats-v2__punct-evolution')?.classList.toggle('is-open', isOpen);
+    evolutionToggle.innerHTML = isOpen ? 'Masquer&nbsp;−' : 'Détails&nbsp;+';
+    evolutionToggle.setAttribute('aria-expanded', String(isOpen));
+    evolutionToggle.setAttribute(
+      'aria-label',
+      isOpen
+        ? 'Masquer le graphique détaillé de ponctualité'
+        : 'Afficher le graphique détaillé de ponctualité'
+    );
+    if (!isOpen) {
+      destroyChart('evolutionMini');
+      destroyChart('evolution');
+    }
+    if (render) renderEvolution();
+    if (isOpen) {
+      window.setTimeout(() => {
+        try { charts.evolution?.resize?.(); } catch (_) {}
+      }, 80);
+    }
+  }
+  /* La vue complète ne s'affiche que sur demande, même après restauration de la page. */
+  setEvolutionDetail(false, { render: false });
+  evolutionToggle?.addEventListener('click', () => {
+    setEvolutionDetail(evolutionToggle.getAttribute('aria-expanded') !== 'true');
   });
   byId('statsV2ApplyRange')?.addEventListener('click', () => setPeriod('custom', { user: true, loadCustom: true }));
   byId('statsV2TrainRun')?.addEventListener('click', runTrain);
@@ -49344,6 +49424,231 @@ body.page-stats .stats-v2__period-bar .stats-v2__period-select{
 @media (prefers-reduced-motion:reduce){
   .stats-v2__entry-chip,
   .stats-v2__entry-subchoice{transition:none!important}
+}
+</style>
+
+<style id="stats-punctuality-evolution-summary-final">
+/* STATS — aperçu de l'évolution intégré au taux global. */
+.stats-v2__punct-evolution{
+  min-width:0;
+  display:grid;
+  grid-template-rows:auto;
+  gap:0;
+  align-self:center;
+}
+.stats-v2__punct-evolution.is-open{
+  grid-template-rows:auto auto;
+  gap:5px;
+  align-self:stretch;
+}
+.stats-v2__punct-evolution-head{
+  min-width:0;
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:8px;
+}
+.stats-v2__punct-evolution-head>div{
+  min-width:0;
+  display:grid;
+  gap:2px;
+}
+.stats-v2__punct-evolution-head strong{
+  color:#e8fcff;
+  font-size:.74rem;
+  line-height:1.1;
+}
+.stats-v2__punct-evolution-head span{
+  color:#6f9ca7;
+  font:700 .62rem/1.15 system-ui,-apple-system,sans-serif;
+}
+.stats-v2__punct-evolution:not(.is-open) .stats-v2__punct-evolution-head span{
+  display:none;
+}
+.stats-v2__expand-button{
+  width:auto!important;
+  min-width:78px!important;
+  max-width:none!important;
+  height:31px!important;
+  min-height:31px!important;
+  max-height:31px!important;
+  display:grid;
+  place-items:center;
+  margin:0!important;
+  padding:0 10px!important;
+  border:1px solid rgba(73,236,247,.68);
+  border-radius:999px;
+  background:linear-gradient(180deg,rgba(7,83,113,.94),rgba(4,45,68,.94));
+  color:#f4ffff;
+  box-shadow:inset 0 0 10px rgba(0,240,255,.13),0 0 12px rgba(0,229,255,.18);
+  font:800 .64rem/1 system-ui,-apple-system,sans-serif;
+  letter-spacing:.025em;
+  white-space:nowrap;
+  cursor:pointer;
+  transition:transform .15s ease,box-shadow .15s ease,background .15s ease;
+}
+.stats-v2__expand-button:hover,
+.stats-v2__expand-button:focus-visible{
+  background:linear-gradient(180deg,rgba(8,105,137,.98),rgba(4,56,80,.98));
+  box-shadow:inset 0 0 12px rgba(0,240,255,.18),0 0 16px rgba(0,229,255,.3);
+  transform:translateY(-1px);
+  outline:none;
+}
+.stats-v2__mini-canvas{
+  position:relative;
+  min-width:0;
+  width:100%;
+  height:82px;
+}
+.stats-v2__evolution-summary{
+  min-width:0;
+  display:grid;
+  grid-template-rows:minmax(74px,1fr) auto;
+  gap:5px;
+  animation:statsEvolutionOpen .18s ease-out;
+}
+.stats-v2__evolution-summary[hidden]{display:none!important}
+.stats-v2__punct-evolution #statsV2PunctualityCopy{
+  margin:0;
+  color:#789da7;
+  font-family:system-ui,-apple-system,sans-serif;
+  font-size:.64rem;
+  line-height:1.28;
+}
+.stats-v2__evolution-detail[hidden]{display:none!important}
+.stats-v2__evolution-detail{
+  animation:statsEvolutionOpen .18s ease-out;
+}
+
+/* L'anneau reste strictement carré, même quand la carte mobile s'étire. */
+.stats-v2__ring{
+  width:136px!important;
+  height:136px!important;
+  min-width:136px!important;
+  min-height:136px!important;
+  max-width:136px!important;
+  max-height:136px!important;
+  aspect-ratio:1/1!important;
+  align-self:center!important;
+  justify-self:center!important;
+  overflow:hidden;
+}
+.stats-v2__ring::before{
+  width:99px!important;
+  height:99px!important;
+  min-width:99px!important;
+  min-height:99px!important;
+  aspect-ratio:1/1!important;
+}
+.stats-v2__ring-value{
+  width:75%;
+  max-width:75%;
+  justify-items:center;
+}
+.stats-v2__ring-value strong{
+  display:block;
+  max-width:100%;
+  font-size:1.35rem!important;
+  line-height:1!important;
+  letter-spacing:-.075em!important;
+  white-space:nowrap;
+}
+@keyframes statsEvolutionOpen{
+  from{opacity:0;transform:translateY(-5px)}
+  to{opacity:1;transform:translateY(0)}
+}
+
+@media (max-width:720px){
+  .stats-v2__punctuality-card{
+    align-items:stretch;
+  }
+  .stats-v2__punct-evolution{
+    grid-template-rows:auto;
+  }
+  .stats-v2__punct-evolution.is-open{
+    grid-template-rows:auto auto;
+  }
+  .stats-v2__evolution-summary{grid-template-rows:70px auto}
+  .stats-v2__mini-canvas{height:70px}
+  .stats-v2__punct-evolution-head strong{font-size:.7rem}
+  .stats-v2__punct-evolution-head span{font-size:.58rem}
+  .stats-v2__expand-button{
+    width:auto!important;
+    min-width:72px!important;
+    max-width:none!important;
+    height:28px!important;
+    min-height:28px!important;
+    max-height:28px!important;
+    padding:0 8px!important;
+    font-size:.6rem!important;
+  }
+  .stats-v2__ring{
+    width:112px!important;
+    height:112px!important;
+    min-width:112px!important;
+    min-height:112px!important;
+    max-width:112px!important;
+    max-height:112px!important;
+  }
+  .stats-v2__ring::before{
+    width:80px!important;
+    height:80px!important;
+    min-width:80px!important;
+    min-height:80px!important;
+  }
+  .stats-v2__ring-value strong{
+    font-size:1.05rem!important;
+  }
+  .stats-v2__punct-evolution #statsV2PunctualityCopy{
+    font-size:.6rem;
+  }
+}
+@media (max-width:430px){
+  .stats-v2__punctuality-card{
+    gap:9px;
+  }
+  .stats-v2__punct-evolution{
+    grid-template-rows:auto;
+    gap:0;
+  }
+  .stats-v2__punct-evolution.is-open{
+    grid-template-rows:auto auto;
+    gap:3px;
+  }
+  .stats-v2__evolution-summary{grid-template-rows:64px auto;gap:3px}
+  .stats-v2__ring{
+    width:96px!important;
+    height:96px!important;
+    min-width:96px!important;
+    min-height:96px!important;
+    max-width:96px!important;
+    max-height:96px!important;
+  }
+  .stats-v2__ring::before{
+    width:69px!important;
+    height:69px!important;
+    min-width:69px!important;
+    min-height:69px!important;
+  }
+  .stats-v2__ring-value strong{
+    font-size:.9rem!important;
+    letter-spacing:-.09em!important;
+  }
+  .stats-v2__ring-value span{
+    font-size:.43rem!important;
+    letter-spacing:.065em!important;
+  }
+  .stats-v2__mini-canvas{height:64px}
+  .stats-v2__punct-evolution #statsV2PunctualityCopy{
+    display:-webkit-box;
+    overflow:hidden;
+    -webkit-box-orient:vertical;
+    -webkit-line-clamp:2;
+  }
+}
+@media (prefers-reduced-motion:reduce){
+  .stats-v2__evolution-summary,
+  .stats-v2__evolution-detail{animation:none}
 }
 </style>
 
