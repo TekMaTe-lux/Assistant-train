@@ -148,6 +148,22 @@ document.addEventListener('DOMContentLoaded', () => {
 
 
 
+
+<style id="lb-alert-links-style">
+.disruption-description p,
+.alert-detail-desc p { margin: .4rem 0; }
+.disruption-description a,
+.alert-detail-desc a {
+  color: #55eaff;
+  font-weight: 700;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  overflow-wrap: anywhere;
+}
+.disruption-description a:hover,
+.alert-detail-desc a:hover { color: #ffffff; }
+</style>
+
 </head>
 <body class="lb-v3">
 
@@ -9935,8 +9951,62 @@ async function chargerEtAfficherAlertes() {
   try { if (typeof ensureTransferIndexesBuilt === 'function') ensureTransferIndexesBuilt(); } catch(e){ console.warn('Index alertes non construit:', e); }   // accélère getStopsForTripQuick
   try { if (typeof buildStationGroups === 'function') buildStationGroups(); } catch(e){ console.warn('Groupes gares alertes non construits:', e); }
 
-  // petit utilitaire local
-  const stripHtml = (s) => (s || '').replace(/<[^>]*>?/gm, '');
+  // Utilitaires locaux : texte brut pour les recherches + HTML nettoyé pour l'affichage.
+  const stripHtml = (s) => {
+    const doc = new DOMParser().parseFromString(String(s || ''), 'text/html');
+    return (doc.body.textContent || '').replace(/\s+/g, ' ').trim();
+  };
+
+  const normalizeAlertText = (s) => stripHtml(s)
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .replace(/[’‘]/g, "'")
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase();
+
+  function sanitizeAlertHtml(rawHtml, titleText = '') {
+    const doc = new DOMParser().parseFromString(String(rawHtml || ''), 'text/html');
+    const allowedTags = new Set(['P','BR','A','STRONG','B','EM','I','UL','OL','LI','SPAN']);
+
+    doc.body.querySelectorAll('*').forEach((el) => {
+      if (!allowedTags.has(el.tagName)) {
+        el.replaceWith(...el.childNodes);
+        return;
+      }
+
+      Array.from(el.attributes).forEach((attr) => el.removeAttribute(attr.name));
+
+      if (el.tagName === 'A') {
+        const originalHref = el.getAttribute('href') || '';
+        let safeHref = '';
+        try {
+          const url = new URL(originalHref, window.location.href);
+          if (url.protocol === 'https:' || url.protocol === 'http:') safeHref = url.href;
+        } catch (_) {}
+
+        if (!safeHref) {
+          el.replaceWith(...el.childNodes);
+          return;
+        }
+        el.setAttribute('href', safeHref);
+        el.setAttribute('target', '_blank');
+        el.setAttribute('rel', 'noopener noreferrer');
+      }
+    });
+
+    // Supprime seulement le premier paragraphe lorsqu'il répète exactement le titre.
+    const titleNorm = normalizeAlertText(titleText);
+    const firstBlock = Array.from(doc.body.children).find((el) => normalizeAlertText(el.textContent));
+    if (firstBlock && titleNorm && normalizeAlertText(firstBlock.textContent) === titleNorm) {
+      firstBlock.remove();
+    }
+
+    doc.body.querySelectorAll('p, span, li').forEach((el) => {
+      if (!normalizeAlertText(el.textContent) && !el.querySelector('a, br')) el.remove();
+    });
+
+    return doc.body.innerHTML.trim();
+  }
 
   function alertActiveForDate(alert, dateObj) {
     const startMs = (alert.active_period_start != null) ? alert.active_period_start * 1000 : -Infinity;
@@ -10023,7 +10093,9 @@ async function chargerEtAfficherAlertes() {
         const styleMeta = getStyleParCauseCode(code);
 
         const titre = String(alerte.header_text ?? styleMeta.label ?? '').trim();
-        const description = stripHtml(String(alerte.description_text ?? ''));
+        const descriptionRaw = String(alerte.description_text ?? '');
+        const description = stripHtml(descriptionRaw);
+        const descriptionHtml = sanitizeAlertHtml(descriptionRaw, titre);
         // Ne PAS se baser uniquement sur code === 2 : certaines alertes SNCF de retard global
         // remontent avec ce code et provoquent à tort une "composition réduite" sur tous les trains.
         // On marque réduit seulement si le libellé parle explicitement de capacité / places assises / composition courte.
@@ -10061,6 +10133,7 @@ async function chargerEtAfficherAlertes() {
           icon: styleMeta.icone || 'ℹ️',
           title: titre || styleMeta.label || 'Information',
           description: description || '',
+          descriptionHtml: descriptionHtml || '',
           trains: trainsCibles.slice()
         };
         LB_ALERTS_BY_KEY.set(detailEntry.key, detailEntry);
@@ -10122,7 +10195,7 @@ async function chargerEtAfficherAlertes() {
             <span class="disruption-icon">${styleMeta.icone || 'ℹ️'}</span>
             <span class="disruption-title-text">${titre}</span>
           </div>
-          ${description ? `<div class="disruption-description">${description}</div>` : ''}
+          ${descriptionHtml ? `<div class="disruption-description">${descriptionHtml}</div>` : ''}
           ${trainsHtml}
         `;
         infoWrapper.appendChild(div);
@@ -19784,7 +19857,9 @@ async function loadAffluenceDate(dateStr){
       body.innerHTML = list.map((it) => `
         <div class="alert-detail-card ${esc(it.level)}">
           <div class="alert-detail-row"><span>${esc(it.icon)}</span><span>${esc(it.title)}</span></div>
-          ${it.description ? `<div class="alert-detail-desc">${esc(it.description)}</div>` : ''}
+          ${it.descriptionHtml
+            ? `<div class="alert-detail-desc">${it.descriptionHtml}</div>`
+            : (it.description ? `<div class="alert-detail-desc">${esc(it.description)}</div>` : '')}
           ${Array.isArray(it.trains) && it.trains.length ? `<div class="disruption-trains">${it.trains.map(t => `<span class="disruption-train-pill">${esc(t)}</span>`).join('')}</div>` : ''}
         </div>`).join('');
     }
