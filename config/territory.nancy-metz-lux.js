@@ -33,7 +33,7 @@ window.LB_TERRITORY_CONFIG = Object.freeze({
     },
     favoris: {
       eyebrow: "Mon quotidien",
-      title: "Mes bétaillères",
+      title: "Mes bétaillères favorites",
       description: "Mes trains du matin et du soir, avec leur état réel."
     },
     stats: {
