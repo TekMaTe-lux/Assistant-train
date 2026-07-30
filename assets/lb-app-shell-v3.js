@@ -153,6 +153,7 @@
 
   function enhanceSearchModes() {
     const select = qs("#tableauModeSelect");
+    const selector = qs("#tableauSelector");
     if (!select || qs("#lbSearchModes")) return;
 
     const labels = {
@@ -184,8 +185,13 @@
     });
 
     function sync() {
+      const safe = ["quick", "train", "advanced"].includes(select.value)
+        ? select.value
+        : "quick";
+      if (select.value !== safe) select.value = safe;
+      if (selector) selector.dataset.searchMode = safe;
       qsa(".lb-search-mode", group).forEach((button) => {
-        const active = button.dataset.value === select.value;
+        const active = button.dataset.value === safe;
         button.classList.toggle("is-active", active);
         button.setAttribute("aria-pressed", String(active));
       });
@@ -193,6 +199,7 @@
 
     select.classList.add("lb-mode-select-enhanced");
     select.insertAdjacentElement("afterend", group);
+    select.addEventListener("input", sync);
     select.addEventListener("change", sync);
     sync();
   }
