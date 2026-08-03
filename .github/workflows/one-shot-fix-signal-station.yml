@@ -1,0 +1,88 @@
+name: One-shot fix signal station
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/one-shot-fix-signal-station.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Preserve selected station when signal form refreshes
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('index.html')
+          text = path.read_text(encoding='utf-8')
+
+          old = '''  function updateSignalStationOptions(){
+            const trainSelect = $id('lbSignalTrainSelect');
+            const stationSelect = $id('lbSignalStationSelect');
+            if (!trainSelect || !stationSelect) return;
+            const train = COMMUNITY.liveTrains.find((it)=> normalizeKey(it.trainNumber) === normalizeKey(trainSelect.value));
+            const options = train?.stops || [];
+            stationSelect.innerHTML = '<option value="">Choisir la gare concernée</option>' + options.map((name)=>`<option value="${safeEscape(name)}">${safeEscape(name)}</option>`).join('');
+            if (options.length === 1) stationSelect.value = options[0];
+          }
+          '''
+
+          new = '''  function updateSignalStationOptions(){
+            const trainSelect = $id('lbSignalTrainSelect');
+            const stationSelect = $id('lbSignalStationSelect');
+            if (!trainSelect || !stationSelect) return;
+            const selectedStation = String(stationSelect.value || '').trim();
+            const train = COMMUNITY.liveTrains.find((it)=> normalizeKey(it.trainNumber) === normalizeKey(trainSelect.value));
+            const options = train?.stops || [];
+            stationSelect.innerHTML = '<option value="">Choisir la gare concernée</option>' + options.map((name)=>`<option value="${safeEscape(name)}">${safeEscape(name)}</option>`).join('');
+            if (selectedStation && options.some((name)=> String(name) === selectedStation)){
+              stationSelect.value = selectedStation;
+            } else if (options.length === 1){
+              stationSelect.value = options[0];
+            }
+          }
+          '''
+
+          marker = "const selectedStation = String(stationSelect.value || '').trim();"
+          if marker in text:
+              print('Fix already present; nothing to replace.')
+          else:
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f'Expected exactly one target function, found {count}. Refusing to modify index.html.')
+              text = text.replace(old, new, 1)
+              path.write_text(text, encoding='utf-8')
+              print('Station persistence fix applied.')
+
+          updated = path.read_text(encoding='utf-8')
+          assert marker in updated, 'Fix marker missing after update'
+          assert "stationSelect.value = selectedStation;" in updated, 'Station restoration line missing'
+          PY
+
+          rm -f .github/workflows/one-shot-fix-signal-station.yml
+          git diff --check
+
+      - name: Commit fix and remove one-shot workflow
+        shell: bash
+        run: |
+          if git diff --quiet; then
+            echo "No changes to commit."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add index.html .github/workflows/one-shot-fix-signal-station.yml
+          git commit -m "Fix station persistence in live report form"
+          git push origin HEAD:main
