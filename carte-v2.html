@@ -63,6 +63,9 @@
     .lb-station-tab.is-active{color:#effcff!important;border-color:rgba(49,231,242,.38)!important;background:linear-gradient(180deg,rgba(29,182,209,.22),rgba(14,111,153,.16))!important;box-shadow:inset 0 1px 0 rgba(255,255,255,.08),0 0 20px rgba(0,211,229,.12)!important}
     .lb-station-tab:focus-visible{outline:2px solid #31e7f2!important;outline-offset:2px!important;box-shadow:0 0 0 3px rgba(49,231,242,.2)!important}
 
+    /* Le sélecteur Départs/Arrivées n'appartient qu'au mode gare natif de carte.html. */
+    .trip-panel:not(.station-board-mode) .lb-station-tabs{display:none!important}
+
     [data-lb-board]{min-width:0!important;width:100%!important;max-width:none!important}
     .lb-board-host{display:grid!important;grid-template-columns:1fr!important;width:100%!important;gap:0!important}
     .lb-force-hidden{display:none!important}
@@ -118,8 +121,7 @@
 
   function isStationPanel(panel){
     if(!panel) return false;
-    const head=norm(panel.querySelector('.trip-panel-header')?.innerText || panel.innerText.slice(0,120));
-    return !!panel.querySelector('.station-board-now') || /GARE DE /.test(head);
+    return panel.classList.contains('station-board-mode');
   }
 
   function findLabel(panel,re){
@@ -152,6 +154,20 @@
     }
   }
 
+  function cleanupNonStationPanel(panel){
+    panel.querySelectorAll('.lb-station-tabs').forEach(x=>x.remove());
+    panel.querySelectorAll('[data-lb-board]').forEach(b=>{
+      b.classList.remove('lb-force-hidden');
+      b.style.removeProperty('display');
+      b.removeAttribute('aria-hidden');
+      b.removeAttribute('data-lb-board');
+    });
+    panel.querySelectorAll('.lb-board-host').forEach(el=>el.classList.remove('lb-board-host'));
+    panel.querySelectorAll('.lb-delay-blink').forEach(el=>el.classList.remove('lb-delay-blink'));
+    panel.querySelectorAll('.lb-row-delayed').forEach(el=>el.classList.remove('lb-row-delayed'));
+    delete panel.dataset.lbSelectedBoard;
+  }
+
   function markDelayStatuses(panel){
     panel.querySelectorAll('.lb-delay-blink').forEach(el=>el.classList.remove('lb-delay-blink'));
     panel.querySelectorAll('.lb-row-delayed').forEach(el=>el.classList.remove('lb-row-delayed'));
@@ -175,12 +191,7 @@
       const panels=[...doc.querySelectorAll('.trip-panel:not(.hidden)')];
       panels.forEach(panel=>{
         if(!isStationPanel(panel)){
-          panel.querySelectorAll('.lb-station-tabs').forEach(x=>x.remove());
-          panel.querySelectorAll('[data-lb-board]').forEach(b=>{
-            b.classList.remove('lb-force-hidden');
-            b.style.removeProperty('display');
-            b.removeAttribute('data-lb-board');
-          });
+          cleanupNonStationPanel(panel);
           return;
         }
 
@@ -229,12 +240,22 @@
       enhance(doc);
       if(!doc.__lbV2FixedObserver){
         let queued=false;
-        const obs=new MutationObserver(()=>{
-          if(queued) return;queued=true;
+        const scheduleEnhance=()=>{
+          if(queued) return;
+          queued=true;
           requestAnimationFrame(()=>{queued=false;enhance(doc)});
-        });
+        };
+        const obs=new MutationObserver(scheduleEnhance);
         obs.observe(doc.body,{childList:true,subtree:true});
         doc.__lbV2FixedObserver=obs;
+
+        /* carte.html bascule station-board-mode directement sur .trip-panel : on observe cette classe sans surveiller toutes nos classes internes. */
+        const tripPanel=doc.querySelector('.trip-panel');
+        if(tripPanel){
+          const modeObs=new MutationObserver(scheduleEnhance);
+          modeObs.observe(tripPanel,{attributes:true,attributeFilter:['class']});
+          doc.__lbV2ModeObserver=modeObs;
+        }
       }
     }catch(e){console.warn('[Carte V2]',e)}
   }
