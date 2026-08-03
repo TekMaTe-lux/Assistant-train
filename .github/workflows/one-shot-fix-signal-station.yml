@@ -27,48 +27,51 @@ jobs:
 
           path = Path('index.html')
           text = path.read_text(encoding='utf-8')
-
-          old = '''  function updateSignalStationOptions(){
-            const trainSelect = $id('lbSignalTrainSelect');
-            const stationSelect = $id('lbSignalStationSelect');
-            if (!trainSelect || !stationSelect) return;
-            const train = COMMUNITY.liveTrains.find((it)=> normalizeKey(it.trainNumber) === normalizeKey(trainSelect.value));
-            const options = train?.stops || [];
-            stationSelect.innerHTML = '<option value="">Choisir la gare concernée</option>' + options.map((name)=>`<option value="${safeEscape(name)}">${safeEscape(name)}</option>`).join('');
-            if (options.length === 1) stationSelect.value = options[0];
-          }
-          '''
-
-          new = '''  function updateSignalStationOptions(){
-            const trainSelect = $id('lbSignalTrainSelect');
-            const stationSelect = $id('lbSignalStationSelect');
-            if (!trainSelect || !stationSelect) return;
-            const selectedStation = String(stationSelect.value || '').trim();
-            const train = COMMUNITY.liveTrains.find((it)=> normalizeKey(it.trainNumber) === normalizeKey(trainSelect.value));
-            const options = train?.stops || [];
-            stationSelect.innerHTML = '<option value="">Choisir la gare concernée</option>' + options.map((name)=>`<option value="${safeEscape(name)}">${safeEscape(name)}</option>`).join('');
-            if (selectedStation && options.some((name)=> String(name) === selectedStation)){
-              stationSelect.value = selectedStation;
-            } else if (options.length === 1){
-              stationSelect.value = options[0];
-            }
-          }
-          '''
-
           marker = "const selectedStation = String(stationSelect.value || '').trim();"
-          if marker in text:
-              print('Fix already present; nothing to replace.')
-          else:
-              count = text.count(old)
-              if count != 1:
-                  raise SystemExit(f'Expected exactly one target function, found {count}. Refusing to modify index.html.')
-              text = text.replace(old, new, 1)
+
+          start_token = "  function updateSignalStationOptions(){"
+          end_token = "\n\n  async function publishSignal"
+          start = text.find(start_token)
+          if start < 0:
+              raise SystemExit('updateSignalStationOptions() not found; refusing to modify index.html.')
+          end = text.find(end_token, start)
+          if end < 0:
+              raise SystemExit('End of updateSignalStationOptions() not found; refusing to modify index.html.')
+
+          block = text[start:end]
+          if marker not in block:
+              guard = "    if (!trainSelect || !stationSelect) return;\n"
+              old_tail = "    if (options.length === 1) stationSelect.value = options[0];"
+              if guard not in block or old_tail not in block:
+                  raise SystemExit('Expected station selector structure not found; refusing to modify index.html.')
+
+              block = block.replace(
+                  guard,
+                  guard + "    const selectedStation = String(stationSelect.value || '').trim();\n",
+                  1,
+              )
+              block = block.replace(
+                  old_tail,
+                  "    if (selectedStation && options.some((name)=> String(name) === selectedStation)){\n"
+                  "      stationSelect.value = selectedStation;\n"
+                  "    } else if (options.length === 1){\n"
+                  "      stationSelect.value = options[0];\n"
+                  "    }",
+                  1,
+              )
+              text = text[:start] + block + text[end:]
               path.write_text(text, encoding='utf-8')
               print('Station persistence fix applied.')
+          else:
+              print('Fix already present.')
 
           updated = path.read_text(encoding='utf-8')
-          assert marker in updated, 'Fix marker missing after update'
-          assert "stationSelect.value = selectedStation;" in updated, 'Station restoration line missing'
+          fixed_start = updated.find(start_token)
+          fixed_end = updated.find(end_token, fixed_start)
+          fixed_block = updated[fixed_start:fixed_end]
+          assert marker in fixed_block, 'Fix marker missing after update'
+          assert "stationSelect.value = selectedStation;" in fixed_block, 'Station restoration line missing'
+          assert "else if (options.length === 1)" in fixed_block, 'Single-station fallback missing'
           PY
 
           rm -f .github/workflows/one-shot-fix-signal-station.yml
