@@ -1,11 +1,4 @@
-/*
- * La Bétaillère — détail Info trafic v3
- *
- * Extension progressive de la carte « Info trafic » existante.
- * Le modal réutilise volontairement le langage visuel du modal
- * « Mes préférences » : titre, sous-titre, boutons et croix sont clonés
- * depuis les composants déjà présents dans index.html quand ils existent.
- */
+/* La Bétaillère — détail Info trafic v3 */
 (function () {
   'use strict';
 
@@ -30,10 +23,7 @@
 
   const qs = (selector, root = document) => root.querySelector(selector);
   const qsa = (selector, root = document) => Array.from(root.querySelectorAll(selector));
-
-  function clean(value) {
-    return String(value || '').replace(/\s+/g, ' ').trim();
-  }
+  const clean = (value) => String(value || '').replace(/\s+/g, ' ').trim();
 
   function normalize(value) {
     return clean(value)
@@ -67,71 +57,68 @@
     if (wrapped && typeof wrapped === 'object') return wrapped;
 
     const entries = Object.entries(raw);
-    if (entries.length && entries.some(([, value]) => value && typeof value === 'object' && (value.stops || value.status))) {
+    if (entries.some(([, value]) => value && typeof value === 'object' && (value.stops || value.status))) {
       return raw;
     }
     return null;
   }
 
-  function trainNumberFrom(entryKey, train) {
+  function trainNumberFrom(key, train) {
     const direct = train?.train_number || train?.trainNumber || train?.number || train?.trip_short_name || train?.tripShortName;
     if (direct) return String(direct);
-    const match = String(entryKey || '').match(/\b\d{4,6}\b/);
-    return match ? match[0] : String(entryKey || 'Train');
+    const match = String(key || '').match(/\b\d{4,6}\b/);
+    return match ? match[0] : String(key || 'Train');
   }
 
-  function isFullyCanceled(statusRaw) {
-    if (statusRaw.includes('PARTIAL')) return false;
-    return statusRaw.includes('CANCEL') || statusRaw.includes('SUPPR') || statusRaw.includes('DELETED');
+  function isFullyCanceled(status) {
+    if (status.includes('PARTIAL')) return false;
+    return status.includes('CANCEL') || status.includes('SUPPR') || status.includes('DELETED');
   }
 
   function analyzeSegment(raw, segment) {
-    const trainsObj = getTrainsObject(raw);
-    if (!trainsObj) return null;
+    const trains = getTrainsObject(raw);
+    if (!trains) return null;
 
     const stationSet = new Set(segment.stations.map(normalize));
     const records = [];
 
-    for (const [entryKey, train] of Object.entries(trainsObj)) {
+    for (const [key, train] of Object.entries(trains)) {
       if (!train || typeof train !== 'object') continue;
 
       const stops = train.stops && typeof train.stops === 'object' ? train.stops : {};
       const canceledStops = Array.isArray(train.canceled_stops)
         ? train.canceled_stops
         : (Array.isArray(train.canceledStops) ? train.canceledStops : []);
-      const statusRaw = String(train.status || '').toUpperCase();
+      const status = String(train.status || '').toUpperCase();
 
-      let touchesSegment = false;
+      let touches = false;
       let maxDelayMin = 0;
       let canceledHits = 0;
 
       for (const [name, delayValue] of Object.entries(stops)) {
         if (!stationSet.has(normalize(name))) continue;
-        touchesSegment = true;
+        touches = true;
         const delay = Number(delayValue);
         if (Number.isFinite(delay) && delay > maxDelayMin) maxDelayMin = delay;
       }
 
       for (const canceledStop of canceledStops) {
         if (!stationSet.has(normalize(stopName(canceledStop)))) continue;
-        touchesSegment = true;
+        touches = true;
         canceledHits += 1;
       }
 
-      if (!touchesSegment) continue;
+      if (!touches) continue;
 
-      const hasCanceledList = canceledStops.length > 0;
-      const partial = statusRaw.includes('PARTIAL') && (canceledHits > 0 || !hasCanceledList);
-      const canceled = isFullyCanceled(statusRaw);
+      const partial = status.includes('PARTIAL') && (canceledHits > 0 || canceledStops.length === 0);
+      const canceled = isFullyCanceled(status);
       const delayed = !canceled && !partial && maxDelayMin > 0;
       const state = canceled ? 'canceled' : partial ? 'partial' : delayed ? 'delayed' : 'ontime';
 
       records.push({
-        trainNumber: trainNumberFrom(entryKey, train),
+        trainNumber: trainNumberFrom(key, train),
         state,
-        maxDelayMin,
-        canceledHits,
-        statusRaw
+        maxDelayMin
       });
     }
 
@@ -139,9 +126,8 @@
       total: records.length,
       onTime: records.filter((item) => item.state === 'ontime').length,
       delayed: records.filter((item) => item.state === 'delayed').length,
-      partial: records.filter((item) => item.state === 'partial').length,
       canceled: records.filter((item) => item.state === 'canceled').length,
-      maxDelayMin: records.reduce((max, item) => Math.max(max, item.maxDelayMin || 0), 0),
+      partial: records.filter((item) => item.state === 'partial').length,
       records
     };
   }
@@ -152,11 +138,7 @@
     const level = row?.dataset?.trafficLevel ||
       ['red', 'orange', 'yellow', 'green', 'loading'].find((name) => badge?.classList.contains(`traffic-pill--${name}`)) ||
       'loading';
-
-    return {
-      level,
-      label: clean(badge?.textContent || 'Situation en cours')
-    };
+    return { level, label: clean(badge?.textContent || 'Situation en cours') };
   }
 
   function formatTrainState(record) {
@@ -167,9 +149,8 @@
   }
 
   function affectedRecords(stats) {
-    if (!stats?.records) return [];
     const priority = { canceled: 0, partial: 1, delayed: 2, ontime: 3 };
-    return stats.records
+    return (stats?.records || [])
       .filter((item) => item.state !== 'ontime')
       .sort((a, b) => (priority[a.state] - priority[b.state]) || ((b.maxDelayMin || 0) - (a.maxDelayMin || 0)));
   }
@@ -183,28 +164,50 @@
       .replace(/'/g, '&#039;');
   }
 
-  /* ===== Réutilisation réelle des composants de « Mes préférences » ===== */
-
-  function preferencesModal() {
+  /*
+   * Le point important de cette version : on ne recrée plus les composants.
+   * On clone ceux du vrai modal « Mes préférences » et on copie leur style calculé.
+   */
+  function preferencesRoot() {
     return document.getElementById('profilePrefsModal');
   }
 
-  function findTextElement(root, selector, regexp) {
+  function findExactText(root, selector, regexp) {
     if (!root) return null;
     return qsa(selector, root).find((el) => regexp.test(clean(el.textContent))) || null;
   }
 
+  function templates() {
+    const root = preferencesRoot();
+    if (!root) return {};
+
+    const title = findExactText(root, 'h1,h2,h3,h4', /^Mes préférences$/i);
+    const subtitle = findExactText(
+      root,
+      'p,small,.modal-subtitle,.auth-subtitle',
+      /^Organise tes préférences par rubrique\.?$/i
+    );
+    const close = root.querySelector(
+      '.tron-close-button, .auth-close, button[aria-label*="Fermer" i], button[title*="Fermer" i]'
+    ) || qsa('button', root).find((button) => /^[×✕x]$/i.test(clean(button.textContent)));
+    const action = qsa('button', root).find((button) => /^Gérer mes listes de trains$/i.test(clean(button.textContent).replace(/^🚇\s*/, ''))) ||
+      qsa('button', root).find((button) => /Gérer mes favoris|Notifications \(bêta\)|Mon profil/i.test(clean(button.textContent)));
+    const panel = title?.closest('.lb-auth-card, .lb-auth-modal, [role="dialog"]') ||
+      root.querySelector('.lb-auth-card, .lb-auth-modal, [role="dialog"]');
+
+    return { title, subtitle, close, action, panel };
+  }
+
   function scrubClone(node) {
     if (!(node instanceof Element)) return node;
-    const all = [node, ...qsa('*', node)];
-    all.forEach((el) => {
+    [node, ...qsa('*', node)].forEach((el) => {
       el.removeAttribute('id');
       el.removeAttribute('onclick');
       el.removeAttribute('aria-controls');
       el.removeAttribute('aria-expanded');
-      for (const attr of Array.from(el.attributes || [])) {
+      Array.from(el.attributes || []).forEach((attr) => {
         if (attr.name.startsWith('data-')) el.removeAttribute(attr.name);
-      }
+      });
     });
     node.hidden = false;
     node.removeAttribute('hidden');
@@ -233,80 +236,44 @@
     'justify-content', 'gap', 'text-align', 'cursor'
   ];
 
-  const CLOSE_PROPS = [
-    ...BUTTON_PROPS, 'width', 'min-width', 'max-width', 'aspect-ratio'
-  ];
-
-  function getPreferenceTemplates() {
-    const root = preferencesModal();
-    if (!root) return {};
-
-    const title = findTextElement(root, 'h1,h2,h3,h4,.modal-title,.auth-title', /^Mes préférences$/i);
-    const subtitle = findTextElement(root, 'p,.modal-subtitle,.auth-subtitle,div', /Organise tes préférences par rubrique/i);
-    const close = root.querySelector('.tron-close-button, .auth-close, button[aria-label*="Fermer" i], button[title*="Fermer" i]') ||
-      qsa('button', root).find((button) => /^[×✕x]$/i.test(clean(button.textContent)));
-
-    const action = qsa('button', root).find((button) => /Gérer mes listes de trains/i.test(clean(button.textContent))) ||
-      qsa('button', root).find((button) => /Gérer mes favoris|Notifications \(bêta\)|Mon profil/i.test(clean(button.textContent)));
-
-    const panel = title?.closest('.lb-auth-card, .lb-auth-modal, [role="dialog"]') ||
-      root.querySelector('.lb-auth-card, .lb-auth-modal, [role="dialog"]');
-
-    return { root, title, subtitle, close, action, panel };
-  }
-
   function makeTitle(text) {
-    const templates = getPreferenceTemplates();
-    let title;
-
-    if (templates.title) {
-      title = scrubClone(templates.title.cloneNode(true));
-      copyComputed(templates.title, title, TEXT_PROPS);
-    } else {
-      title = document.createElement('h2');
-      title.className = 'lb-traffic-fallback-title';
-    }
-
+    const source = templates().title;
+    const title = source ? scrubClone(source.cloneNode(true)) : document.createElement('h2');
+    if (source) copyComputed(source, title, TEXT_PROPS);
+    else title.className = 'lb-traffic-fallback-title';
     title.id = 'lbTrafficDetailTitle';
     title.textContent = text;
     return title;
   }
 
   function makeSubtitle() {
-    const templates = getPreferenceTemplates();
-    let subtitle;
-
-    if (templates.subtitle) {
-      subtitle = scrubClone(templates.subtitle.cloneNode(true));
-      copyComputed(templates.subtitle, subtitle, TEXT_PROPS);
-    } else {
-      subtitle = document.createElement('p');
-      subtitle.className = 'lb-traffic-fallback-subtitle';
-    }
-
+    const source = templates().subtitle;
+    const subtitle = source ? scrubClone(source.cloneNode(true)) : document.createElement('p');
+    if (source) copyComputed(source, subtitle, TEXT_PROPS);
+    else subtitle.className = 'lb-traffic-fallback-subtitle';
     subtitle.textContent = 'Situation actuelle sur ce tronçon.';
     subtitle.classList.add('lb-traffic-detail-subtitle');
     return subtitle;
   }
 
-  function makeCloseButton() {
-    const templates = getPreferenceTemplates();
-    let button;
-
-    if (templates.close) {
-      button = scrubClone(templates.close.cloneNode(true));
-      copyComputed(templates.close, button, CLOSE_PROPS);
-    } else {
-      button = document.createElement('button');
-      button.className = 'tron-close-button auth-close';
-      button.textContent = '×';
-    }
+  function makeClose() {
+    const source = templates().close;
+    let button = source ? scrubClone(source.cloneNode(true)) : document.createElement('button');
 
     if (!(button instanceof HTMLButtonElement)) {
       const replacement = document.createElement('button');
       replacement.className = button.className;
       replacement.innerHTML = button.innerHTML || '×';
       button = replacement;
+    }
+
+    if (source) {
+      copyComputed(source, button, [
+        ...BUTTON_PROPS, 'width', 'min-width', 'max-width', 'aspect-ratio'
+      ]);
+    } else {
+      button.className = 'tron-close-button auth-close';
+      button.textContent = '×';
     }
 
     button.type = 'button';
@@ -316,17 +283,9 @@
     return button;
   }
 
-  function makePreferenceAction(label, dataAttribute) {
-    const templates = getPreferenceTemplates();
-    let button;
-
-    if (templates.action) {
-      button = scrubClone(templates.action.cloneNode(true));
-      copyComputed(templates.action, button, BUTTON_PROPS);
-    } else {
-      button = document.createElement('button');
-      button.className = 'lb-traffic-fallback-action';
-    }
+  function makeAction(label, dataAttribute) {
+    const source = templates().action;
+    let button = source ? scrubClone(source.cloneNode(true)) : document.createElement('button');
 
     if (!(button instanceof HTMLButtonElement)) {
       const replacement = document.createElement('button');
@@ -334,20 +293,22 @@
       button = replacement;
     }
 
+    if (source) copyComputed(source, button, BUTTON_PROPS);
+    else button.className = 'lb-traffic-fallback-action';
+
     button.type = 'button';
     button.textContent = label;
-    button.classList.add('lb-traffic-pref-action');
     button.setAttribute(dataAttribute, '');
-    button.removeAttribute('disabled');
+    button.classList.add('lb-traffic-pref-action');
     return button;
   }
 
-  function applyPreferencePanelStyle(panel) {
-    const templates = getPreferenceTemplates();
-    if (!templates.panel) return;
-    copyComputed(templates.panel, panel, [
-      'font-family', 'color', 'background', 'background-color', 'border',
-      'border-radius', 'box-shadow'
+  function applyPanelLook(panel) {
+    const source = templates().panel;
+    if (!source) return;
+    copyComputed(source, panel, [
+      'font-family', 'color', 'background', 'background-color',
+      'border', 'border-radius', 'box-shadow'
     ]);
   }
 
@@ -357,16 +318,13 @@
     const head = qs('.lb-traffic-detail-head', modal);
     if (!panel || !head) return;
 
-    applyPreferencePanelStyle(panel);
+    applyPanelLook(panel);
+    const titleText = clean(qs('#lbTrafficDetailTitle', head)?.textContent || 'Info trafic');
 
-    const currentTitle = qs('#lbTrafficDetailTitle', head);
-    const currentText = clean(currentTitle?.textContent || 'Info trafic');
-
-    head.replaceChildren();
     const copy = document.createElement('div');
     copy.className = 'lb-traffic-detail-head-copy';
-    copy.append(makeTitle(currentText), makeSubtitle());
-    head.append(copy, makeCloseButton());
+    copy.append(makeTitle(titleText), makeSubtitle());
+    head.replaceChildren(copy, makeClose());
   }
 
   function ensureModal() {
@@ -428,14 +386,13 @@
 
     document.addEventListener('keydown', (event) => {
       if (!modal?.classList.contains('is-open')) return;
-
       if (event.key === 'Escape') {
         event.preventDefault();
         closeModal();
         return;
       }
-
       if (event.key !== 'Tab') return;
+
       const focusable = qsa('button:not([disabled]), a[href]', modal).filter((el) => !el.hidden);
       if (!focusable.length) return;
       const first = focusable[0];
@@ -462,24 +419,18 @@
     const actions = document.createElement('div');
     actions.className = 'lb-traffic-detail-actions';
     actions.append(
-      makePreferenceAction('👥  LIVE voyageurs', 'data-lb-traffic-live'),
-      makePreferenceAction('🗺️  Voir sur la carte', 'data-lb-traffic-map')
+      makeAction('👥  LIVE voyageurs', 'data-lb-traffic-live'),
+      makeAction('🗺️  Voir sur la carte', 'data-lb-traffic-map')
     );
     body.append(actions);
   }
 
   function metric(value, label, state) {
-    return `
-      <div class="lb-traffic-metric is-${state}">
-        <strong>${escapeHtml(value)}</strong>
-        <span>${escapeHtml(label)}</span>
-      </div>`;
+    return `<div class="lb-traffic-metric is-${state}"><strong>${escapeHtml(value)}</strong><span>${escapeHtml(label)}</span></div>`;
   }
 
   function renderLoading(segment, badgeState) {
     const body = qs('#lbTrafficDetailBody', ensureModal());
-    if (!body) return;
-
     setTitle(segment);
     body.innerHTML = `
       <div class="lb-traffic-summary-card lb-level-${badgeState.level}">
@@ -493,8 +444,6 @@
 
   function renderDetail(segment, stats, badgeState) {
     const body = qs('#lbTrafficDetailBody', ensureModal());
-    if (!body) return;
-
     setTitle(segment);
 
     if (!stats) {
@@ -549,7 +498,6 @@
 
   async function refreshSourceIfNeeded() {
     if (getTrainsObject(getCurrentRaw())) return;
-
     try {
       if (typeof window.updateHomeTrafficStatus === 'function') {
         await Promise.race([
@@ -573,9 +521,6 @@
     previousFocus = document.activeElement;
 
     const currentModal = ensureModal();
-
-    /* Le modal « Mes préférences » est parfois initialisé après le shell :
-       on resynchronise donc les vrais composants à chaque ouverture. */
     rebuildChrome();
 
     const badgeState = getBadgeState(segment);
@@ -587,7 +532,6 @@
 
     await refreshSourceIfNeeded();
     if (activeSegmentKey !== segmentKey || !currentModal.classList.contains('is-open')) return;
-
     renderDetail(segment, analyzeSegment(getCurrentRaw(), segment), getBadgeState(segment));
   }
 
@@ -597,10 +541,7 @@
     modal.classList.remove('is-open');
     modal.setAttribute('aria-hidden', 'true');
     document.body.classList.remove('lb-traffic-detail-open');
-
-    if (previousFocus instanceof HTMLElement) {
-      previousFocus.focus({ preventScroll: true });
-    }
+    if (previousFocus instanceof HTMLElement) previousFocus.focus({ preventScroll: true });
   }
 
   function enhanceRow(segmentKey, segment) {
@@ -609,13 +550,11 @@
     if (!row || row.dataset.lbTrafficDetails === '1') return;
 
     row.dataset.lbTrafficDetails = '1';
-    row.dataset.lbTrafficSegment = segmentKey;
     row.classList.add('lb-traffic-row-action');
     row.setAttribute('role', 'button');
     row.setAttribute('tabindex', '0');
     row.setAttribute('aria-haspopup', 'dialog');
     row.setAttribute('aria-label', `${segment.shortLabel} : ouvrir le détail du trafic`);
-    row.setAttribute('title', `Voir le détail du trafic : ${segment.shortLabel}`);
 
     const chevron = document.createElement('span');
     chevron.className = 'lb-traffic-row-chevron';
@@ -638,18 +577,12 @@
   function init() {
     enhanceRows();
     ensureModal();
-
     const host = document.getElementById('homeTrafficRows');
-    if (host) {
-      new MutationObserver(enhanceRows).observe(host, { childList: true, subtree: true });
-    }
+    if (host) new MutationObserver(enhanceRows).observe(host, { childList: true, subtree: true });
   }
 
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', init, { once: true });
-  } else {
-    init();
-  }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init, { once: true });
+  else init();
 
   window.lbTrafficDetails = Object.freeze({
     open: openSegment,
