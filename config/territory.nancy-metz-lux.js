@@ -51,8 +51,7 @@ window.LB_TERRITORY_CONFIG = Object.freeze({
 
 /*
  * Détail Info trafic — couche progressive sur l'accueil existant.
- * On garde index.html et son calcul actuel intacts : cette couche ouvre seulement
- * le snapshot GTFS-RT déjà utilisé par les deux indicateurs de tronçon.
+ * On garde index.html et son calcul actuel intacts.
  */
 (function loadTrafficDetails() {
   if (typeof document === 'undefined') return;
@@ -61,14 +60,14 @@ window.LB_TERRITORY_CONFIG = Object.freeze({
     const stylesheet = document.createElement('link');
     stylesheet.id = 'lbTrafficDetailsStyles';
     stylesheet.rel = 'stylesheet';
-    stylesheet.href = './assets/lb-traffic-details-v1.css?v=1';
+    stylesheet.href = './assets/lb-traffic-details-v1.css?v=2';
     document.head.append(stylesheet);
   }
 
   if (!document.getElementById('lbTrafficDetailsScript')) {
     const script = document.createElement('script');
     script.id = 'lbTrafficDetailsScript';
-    script.src = './assets/lb-traffic-details-v1.js?v=1';
+    script.src = './assets/lb-traffic-details-v1.js?v=2';
     script.async = false;
     document.head.append(script);
   }
