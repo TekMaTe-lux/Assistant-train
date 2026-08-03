@@ -67,7 +67,7 @@
     .lb-board-host{display:grid!important;grid-template-columns:1fr!important;width:100%!important;gap:0!important}
     .lb-force-hidden{display:none!important}
 
-    /* Horaires en gare : alternance légère des lignes, comme sur un écran de gare, pour suivre un train plus facilement. */
+    /* Horaires en gare : alternance légère des lignes, comme sur un écran de gare. */
     .station-board table{width:100%!important;border-collapse:separate!important;border-spacing:0 2px!important}
     .station-board th{padding:0 5px 3px!important;font-size:9px!important;letter-spacing:.08em!important;color:#63dff5!important}
     .station-board tbody tr:nth-child(odd) td{background:linear-gradient(90deg,rgba(4,16,30,.96),rgba(5,20,36,.93))!important}
@@ -78,12 +78,17 @@
     .station-board tbody tr:nth-child(even) td:first-child{border-left-color:rgba(49,231,242,.34)!important}
     .station-board button,.station-board .detail-btn,.station-board .details-btn{min-height:25px!important;padding:3px 6px!important;border-radius:6px!important;font-size:9px!important;background:rgba(3,24,44,.92)!important;border:1px solid rgba(0,234,255,.22)!important;color:#e9fbff!important}
 
-    /* Clignotement très léger : uniquement le petit texte d'état, jamais la ligne complète. */
-    @keyframes lb-status-blink{0%,46%,100%{opacity:1}50%,92%{opacity:.26}}
-    .lb-live-status{display:inline-block!important;will-change:opacity;animation:lb-status-blink 1.35s steps(1,end) infinite!important;font-weight:900!important}
-    .lb-live-status--imminent{color:#9cff00!important}
-    .lb-live-status--delay{color:#ffad32!important}
-    .lb-live-status--cancelled{color:#ff4e5c!important}
+    /*
+      Alertes gare : on réutilise les classes natives de carte.html.
+      - Départ imminent : même clignotement que carte.html, sur la ligne.
+      - Supprimé : seul le statut rouge clignote.
+      - Retard : seul le texte du retard clignote.
+      Opacity uniquement : pas de timer JS, pas de recalcul de layout.
+    */
+    @keyframes lb-status-blink{0%,100%{opacity:1}50%{opacity:.35}}
+    .station-board-row-imminent td{animation:station-board-blink .9s ease-in-out infinite!important}
+    .station-board-row-cancelled .station-board-time-sub.is-cancelled{animation:lb-status-blink 1.05s ease-in-out infinite!important;color:#ff4e5c!important;font-weight:900!important}
+    .station-board-time-sub.lb-delay-blink{animation:lb-status-blink 1.05s ease-in-out infinite!important;color:#ffad32!important;font-weight:900!important}
 
     @media(max-width:720px){
       :root{--marker-font:8.5px!important;--marker-gap:1px!important;--marker-num-font:8px!important;--marker-num-pad:1px 3px!important;--marker-delay-font:7.5px!important;--station-font:9px!important}
@@ -95,7 +100,8 @@
       .station-board table{font-size:10px!important;border-spacing:0 2px!important}.station-board th{font-size:8px!important}.station-board tbody tr td{padding:5px!important}
     }
     @media(max-width:420px){.cow-marker .cow-glyph{display:none!important}.station-marker{min-width:17px!important;min-height:17px!important;font-size:9px!important}.trip-panel{max-height:76vh!important}}
-    @media(prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important}}
+    /* On coupe seulement les transitions décoratives. Les alertes fonctionnelles restent actives. */
+    @media(prefers-reduced-motion:reduce){.panel,.trip-panel,.cow-marker,.station-marker,.lb-station-tab{transition:none!important}}
   `;
 
   function norm(s){return (s||'').replace(/\s+/g,' ').trim().toUpperCase()}
@@ -136,29 +142,14 @@
     }
   }
 
-  function markLiveStatuses(panel){
-    panel.querySelectorAll('.lb-live-status').forEach(el=>el.classList.remove('lb-live-status','lb-live-status--imminent','lb-live-status--delay','lb-live-status--cancelled'));
+  function markDelayStatuses(panel){
+    panel.querySelectorAll('.lb-delay-blink').forEach(el=>el.classList.remove('lb-delay-blink'));
     panel.querySelectorAll('.station-board tbody tr').forEach(row=>{
-      const rowText=norm(row.innerText);
-      let kind=null;
-      let matcher=null;
-      if(/SUPPRIM|ANNUL/.test(rowText)){
-        kind='cancelled';matcher=/SUPPRIM|ANNUL/;
-      }else if(/D[ÉE]PART IMMINENT|IMMINENT/.test(rowText)){
-        kind='imminent';matcher=/D[ÉE]PART IMMINENT|IMMINENT/;
-      }else if(/RETARD|\+\s*\d+\s*MIN/.test(rowText)){
-        kind='delay';matcher=/RETARD|\+\s*\d+\s*MIN/;
-      }
-      if(!kind) return;
-
-      const candidates=[...row.querySelectorAll('small,span,strong,b,em,div')].filter(el=>el.children.length===0 && matcher.test(norm(el.textContent)));
-      let target=candidates[0]||null;
-      if(!target){
-        const cells=[...row.querySelectorAll('td')];
-        target=cells.find(td=>matcher.test(norm(td.textContent)))||null;
-      }
-      if(!target) return;
-      target.classList.add('lb-live-status',`lb-live-status--${kind}`);
+      if(row.classList.contains('station-board-row-cancelled')) return;
+      const status=row.querySelector('.station-board-time-sub');
+      if(!status) return;
+      const text=norm(status.textContent);
+      if(/RETARD|\+\s*\d+\s*MIN/.test(text)) status.classList.add('lb-delay-blink');
     });
   }
 
@@ -208,7 +199,7 @@
         setBoardVisible(dep,selected==='departures');
         setBoardVisible(arr,selected==='arrivals');
         tabs.querySelectorAll('[data-lb-tab]').forEach(b=>b.classList.toggle('is-active',b.dataset.lbTab===selected));
-        markLiveStatuses(panel);
+        markDelayStatuses(panel);
       });
     }finally{applying=false}
   }
