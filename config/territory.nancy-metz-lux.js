@@ -48,3 +48,28 @@ window.LB_TERRITORY_CONFIG = Object.freeze({
     }
   }
 });
+
+/*
+ * Coeur v4 — couche progressive.
+ * Elle est chargée depuis la configuration pour éviter de toucher au gros
+ * index.html et rester simple à désactiver en cas de régression.
+ */
+(function loadBetaillereCoreV4() {
+  if (typeof document === "undefined") return;
+
+  if (!document.getElementById("lbCoreV4Styles")) {
+    const stylesheet = document.createElement("link");
+    stylesheet.id = "lbCoreV4Styles";
+    stylesheet.rel = "stylesheet";
+    stylesheet.href = "./assets/lb-core-v4.css?v=1";
+    document.head.append(stylesheet);
+  }
+
+  if (!document.getElementById("lbCoreV4Script")) {
+    const script = document.createElement("script");
+    script.id = "lbCoreV4Script";
+    script.src = "./assets/lb-core-v4.js?v=1";
+    script.async = false;
+    document.head.append(script);
+  }
+})();
