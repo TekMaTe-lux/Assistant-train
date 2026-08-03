@@ -9,7 +9,6 @@
   const qs = (selector, root = document) => root.querySelector(selector);
   const qsa = (selector, root = document) => Array.from(root.querySelectorAll(selector));
   const HOME = "#home";
-  const mobileQuery = window.matchMedia("(max-width: 720px), (hover: none) and (pointer: coarse) and (max-width: 900px)");
 
   function clean(value) {
     return String(value || "").replace(/\s+/g, " ").trim();
@@ -50,11 +49,7 @@
     return qsa(`${HOME} .traffic-split-row`).map((row) => {
       const route = clean(qs(".traffic-split-line", row)?.textContent) || "Ligne";
       const status = clean(qs(".traffic-pill", row)?.textContent) || "Mise à jour en cours";
-      return {
-        route,
-        status,
-        severity: severityFromText(status)
-      };
+      return { route, status, severity: severityFromText(status) };
     });
   }
 
@@ -67,31 +62,30 @@
       };
     }
 
-    const danger = items.filter((item) => item.severity === "danger").length;
-    const warning = items.filter((item) => item.severity === "warning").length;
-    const ok = items.filter((item) => item.severity === "ok").length;
-
-    if (danger) {
+    if (items.some((item) => item.severity === "danger")) {
       return {
         severity: "danger",
         title: "Attention sur la ligne",
         subtitle: items.map((item) => `${item.route} : ${item.status}`).join(" · ")
       };
     }
-    if (warning) {
+
+    if (items.some((item) => item.severity === "warning")) {
       return {
         severity: "warning",
         title: "Trafic à surveiller",
         subtitle: items.map((item) => `${item.route} : ${item.status}`).join(" · ")
       };
     }
-    if (ok === items.length) {
+
+    if (items.every((item) => item.severity === "ok")) {
       return {
         severity: "ok",
         title: "La ligne respire",
         subtitle: items.map((item) => `${item.route} : ${item.status}`).join(" · ")
       };
     }
+
     return {
       severity: "neutral",
       title: "Situation de la ligne",
@@ -110,13 +104,28 @@
     }
   }
 
+  function explicitGuestState() {
+    const favoriteCard = qs(`${HOME} .home-card[aria-label="Mes Bétaillères favorites"]`);
+    if (!favoriteCard) return false;
+
+    const hasRealFavorite = qsa(".home-fav-row", favoriteCard).some((row) => /\b\d{5}\b/.test(clean(row.textContent)));
+    if (hasRealFavorite) return false;
+
+    const favoriteText = normalize(favoriteCard.textContent);
+    return (
+      favoriteText.includes("connecte-toi") ||
+      favoriteText.includes("connectez-vous") ||
+      favoriteText.includes("se connecter")
+    );
+  }
+
   function proxyCommunityAction(keyword) {
     const voice = qs(`${HOME} .live-wall-card--home`) || qs(`${HOME} [aria-label*="Voix"]`);
     if (!voice) return false;
     const needle = normalize(keyword);
-    const button = qsa("button, a", voice).find((candidate) => normalize(candidate.textContent).includes(needle));
-    if (!button) return false;
-    button.click();
+    const control = qsa("button, a", voice).find((candidate) => normalize(candidate.textContent).includes(needle));
+    if (!control) return false;
+    control.click();
     return true;
   }
 
@@ -124,7 +133,7 @@
     if (location.hash !== hash) location.hash = hash;
     window.setTimeout(() => {
       if (typeof after === "function") after();
-    }, 80);
+    }, 90);
   }
 
   async function shareBrief() {
@@ -150,6 +159,46 @@
       if (error?.name === "AbortError") return;
     }
     window.lbAppShell?.toast?.("Partage indisponible sur ce navigateur.");
+  }
+
+  function renderBriefSheet() {
+    const host = qs("#lbCoreSheetStatus");
+    if (!host) return;
+
+    const items = trafficRows();
+    const summary = overallTraffic(items);
+    host.replaceChildren();
+
+    const summaryNode = document.createElement("div");
+    summaryNode.className = `lb-core-sheet__summary is-${summary.severity}`;
+    summaryNode.innerHTML = '<span class="lb-core-status-dot" aria-hidden="true"></span>';
+
+    const copy = document.createElement("div");
+    const strong = document.createElement("strong");
+    strong.textContent = summary.title;
+    const small = document.createElement("small");
+    small.textContent = `Lecture ${timeLabel()}`;
+    copy.append(strong, small);
+    summaryNode.append(copy);
+    host.append(summaryNode);
+
+    const list = document.createElement("div");
+    list.className = "lb-core-sheet__routes";
+    const safeItems = items.length
+      ? items
+      : [{ route: "Nancy · Metz · Luxembourg", status: "Mise à jour en cours", severity: "loading" }];
+
+    safeItems.forEach((item) => {
+      const row = document.createElement("div");
+      row.className = `lb-core-route is-${item.severity}`;
+      const route = document.createElement("span");
+      route.textContent = item.route;
+      const status = document.createElement("strong");
+      status.textContent = item.status;
+      row.append(route, status);
+      list.append(row);
+    });
+    host.append(list);
   }
 
   function createBriefSheet() {
@@ -222,7 +271,10 @@
     qs('[data-lb-core-action="share"]', sheet)?.addEventListener("click", shareBrief);
 
     sheet.addEventListener("keydown", (event) => {
-      if (event.key === "Escape") close();
+      if (event.key === "Escape") {
+        close();
+        return;
+      }
       if (event.key !== "Tab") return;
       const focusable = qsa('button:not([disabled]), a[href], [tabindex="0"]', panel);
       if (!focusable.length) return;
@@ -238,52 +290,13 @@
     });
 
     sheet.lbOpen = open;
-    sheet.lbClose = close;
     return sheet;
-  }
-
-  function renderBriefSheet() {
-    const host = qs("#lbCoreSheetStatus");
-    if (!host) return;
-    const items = trafficRows();
-    const summary = overallTraffic(items);
-    host.replaceChildren();
-
-    const summaryNode = document.createElement("div");
-    summaryNode.className = `lb-core-sheet__summary is-${summary.severity}`;
-    const dot = document.createElement("span");
-    dot.className = "lb-core-status-dot";
-    dot.setAttribute("aria-hidden", "true");
-    const copy = document.createElement("div");
-    const strong = document.createElement("strong");
-    strong.textContent = summary.title;
-    const small = document.createElement("small");
-    small.textContent = `Lecture ${timeLabel()}`;
-    copy.append(strong, small);
-    summaryNode.append(dot, copy);
-    host.append(summaryNode);
-
-    const list = document.createElement("div");
-    list.className = "lb-core-sheet__routes";
-    const safeItems = items.length
-      ? items
-      : [{ route: "Nancy · Metz · Luxembourg", status: "Mise à jour en cours", severity: "loading" }];
-    safeItems.forEach((item) => {
-      const row = document.createElement("div");
-      row.className = `lb-core-route is-${item.severity}`;
-      const route = document.createElement("span");
-      route.textContent = item.route;
-      const status = document.createElement("strong");
-      status.textContent = item.status;
-      row.append(route, status);
-      list.append(row);
-    });
-    host.append(list);
   }
 
   function ensureBrief() {
     const dashboard = qs(`${HOME} .home-dashboard`);
     if (!dashboard) return null;
+
     let brief = qs("#lbCoreBrief", dashboard);
     if (brief) return brief;
 
@@ -315,26 +328,24 @@
   function updateBrief() {
     const brief = ensureBrief();
     if (!brief) return;
-    const summary = overallTraffic(trafficRows());
-    brief.className = `lb-core-brief is-${summary.severity}`;
-    const title = qs(".lb-core-brief__title", brief);
-    const subtitle = qs(".lb-core-brief__subtitle", brief);
-    if (title) title.textContent = summary.title;
-    if (subtitle) subtitle.textContent = summary.subtitle;
-    brief.setAttribute("aria-label", `${summary.title}. ${summary.subtitle}. Ouvrir le brief de la ligne.`);
-    if (!qs("#lbCoreBriefSheet")?.hidden) renderBriefSheet();
-  }
 
-  function isGuest() {
-    const favoriteCard = qs(`${HOME} .home-card[aria-label="Mes Bétaillères favorites"]`);
-    const voice = qs(`${HOME} .live-wall-card--home`);
-    const combined = normalize(`${favoriteCard?.textContent || ""} ${voice?.textContent || ""}`);
-    return combined.includes("connecte-toi") || combined.includes("connectez-vous") || combined.includes("se connecter");
+    const summary = overallTraffic(trafficRows());
+    const signature = `${summary.severity}|${summary.title}|${summary.subtitle}`;
+    if (brief.dataset.state === signature) return;
+    brief.dataset.state = signature;
+
+    brief.className = `lb-core-brief is-${summary.severity}`;
+    qs(".lb-core-brief__title", brief).textContent = summary.title;
+    qs(".lb-core-brief__subtitle", brief).textContent = summary.subtitle;
+    brief.setAttribute("aria-label", `${summary.title}. ${summary.subtitle}. Ouvrir le brief de la ligne.`);
+
+    const sheet = qs("#lbCoreBriefSheet");
+    if (sheet && !sheet.hidden) renderBriefSheet();
   }
 
   function enhanceGuestValue() {
     const favoriteCard = qs(`${HOME} .home-card[aria-label="Mes Bétaillères favorites"]`);
-    if (!favoriteCard || !isGuest() || qs(".lb-core-signup", favoriteCard)) return;
+    if (!favoriteCard || !explicitGuestState() || qs(".lb-core-signup", favoriteCard)) return;
 
     const value = document.createElement("div");
     value.className = "lb-core-signup";
@@ -362,30 +373,35 @@
       actions.before(nudge);
     }
 
-    const items = qsa(".live-wall-item, .live-wall-item--home", voice);
-    const guest = isGuest();
-    nudge.replaceChildren();
+    const count = qsa(".live-wall-item, .live-wall-item--home", voice).length;
+    const guest = explicitGuestState();
+    const signature = `${guest ? "guest" : "member"}|${count}`;
 
-    const copy = document.createElement("span");
-    copy.className = "lb-core-community-nudge__copy";
-    const strong = document.createElement("strong");
-    strong.textContent = guest ? "Le terrain, c’est vous." : "Vu quelque chose ? Dites-le au train derrière.";
-    const small = document.createElement("small");
-    small.textContent = guest
-      ? "Un compte suffit pour signaler et confirmer les infos utiles."
-      : items.length
-        ? `${items.length} info${items.length > 1 ? "s" : ""} terrain visible${items.length > 1 ? "s" : ""} · un signalement prend quelques secondes.`
-        : "Retard, rame bondée, clim, quai… quelques secondes suffisent.";
-    copy.append(strong, small);
-    nudge.append(copy);
+    if (nudge.dataset.state !== signature) {
+      nudge.dataset.state = signature;
+      nudge.replaceChildren();
 
-    if (guest) {
-      const join = document.createElement("button");
-      join.type = "button";
-      join.className = "lb-core-community-join";
-      join.textContent = "Participer";
-      join.addEventListener("click", () => qs("#bottomAccountBtn")?.click());
-      nudge.append(join);
+      const copy = document.createElement("span");
+      copy.className = "lb-core-community-nudge__copy";
+      const strong = document.createElement("strong");
+      strong.textContent = guest ? "Le terrain, c’est vous." : "Vu quelque chose ? Dites-le au train derrière.";
+      const small = document.createElement("small");
+      small.textContent = guest
+        ? "Un compte suffit pour signaler et confirmer les infos utiles."
+        : count
+          ? `${count} info${count > 1 ? "s" : ""} terrain visible${count > 1 ? "s" : ""} · un signalement prend quelques secondes.`
+          : "Retard, rame bondée, clim, quai… quelques secondes suffisent.";
+      copy.append(strong, small);
+      nudge.append(copy);
+
+      if (guest) {
+        const join = document.createElement("button");
+        join.type = "button";
+        join.className = "lb-core-community-join";
+        join.textContent = "Participer";
+        join.addEventListener("click", () => qs("#bottomAccountBtn")?.click());
+        nudge.append(join);
+      }
     }
 
     qsa(".lb-community-btn", actions).forEach((button) => {
@@ -415,18 +431,10 @@
         <span class="lb-core-discover__arrow" aria-hidden="true">›</span>
       </button>
       <div id="lbCoreDiscoverPanel" class="lb-core-discover__panel" hidden>
-        <button type="button" data-lb-discover="train">
-          <span aria-hidden="true">⌕</span><strong>Mon train est-il fiable ?</strong><small>Retrouver une bétaillère et son historique.</small>
-        </button>
-        <button type="button" data-lb-discover="stats">
-          <span aria-hidden="true">▥</span><strong>Le vrai bilan de la ligne</strong><small>Ponctualité, retards et suppressions observés.</small>
-        </button>
-        <button type="button" data-lb-discover="map">
-          <span aria-hidden="true">◎</span><strong>Qu’est-ce qui roule maintenant ?</strong><small>Ouvrir la carte en direct.</small>
-        </button>
-        <button type="button" data-lb-discover="share">
-          <span aria-hidden="true">↗</span><strong>Partager la situation</strong><small>Envoyer le brief BER autour de soi.</small>
-        </button>
+        <button type="button" data-lb-discover="train"><span aria-hidden="true">⌕</span><strong>Mon train est-il fiable ?</strong><small>Retrouver une bétaillère et son historique.</small></button>
+        <button type="button" data-lb-discover="stats"><span aria-hidden="true">▥</span><strong>Le vrai bilan de la ligne</strong><small>Ponctualité, retards et suppressions observés.</small></button>
+        <button type="button" data-lb-discover="map"><span aria-hidden="true">◎</span><strong>Qu’est-ce qui roule maintenant ?</strong><small>Ouvrir la carte en direct.</small></button>
+        <button type="button" data-lb-discover="share"><span aria-hidden="true">↗</span><strong>Partager la situation</strong><small>Envoyer le brief BER autour de soi.</small></button>
       </div>
     `;
     dashboard.insertAdjacentElement("afterend", section);
@@ -447,12 +455,12 @@
     qs('[data-lb-discover="share"]', section)?.addEventListener("click", shareBrief);
   }
 
-  let queued = false;
+  let refreshQueued = false;
   function refresh() {
-    if (queued) return;
-    queued = true;
+    if (refreshQueued) return;
+    refreshQueued = true;
     window.requestAnimationFrame(() => {
-      queued = false;
+      refreshQueued = false;
       updateBrief();
       enhanceGuestValue();
       enhanceCommunity();
@@ -463,15 +471,23 @@
   function observeHome() {
     const home = qs(HOME);
     if (!home) return;
-    const traffic = qs(".home-card[aria-label=\"Info trafic\"]", home) || home;
+
+    const traffic = qs('.home-card[aria-label="Info trafic"]', home);
+    if (traffic) {
+      new MutationObserver(refresh).observe(traffic, {
+        childList: true,
+        subtree: true,
+        characterData: true
+      });
+    }
+
     const voice = qs(".live-wall-card--home", home);
-
-    const trafficObserver = new MutationObserver(refresh);
-    trafficObserver.observe(traffic, { childList: true, subtree: true, characterData: true });
-
-    if (voice && voice !== traffic) {
-      const voiceObserver = new MutationObserver(refresh);
-      voiceObserver.observe(voice, { childList: true, subtree: true, characterData: true });
+    if (voice) {
+      new MutationObserver(refresh).observe(voice, {
+        childList: true,
+        subtree: true,
+        characterData: true
+      });
     }
   }
 
@@ -481,7 +497,6 @@
     refresh();
     observeHome();
     window.addEventListener("hashchange", refresh, { passive: true });
-    mobileQuery.addEventListener?.("change", refresh);
   }
 
   if (document.readyState === "loading") {
