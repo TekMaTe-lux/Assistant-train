@@ -1,9 +1,10 @@
 /*
- * La Bétaillère — détail Info trafic v2
+ * La Bétaillère — détail Info trafic v3
  *
  * Extension progressive de la carte « Info trafic » existante.
- * Les chiffres sont calculés à partir du même état temps réel déjà chargé
- * par l'accueil pour les tronçons Metz–Lux / Nancy–Metz.
+ * Le modal réutilise volontairement le langage visuel du modal
+ * « Mes préférences » : titre, sous-titre, boutons et croix sont clonés
+ * depuis les composants déjà présents dans index.html quand ils existent.
  */
 (function () {
   'use strict';
@@ -30,8 +31,12 @@
   const qs = (selector, root = document) => root.querySelector(selector);
   const qsa = (selector, root = document) => Array.from(root.querySelectorAll(selector));
 
+  function clean(value) {
+    return String(value || '').replace(/\s+/g, ' ').trim();
+  }
+
   function normalize(value) {
-    return String(value || '')
+    return clean(value)
       .normalize('NFD')
       .replace(/[\u0300-\u036f]/g, '')
       .toLowerCase()
@@ -130,7 +135,7 @@
       });
     }
 
-    const totals = {
+    return {
       total: records.length,
       onTime: records.filter((item) => item.state === 'ontime').length,
       delayed: records.filter((item) => item.state === 'delayed').length,
@@ -139,8 +144,6 @@
       maxDelayMin: records.reduce((max, item) => Math.max(max, item.maxDelayMin || 0), 0),
       records
     };
-
-    return totals;
   }
 
   function getBadgeState(segment) {
@@ -152,7 +155,7 @@
 
     return {
       level,
-      label: String(badge?.textContent || 'Situation en cours').trim()
+      label: clean(badge?.textContent || 'Situation en cours')
     };
   }
 
@@ -171,27 +174,6 @@
       .sort((a, b) => (priority[a.state] - priority[b.state]) || ((b.maxDelayMin || 0) - (a.maxDelayMin || 0)));
   }
 
-  function situationSentence(stats) {
-    if (!stats) return '';
-    const parts = [];
-
-    if (stats.delayed) {
-      parts.push(`${stats.delayed} train${stats.delayed > 1 ? 's' : ''} en retard`);
-    }
-    if (stats.canceled) {
-      parts.push(`${stats.canceled} supprimé${stats.canceled > 1 ? 's' : ''}`);
-    }
-    if (stats.partial) {
-      parts.push(`${stats.partial} suppression${stats.partial > 1 ? 's' : ''} partielle${stats.partial > 1 ? 's' : ''}`);
-    }
-
-    if (!parts.length) return 'Aucune perturbation détectée actuellement sur ce tronçon.';
-
-    let sentence = parts.join(' · ');
-    if (stats.maxDelayMin > 0) sentence += ` · retard max +${Math.round(stats.maxDelayMin)} min`;
-    return sentence;
-  }
-
   function escapeHtml(value) {
     return String(value ?? '')
       .replace(/&/g, '&amp;')
@@ -201,13 +183,190 @@
       .replace(/'/g, '&#039;');
   }
 
-  function metric(value, label, state, icon) {
-    return `
-      <div class="lb-traffic-metric is-${state}">
-        <span class="lb-traffic-metric-icon" aria-hidden="true">${icon}</span>
-        <strong>${escapeHtml(value)}</strong>
-        <span class="lb-traffic-metric-label">${escapeHtml(label)}</span>
-      </div>`;
+  /* ===== Réutilisation réelle des composants de « Mes préférences » ===== */
+
+  function preferencesModal() {
+    return document.getElementById('profilePrefsModal');
+  }
+
+  function findTextElement(root, selector, regexp) {
+    if (!root) return null;
+    return qsa(selector, root).find((el) => regexp.test(clean(el.textContent))) || null;
+  }
+
+  function scrubClone(node) {
+    if (!(node instanceof Element)) return node;
+    const all = [node, ...qsa('*', node)];
+    all.forEach((el) => {
+      el.removeAttribute('id');
+      el.removeAttribute('onclick');
+      el.removeAttribute('aria-controls');
+      el.removeAttribute('aria-expanded');
+      for (const attr of Array.from(el.attributes || [])) {
+        if (attr.name.startsWith('data-')) el.removeAttribute(attr.name);
+      }
+    });
+    node.hidden = false;
+    node.removeAttribute('hidden');
+    node.removeAttribute('disabled');
+    return node;
+  }
+
+  function copyComputed(source, target, properties) {
+    if (!source || !target || !window.getComputedStyle) return;
+    const style = window.getComputedStyle(source);
+    properties.forEach((property) => {
+      const value = style.getPropertyValue(property);
+      if (value) target.style.setProperty(property, value);
+    });
+  }
+
+  const TEXT_PROPS = [
+    'font-family', 'font-size', 'font-weight', 'font-style', 'line-height',
+    'letter-spacing', 'text-transform', 'color', 'text-shadow', 'margin'
+  ];
+
+  const BUTTON_PROPS = [
+    'font-family', 'font-size', 'font-weight', 'line-height', 'letter-spacing',
+    'color', 'background', 'background-color', 'border', 'border-radius',
+    'box-shadow', 'min-height', 'height', 'padding', 'display', 'align-items',
+    'justify-content', 'gap', 'text-align', 'cursor'
+  ];
+
+  const CLOSE_PROPS = [
+    ...BUTTON_PROPS, 'width', 'min-width', 'max-width', 'aspect-ratio'
+  ];
+
+  function getPreferenceTemplates() {
+    const root = preferencesModal();
+    if (!root) return {};
+
+    const title = findTextElement(root, 'h1,h2,h3,h4,.modal-title,.auth-title', /^Mes préférences$/i);
+    const subtitle = findTextElement(root, 'p,.modal-subtitle,.auth-subtitle,div', /Organise tes préférences par rubrique/i);
+    const close = root.querySelector('.tron-close-button, .auth-close, button[aria-label*="Fermer" i], button[title*="Fermer" i]') ||
+      qsa('button', root).find((button) => /^[×✕x]$/i.test(clean(button.textContent)));
+
+    const action = qsa('button', root).find((button) => /Gérer mes listes de trains/i.test(clean(button.textContent))) ||
+      qsa('button', root).find((button) => /Gérer mes favoris|Notifications \(bêta\)|Mon profil/i.test(clean(button.textContent)));
+
+    const panel = title?.closest('.lb-auth-card, .lb-auth-modal, [role="dialog"]') ||
+      root.querySelector('.lb-auth-card, .lb-auth-modal, [role="dialog"]');
+
+    return { root, title, subtitle, close, action, panel };
+  }
+
+  function makeTitle(text) {
+    const templates = getPreferenceTemplates();
+    let title;
+
+    if (templates.title) {
+      title = scrubClone(templates.title.cloneNode(true));
+      copyComputed(templates.title, title, TEXT_PROPS);
+    } else {
+      title = document.createElement('h2');
+      title.className = 'lb-traffic-fallback-title';
+    }
+
+    title.id = 'lbTrafficDetailTitle';
+    title.textContent = text;
+    return title;
+  }
+
+  function makeSubtitle() {
+    const templates = getPreferenceTemplates();
+    let subtitle;
+
+    if (templates.subtitle) {
+      subtitle = scrubClone(templates.subtitle.cloneNode(true));
+      copyComputed(templates.subtitle, subtitle, TEXT_PROPS);
+    } else {
+      subtitle = document.createElement('p');
+      subtitle.className = 'lb-traffic-fallback-subtitle';
+    }
+
+    subtitle.textContent = 'Situation actuelle sur ce tronçon.';
+    subtitle.classList.add('lb-traffic-detail-subtitle');
+    return subtitle;
+  }
+
+  function makeCloseButton() {
+    const templates = getPreferenceTemplates();
+    let button;
+
+    if (templates.close) {
+      button = scrubClone(templates.close.cloneNode(true));
+      copyComputed(templates.close, button, CLOSE_PROPS);
+    } else {
+      button = document.createElement('button');
+      button.className = 'tron-close-button auth-close';
+      button.textContent = '×';
+    }
+
+    if (!(button instanceof HTMLButtonElement)) {
+      const replacement = document.createElement('button');
+      replacement.className = button.className;
+      replacement.innerHTML = button.innerHTML || '×';
+      button = replacement;
+    }
+
+    button.type = 'button';
+    button.setAttribute('aria-label', 'Fermer');
+    button.setAttribute('data-lb-traffic-close', '');
+    button.classList.add('lb-traffic-pref-close');
+    return button;
+  }
+
+  function makePreferenceAction(label, dataAttribute) {
+    const templates = getPreferenceTemplates();
+    let button;
+
+    if (templates.action) {
+      button = scrubClone(templates.action.cloneNode(true));
+      copyComputed(templates.action, button, BUTTON_PROPS);
+    } else {
+      button = document.createElement('button');
+      button.className = 'lb-traffic-fallback-action';
+    }
+
+    if (!(button instanceof HTMLButtonElement)) {
+      const replacement = document.createElement('button');
+      replacement.className = button.className;
+      button = replacement;
+    }
+
+    button.type = 'button';
+    button.textContent = label;
+    button.classList.add('lb-traffic-pref-action');
+    button.setAttribute(dataAttribute, '');
+    button.removeAttribute('disabled');
+    return button;
+  }
+
+  function applyPreferencePanelStyle(panel) {
+    const templates = getPreferenceTemplates();
+    if (!templates.panel) return;
+    copyComputed(templates.panel, panel, [
+      'font-family', 'color', 'background', 'background-color', 'border',
+      'border-radius', 'box-shadow'
+    ]);
+  }
+
+  function rebuildChrome() {
+    if (!modal) return;
+    const panel = qs('.lb-traffic-detail-panel', modal);
+    const head = qs('.lb-traffic-detail-head', modal);
+    if (!panel || !head) return;
+
+    applyPreferencePanelStyle(panel);
+
+    const currentTitle = qs('#lbTrafficDetailTitle', head);
+    const currentText = clean(currentTitle?.textContent || 'Info trafic');
+
+    head.replaceChildren();
+    const copy = document.createElement('div');
+    copy.className = 'lb-traffic-detail-head-copy';
+    copy.append(makeTitle(currentText), makeSubtitle());
+    head.append(copy, makeCloseButton());
   }
 
   function ensureModal() {
@@ -215,34 +374,38 @@
 
     modal = document.createElement('div');
     modal.id = 'lbTrafficDetailModal';
-    modal.className = 'lb-traffic-detail-modal';
+    modal.className = 'auth-overlay lb-traffic-detail-modal';
     modal.setAttribute('aria-hidden', 'true');
-    modal.innerHTML = `
-      <div class="lb-traffic-detail-panel" role="dialog" aria-modal="true" aria-labelledby="lbTrafficDetailTitle">
-        <header class="lb-traffic-detail-head">
-          <div class="lb-traffic-detail-title-wrap">
-            <div class="lb-traffic-detail-title-icon" aria-hidden="true">🚦</div>
-            <div>
-              <h3 id="lbTrafficDetailTitle">Info trafic</h3>
-              <p>Situation actuelle sur ce tronçon</p>
-            </div>
-          </div>
-          <button type="button" class="lb-traffic-detail-close" data-lb-traffic-close aria-label="Fermer">×</button>
-        </header>
-        <div id="lbTrafficDetailBody" class="lb-traffic-detail-body"></div>
-      </div>`;
 
+    const panel = document.createElement('div');
+    panel.className = 'lb-auth-modal lb-auth-card lb-traffic-detail-panel';
+    panel.setAttribute('role', 'dialog');
+    panel.setAttribute('aria-modal', 'true');
+    panel.setAttribute('aria-labelledby', 'lbTrafficDetailTitle');
+
+    const head = document.createElement('header');
+    head.className = 'lb-traffic-detail-head';
+
+    const body = document.createElement('div');
+    body.id = 'lbTrafficDetailBody';
+    body.className = 'lb-traffic-detail-body';
+
+    panel.append(head, body);
+    modal.append(panel);
     document.body.append(modal);
+    rebuildChrome();
 
     modal.addEventListener('click', (event) => {
       if (event.target === modal || event.target.closest('[data-lb-traffic-close]')) {
+        event.preventDefault();
+        event.stopPropagation();
         closeModal();
         return;
       }
 
-      const live = event.target.closest('[data-lb-traffic-live]');
-      if (live) {
+      if (event.target.closest('[data-lb-traffic-live]')) {
         event.preventDefault();
+        event.stopPropagation();
         closeModal();
         window.setTimeout(() => {
           if (window.lbCommunityLive?.openLive) window.lbCommunityLive.openLive();
@@ -251,9 +414,9 @@
         return;
       }
 
-      const map = event.target.closest('[data-lb-traffic-map]');
-      if (map) {
+      if (event.target.closest('[data-lb-traffic-map]')) {
         event.preventDefault();
+        event.stopPropagation();
         closeModal();
         window.setTimeout(() => {
           const mapNav = document.querySelector('.bottom-nav__item[href="#carte"], a[href="#carte"]');
@@ -290,32 +453,41 @@
     return modal;
   }
 
+  function setTitle(segment) {
+    const title = qs('#lbTrafficDetailTitle', modal);
+    if (title) title.textContent = `Info trafic · ${segment.shortLabel}`;
+  }
+
+  function appendActions(body) {
+    const actions = document.createElement('div');
+    actions.className = 'lb-traffic-detail-actions';
+    actions.append(
+      makePreferenceAction('👥  LIVE voyageurs', 'data-lb-traffic-live'),
+      makePreferenceAction('🗺️  Voir sur la carte', 'data-lb-traffic-map')
+    );
+    body.append(actions);
+  }
+
+  function metric(value, label, state) {
+    return `
+      <div class="lb-traffic-metric is-${state}">
+        <strong>${escapeHtml(value)}</strong>
+        <span>${escapeHtml(label)}</span>
+      </div>`;
+  }
+
   function renderLoading(segment, badgeState) {
     const body = qs('#lbTrafficDetailBody', ensureModal());
     if (!body) return;
 
-    qs('#lbTrafficDetailTitle', modal).textContent = segment.label;
+    setTitle(segment);
     body.innerHTML = `
       <div class="lb-traffic-summary-card lb-level-${badgeState.level}">
         <div class="lb-traffic-summary-top">
           <span class="lb-traffic-detail-dot" aria-hidden="true"></span>
           <strong>${escapeHtml(badgeState.label)}</strong>
         </div>
-        <div class="lb-traffic-detail-loading">Actualisation de la situation…</div>
-      </div>`;
-  }
-
-  function renderActions() {
-    return `
-      <div class="lb-traffic-detail-actions">
-        <button type="button" class="lb-traffic-action lb-traffic-action--live" data-lb-traffic-live>
-          <span class="lb-traffic-action-icon" aria-hidden="true">👥</span>
-          <span>LIVE voyageurs</span>
-        </button>
-        <button type="button" class="lb-traffic-action lb-traffic-action--map" data-lb-traffic-map>
-          <span class="lb-traffic-action-icon" aria-hidden="true">🗺️</span>
-          <span>Voir sur la carte</span>
-        </button>
+        <p class="lb-traffic-detail-loading">Actualisation de la situation…</p>
       </div>`;
   }
 
@@ -323,7 +495,7 @@
     const body = qs('#lbTrafficDetailBody', ensureModal());
     if (!body) return;
 
-    qs('#lbTrafficDetailTitle', modal).textContent = segment.label;
+    setTitle(segment);
 
     if (!stats) {
       body.innerHTML = `
@@ -333,21 +505,15 @@
             <strong>${escapeHtml(badgeState.label)}</strong>
           </div>
           <p>Les détails sont momentanément indisponibles. Réessaie dans quelques instants.</p>
-        </div>
-        ${renderActions()}`;
+        </div>`;
+      appendActions(body);
       return;
     }
 
     const affected = affectedRecords(stats);
     const affectedHtml = affected.length
       ? `<section class="lb-traffic-affected" aria-label="Trains impactés">
-          <div class="lb-traffic-section-head">
-            <div>
-              <div class="lb-traffic-section-title">Trains impactés</div>
-              <div class="lb-traffic-section-subtitle">Les trains à surveiller sur ce tronçon</div>
-            </div>
-            <span class="lb-traffic-impact-count">${affected.length}</span>
-          </div>
+          <div class="lb-traffic-section-title">Trains impactés</div>
           <div class="lb-traffic-train-list">
             ${affected.map((record) => {
               const state = formatTrainState(record);
@@ -358,10 +524,7 @@
             }).join('')}
           </div>
         </section>`
-      : `<div class="lb-traffic-all-good">
-          <span aria-hidden="true">✓</span>
-          <div><strong>Tout roule sur ce tronçon.</strong><small>Aucun train impacté détecté actuellement.</small></div>
-        </div>`;
+      : `<div class="lb-traffic-all-good"><strong>✓ Aucun train impacté actuellement.</strong></div>`;
 
     body.innerHTML = `
       <div class="lb-traffic-summary-card lb-level-${badgeState.level}">
@@ -369,19 +532,19 @@
           <span class="lb-traffic-detail-dot" aria-hidden="true"></span>
           <strong>${escapeHtml(badgeState.label)}</strong>
         </div>
-        <div class="lb-traffic-summary-count"><strong>${stats.total}</strong> train${stats.total > 1 ? 's' : ''} sur ce tronçon</div>
-        <p>${escapeHtml(situationSentence(stats))}</p>
+        <div class="lb-traffic-summary-count"><strong>${stats.total}</strong> train${stats.total > 1 ? 's' : ''} suivi${stats.total > 1 ? 's' : ''} sur ce tronçon</div>
       </div>
 
-      <div class="lb-traffic-metrics" aria-label="Répartition des trains">
-        ${metric(stats.onTime, 'À l’heure', 'ontime', '✓')}
-        ${metric(stats.delayed, 'En retard', 'delayed', '⏱')}
-        ${metric(stats.canceled, 'Supprimé' + (stats.canceled > 1 ? 's' : ''), 'canceled', '×')}
-        ${metric(stats.partial, 'Suppression partielle', 'partial', '!')}
+      <div class="lb-traffic-metrics" aria-label="État des trains">
+        ${metric(stats.onTime, 'À l’heure', 'ontime')}
+        ${metric(stats.delayed, 'En retard', 'delayed')}
+        ${metric(stats.canceled, 'Supprimé' + (stats.canceled > 1 ? 's' : ''), 'canceled')}
+        ${metric(stats.partial, 'Suppr. partielle' + (stats.partial > 1 ? 's' : ''), 'partial')}
       </div>
 
-      ${affectedHtml}
-      ${renderActions()}`;
+      ${affectedHtml}`;
+
+    appendActions(body);
   }
 
   async function refreshSourceIfNeeded() {
@@ -410,8 +573,12 @@
     previousFocus = document.activeElement;
 
     const currentModal = ensureModal();
-    const badgeState = getBadgeState(segment);
 
+    /* Le modal « Mes préférences » est parfois initialisé après le shell :
+       on resynchronise donc les vrais composants à chaque ouverture. */
+    rebuildChrome();
+
+    const badgeState = getBadgeState(segment);
     renderLoading(segment, badgeState);
     currentModal.classList.add('is-open');
     currentModal.setAttribute('aria-hidden', 'false');
@@ -421,8 +588,7 @@
     await refreshSourceIfNeeded();
     if (activeSegmentKey !== segmentKey || !currentModal.classList.contains('is-open')) return;
 
-    const stats = analyzeSegment(getCurrentRaw(), segment);
-    renderDetail(segment, stats, getBadgeState(segment));
+    renderDetail(segment, analyzeSegment(getCurrentRaw(), segment), getBadgeState(segment));
   }
 
   function closeModal() {
