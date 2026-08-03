@@ -1,9 +1,9 @@
 /*
- * La Bétaillère — détail Info trafic v1
+ * La Bétaillère — détail Info trafic v2
  *
- * Extension progressive de la carte existante « Info trafic ».
- * Aucune nouvelle source : les chiffres sont calculés à partir du même snapshot
- * GTFS-RT SNCF déjà chargé par index.html pour colorer Metz–Lux / Nancy–Metz.
+ * Extension progressive de la carte « Info trafic » existante.
+ * Les chiffres sont calculés à partir du même état temps réel déjà chargé
+ * par l'accueil pour les tronçons Metz–Lux / Nancy–Metz.
  */
 (function () {
   'use strict';
@@ -61,7 +61,6 @@
     const wrapped = raw.trains || raw?.normalized?.trains || raw?.data?.trains;
     if (wrapped && typeof wrapped === 'object') return wrapped;
 
-    // Secours pour un snapshot dont les trains seraient directement à la racine.
     const entries = Object.entries(raw);
     if (entries.length && entries.some(([, value]) => value && typeof value === 'object' && (value.stops || value.status))) {
       return raw;
@@ -87,7 +86,6 @@
 
     const stationSet = new Set(segment.stations.map(normalize));
     const records = [];
-    let canceledStopsInSegment = 0;
 
     for (const [entryKey, train] of Object.entries(trainsObj)) {
       if (!train || typeof train !== 'object') continue;
@@ -123,7 +121,6 @@
       const delayed = !canceled && !partial && maxDelayMin > 0;
       const state = canceled ? 'canceled' : partial ? 'partial' : delayed ? 'delayed' : 'ontime';
 
-      canceledStopsInSegment += canceledHits;
       records.push({
         trainNumber: trainNumberFrom(entryKey, train),
         state,
@@ -140,26 +137,9 @@
       partial: records.filter((item) => item.state === 'partial').length,
       canceled: records.filter((item) => item.state === 'canceled').length,
       maxDelayMin: records.reduce((max, item) => Math.max(max, item.maxDelayMin || 0), 0),
-      canceledStopsInSegment
+      records
     };
 
-    // Les statistiques de référence du badge sont réutilisées si la fonction
-    // actuelle d'index.html est disponible : le panneau explique donc exactement
-    // le même calcul que celui qui colore la ligne.
-    try {
-      if (typeof window.__lbBuildTrafficSegmentStats === 'function') {
-        const base = window.__lbBuildTrafficSegmentStats(raw, segment.stations);
-        if (base && Number(base.total) >= 0) {
-          totals.badgeTotal = Number(base.total || 0);
-          totals.badgeDelayed = Number(base.delayed || 0);
-          totals.badgeMaxDelayMin = Number(base.maxDelayMin || 0);
-          totals.badgePartial = Number(base.partialCount || 0);
-          totals.badgeCanceledStops = Number(base.canceledStopsInSegment || 0);
-        }
-      }
-    } catch (_) {}
-
-    totals.records = records;
     return totals;
   }
 
@@ -169,15 +149,16 @@
     const level = row?.dataset?.trafficLevel ||
       ['red', 'orange', 'yellow', 'green', 'loading'].find((name) => badge?.classList.contains(`traffic-pill--${name}`)) ||
       'loading';
+
     return {
       level,
-      label: String(badge?.textContent || 'Données indisponibles').trim()
+      label: String(badge?.textContent || 'Situation en cours').trim()
     };
   }
 
   function formatTrainState(record) {
     if (record.state === 'canceled') return { label: 'Supprimé', className: 'is-canceled' };
-    if (record.state === 'partial') return { label: 'Partiel', className: 'is-partial' };
+    if (record.state === 'partial') return { label: 'Supprimé partiel', className: 'is-partial' };
     if (record.state === 'delayed') return { label: `+${Math.max(1, Math.round(record.maxDelayMin))} min`, className: 'is-delayed' };
     return { label: 'À l’heure', className: 'is-ontime' };
   }
@@ -187,52 +168,77 @@
     const priority = { canceled: 0, partial: 1, delayed: 2, ontime: 3 };
     return stats.records
       .filter((item) => item.state !== 'ontime')
-      .sort((a, b) => (priority[a.state] - priority[b.state]) || ((b.maxDelayMin || 0) - (a.maxDelayMin || 0)))
-      .slice(0, 8);
+      .sort((a, b) => (priority[a.state] - priority[b.state]) || ((b.maxDelayMin || 0) - (a.maxDelayMin || 0)));
   }
 
-  function explainBadge(stats, badgeState) {
-    if (!stats) return 'Les données détaillées ne sont pas disponibles pour le moment.';
+  function situationSentence(stats) {
+    if (!stats) return '';
+    const parts = [];
 
-    const total = Number.isFinite(stats.badgeTotal) ? stats.badgeTotal : stats.total;
-    const delayed = Number.isFinite(stats.badgeDelayed) ? stats.badgeDelayed : stats.delayed;
-    const maxDelay = Number.isFinite(stats.badgeMaxDelayMin) ? stats.badgeMaxDelayMin : stats.maxDelayMin;
-    const partial = Number.isFinite(stats.badgePartial) ? stats.badgePartial : stats.partial;
-    const canceledStops = Number.isFinite(stats.badgeCanceledStops) ? stats.badgeCanceledStops : stats.canceledStopsInSegment;
-
-    if (partial > 0) {
-      const parts = [`${partial} suppression${partial > 1 ? 's' : ''} partielle${partial > 1 ? 's' : ''}`];
-      if (canceledStops > 0) parts.push(`${canceledStops} arrêt${canceledStops > 1 ? 's' : ''} supprimé${canceledStops > 1 ? 's' : ''}`);
-      return parts.join(' · ');
+    if (stats.delayed) {
+      parts.push(`${stats.delayed} train${stats.delayed > 1 ? 's' : ''} en retard`);
     }
-    if (badgeState.level === 'green') return total ? `Aucun retard détecté sur ${total} train${total > 1 ? 's' : ''} suivi${total > 1 ? 's' : ''}.` : 'Aucun train exploitable dans le snapshot actuel.';
-    if (badgeState.level === 'yellow') return `${delayed}/${total} train${total > 1 ? 's' : ''} retardé${delayed > 1 ? 's' : ''} · retard max +${Math.round(maxDelay)} min.`;
-    if (delayed > 0) return `${delayed}/${total} train${total > 1 ? 's' : ''} retardé${delayed > 1 ? 's' : ''} · retard max +${Math.round(maxDelay)} min.`;
-    return 'Le statut est issu du snapshot GTFS-RT actuellement chargé.';
+    if (stats.canceled) {
+      parts.push(`${stats.canceled} supprimé${stats.canceled > 1 ? 's' : ''}`);
+    }
+    if (stats.partial) {
+      parts.push(`${stats.partial} suppression${stats.partial > 1 ? 's' : ''} partielle${stats.partial > 1 ? 's' : ''}`);
+    }
+
+    if (!parts.length) return 'Aucune perturbation détectée actuellement sur ce tronçon.';
+
+    let sentence = parts.join(' · ');
+    if (stats.maxDelayMin > 0) sentence += ` · retard max +${Math.round(stats.maxDelayMin)} min`;
+    return sentence;
+  }
+
+  function escapeHtml(value) {
+    return String(value ?? '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#039;');
+  }
+
+  function metric(value, label, state, icon) {
+    return `
+      <div class="lb-traffic-metric is-${state}">
+        <span class="lb-traffic-metric-icon" aria-hidden="true">${icon}</span>
+        <strong>${escapeHtml(value)}</strong>
+        <span class="lb-traffic-metric-label">${escapeHtml(label)}</span>
+      </div>`;
   }
 
   function ensureModal() {
     if (modal) return modal;
+
     modal = document.createElement('div');
     modal.id = 'lbTrafficDetailModal';
     modal.className = 'lb-traffic-detail-modal';
     modal.setAttribute('aria-hidden', 'true');
     modal.innerHTML = `
       <div class="lb-traffic-detail-panel" role="dialog" aria-modal="true" aria-labelledby="lbTrafficDetailTitle">
-        <div class="lb-traffic-detail-grab" aria-hidden="true"></div>
         <header class="lb-traffic-detail-head">
-          <div>
-            <div class="lb-traffic-detail-kicker">INFO TRAFIC · GTFS-RT</div>
-            <h3 id="lbTrafficDetailTitle">Détail du trafic</h3>
+          <div class="lb-traffic-detail-title-wrap">
+            <div class="lb-traffic-detail-title-icon" aria-hidden="true">🚦</div>
+            <div>
+              <h3 id="lbTrafficDetailTitle">Info trafic</h3>
+              <p>Situation actuelle sur ce tronçon</p>
+            </div>
           </div>
           <button type="button" class="lb-traffic-detail-close" data-lb-traffic-close aria-label="Fermer">×</button>
         </header>
         <div id="lbTrafficDetailBody" class="lb-traffic-detail-body"></div>
       </div>`;
+
     document.body.append(modal);
 
     modal.addEventListener('click', (event) => {
-      if (event.target === modal || event.target.closest('[data-lb-traffic-close]')) closeModal();
+      if (event.target === modal || event.target.closest('[data-lb-traffic-close]')) {
+        closeModal();
+        return;
+      }
 
       const live = event.target.closest('[data-lb-traffic-live]');
       if (live) {
@@ -242,6 +248,7 @@
           if (window.lbCommunityLive?.openLive) window.lbCommunityLive.openLive();
           else document.getElementById('lbOpenLiveModal')?.click();
         }, 30);
+        return;
       }
 
       const map = event.target.closest('[data-lb-traffic-map]');
@@ -258,16 +265,19 @@
 
     document.addEventListener('keydown', (event) => {
       if (!modal?.classList.contains('is-open')) return;
+
       if (event.key === 'Escape') {
         event.preventDefault();
         closeModal();
         return;
       }
+
       if (event.key !== 'Tab') return;
       const focusable = qsa('button:not([disabled]), a[href]', modal).filter((el) => !el.hidden);
       if (!focusable.length) return;
       const first = focusable[0];
       const last = focusable[focusable.length - 1];
+
       if (event.shiftKey && document.activeElement === first) {
         event.preventDefault();
         last.focus();
@@ -283,54 +293,61 @@
   function renderLoading(segment, badgeState) {
     const body = qs('#lbTrafficDetailBody', ensureModal());
     if (!body) return;
+
     qs('#lbTrafficDetailTitle', modal).textContent = segment.label;
     body.innerHTML = `
-      <div class="lb-traffic-detail-status lb-level-${badgeState.level}">
-        <span class="lb-traffic-detail-dot" aria-hidden="true"></span>
-        <strong>${escapeHtml(badgeState.label)}</strong>
-      </div>
-      <div class="lb-traffic-detail-loading">Lecture du même flux GTFS-RT que l’indicateur de l’accueil…</div>`;
+      <div class="lb-traffic-summary-card lb-level-${badgeState.level}">
+        <div class="lb-traffic-summary-top">
+          <span class="lb-traffic-detail-dot" aria-hidden="true"></span>
+          <strong>${escapeHtml(badgeState.label)}</strong>
+        </div>
+        <div class="lb-traffic-detail-loading">Actualisation de la situation…</div>
+      </div>`;
   }
 
-  function escapeHtml(value) {
-    return String(value ?? '')
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;')
-      .replace(/'/g, '&#039;');
-  }
-
-  function metric(value, label, state) {
-    return `<div class="lb-traffic-metric ${state ? `is-${state}` : ''}"><strong>${escapeHtml(value)}</strong><span>${escapeHtml(label)}</span></div>`;
+  function renderActions() {
+    return `
+      <div class="lb-traffic-detail-actions">
+        <button type="button" class="lb-traffic-action lb-traffic-action--live" data-lb-traffic-live>
+          <span class="lb-traffic-action-icon" aria-hidden="true">👥</span>
+          <span>LIVE voyageurs</span>
+        </button>
+        <button type="button" class="lb-traffic-action lb-traffic-action--map" data-lb-traffic-map>
+          <span class="lb-traffic-action-icon" aria-hidden="true">🗺️</span>
+          <span>Voir sur la carte</span>
+        </button>
+      </div>`;
   }
 
   function renderDetail(segment, stats, badgeState) {
     const body = qs('#lbTrafficDetailBody', ensureModal());
     if (!body) return;
+
     qs('#lbTrafficDetailTitle', modal).textContent = segment.label;
 
     if (!stats) {
       body.innerHTML = `
-        <div class="lb-traffic-detail-status lb-level-${badgeState.level}">
-          <span class="lb-traffic-detail-dot" aria-hidden="true"></span>
-          <strong>${escapeHtml(badgeState.label)}</strong>
-        </div>
-        <div class="lb-traffic-detail-unavailable">
-          <strong>Détail GTFS-RT momentanément indisponible.</strong>
-          <span>L’indicateur de l’accueil reste affiché avec la dernière donnée disponible.</span>
+        <div class="lb-traffic-summary-card lb-level-${badgeState.level}">
+          <div class="lb-traffic-summary-top">
+            <span class="lb-traffic-detail-dot" aria-hidden="true"></span>
+            <strong>${escapeHtml(badgeState.label)}</strong>
+          </div>
+          <p>Les détails sont momentanément indisponibles. Réessaie dans quelques instants.</p>
         </div>
         ${renderActions()}`;
       return;
     }
 
     const affected = affectedRecords(stats);
-    const totalLabel = stats.total > 1 ? 'trains suivis' : 'train suivi';
-    const partialMetric = stats.partial > 0 ? metric(stats.partial, 'partiel' + (stats.partial > 1 ? 's' : ''), 'partial') : '';
-
     const affectedHtml = affected.length
-      ? `<section class="lb-traffic-affected" aria-label="Trains perturbés">
-          <div class="lb-traffic-section-title">À surveiller maintenant</div>
+      ? `<section class="lb-traffic-affected" aria-label="Trains impactés">
+          <div class="lb-traffic-section-head">
+            <div>
+              <div class="lb-traffic-section-title">Trains impactés</div>
+              <div class="lb-traffic-section-subtitle">Les trains à surveiller sur ce tronçon</div>
+            </div>
+            <span class="lb-traffic-impact-count">${affected.length}</span>
+          </div>
           <div class="lb-traffic-train-list">
             ${affected.map((record) => {
               const state = formatTrainState(record);
@@ -340,48 +357,31 @@
               </div>`;
             }).join('')}
           </div>
-          ${stats.records.filter((item) => item.state !== 'ontime').length > affected.length ? `<div class="lb-traffic-more-count">+ ${stats.records.filter((item) => item.state !== 'ontime').length - affected.length} autre(s) train(s) perturbé(s)</div>` : ''}
         </section>`
-      : `<div class="lb-traffic-all-good"><span aria-hidden="true">✓</span> Aucun train perturbé détecté sur ce tronçon dans le snapshot actuel.</div>`;
+      : `<div class="lb-traffic-all-good">
+          <span aria-hidden="true">✓</span>
+          <div><strong>Tout roule sur ce tronçon.</strong><small>Aucun train impacté détecté actuellement.</small></div>
+        </div>`;
 
     body.innerHTML = `
-      <div class="lb-traffic-detail-status lb-level-${badgeState.level}">
-        <span class="lb-traffic-detail-dot" aria-hidden="true"></span>
-        <strong>${escapeHtml(badgeState.label)}</strong>
+      <div class="lb-traffic-summary-card lb-level-${badgeState.level}">
+        <div class="lb-traffic-summary-top">
+          <span class="lb-traffic-detail-dot" aria-hidden="true"></span>
+          <strong>${escapeHtml(badgeState.label)}</strong>
+        </div>
+        <div class="lb-traffic-summary-count"><strong>${stats.total}</strong> train${stats.total > 1 ? 's' : ''} sur ce tronçon</div>
+        <p>${escapeHtml(situationSentence(stats))}</p>
       </div>
 
-      <div class="lb-traffic-explainer">
-        <span>Ce que voit l’indicateur</span>
-        <strong>${escapeHtml(explainBadge(stats, badgeState))}</strong>
-      </div>
-
-      <div class="lb-traffic-metrics">
-        ${metric(stats.total, totalLabel, 'total')}
-        ${metric(stats.onTime, 'à l’heure', 'ontime')}
-        ${metric(stats.delayed, 'en retard', 'delayed')}
-        ${metric(stats.canceled, 'supprimé' + (stats.canceled > 1 ? 's' : ''), 'canceled')}
-        ${partialMetric}
+      <div class="lb-traffic-metrics" aria-label="Répartition des trains">
+        ${metric(stats.onTime, 'À l’heure', 'ontime', '✓')}
+        ${metric(stats.delayed, 'En retard', 'delayed', '⏱')}
+        ${metric(stats.canceled, 'Supprimé' + (stats.canceled > 1 ? 's' : ''), 'canceled', '×')}
+        ${metric(stats.partial, 'Suppression partielle', 'partial', '!')}
       </div>
 
       ${affectedHtml}
-
-      <div class="lb-traffic-source-note">
-        <strong>Source : GTFS-RT SNCF</strong> via le proxy La Bétaillère. Même snapshot que celui utilisé pour colorer ce tronçon. Metz reste hors des deux groupes de calcul afin d’éviter le double comptage, comme dans l’indicateur actuel.
-      </div>
-
       ${renderActions()}`;
-  }
-
-  function renderActions() {
-    return `
-      <div class="lb-traffic-detail-actions">
-        <button type="button" class="lb-traffic-action lb-traffic-action--live" data-lb-traffic-live>
-          <span aria-hidden="true">●</span><span>Voir les trains LIVE</span>
-        </button>
-        <button type="button" class="lb-traffic-action lb-traffic-action--map" data-lb-traffic-map>
-          <span aria-hidden="true">◎</span><span>Voir sur la carte</span>
-        </button>
-      </div>`;
   }
 
   async function refreshSourceIfNeeded() {
@@ -408,6 +408,7 @@
 
     activeSegmentKey = segmentKey;
     previousFocus = document.activeElement;
+
     const currentModal = ensureModal();
     const badgeState = getBadgeState(segment);
 
@@ -420,8 +421,7 @@
     await refreshSourceIfNeeded();
     if (activeSegmentKey !== segmentKey || !currentModal.classList.contains('is-open')) return;
 
-    const raw = getCurrentRaw();
-    const stats = analyzeSegment(raw, segment);
+    const stats = analyzeSegment(getCurrentRaw(), segment);
     renderDetail(segment, stats, getBadgeState(segment));
   }
 
@@ -431,7 +431,10 @@
     modal.classList.remove('is-open');
     modal.setAttribute('aria-hidden', 'true');
     document.body.classList.remove('lb-traffic-detail-open');
-    if (previousFocus instanceof HTMLElement) previousFocus.focus({ preventScroll: true });
+
+    if (previousFocus instanceof HTMLElement) {
+      previousFocus.focus({ preventScroll: true });
+    }
   }
 
   function enhanceRow(segmentKey, segment) {
@@ -445,7 +448,8 @@
     row.setAttribute('role', 'button');
     row.setAttribute('tabindex', '0');
     row.setAttribute('aria-haspopup', 'dialog');
-    row.setAttribute('title', `Voir le détail GTFS-RT : ${segment.shortLabel}`);
+    row.setAttribute('aria-label', `${segment.shortLabel} : ouvrir le détail du trafic`);
+    row.setAttribute('title', `Voir le détail du trafic : ${segment.shortLabel}`);
 
     const chevron = document.createElement('span');
     chevron.className = 'lb-traffic-row-chevron';
@@ -475,12 +479,17 @@
     }
   }
 
-  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init, { once: true });
-  else init();
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', init, { once: true });
+  } else {
+    init();
+  }
 
   window.lbTrafficDetails = Object.freeze({
     open: openSegment,
     close: closeModal,
-    analyze: (segmentKey) => SEGMENTS[segmentKey] ? analyzeSegment(getCurrentRaw(), SEGMENTS[segmentKey]) : null
+    analyze: (segmentKey) => SEGMENTS[segmentKey]
+      ? analyzeSegment(getCurrentRaw(), SEGMENTS[segmentKey])
+      : null
   });
 })();
