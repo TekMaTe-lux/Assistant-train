@@ -68,7 +68,7 @@ window.LB_TERRITORY_CONFIG = Object.freeze({
     const layoutFix = document.createElement('link');
     layoutFix.id = 'lbTrafficDetailsLayoutFix';
     layoutFix.rel = 'stylesheet';
-    layoutFix.href = './assets/lb-traffic-details-layout-fix.css?v=2';
+    layoutFix.href = './assets/lb-traffic-details-layout-fix.css?v=3';
     document.head.append(layoutFix);
   }
 
