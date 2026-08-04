@@ -48,3 +48,35 @@ window.LB_TERRITORY_CONFIG = Object.freeze({
     }
   }
 });
+
+/*
+ * Détail Info trafic — couche progressive sur l'accueil existant.
+ * On garde index.html et son calcul actuel intacts.
+ */
+(function loadTrafficDetails() {
+  if (typeof document === 'undefined') return;
+
+  if (!document.getElementById('lbTrafficDetailsStyles')) {
+    const stylesheet = document.createElement('link');
+    stylesheet.id = 'lbTrafficDetailsStyles';
+    stylesheet.rel = 'stylesheet';
+    stylesheet.href = './assets/lb-traffic-details-v1.css?v=4';
+    document.head.append(stylesheet);
+  }
+
+  if (!document.getElementById('lbTrafficDetailsLayoutFix')) {
+    const layoutFix = document.createElement('link');
+    layoutFix.id = 'lbTrafficDetailsLayoutFix';
+    layoutFix.rel = 'stylesheet';
+    layoutFix.href = './assets/lb-traffic-details-layout-fix.css?v=3';
+    document.head.append(layoutFix);
+  }
+
+  if (!document.getElementById('lbTrafficDetailsScript')) {
+    const script = document.createElement('script');
+    script.id = 'lbTrafficDetailsScript';
+    script.src = './assets/lb-traffic-details-v1.js?v=4';
+    script.async = false;
+    document.head.append(script);
+  }
+})();
