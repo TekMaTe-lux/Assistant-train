@@ -64,6 +64,14 @@ window.LB_TERRITORY_CONFIG = Object.freeze({
     document.head.append(stylesheet);
   }
 
+  if (!document.getElementById('lbTrafficDetailsLayoutFix')) {
+    const layoutFix = document.createElement('link');
+    layoutFix.id = 'lbTrafficDetailsLayoutFix';
+    layoutFix.rel = 'stylesheet';
+    layoutFix.href = './assets/lb-traffic-details-layout-fix.css?v=1';
+    document.head.append(layoutFix);
+  }
+
   if (!document.getElementById('lbTrafficDetailsScript')) {
     const script = document.createElement('script');
     script.id = 'lbTrafficDetailsScript';
