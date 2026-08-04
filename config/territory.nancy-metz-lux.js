@@ -60,14 +60,14 @@ window.LB_TERRITORY_CONFIG = Object.freeze({
     const stylesheet = document.createElement('link');
     stylesheet.id = 'lbTrafficDetailsStyles';
     stylesheet.rel = 'stylesheet';
-    stylesheet.href = './assets/lb-traffic-details-v1.css?v=3';
+    stylesheet.href = './assets/lb-traffic-details-v1.css?v=4';
     document.head.append(stylesheet);
   }
 
   if (!document.getElementById('lbTrafficDetailsScript')) {
     const script = document.createElement('script');
     script.id = 'lbTrafficDetailsScript';
-    script.src = './assets/lb-traffic-details-v1.js?v=3';
+    script.src = './assets/lb-traffic-details-v1.js?v=4';
     script.async = false;
     document.head.append(script);
   }
