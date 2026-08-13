@@ -195,12 +195,14 @@ document.addEventListener('DOMContentLoaded', () => {
 }
 #trainInfo .terminal-partial-base {
   color: #ffffff !important;
+  -webkit-text-fill-color: #ffffff !important;
   font-weight: 700 !important;
-  opacity: .92 !important;
+  opacity: 1 !important;
   text-decoration-line: line-through !important;
-  text-decoration-color: rgba(255,255,255,.92) !important;
+  text-decoration-color: #ffffff !important;
   text-decoration-thickness: 1.4px !important;
   text-shadow: none !important;
+  filter: none !important;
 }
 #trainInfo .terminal-partial-new {
   color: #39a8ff !important;
@@ -208,6 +210,43 @@ document.addEventListener('DOMContentLoaded', () => {
   text-decoration: none !important;
   opacity: 1 !important;
   text-shadow: 0 0 8px rgba(57,168,255,.72), 0 0 14px rgba(57,168,255,.34) !important;
+}
+
+/* Même code couleur dans la fiche : retard orange, terminus bleu, tronçon supprimé rouge. */
+#trainDetailStops .lb-train-profile__stop.is-effective-endpoint .lb-train-profile__times s {
+  color: #ffffff !important;
+  text-decoration-color: #ffffff !important;
+  opacity: 1 !important;
+}
+#trainDetailStops .lb-train-profile__stop.is-effective-endpoint .lb-train-profile__times b {
+  color: #39a8ff !important;
+  text-shadow: 0 0 7px rgba(57,168,255,.5) !important;
+}
+#trainDetailStops .lb-train-profile__stop.is-cancel {
+  opacity: .78;
+}
+#trainDetailStops .lb-train-profile__stop.is-cancel .lb-train-profile__times b,
+#trainDetailStops .lb-train-profile__stop.is-cancel .lb-train-profile__stop-name strong {
+  color: #8f9aa1 !important;
+  text-decoration: line-through !important;
+  text-decoration-color: #8f9aa1 !important;
+}
+#trainDetailStops .lb-train-profile__stop.is-cancel .lb-train-profile__stop-name span {
+  color: #c95a60 !important;
+}
+#trainDetailStops .lb-train-profile__stop.is-cancel .lb-train-profile__dot {
+  border-color: #8b262a !important;
+  background: #8b262a !important;
+  box-shadow: 0 0 0 4px #09202b, 0 0 8px rgba(255,69,69,.32) !important;
+}
+#trainDetailStops .lb-train-profile__stop.is-cancel .lb-train-profile__delay {
+  display: inline-flex;
+  width: max-content;
+  padding: 2px 6px;
+  color: #ff5a5f !important;
+  border: 1px solid rgba(255,69,69,.25);
+  border-radius: 5px;
+  background: rgba(120,16,20,.42);
 }
 @media (max-width: 720px), (hover: none) and (pointer: coarse) and (max-width: 900px) {
   #trainInfo .partial-service-label {
@@ -8708,7 +8747,7 @@ const stopHasSchedule = (result, stopName) => {
           const terminalDepartureClock = ft(terminalDepartureRaw);
           const terminalHasDelay = !!terminalScheduledRaw && !!terminalDepartureRaw && dl(terminalScheduledRaw, terminalDepartureRaw) > 0;
           const terminalScheduledHtml = terminalHasDelay
-            ? `<span class="terminal-partial-base">${ft(terminalScheduledRaw)}</span>`
+            ? `<span class="terminal-partial-base" style="color:#fff!important;-webkit-text-fill-color:#fff!important;opacity:1!important;text-decoration-line:line-through!important;text-decoration-color:#fff!important;text-shadow:none!important;">${ft(terminalScheduledRaw)}</span>`
             : '';
           const terminalBaseAttr = terminalScheduledRaw ? ` data-base-time="${terminalScheduledRaw}" data-terminal-start="1"` : ' data-terminal-start="1"';
           const terminalClassAttr = cellClasses.length
@@ -8746,7 +8785,7 @@ const stopHasSchedule = (result, stopName) => {
           const terminalArrivalClock = ft(terminalArrivalRaw);
           const terminalHasDelay = !!terminalScheduledRaw && !!terminalArrivalRaw && dl(terminalScheduledRaw, terminalArrivalRaw) > 0;
           const terminalScheduledHtml = terminalHasDelay
-            ? `<span class="terminal-partial-base">${ft(terminalScheduledRaw)}</span>`
+            ? `<span class="terminal-partial-base" style="color:#fff!important;-webkit-text-fill-color:#fff!important;opacity:1!important;text-decoration-line:line-through!important;text-decoration-color:#fff!important;text-shadow:none!important;">${ft(terminalScheduledRaw)}</span>`
             : '';
           const terminalBaseAttr = terminalScheduledRaw ? ` data-base-time="${terminalScheduledRaw}" data-terminal-arrival="1"` : ' data-terminal-arrival="1"';
           const terminalClassAttr = cellClasses.length
@@ -25842,10 +25881,14 @@ async function loadAffluenceDate(dateStr){
     // puisse expliquer clairement que toute la circulation est supprimée.
     if (firstIndex < 0 || lastIndex < 0 || firstIndex > lastIndex) return enriched;
 
-    return enriched.slice(firstIndex, lastIndex + 1).map((row, index, effectiveRows) => ({
+    // La fiche conserve le parcours théorique complet. Les arrêts situés avant
+    // le nouveau départ ou après le terminus exceptionnel restent visibles,
+    // mais sont marqués comme supprimés.
+    return enriched.map((row, index) => ({
       ...row,
-      isNewOrigin: firstIndex > 0 && index === 0,
-      isNewTerminus: lastIndex < enriched.length - 1 && index === effectiveRows.length - 1
+      isDeleted: row.isDeleted || index < firstIndex || index > lastIndex,
+      isNewOrigin: firstIndex > 0 && index === firstIndex,
+      isNewTerminus: lastIndex < enriched.length - 1 && index === lastIndex
     }));
   }
 
@@ -26109,6 +26152,10 @@ async function loadAffluenceDate(dateStr){
     const fallbackPlanned = isLast
       ? (row?.arrival || row?.departure || '—')
       : (row?.departure || row?.arrival || '—');
+    // Une heure SNCF amendée est plus précise qu'un simple décalage GTFS-RT.
+    // Ex. 88503 à Metz : arrivée 07:30 → 08:10, sans départ après Metz.
+    const sncf = sncfRealtimeAtRow(row, liveBundle, isLast);
+    if (sncf.known) return sncf;
     const gtfs = liveBundle
       ? gtfsRealtimeAtStop(number, row?.name, liveBundle)
       : { known: false, delay: 0 };
@@ -26120,8 +26167,6 @@ async function loadAffluenceDate(dateStr){
         source: 'GTFS-RT'
       };
     }
-    const sncf = sncfRealtimeAtRow(row, liveBundle, isLast);
-    if (sncf.known) return sncf;
     return { planned: fallbackPlanned, actual: fallbackPlanned, delay: 0, source: '' };
   }
 
@@ -26278,9 +26323,10 @@ async function loadAffluenceDate(dateStr){
   if (type.className === 'is-partial') {
     try {
       const scheduledRows = normalizeJourneyRows(liveBundle);
-      const effectiveRows = scheduledRows.length
+      const serviceRows = scheduledRows.length
         ? applyEffectiveServicePattern(scheduledRows, liveBundle)
         : [];
+      const effectiveRows = serviceRows.filter((row) => !row.isDeleted);
       if (scheduledRows.length && effectiveRows.length) {
         const scheduledOrigin = String(scheduledRows[0]?.name || '').trim();
         const scheduledDestination = String(scheduledRows[scheduledRows.length - 1]?.name || '').trim();
@@ -26496,13 +26542,16 @@ async function loadAffluenceDate(dateStr){
           : (row.isNewTerminus
             ? 'TERMINUS EXCEPTIONNEL'
             : (row.delay > 0 ? `+${Math.round(row.delay)} min` : (liveBundle ? 'À L’HEURE' : ''))));
+      const stopMeta = row.canceled
+        ? 'Arrêt non desservi'
+        : (row.platform || (row.index === firstUpcoming && firstUpcoming > 0 ? 'Prochain arrêt' : 'Voie non communiquée'));
       return `
         <div class="${classes.join(' ')}">
           <div class="lb-train-profile__times">${timeHtml}</div>
           <i class="lb-train-profile__dot"></i>
           <div class="lb-train-profile__stop-name">
             <strong>${safe(row.name)}</strong>
-            <span>${safe(row.platform || (row.index === firstUpcoming && firstUpcoming > 0 ? 'Prochain arrêt' : 'Voie non communiquée'))}</span>
+            <span>${safe(stopMeta)}</span>
           </div>
           ${delayLabel ? `<span class="lb-train-profile__delay${row.delay === 0 && !row.canceled ? ' is-ok' : ''}">${safe(delayLabel)}</span>` : ''}
         </div>
@@ -26902,12 +26951,16 @@ async function loadAffluenceDate(dateStr){
         throw new Error(`Aucune circulation ${number} trouvée dans les horaires disponibles.`);
       }
 
-      const heroState = renderHero(number, dateIso, rows, liveBundle);
+      // Le bandeau décrit le trajet réellement assuré ; la timeline conserve
+      // également le tronçon théorique supprimé pour l'expliquer visuellement.
+      const effectiveRows = rows.filter((row) => !row.isDeleted);
+      const heroRows = effectiveRows.length ? effectiveRows : rows;
+      const heroState = renderHero(number, dateIso, heroRows, liveBundle);
       renderRoute(number, dateIso, rows, liveBundle);
       renderComposition(number, affluence);
       renderAffluence(affluence);
       renderReliability(reliability);
-      state.lastBundle = { number, dateIso, rows, liveBundle, reliability, affluence };
+      state.lastBundle = { number, dateIso, rows, effectiveRows, liveBundle, reliability, affluence };
       setupProfileActions(number, dateIso, !!heroState?.liveActive);
       refreshFavoriteButton();
       void ensureProfileTitle(number);
