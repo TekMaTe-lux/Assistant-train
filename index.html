@@ -1154,16 +1154,10 @@ document.addEventListener('DOMContentLoaded', () => {
       <div class="fav-meta" id="favMetaAM">—</div>
       <div class="fav-line" id="favLineAM"></div>
       <div class="fav-cause" id="favCauseAM"></div>
-      <section class="fav-recent" id="favRecentAM" aria-label="Dernières circulations du train du matin">
-        <div class="fav-recent-loading">Chargement de l’historique…</div>
-      </section>
       <details class="fav-details" id="favStatsAM">
-        <summary class="fav-details-summary" id="favStatsSummaryAM">Fiabilité sur 30 jours : <span class="fav-pct" id="favPctAM">—</span></summary>
-        <div class="fav-details-body" id="favStatsBodyAM"></div>
-      </details>
-      <button class="fav-profile-open" id="favProfileAM" type="button" hidden>
-        <span>Voir la fiche du train</span><span aria-hidden="true">→</span>
-      </button>
+      <summary class="fav-details-summary" id="favStatsSummaryAM">Fiabilité (10 jours): <span class="fav-pct" id="favPctAM">—</span></summary>
+      <div class="fav-details-body" id="favStatsBodyAM"></div>
+    </details>
     </article>
 
     <article class="fav-card" id="favCardPM">
@@ -1177,16 +1171,10 @@ document.addEventListener('DOMContentLoaded', () => {
       <div class="fav-meta" id="favMetaPM">—</div>
       <div class="fav-line" id="favLinePM"></div>
       <div class="fav-cause" id="favCausePM"></div>
-      <section class="fav-recent" id="favRecentPM" aria-label="Dernières circulations du train du soir">
-        <div class="fav-recent-loading">Chargement de l’historique…</div>
-      </section>
       <details class="fav-details" id="favStatsPM">
-        <summary class="fav-details-summary" id="favStatsSummaryPM">Fiabilité sur 30 jours : <span class="fav-pct" id="favPctPM">—</span></summary>
-        <div class="fav-details-body" id="favStatsBodyPM"></div>
-      </details>
-      <button class="fav-profile-open" id="favProfilePM" type="button" hidden>
-        <span>Voir la fiche du train</span><span aria-hidden="true">→</span>
-      </button>
+      <summary class="fav-details-summary" id="favStatsSummaryPM">Fiabilité (10 jours): <span class="fav-pct" id="favPctPM">—</span></summary>
+      <div class="fav-details-body" id="favStatsBodyPM"></div>
+    </details>
     </article>
   </div>
 </section>
@@ -15395,13 +15383,13 @@ function scheduleWeatherAfterTableSettled(){
   async function getFavQuickStatsData(trainId){
     if (!trainId) return null;
 
-    // Même fenêtre de 30 jours que la fiche train complète.
+    // 10 derniers jours (glissants)
     const r = (window.__lbStats && typeof window.__lbStats.getLastDaysRange === 'function')
-      ? window.__lbStats.getLastDaysRange(30)
+      ? window.__lbStats.getLastDaysRange(10)
       : null;
     if (!r?.from || !r?.to) return null;
 
-    const key = `${trainId}|${r.from}|${r.to}|v4`;
+    const key = `${trainId}|${r.from}|${r.to}|v3`;
     if (FAV_QUICK_STATS_CACHE.has(key)) return FAV_QUICK_STATS_CACHE.get(key);
 
     const getRawRangeFn = window.__lbStats && window.__lbStats.getRawRange;
@@ -15442,11 +15430,7 @@ function scheduleWeatherAfterTableSettled(){
       ? colorFn(pctOnTime)
       : window.lbPunctualityColor(pctOnTime);
 
-    const series = s
-      .filter((item) => item && item.date)
-      .sort((a, b) => String(a.date).localeCompare(String(b.date)))
-      .slice(-30);
-    const data = { from:r.from, to:r.to, total, pctOnTime, pctColor, onTime, delayed, canceled, partial, series };
+    const data = { from:r.from, to:r.to, total, pctOnTime, pctColor, onTime, delayed, canceled, partial };
     FAV_QUICK_STATS_CACHE.set(key, data);
     return data;
   }
@@ -15455,87 +15439,37 @@ function scheduleWeatherAfterTableSettled(){
     const sumEl = document.getElementById(kind === 'AM' ? 'favStatsSummaryAM' : 'favStatsSummaryPM');
     const bodyEl = document.getElementById(kind === 'AM' ? 'favStatsBodyAM' : 'favStatsBodyPM');
     const rootEl = document.getElementById(kind === 'AM' ? 'favStatsAM' : 'favStatsPM');
-    const recentEl = document.getElementById(kind === 'AM' ? 'favRecentAM' : 'favRecentPM');
-    if (!sumEl || !bodyEl || !rootEl || !recentEl) return;
-
-    const formatRunDate = (dateIso) => {
-      const parsed = new Date(`${dateIso}T12:00:00`);
-      if (!Number.isFinite(parsed.getTime())) return dateIso || 'Date inconnue';
-      return parsed.toLocaleDateString('fr-FR', { day:'2-digit', month:'2-digit' });
-    };
-    const runPresentation = (item) => {
-      const bucket = String(item?.bucket || '').toUpperCase();
-      const delay = Number(item?.value);
-      if (bucket === 'CANCELED') return { cls:'is-canceled', label:'Supprimé' };
-      if (bucket === 'PARTIAL') return { cls:'is-partial', label:'Suppression partielle' };
-      if (bucket === 'DELAYED') {
-        return { cls:'is-delayed', label:Number.isFinite(delay) && delay > 0 ? `Retard +${Math.round(delay)} min` : 'En retard' };
-      }
-      if (bucket === 'ON_TIME') return { cls:'is-on-time', label:'À l’heure' };
-      return { cls:'is-unknown', label:'Donnée indisponible' };
-    };
+    if (!sumEl || !bodyEl || !rootEl) return;
 
     if (!trainId){
-      sumEl.textContent = 'Fiabilité sur 30 jours : —';
+      sumEl.textContent = 'Fiabilite (10 jours): —';
       bodyEl.innerHTML = '';
-      recentEl.innerHTML = '';
       rootEl.open = false;
       return;
     }
 
-    recentEl.innerHTML = '<div class="fav-recent-loading">Chargement de l’historique…</div>';
     const data = await getFavQuickStatsData(trainId);
     if (!data){
-      sumEl.textContent = 'Fiabilité sur 30 jours : —';
+      sumEl.textContent = 'Fiabilite (10 jours): —';
       bodyEl.innerHTML = '';
-      recentEl.innerHTML = '<div class="fav-recent-empty">Historique indisponible pour ce train.</div>';
       return;
     }
 
-    sumEl.innerHTML = `Fiabilité sur 30 jours : <span class="fav-pct" style="color:${data.pctColor}">${data.pctOnTime}%</span>`;
+    // bandeau (compact)
+    sumEl.innerHTML = `Fiabilite (10 jours): <span class="fav-pct" style="color:${data.pctColor}">${data.pctOnTime}%</span>`;
 
-    const runs = Array.isArray(data.series) ? data.series.slice(-30) : [];
-    const latest = runs[runs.length - 1] || null;
-    const latestView = latest ? runPresentation(latest) : null;
-    recentEl.innerHTML = runs.length ? `
-      <div class="fav-recent-head">
-        <span>Dernières circulations</span>
-        <b>${data.total} circ.</b>
-      </div>
-      <div class="fav-recent-track" role="list" aria-label="État des dernières circulations">
-        ${runs.map((item) => {
-          const view = runPresentation(item);
-          const dateLabel = formatRunDate(String(item.date || ''));
-          return `
-            <button type="button"
-              class="fav-recent-run ${view.cls}"
-              data-date-label="${escapeHtml(dateLabel)}"
-              data-state-label="${escapeHtml(view.label)}"
-              title="${escapeHtml(dateLabel)} · ${escapeHtml(view.label)}"
-              aria-label="${escapeHtml(dateLabel)} : ${escapeHtml(view.label)}"
-              role="listitem"></button>
-          `;
-        }).join('')}
-      </div>
-      <output class="fav-recent-readout" aria-live="polite">${latest ? `${escapeHtml(formatRunDate(String(latest.date || '')))} · ${escapeHtml(latestView.label)}` : ''}</output>
-      <div class="fav-recent-legend" aria-hidden="true">
-        <span><i class="is-on-time"></i>À l’heure</span>
-        <span><i class="is-delayed"></i>Retard</span>
-        <span><i class="is-partial"></i>Partiel</span>
-        <span><i class="is-canceled"></i>Supprimé</span>
-      </div>
-    ` : '<div class="fav-recent-empty">Aucune circulation enregistrée sur cette période.</div>';
-
+    // details (dans le drop-down)
     bodyEl.innerHTML = `
       <div class="fav-minirow">
-        <span class="stats-status-on-time">✅ ${data.onTime} à l’heure</span>
-        <span class="stats-status-delayed">⏰ ${data.delayed} retard${data.delayed > 1 ? 's' : ''}</span>
-        <span class="stats-status-canceled">❌ ${data.canceled} suppression${data.canceled > 1 ? 's' : ''}</span>
-        <span class="stats-status-partial">🟠 ${data.partial} partielle${data.partial > 1 ? 's' : ''}</span>
+        <span class="stats-status-on-time">✅ ${data.onTime} a l'heure</span>
+        <span class="stats-status-delayed">⏰ ${data.delayed} retard</span>
+        <span class="stats-status-canceled">❌ ${data.canceled} suppr.</span>
+        <span class="stats-status-partial">🟠 ${data.partial} suppr. partielle</span>
       </div>
-      <div class="fav-note">Calculé sur les circulations disponibles des 30 derniers jours.</div>
+      <div class="fav-note">Base: uniquement les jours trouves dans tes stats (week-end sans circulation = non penalise).</div>
     `;
 
+    // ne pas refermer si l'utilisateur a ouvert
     if (!rootEl.hasAttribute('data-user-opened')) rootEl.open = false;
   }
 
@@ -16233,8 +16167,6 @@ function getGtfsDelayForStop(trainNumber, stopName){
     const line    = document.getElementById(kind === 'AM' ? 'favLineAM'  : 'favLinePM');
     const causeEl = document.getElementById(kind === 'AM' ? 'favCauseAM' : 'favCausePM');
     const statsEl = document.getElementById(kind === 'AM' ? 'favStatsAM' : 'favStatsPM');
-    const profileBtn = document.getElementById(kind === 'AM' ? 'favProfileAM' : 'favProfilePM');
-    const recentEl = document.getElementById(kind === 'AM' ? 'favRecentAM' : 'favRecentPM');
     const card    = document.getElementById(kind === 'AM' ? 'favCardAM'  : 'favCardPM');
 
     if (statsEl && !statsEl.__lbBound){
@@ -16246,12 +16178,6 @@ function getGtfsDelayForStop(trainNumber, stopName){
 
     if (card) card.classList.remove('is-canceled', 'is-delayed');
     try { title.dataset.trainId = String(trainId || ''); } catch(_) {}
-    if (profileBtn) {
-      profileBtn.hidden = !trainId;
-      profileBtn.dataset.train = String(trainId || '');
-      profileBtn.setAttribute('aria-label', trainId ? `Voir la fiche complète du train ${trainId}` : 'Voir la fiche du train');
-    }
-    if (recentEl && !trainId) recentEl.innerHTML = '';
     title.innerHTML = `<span class="fav-train-wrap"><span class="fav-train-num">TER ${escapeHtml(trainId || '—')}</span></span>`;
 	if (badgeEl) badgeEl.innerHTML = '';
     meta.innerHTML = '';
@@ -16312,17 +16238,6 @@ function getGtfsDelayForStop(trainNumber, stopName){
       else if (st.now >= effectiveDepMin && st.now <= effectiveArrLast) widgetState = 'running';
       else if (st.now > effectiveArrLast) widgetState = 'after';
     }
-    if (profileBtn) {
-      const labels = {
-        before: 'Voir la fiche avant départ',
-        running: 'Suivre le train en direct',
-        after: 'Voir le bilan du trajet',
-        unknown: 'Voir la fiche du train'
-      };
-      profileBtn.dataset.state = widgetState || 'unknown';
-      const labelNode = profileBtn.querySelector('span');
-      if (labelNode) labelNode.textContent = labels[widgetState] || labels.unknown;
-    }
 	const stateBadge = buildWidgetStateBadge(widgetState);
     const typeBadge = (window.buildFavTrainTypeBadge ? window.buildFavTrainTypeBadge(trainId) : '');
 	if (badgeEl) badgeEl.innerHTML = `${typeBadge}${stateBadge}`;
@@ -16335,11 +16250,6 @@ function getGtfsDelayForStop(trainNumber, stopName){
       else if (canceledAfterLiveMin != null && st.now != null && st.now > canceledAfterLiveMin) canceledState = 'after';
       else if (st.now != null) canceledState = 'running';
       if (card) card.classList.add('is-canceled');
-      if (profileBtn) {
-        profileBtn.dataset.state = 'canceled';
-        const labelNode = profileBtn.querySelector('span');
-        if (labelNode) labelNode.textContent = 'Voir le détail de la suppression';
-      }
 	  if (badgeEl) badgeEl.innerHTML = `${typeBadge}${buildWidgetStateBadge(canceledState)} <span class="fav-cancel-badge">✖ SUPPRIMÉ</span>`;
       meta.innerHTML = `
         <div class="fav-primary-route">${escapeHtml(origin)} → ${escapeHtml(dest)}</div>
@@ -16488,37 +16398,6 @@ if (statsEl){
       if (!statsEl.hasAttribute('data-user-opened')) statsEl.open = false;
     }
   };
-  // Interaction légère de l'historique + ouverture de la fiche train unifiée.
-  if (!window.__lbFavProfileOpenBound){
-    window.__lbFavProfileOpenBound = true;
-    document.addEventListener('click', (event) => {
-      const run = event.target?.closest?.('.fav-recent-run');
-      if (run) {
-        event.preventDefault();
-        const host = run.closest('.fav-recent');
-        host?.querySelectorAll('.fav-recent-run.is-selected').forEach((item) => item.classList.remove('is-selected'));
-        run.classList.add('is-selected');
-        const readout = host?.querySelector('.fav-recent-readout');
-        if (readout) readout.textContent = `${run.dataset.dateLabel || ''} · ${run.dataset.stateLabel || ''}`;
-        return;
-      }
-
-      const button = event.target?.closest?.('.fav-profile-open');
-      if (!button) return;
-      event.preventDefault();
-      const trainId = String(button.dataset.train || '').match(/\d{5,6}/)?.[0] || '';
-      if (!trainId || typeof window.lbOpenTrainProfile !== 'function') return;
-      button.classList.add('is-loading');
-      button.disabled = true;
-      Promise.resolve(window.lbOpenTrainProfile(trainId, luxYmdToday(), { origin:'favorites' }))
-        .catch((error) => console.error('[Favoris] ouverture de la fiche impossible', error))
-        .finally(() => {
-          button.classList.remove('is-loading');
-          button.disabled = false;
-        });
-    }, true);
-  }
-
   // Clic sur "Détail" dans l'affluence des favoris -> ouvre la section Affluence + détail du train
   if (!window.__lbFavAffOpenBound){
     window.__lbFavAffOpenBound = true;
@@ -27770,181 +27649,6 @@ async function loadAffluenceDate(dateStr){
     font-weight: 700 !important;
     line-height: 1 !important;
     letter-spacing: .015em !important;
-  }
-}
-</style>
-
-
-<style id="lb-favorites-profile-preview-v1">
-#favTrainsWidget .fav-recent {
-  margin: 10px 0 8px;
-  padding: 10px;
-  border: 1px solid rgba(62, 228, 244, .18);
-  border-radius: 10px;
-  background: rgba(3, 17, 27, .5);
-}
-#favTrainsWidget .fav-recent-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  margin-bottom: 8px;
-  color: #8fb5c0;
-  font: 700 10px/1.1 "Orbitron", system-ui, sans-serif;
-  letter-spacing: .035em;
-  text-transform: uppercase;
-}
-#favTrainsWidget .fav-recent-head b {
-  flex: 0 0 auto;
-  padding: 3px 6px;
-  border: 1px solid rgba(62, 228, 244, .28);
-  border-radius: 999px;
-  color: #56eaf7;
-  font-size: 8px;
-}
-#favTrainsWidget .fav-recent-track {
-  display: flex;
-  align-items: stretch;
-  gap: 3px;
-  width: 100%;
-  height: 29px;
-  overflow: hidden;
-}
-#favTrainsWidget .fav-recent-run {
-  flex: 1 1 0;
-  min-width: 3px !important;
-  height: 29px !important;
-  min-height: 29px !important;
-  padding: 0 !important;
-  border: 0 !important;
-  border-radius: 4px !important;
-  background: #53636a;
-  box-shadow: inset 0 0 0 1px rgba(255,255,255,.08);
-  cursor: pointer;
-  transition: transform .14s ease, filter .14s ease, box-shadow .14s ease;
-}
-#favTrainsWidget .fav-recent-run.is-on-time,
-#favTrainsWidget .fav-recent-legend i.is-on-time { background: #2add88; }
-#favTrainsWidget .fav-recent-run.is-delayed,
-#favTrainsWidget .fav-recent-legend i.is-delayed { background: #fd7e14; }
-#favTrainsWidget .fav-recent-run.is-partial,
-#favTrainsWidget .fav-recent-legend i.is-partial { background: #ffc107; }
-#favTrainsWidget .fav-recent-run.is-canceled,
-#favTrainsWidget .fav-recent-legend i.is-canceled { background: #dc3545; }
-#favTrainsWidget .fav-recent-run.is-selected,
-#favTrainsWidget .fav-recent-run:focus-visible {
-  z-index: 1;
-  outline: none;
-  transform: translateY(-2px);
-  filter: brightness(1.2);
-  box-shadow: 0 0 0 2px #dffcff, 0 0 9px currentColor;
-}
-#favTrainsWidget .fav-recent-readout {
-  display: block;
-  min-height: 14px;
-  margin-top: 6px;
-  color: #d8f7fb;
-  font: 700 10px/1.2 "Rajdhani", system-ui, sans-serif;
-}
-#favTrainsWidget .fav-recent-legend {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px 9px;
-  margin-top: 5px;
-  color: #76949d;
-  font: 600 8px/1 "Rajdhani", system-ui, sans-serif;
-}
-#favTrainsWidget .fav-recent-legend span {
-  display: inline-flex;
-  align-items: center;
-  gap: 3px;
-}
-#favTrainsWidget .fav-recent-legend i {
-  width: 5px;
-  height: 5px;
-  border-radius: 50%;
-}
-#favTrainsWidget .fav-recent-loading,
-#favTrainsWidget .fav-recent-empty {
-  color: #78949d;
-  font: 600 10px/1.3 "Rajdhani", system-ui, sans-serif;
-}
-#favTrainsWidget .fav-details {
-  margin-top: 0;
-}
-#favTrainsWidget .fav-details-summary {
-  min-height: 34px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  padding: 0 10px;
-}
-#favTrainsWidget .fav-profile-open {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 9px;
-  width: 100%;
-  height: 36px;
-  min-height: 36px;
-  margin-top: 8px;
-  padding: 0 12px;
-  border: 1px solid rgba(61, 229, 244, .48);
-  border-radius: 10px;
-  background: linear-gradient(135deg, rgba(7, 44, 57, .96), rgba(4, 25, 36, .98));
-  color: #73eff9;
-  box-shadow: inset 0 0 15px rgba(61, 229, 244, .05);
-  font: 800 10px/1 "Orbitron", system-ui, sans-serif;
-  letter-spacing: .025em;
-  cursor: pointer;
-}
-#favTrainsWidget .fav-profile-open[data-state="running"] {
-  border-color: rgba(42, 221, 136, .55);
-  color: #63efa8;
-  background: linear-gradient(135deg, rgba(5, 52, 39, .96), rgba(4, 28, 31, .98));
-}
-#favTrainsWidget .fav-profile-open[data-state="after"] {
-  border-color: rgba(130, 166, 176, .35);
-  color: #b7d0d7;
-}
-#favTrainsWidget .fav-profile-open[data-state="canceled"] {
-  border-color: rgba(220, 53, 69, .58);
-  color: #ff7d89;
-  background: linear-gradient(135deg, rgba(57, 11, 17, .96), rgba(28, 15, 24, .98));
-}
-#favTrainsWidget .fav-profile-open:hover,
-#favTrainsWidget .fav-profile-open:focus-visible {
-  border-color: #62edf8;
-  color: #eaffff;
-  outline: none;
-  box-shadow: 0 0 10px rgba(61, 229, 244, .18);
-}
-#favTrainsWidget .fav-profile-open[hidden] {
-  display: none !important;
-}
-#favTrainsWidget .fav-profile-open.is-loading {
-  opacity: .68;
-  cursor: wait;
-}
-@media (max-width: 700px) {
-  #favTrainsWidget .fav-recent {
-    margin-top: 9px;
-    padding: 9px;
-  }
-  #favTrainsWidget .fav-recent-track {
-    gap: 2px;
-    height: 27px;
-  }
-  #favTrainsWidget .fav-recent-run {
-    height: 27px !important;
-    min-height: 27px !important;
-    border-radius: 3px !important;
-  }
-  #favTrainsWidget .fav-profile-open {
-    height: 35px;
-    min-height: 35px;
-    font-size: 9.5px;
   }
 }
 </style>
