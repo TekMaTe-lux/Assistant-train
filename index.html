@@ -164,6 +164,54 @@ document.addEventListener('DOMContentLoaded', () => {
 .alert-detail-desc a:hover { color: #ffffff; }
 </style>
 
+<style id="lb-alert-layout-fix-v2">
+.disruption-grid,
+.disruption-box {
+  min-width: 0;
+}
+.disruption-box {
+  overflow: hidden;
+}
+.disruption-title-text,
+.disruption-description,
+.alert-detail-desc {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  word-break: normal;
+}
+.disruption-trains {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  max-width: 100%;
+}
+.disruption-train-pill {
+  flex: 0 0 auto;
+  max-width: 100%;
+}
+.disruption-more {
+  margin-top: 8px;
+  min-width: 0;
+}
+.disruption-more summary {
+  color: #55eaff;
+  cursor: pointer;
+  font-weight: 800;
+  overflow-wrap: anywhere;
+}
+.disruption-description--full {
+  margin-top: 7px;
+  padding-top: 7px;
+  border-top: 1px solid rgba(85, 234, 255, .25);
+}
+.disruption-source {
+  margin-top: 7px;
+  color: #7897a0;
+  font-size: .72rem;
+  text-align: right;
+}
+</style>
+
 
 <style id="lb-partial-service-table-v1">
 #trainInfo td.terminal-arrival-cell,
@@ -9959,6 +10007,7 @@ function resetGtfsRetards(scope) {
 }
 /* ---------- ALERTES ---------- */
 const urlAlertes = 'https://vps.labetaillere.fr/gtfs/alertes_sillon_lorrain.json';
+const urlSiriAlertes = 'https://vps.labetaillere.fr/gtfs/siri_sx_alertes.json';
 const LB_ALERTS_BY_TRAIN = new Map();
 const LB_ALERTS_BY_KEY = new Map();
 const LB_TABLE_DISRUPTIONS_BY_TRAIN = new Map();
@@ -10142,10 +10191,11 @@ async function chargerEtAfficherAlertes() {
         return;
       }
 
+      // Conserver href avant le nettoyage des attributs, sinon tous les liens disparaissent.
+      const originalHref = el.tagName === 'A' ? (el.getAttribute('href') || '') : '';
       Array.from(el.attributes).forEach((attr) => el.removeAttribute(attr.name));
 
       if (el.tagName === 'A') {
-        const originalHref = el.getAttribute('href') || '';
         let safeHref = '';
         try {
           const url = new URL(originalHref, window.location.href);
@@ -10189,13 +10239,24 @@ async function chargerEtAfficherAlertes() {
   if (existingInfo) existingInfo.remove();
   updateDisruptionsSummaryVisibility();
 
-  fetch(urlAlertes + "?t=" + new Date().getTime())
-    .then(response => {
+  const cacheBust = "?t=" + new Date().getTime();
+  Promise.all([
+    fetch(urlAlertes + cacheBust).then(response => {
       if (!response.ok) throw new Error(`HTTP ${response.status} sur ${urlAlertes}`);
       return response.json();
+    }),
+    fetch(urlSiriAlertes + cacheBust).then(response => {
+      if (!response.ok) throw new Error(`HTTP ${response.status} sur ${urlSiriAlertes}`);
+      return response.json();
+    }).catch((error) => {
+      // Une panne SIRI ne doit jamais empêcher l'affichage des alertes GTFS.
+      console.warn('[alertes] SIRI indisponible, GTFS conservé :', error);
+      return { situations: [] };
     })
-    .then(alertesRaw => {
-      const alertes = Array.isArray(alertesRaw) ? alertesRaw : [];
+  ])
+    .then(([alertesRaw, siriRaw]) => {
+      const alertes = Array.isArray(alertesRaw) ? alertesRaw.slice() : [];
+      const siriSituations = Array.isArray(siriRaw?.situations) ? siriRaw.situations : [];
 
       let infoWrapper = document.getElementById('alertesInline');
       if (!infoWrapper) {
@@ -10208,6 +10269,100 @@ async function chargerEtAfficherAlertes() {
 
       // ⚙️ sets construits à partir des trains AFFICHÉS
       const sets = buildDisplayedFilters(ymd);
+
+      /*
+       * Normalisation SIRI -> modèle déjà utilisé par le rendu GTFS.
+       * La pertinence repose sur les trains affectés et la période, jamais sur un mot isolé.
+       * Les doublons SIRI portant le même texte sont fusionnés avant affichage.
+       */
+      const escapeAlertHtml = (value) => String(value || '').replace(/[&<>"']/g, (char) => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+      }[char]));
+
+      const siriGroups = new Map();
+      siriSituations.forEach((situation) => {
+        if (!situation || typeof situation !== 'object') return;
+        const fullText = String(situation.detail || situation.description || '').trim();
+        const dedupeKey = normalizeAlertText(fullText || situation.summary || situation.situation_number || '');
+        if (!dedupeKey) return;
+
+        if (!siriGroups.has(dedupeKey)) {
+          siriGroups.set(dedupeKey, {
+            ...situation,
+            affects: Array.isArray(situation.affects) ? situation.affects.slice() : [],
+            links: Array.isArray(situation.links) ? situation.links.slice() : []
+          });
+          return;
+        }
+
+        const current = siriGroups.get(dedupeKey);
+        current.affects.push(...(Array.isArray(situation.affects) ? situation.affects : []));
+        const knownUrls = new Set(current.links.map((link) => String(link?.url || '')));
+        (Array.isArray(situation.links) ? situation.links : []).forEach((link) => {
+          const url = String(link?.url || '');
+          if (url && !knownUrls.has(url)) {
+            current.links.push(link);
+            knownUrls.add(url);
+          }
+        });
+      });
+
+      siriGroups.forEach((situation) => {
+        const entities = [];
+        (Array.isArray(situation.affects) ? situation.affects : []).forEach((affected) => {
+          (Array.isArray(affected?.vehicle_journeys) ? affected.vehicle_journeys : [])
+            .forEach((ref) => entities.push({ vehicle_journey_id: String(ref) }));
+          (Array.isArray(affected?.stop_points) ? affected.stop_points : [])
+            .forEach((ref) => entities.push({ stop_id: String(ref) }));
+        });
+
+        // Une situation sans aucun périmètre structuré ne doit pas créer une carte globale.
+        if (!entities.length) return;
+
+        const periods = Array.isArray(situation.validity_periods)
+          ? situation.validity_periods
+          : [];
+        const starts = periods.map((p) => Date.parse(p?.start || '')).filter(Number.isFinite);
+        const ends = periods.map((p) => Date.parse(p?.end || '')).filter(Number.isFinite);
+        const shortDescription = String(situation.description || situation.detail || '').trim();
+        const fullDescription = String(situation.detail || situation.description || '').trim();
+        const searchable = normalizeAlertText(`${shortDescription} ${fullDescription}`);
+
+        let title = String(situation.summary || '').trim();
+        if (!title && /thionville/.test(searchable) && /luxembourg/.test(searchable)
+            && /(travaux|supprim|remplac|cars?)/.test(searchable)) {
+          title = 'Travaux Thionville–Luxembourg';
+        }
+        if (!title) {
+          const firstSentence = shortDescription.split(/(?<=[.!?])\s+/)[0] || 'Information trafic';
+          title = firstSentence.length > 92 ? `${firstSentence.slice(0, 89)}…` : firstSentence;
+        }
+
+        const detailBody = escapeAlertHtml(fullDescription).replace(/\n/g, '<br>');
+        const linksHtml = (Array.isArray(situation.links) ? situation.links : [])
+          .filter((link) => /^https?:\/\//i.test(String(link?.url || '')))
+          .map((link) => {
+            const rawLabel = String(link?.label || '').trim();
+            const label = normalizeAlertText(rawLabel) === 'ici'
+              ? 'Fiche informative'
+              : (rawLabel || 'En savoir plus');
+            return `<a href="${escapeAlertHtml(link.url)}">${escapeAlertHtml(label)}</a>`;
+          })
+          .join(' · ');
+
+        alertes.push({
+          header_text: title,
+          description_text: `<p>${escapeAlertHtml(shortDescription)}</p>`,
+          detail_html: `<p>${detailBody}</p>${linksHtml ? `<p class="alert-source-links">${linksHtml}</p>` : ''}`,
+          cause: '',
+          effect: 9,
+          active_period_start: starts.length ? Math.floor(Math.min(...starts) / 1000) : null,
+          active_period_end: ends.length ? Math.floor(Math.max(...ends) / 1000) : null,
+          informed_entities: entities,
+          source: 'SIRI-SX',
+          source_id: String(situation.situation_number || '')
+        });
+      });
 
       // Nettoyage des états visuels d'alertes du tableau.
       // Important : on vide aussi le Set global, sinon les favoris peuvent rester en "réduit"
@@ -10264,6 +10419,9 @@ async function chargerEtAfficherAlertes() {
         const descriptionRaw = String(alerte.description_text ?? '');
         const description = stripHtml(descriptionRaw);
         const descriptionHtml = sanitizeAlertHtml(descriptionRaw, titre);
+        const detailRaw = String(alerte.detail_html ?? descriptionRaw);
+        const detailHtml = sanitizeAlertHtml(detailRaw, titre);
+        const hasExtendedDetail = normalizeAlertText(detailRaw) !== normalizeAlertText(descriptionRaw);
         // Ne PAS se baser uniquement sur code === 2 : certaines alertes SNCF de retard global
         // remontent avec ce code et provoquent à tort une "composition réduite" sur tous les trains.
         // On marque réduit seulement si le libellé parle explicitement de capacité / places assises / composition courte.
@@ -10300,9 +10458,10 @@ async function chargerEtAfficherAlertes() {
           level: (styleMeta.prio === 1) ? 'red' : ((styleMeta.prio === 2 || styleMeta.prio === 3 || isReducedSeats) ? 'orange' : 'info'),
           icon: styleMeta.icone || 'ℹ️',
           title: titre || styleMeta.label || 'Information',
-          description: description || '',
-          descriptionHtml: descriptionHtml || '',
-          trains: trainsCibles.slice()
+          description: stripHtml(detailRaw) || description || '',
+          descriptionHtml: detailHtml || descriptionHtml || '',
+          trains: trainsCibles.slice(),
+          source: alerte.source || 'GTFS-RT'
         };
         LB_ALERTS_BY_KEY.set(detailEntry.key, detailEntry);
         trainsCibles.forEach((tn) => {
@@ -10364,7 +10523,13 @@ async function chargerEtAfficherAlertes() {
             <span class="disruption-title-text">${titre}</span>
           </div>
           ${descriptionHtml ? `<div class="disruption-description">${descriptionHtml}</div>` : ''}
+          ${hasExtendedDetail ? `
+            <details class="disruption-more">
+              <summary>Voir le message complet et les liens</summary>
+              <div class="disruption-description disruption-description--full">${detailHtml}</div>
+            </details>` : ''}
           ${trainsHtml}
+          ${alerte.source ? `<div class="disruption-source">Source : ${escapeAlertHtml(alerte.source)}</div>` : ''}
         `;
         infoWrapper.appendChild(div);
       });
