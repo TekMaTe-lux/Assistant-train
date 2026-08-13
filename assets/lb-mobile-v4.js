@@ -13,6 +13,16 @@
     return mobileQuery.matches;
   }
 
+  function syncGenerateButton() {
+    const button = document.getElementById("loadTrains");
+    if (!button) return;
+    const mobile = isMobileLayout();
+    const label = mobile ? "Générer" : "Générer le tableau";
+    if ((button.textContent || "").trim() !== label) button.textContent = label;
+    button.setAttribute("aria-label", label);
+    button.classList.toggle("lb-generate-mobile", mobile);
+  }
+
   function syncViewport() {
     const viewport = window.visualViewport;
     const visualHeight = Math.round(viewport?.height || window.innerHeight || 0);
@@ -108,6 +118,7 @@
     removeCompactMoreMenu();
     watchTrainTable();
     watchSecondaryNavigation();
+    syncGenerateButton();
     syncViewport();
 
     window.addEventListener("resize", syncViewport, { passive: true });
@@ -121,6 +132,7 @@
     window.visualViewport?.addEventListener("scroll", syncViewport, { passive: true });
     mobileQuery.addEventListener?.("change", () => {
       removeCompactMoreMenu();
+      syncGenerateButton();
       syncViewport();
     });
   }
