@@ -15378,27 +15378,33 @@ function scheduleWeatherAfterTableSettled(){
 
 
 
-  // --- Aperçu compact des 30 dernières circulations ---
-  // Source directe identique à la fiche train, sans dépendre de l'ouverture du module STATS.
+  // --- Fiabilité des favoris : mêmes données et mêmes calculs que la fiche train ---
+  // Source directe, sans dépendre de l'ouverture du module STATS.
   const FAV_QUICK_STATS_CACHE = new Map();
   async function getFavQuickStatsData(trainId){
     if (!trainId) return null;
 
-    const to = new Date().toLocaleDateString('en-CA', { timeZone:'Europe/Luxembourg' });
-    const toDate = new Date(`${to}T12:00:00Z`);
+    const today = new Date().toLocaleDateString('en-CA', { timeZone:'Europe/Luxembourg' });
+    const toDate = new Date(`${today}T12:00:00Z`);
+    toDate.setUTCDate(toDate.getUTCDate() - 1);
+    const to = toDate.toISOString().slice(0, 10);
     const fromDate = new Date(toDate.getTime() - (29 * 86400000));
     const from = fromDate.toISOString().slice(0, 10);
-    const key = `${trainId}|${from}|${to}|compact-v1`;
+    const key = `${trainId}|${from}|${to}|profile-v2`;
     if (FAV_QUICK_STATS_CACHE.has(key)) return FAV_QUICK_STATS_CACHE.get(key);
 
     try {
-      const query = new URLSearchParams({ from, to, trainId:String(trainId) });
-      const response = await fetch(
-        `https://vps.labetaillere.fr/api/stats/gtfs/train?${query.toString()}`,
-        { cache:'no-store', credentials:'include' }
-      );
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      const payload = await response.json();
+      const trainQuery = new URLSearchParams({ from, to, trainId:String(trainId) });
+      const dailyQuery = new URLSearchParams({ from, to });
+      const fetchStatsJson = async (url) => {
+        const response = await fetch(url, { cache:'no-store', credentials:'include' });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        return response.json();
+      };
+      const [payload, dailyPayload] = await Promise.all([
+        fetchStatsJson(`https://vps.labetaillere.fr/api/stats/gtfs/train?${trainQuery.toString()}`),
+        fetchStatsJson(`https://vps.labetaillere.fr/api/stats/beta/daily?${dailyQuery.toString()}`).catch(() => null)
+      ]);
       const series = (Array.isArray(payload?.series) ? payload.series : [])
         .filter((item) => item && item.date)
         .sort((a, b) => String(a.date).localeCompare(String(b.date)));
@@ -15408,21 +15414,51 @@ function scheduleWeatherAfterTableSettled(){
       }
 
       let onTime = 0, delayed = 0, canceled = 0, partial = 0;
+      const delays = [];
       series.forEach((item) => {
         const bucket = String(item?.bucket || item?.status || '').toUpperCase();
         if (bucket === 'ON_TIME') onTime += 1;
-        else if (bucket === 'DELAYED') delayed += 1;
+        else if (bucket === 'DELAYED') {
+          delayed += 1;
+          if (Number.isFinite(Number(item?.value))) delays.push(Number(item.value));
+        }
         else if (bucket === 'CANCELED') canceled += 1;
         else if (bucket === 'PARTIAL') partial += 1;
       });
       const total = onTime + delayed + canceled + partial;
       if (!total) return null;
       const pctOnTime = Math.round((onTime / total) * 100);
-      const colorFn = window.__lbStats && window.__lbStats.colorForPunctuality;
+      const colorFn = window.lbPunctualityColor
+        || (window.__lbStats && window.__lbStats.colorForPunctuality);
       const pctColor = typeof colorFn === 'function'
         ? colorFn(pctOnTime)
-        : (pctOnTime >= 90 ? '#2add88' : pctOnTime >= 75 ? '#ffc107' : '#fd7e14');
-      const data = { from, to, total, pctOnTime, pctColor, onTime, delayed, canceled, partial, series };
+        : (pctOnTime >= 95 ? '#2add88' : pctOnTime >= 85 ? '#ffc107' : pctOnTime >= 75 ? '#fd7e14' : '#dc3545');
+
+      // Même calendrier que la fiche : vert/orange/rouge/jaune, gris lorsque
+      // le train ne circulait pas ou que la donnée journalière manque.
+      const observedDates = new Set(
+        (dailyPayload?.series || []).map((item) => String(item?.date || '')).filter(Boolean)
+      );
+      const runsByDate = new Map(series.map((item) => [String(item.date), item]));
+      const calendarSeries = [];
+      for (let cursor = new Date(`${from}T12:00:00Z`); cursor <= toDate; cursor = new Date(cursor.getTime() + 86400000)) {
+        const date = cursor.toISOString().slice(0, 10);
+        calendarSeries.push(runsByDate.get(date) || {
+          date,
+          bucket: observedDates.has(date) ? 'NOT_RUNNING' : 'NO_DATA',
+          value: null
+        });
+      }
+      const average = delays.length
+        ? Math.round(delays.reduce((sum, value) => sum + value, 0) / delays.length)
+        : 0;
+      const maximum = delays.length ? Math.max(...delays) : 0;
+      const data = {
+        from, to, total, pctOnTime, pctColor,
+        onTime, delayed, canceled, partial,
+        average, maximum,
+        series: calendarSeries
+      };
       FAV_QUICK_STATS_CACHE.set(key, data);
       return data;
     } catch (error) {
@@ -15459,27 +15495,41 @@ function scheduleWeatherAfterTableSettled(){
       if (bucket === 'CANCELED') return { cls:'is-canceled', label:'Supprimé' };
       if (bucket === 'PARTIAL') return { cls:'is-partial', label:'Partiel' };
       if (bucket === 'DELAYED') return { cls:'is-delayed', label:Number.isFinite(delay) && delay > 0 ? `+${Math.round(delay)} min` : 'Retard' };
-      return { cls:'is-on-time', label:'À l’heure' };
+      if (bucket === 'ON_TIME') return { cls:'is-on-time', label:'À l’heure' };
+      if (bucket === 'NOT_RUNNING') return { cls:'is-not-running', label:'Ne circulait pas' };
+      return { cls:'is-no-data', label:'Donnée indisponible' };
     };
-    const runs = data.series.slice(-16);
+    const runs = data.series.slice(-30);
     const runsHtml = runs.map((item) => {
       const view = runView(item);
       const date = String(item.date || '').split('-').slice(1).reverse().join('/');
-      return `<i class="fav-summary-run ${view.cls}" title="${escapeHtml(date)} · ${escapeHtml(view.label)}" aria-label="${escapeHtml(date)} : ${escapeHtml(view.label)}"></i>`;
+      return `<i class="fav-summary-run ${view.cls}" role="button" tabindex="0" data-date-label="${escapeHtml(date)}" data-state-label="${escapeHtml(view.label)}" title="${escapeHtml(date)} · ${escapeHtml(view.label)}" aria-label="${escapeHtml(date)} : ${escapeHtml(view.label)}"></i>`;
     }).join('');
 
     sumEl.innerHTML = `
-      <span class="fav-stats-label">Fiabilité (30 j) : <b style="color:${data.pctColor}">${data.pctOnTime}%</b></span>
-      <span class="fav-summary-runs" aria-label="Aperçu des 16 dernières circulations">${runsHtml}</span>
+      <span class="fav-stats-label">Fiabilité (30 j) : <b class="fav-reliability-pct" style="color:${data.pctColor}">${data.pctOnTime}%</b></span>
     `;
     bodyEl.innerHTML = `
-      <div class="fav-minirow">
-        <span class="stats-status-on-time">✅ ${data.onTime} à l’heure</span>
-        <span class="stats-status-delayed">⏰ ${data.delayed} retard${data.delayed > 1 ? 's' : ''}</span>
-        <span class="stats-status-canceled">❌ ${data.canceled} suppr.</span>
-        <span class="stats-status-partial">🟠 ${data.partial} partielle${data.partial > 1 ? 's' : ''}</span>
+      <div class="fav-reliability-metrics">
+        <div><span>Retard moyen</span><b>${data.average} min</b></div>
+        <div><span>Retard maximum</span><b>${data.maximum} min</b></div>
+        <div><span>Suppressions</span><b>${data.canceled}</b></div>
+        <div><span>Suppr. partielles</span><b>${data.partial}</b></div>
+      </div>
+      <div class="fav-reliability-runs">
+        <span class="fav-reliability-runs-title">Dernières circulations</span>
+        <span class="fav-summary-runs" aria-label="État du train sur les 30 derniers jours">${runsHtml}</span>
+        <output class="fav-reliability-readout" aria-live="polite">Appuie sur une barre pour afficher la date.</output>
       </div>
     `;
+    const showRun = (bar) => {
+      const output = bodyEl.querySelector('.fav-reliability-readout');
+      if (!bar || !output) return;
+      bodyEl.querySelectorAll('.fav-summary-run').forEach((item) => item.classList.toggle('is-active', item === bar));
+      output.innerHTML = `<b>${escapeHtml(bar.dataset.dateLabel || '')}</b><span>${escapeHtml(bar.dataset.stateLabel || '')}</span>`;
+    };
+    bodyEl.onclick = (event) => showRun(event.target.closest?.('.fav-summary-run'));
+    bodyEl.onfocusin = (event) => showRun(event.target.closest?.('.fav-summary-run'));
     if (!rootEl.hasAttribute('data-user-opened')) rootEl.open = false;
   }
 
@@ -27743,6 +27793,76 @@ async function loadAffluenceDate(dateStr){
 #favTrainsWidget .fav-summary-run.is-delayed { background:#fd7e14; }
 #favTrainsWidget .fav-summary-run.is-partial { background:#ffc107; }
 #favTrainsWidget .fav-summary-run.is-canceled { background:#dc3545; }
+#favTrainsWidget .fav-summary-run.is-not-running { background:#53656b; }
+#favTrainsWidget .fav-summary-run.is-no-data { background:#293c43; opacity:.72; }
+#favTrainsWidget .fav-reliability-pct {
+  font-family:"Orbitron", system-ui, sans-serif;
+  font-weight:900;
+}
+#favTrainsWidget .fav-reliability-metrics {
+  display:grid;
+  grid-template-columns:repeat(2,minmax(0,1fr));
+  gap:0 12px;
+  margin-bottom:7px;
+}
+#favTrainsWidget .fav-reliability-metrics > div {
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:7px;
+  min-width:0;
+  padding:3px 0;
+  border-bottom:1px solid rgba(85,234,255,.10);
+}
+#favTrainsWidget .fav-reliability-metrics span {
+  overflow:hidden;
+  color:#94afb8;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+}
+#favTrainsWidget .fav-reliability-metrics b { color:#eefeff; }
+#favTrainsWidget .fav-reliability-runs-title {
+  display:block;
+  margin-bottom:5px;
+  color:#69dfe9;
+  font-family:"Orbitron", system-ui, sans-serif;
+  font-size:.58rem;
+  font-weight:800;
+  letter-spacing:.05em;
+  text-transform:uppercase;
+}
+#favTrainsWidget .fav-reliability-runs .fav-summary-runs {
+  width:100%;
+  justify-content:stretch;
+  gap:2px;
+}
+#favTrainsWidget .fav-reliability-runs .fav-summary-run {
+  max-width:none;
+  height:19px;
+  padding:0;
+  border:0;
+  border-radius:3px;
+  cursor:pointer;
+  transition:transform .12s ease, box-shadow .12s ease;
+}
+#favTrainsWidget .fav-reliability-runs .fav-summary-run:is(:focus-visible,.is-active) {
+  outline:none;
+  transform:translateY(-2px);
+  box-shadow:0 0 0 1px #bdfaff,0 0 8px rgba(85,234,255,.45);
+}
+#favTrainsWidget .fav-reliability-readout {
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  gap:6px;
+  min-height:15px;
+  margin-top:4px;
+  color:#6f8d97;
+  font-size:.58rem;
+  text-align:center;
+}
+#favTrainsWidget .fav-reliability-readout b { color:#d9faff; }
+#favTrainsWidget .fav-reliability-readout span { color:#8fb3bd; }
 @media (max-width:700px) {
   #favTrainsWidget .fav-details-summary {
     gap: 6px;
@@ -27753,6 +27873,14 @@ async function loadAffluenceDate(dateStr){
   #favTrainsWidget .fav-summary-run {
     height: 10px;
     max-width: 6px;
+  }
+  #favTrainsWidget .fav-reliability-runs .fav-summary-run {
+    height:18px;
+    max-width:none;
+    min-width:2px;
+  }
+  #favTrainsWidget .fav-reliability-metrics {
+    gap:0 9px;
   }
 }
 </style>
