@@ -1,3 +1,29 @@
+'use strict';
+
+document.documentElement.dataset.homeMajorAlertsController = '2';
+
+function setHomeMajorAlertModal(open) {
+  const modal = document.getElementById('homeMajorAlertModal');
+  if (!modal) return;
+  if (modal.parentElement !== document.body) document.body.appendChild(modal);
+  modal.classList.toggle('is-open', open);
+  if (open) modal.style.display = 'flex';
+  else modal.style.removeProperty('display');
+  modal.setAttribute('aria-hidden', open ? 'false' : 'true');
+  document.body.style.toggleProperty?.('overflow', open ? 'hidden' : '');
+  if (!open) document.body.style.removeProperty('overflow');
+}
+
+window.addEventListener('click', (event) => {
+  const trigger = event.target.closest?.('#homeMajorAlertBadge');
+  const close = event.target.closest?.('#homeMajorAlertClose');
+  const backdrop = event.target.id === 'homeMajorAlertModal';
+  if (!trigger && !close && !backdrop) return;
+  event.preventDefault();
+  event.stopImmediatePropagation();
+  setHomeMajorAlertModal(!!trigger);
+}, true);
+
 (function initHomeMajorAlerts(){
   'use strict';
 
