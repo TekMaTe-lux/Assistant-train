@@ -1,6 +1,6 @@
 'use strict';
 
-document.documentElement.dataset.homeMajorAlertsController = '2';
+document.documentElement.dataset.homeMajorAlertsController = '3';
 
 function setHomeMajorAlertModal(open) {
   const modal = document.getElementById('homeMajorAlertModal');
@@ -89,6 +89,23 @@ window.addEventListener('click', (event) => {
   const hasMajorImpact = (text) =>
     /(tous les trains[^.]{0,90}(supprim|remplac)|interruption (totale|des circulations)|circulation[^.]{0,80}(interromp|tres perturbee|très perturbée)|aucun train|nombreuses suppressions|remplac[ée]s? par des cars|forts? retards?|retards? importants?)/.test(text);
 
+  // Même hiérarchie et mêmes couleurs que les cartes de l'onglet Perturbations.
+  const severityFor = (text) => {
+    if (/(tous les trains[^.]{0,100}supprim|interruption totale|aucun train|circulation[^.]{0,80}interromp)/.test(text)) {
+      return { key: 'critical', icon: '❌', label: 'Circulation interrompue', rank: 5 };
+    }
+    if (/(service reduit|service modifie|nombreuses suppressions|remplac[ée]s? par des cars)/.test(text)) {
+      return { key: 'warning', icon: '⚠️', label: 'Service réduit', rank: 4 };
+    }
+    if (/(forts? retards?|retards? importants?)/.test(text)) {
+      return { key: 'delay', icon: '⏰', label: 'Retards importants', rank: 3 };
+    }
+    if (/travaux/.test(text)) {
+      return { key: 'works', icon: '🔧', label: 'Travaux', rank: 2 };
+    }
+    return { key: 'info', icon: 'ℹ️', label: 'Information trafic', rank: 1 };
+  };
+
   function classify(situation){
     const fullText = [
       situation?.summary,
@@ -112,6 +129,7 @@ window.addEventListener('click', (event) => {
       situation,
       text,
       corridorTrains,
+      severity: severityFor(text),
       fingerprint: normalize(situation?.detail || situation?.description || situation?.summary || '')
         .replace(/[^a-z0-9]+/g, ' ')
         .trim()
@@ -147,6 +165,18 @@ window.addEventListener('click', (event) => {
 
   function render(items){
     countNode.textContent = String(items.length);
+    const labelNode = document.getElementById('homeMajorAlertLabel');
+    if (labelNode) labelNode.textContent = items.length > 1 ? 'ALERTES' : 'ALERTE';
+
+    const strongest = items.reduce(
+      (best, item) => !best || (item.severity?.rank || 0) > (best.rank || 0)
+        ? item.severity
+        : best,
+      null
+    );
+    if (strongest?.key) badge.dataset.level = strongest.key;
+    else badge.removeAttribute('data-level');
+
     badge.hidden = items.length === 0;
     badge.setAttribute(
       'aria-label',
@@ -158,10 +188,20 @@ window.addEventListener('click', (event) => {
     body.innerHTML = items.map((item) => {
       const situation = item.situation;
       const detail = String(situation.detail || situation.description || '').trim();
-      let title = String(situation.summary || '').trim();
-      if (!title || /^(plus d'infos?|information trafic)\s*:?$/i.test(title)) {
-        const first = detail.split(/(?<=[.!?])\s+/)[0] || 'Perturbation majeure';
-        title = first.length > 100 ? `${first.slice(0, 97)}…` : first;
+      const text = item.text || normalize(detail);
+      const severity = item.severity || severityFor(text);
+
+      let route = '';
+      if (/thionville/.test(text) && /luxembourg/.test(text)) route = 'Thionville–Luxembourg';
+      else if (/metz/.test(text) && /luxembourg/.test(text)) route = 'Metz–Luxembourg';
+      else if (/nancy/.test(text) && /metz/.test(text)) route = 'Nancy–Metz';
+
+      let title = route ? `${severity.label} — ${route}` : severity.label;
+      if (severity.key === 'info') {
+        const summary = String(situation.summary || '').replace(/^[^\p{L}\p{N}]+/u, '').trim();
+        if (summary && !/^(plus d'infos?|information trafic)\s*:?$/i.test(summary)) {
+          title = summary.length > 86 ? `${summary.slice(0, 83)}…` : summary;
+        }
       }
 
       const links = (Array.isArray(situation.links) ? situation.links : [])
@@ -173,16 +213,11 @@ window.addEventListener('click', (event) => {
           return `<a href="${escapeHtml(link.url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(label)}</a>`;
         }).join('');
 
-      const trainMeta = item.corridorTrains.length
-        ? `${item.corridorTrains.length} train${item.corridorTrains.length > 1 ? 's' : ''} du sillon concerné${item.corridorTrains.length > 1 ? 's' : ''}`
-        : 'Perturbation générale du corridor';
-
       return `
-        <article class="home-major-alert-item">
-          <h4>⚠️ ${escapeHtml(title)}</h4>
+        <article class="home-major-alert-item" data-level="${escapeHtml(severity.key)}">
+          <h4><span class="home-major-alert-item-icon" aria-hidden="true">${severity.icon}</span>${escapeHtml(title)}</h4>
           <p>${escapeHtml(detail)}</p>
           ${links ? `<div class="home-major-alert-links">${links}</div>` : ''}
-          <div class="home-major-alert-meta">${escapeHtml(trainMeta)} · Source SIRI-SX</div>
         </article>`;
     }).join('');
   }
