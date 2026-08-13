@@ -8628,11 +8628,16 @@ const stopHasSchedule = (result, stopName) => {
         // la gare qui devient terminus (ex: Thionville pour 88501) n'est pas toujours
         // explicitement marquée dans impacted_stops. On détecte donc aussi le dernier arrêt
         // encore desservi juste avant une queue d'arrêts supprimés.
-        const hasStopDeletedStatus = (entry) => !!entry && (
-          entry.stop_time_effect === 'deleted' ||
-          entry.departure_status === 'deleted' ||
-          entry.arrival_status === 'deleted'
-        );
+        const hasStopDeletedStatus = (entry) => {
+          if (!entry) return false;
+          // Ne jamais transformer une suppression d'un seul mouvement en suppression de la gare.
+          // Ex. 88503 à Metz : arrivée retardée/maintenue, départ supprimé = terminus exceptionnel.
+          const hasPreciseStatuses = !!entry.arrival_status || !!entry.departure_status;
+          if (hasPreciseStatuses) {
+            return entry.arrival_status === 'deleted' && entry.departure_status === 'deleted';
+          }
+          return entry.stop_time_effect === 'deleted';
+        };
         const isArrivalReallyDeleted = (entry, scheduledStop = null) => !!entry && (
           entry.arrival_status === 'deleted' ||
           (!entry.arrival_status && entry.stop_time_effect === 'deleted') ||
@@ -17113,6 +17118,18 @@ if (statsEl){
       if (!cell || !baseTimeRaw) return;
       const baseClock = (typeof ft === 'function') ? ft(baseTimeRaw) : baseTimeRaw;
       const baseWithVoie = voieLabel ? formatClockWithVoie(baseClock, voieLabel) : baseClock;
+
+      // Le rafraîchissement des voies ne doit jamais détruire le rendu d'un
+      // départ/terminus exceptionnel (ancienne heure barrée + nouvelle heure bleue).
+      const isPartialBoundaryCell =
+        cell.dataset?.terminalArrival === '1' ||
+        cell.dataset?.terminalStart === '1' ||
+        !!cell.querySelector('.terminal-partial-stack');
+      if (isPartialBoundaryCell) {
+        const terminalBase = cell.querySelector('.terminal-partial-base');
+        if (terminalBase) terminalBase.textContent = baseClock;
+        return;
+      }
 
       const delayStrike = cell.querySelector('.delay-strike');
       if (delayStrike) {
