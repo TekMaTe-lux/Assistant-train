@@ -18,150 +18,19 @@ jobs:
           ref: main
           fetch-depth: 1
 
-      - name: Patch table and mobile CSS
-        shell: bash
+      - name: Apply targeted patch
+        run: python3 .github/scripts/patch_partial_table_mobile.py
+
+      - name: Validate changes
         run: |
-          python3 - <<'PY'
-          from pathlib import Path
-
-          index_path = Path('index.html')
-          text = index_path.read_text(encoding='utf-8')
-
-          # 1) En-têtes du tableau : préciser origine/terminus exceptionnel + retard.
-          anchor = "        const isPartialEnd = newEndId && newEndId !== originalEndId;\n"
-          addition = """        const isPartialEnd = newEndId && newEndId !== originalEndId;
-        const partialStartName = isPartial
-          ? (result.train.stop_times.find((s) => s.stop_point?.id === newStartId)?.stop_point?.name || '')
-          : '';
-        const partialEndName = isPartialEnd
-          ? (result.train.stop_times.find((s) => s.stop_point?.id === newEndId)?.stop_point?.name || '')
-          : '';
-        const tableMaxDelay = Object.values(impacted).reduce((maxDelay, st) => {
-          const amended = st?.amended_departure_time || st?.amended_arrival_time;
-          const baseTime = st?.base_departure_time || st?.base_arrival_time;
-          const computed = amended && baseTime ? Number(dl(baseTime, amended)) : 0;
-          const explicit = Number(st?.delay_minutes);
-          return Math.max(
-            maxDelay,
-            Number.isFinite(computed) && computed > 0 ? computed : 0,
-            Number.isFinite(explicit) && explicit > 0 ? explicit : 0
-          );
-        }, 0);
-"""
-          count_anchor = text.count(anchor)
-          if count_anchor < 1:
-            raise SystemExit('Ancre isPartialEnd introuvable')
-          text = text.replace(anchor, addition)
-
-          old_partial_title = "        } else if (isPartial || isPartialEnd) {\n          icon = '⚠️'; title = 'Suppression partielle';\n"
-          new_partial_title = """        } else if (isPartial || isPartialEnd) {
-          icon = '⚠️';
-          const partialParts = ['Suppression partielle'];
-          if (isPartial && partialStartName) partialParts.push(`Départ exceptionnel ${partialStartName}`);
-          if (isPartialEnd && partialEndName) partialParts.push(`Terminus exceptionnel ${partialEndName}`);
-          if (tableMaxDelay > 0) partialParts.push(`+${Math.round(tableMaxDelay)} min`);
-          title = partialParts.join(' · ');
-"""
-          count_title = text.count(old_partial_title)
-          if count_title < 1:
-            raise SystemExit('Bloc titre suppression partielle introuvable')
-          text = text.replace(old_partial_title, new_partial_title)
-
-          # 2) Cellule du terminus / départ exceptionnel : libellé visible dans le tableau.
-          old_terminal = '<span class="new-start terminal-arrival-time" style="color:#39a8ff !important;font-weight:900 !important;text-decoration:none !important;animation:none !important;opacity:1 !important;text-shadow:0 0 8px rgba(57,168,255,.72),0 0 14px rgba(57,168,255,.34) !important;background:transparent !important;border:0 !important;box-shadow:none !important;padding:0 !important;">${terminalArrivalClock}</span></td>`;'
-          new_terminal = '<span class="new-start terminal-arrival-time" style="color:#39a8ff !important;font-weight:900 !important;text-decoration:none !important;animation:none !important;opacity:1 !important;text-shadow:0 0 8px rgba(57,168,255,.72),0 0 14px rgba(57,168,255,.34) !important;background:transparent !important;border:0 !important;box-shadow:none !important;padding:0 !important;">${terminalArrivalClock}</span><span class="partial-service-label partial-service-label--terminus">TERMINUS EXCEPTIONNEL</span></td>`;'
-          count_terminal = text.count(old_terminal)
-          if count_terminal < 1:
-            raise SystemExit('Rendu terminal-arrival-time introuvable')
-          text = text.replace(old_terminal, new_terminal)
-
-          old_start = '<span class="new-start terminal-start-time" style="color:#39a8ff !important;font-weight:900 !important;text-decoration:none !important;animation:none !important;opacity:1 !important;text-shadow:0 0 8px rgba(57,168,255,.72),0 0 14px rgba(57,168,255,.34) !important;background:transparent !important;border:0 !important;box-shadow:none !important;padding:0 !important;">${terminalDepartureClock}</span></td>`;'
-          new_start = '<span class="new-start terminal-start-time" style="color:#39a8ff !important;font-weight:900 !important;text-decoration:none !important;animation:none !important;opacity:1 !important;text-shadow:0 0 8px rgba(57,168,255,.72),0 0 14px rgba(57,168,255,.34) !important;background:transparent !important;border:0 !important;box-shadow:none !important;padding:0 !important;">${terminalDepartureClock}</span><span class="partial-service-label partial-service-label--start">DÉPART EXCEPTIONNEL</span></td>`;'
-          count_start = text.count(old_start)
-          if count_start < 1:
-            raise SystemExit('Rendu terminal-start-time introuvable')
-          text = text.replace(old_start, new_start)
-
-          style_id = 'lb-partial-service-table-v1'
-          if style_id not in text:
-            style = r'''
-<style id="lb-partial-service-table-v1">
-#trainInfo td.terminal-arrival-cell,
-#trainInfo td.terminal-start-cell {
-  vertical-align: middle;
-}
-#trainInfo .partial-service-label {
-  display: block;
-  width: max-content;
-  max-width: 92px;
-  margin: 3px auto 0;
-  font-family: "Rajdhani", system-ui, sans-serif;
-  font-size: 9px;
-  font-weight: 900;
-  line-height: 1;
-  letter-spacing: .025em;
-  text-align: center;
-  white-space: normal;
-  text-transform: uppercase;
-}
-#trainInfo .partial-service-label--terminus { color: #ffb21a; }
-#trainInfo .partial-service-label--start { color: #55eaff; }
-@media (max-width: 720px), (hover: none) and (pointer: coarse) and (max-width: 900px) {
-  #trainInfo .partial-service-label {
-    max-width: 74px;
-    margin-top: 2px;
-    font-size: 7.5px;
-    line-height: .95;
-  }
-}
-</style>
-'''
-            head_end = text.find('</head>')
-            if head_end < 0:
-              raise SystemExit('</head> introuvable')
-            text = text[:head_end] + style + '\n' + text[head_end:]
-
-          index_path.write_text(text, encoding='utf-8')
-
-          # 3) Mobile : centrer réellement le texte du bouton Générer le tableau.
-          css_path = Path('assets/lb-mobile-v4.css')
-          css = css_path.read_text(encoding='utf-8')
-          mobile_marker = '/* LB mobile: centrage bouton Générer le tableau */'
-          if mobile_marker not in css:
-            css += r'''
-
-/* LB mobile: centrage bouton Générer le tableau */
-@media (max-width: 720px), (hover: none) and (pointer: coarse) and (max-width: 900px) {
-  body.lb-v3 #search #loadTrains {
-    display: flex !important;
-    align-items: center !important;
-    justify-content: center !important;
-    text-align: center !important;
-    line-height: 1.1 !important;
-  }
-}
-'''
-          css_path.write_text(css, encoding='utf-8')
-
-          print('header anchors patched:', count_anchor)
-          print('partial titles patched:', count_title)
-          print('terminus cells patched:', count_terminal)
-          print('start cells patched:', count_start)
-          PY
-
           git diff --check
           grep -n "TERMINUS EXCEPTIONNEL</span>" index.html | head
-          grep -n "Terminus exceptionnel \${partialEndName}" index.html | head
           grep -n "centrage bouton Générer le tableau" assets/lb-mobile-v4.css
           git diff --stat -- index.html assets/lb-mobile-v4.css
 
       - name: Commit patch
-        shell: bash
         run: |
-          if git diff --quiet -- index.html assets/lb-mobile-v4.css; then
-            echo "Aucun changement à committer"
-            exit 1
-          fi
+          test -n "$(git status --porcelain -- index.html assets/lb-mobile-v4.css)"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add index.html assets/lb-mobile-v4.css
