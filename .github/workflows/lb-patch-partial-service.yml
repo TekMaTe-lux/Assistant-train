@@ -27,10 +27,13 @@ jobs:
           path = Path('index.html')
           text = path.read_text(encoding='utf-8')
 
-          old_partial = """    if (status.includes('PARTIAL')) {
-              return { className: 'is-partial', label: 'SUPPRESSION PARTIELLE', live: true };
-            }
-          """
+          live_status_start = text.find("  function liveStatus(liveBundle, dateIso) {")
+          if live_status_start < 0:
+              raise SystemExit('liveStatus introuvable: aucun fichier modifié.')
+          partial_start = text.find("    if (status.includes('PARTIAL')) {", live_status_start)
+          partial_end = text.find("\n    if (status.includes('CANCEL')", partial_start)
+          if partial_start < 0 or partial_end < 0:
+              raise SystemExit('Bloc liveStatus PARTIAL introuvable: aucun fichier modifié.')
           new_partial = """    if (status.includes('PARTIAL')) {
               const partialDelay = Math.max(0, Number(liveBundle?.maxDelay || 0));
               return {
@@ -40,11 +43,11 @@ jobs:
                   : 'SUPPRESSION PARTIELLE',
                 live: true
               };
-            }
-          """
-          if old_partial not in text:
-              raise SystemExit('Bloc liveStatus PARTIAL introuvable: aucun fichier modifié.')
-          text = text.replace(old_partial, new_partial, 1)
+            }"""
+          # Réaligne l'indentation sur le code source (2 espaces dans la chaîne YAML ne doivent rien imposer au HTML).
+          new_partial = "\n".join(line[4:] if line.startswith('    ') else line for line in new_partial.splitlines())
+          new_partial = "\n".join(('    ' + line if line else line) for line in new_partial.splitlines())
+          text = text[:partial_start] + new_partial + text[partial_end:]
 
           start_marker = "  function renderDisruption(liveBundle, status) {"
           end_marker = "\n\n  function renderHero(number, dateIso, rows, liveBundle) {"
@@ -172,6 +175,8 @@ jobs:
 
           text = text[:start] + new_render + text[end:]
 
+          if "? 'DÉPART EFFECTIF'" not in text or "? 'TERMINUS EFFECTIF'" not in text:
+              raise SystemExit('Libellés de parcours attendus introuvables: aucun fichier écrit.')
           text = text.replace("? 'DÉPART EFFECTIF'", "? 'DÉPART EXCEPTIONNEL'", 1)
           text = text.replace("? 'TERMINUS EFFECTIF'", "? 'TERMINUS EXCEPTIONNEL'", 1)
 
