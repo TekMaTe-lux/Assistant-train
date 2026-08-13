@@ -10324,11 +10324,28 @@ async function chargerEtAfficherAlertes() {
           : [];
         const starts = periods.map((p) => Date.parse(p?.start || '')).filter(Number.isFinite);
         const ends = periods.map((p) => Date.parse(p?.end || '')).filter(Number.isFinite);
-        const shortDescription = String(situation.description || situation.detail || '').trim();
+        let shortDescription = String(situation.description || situation.detail || '').trim();
         const fullDescription = String(situation.detail || situation.description || '').trim();
+
+        // Le flux multilingue SNCF place souvent DE avant FR. Tant que le collecteur
+        // n'a pas fourni la langue, on privilégie le détail français et on masque
+        // une situation exclusivement allemande.
+        const looksGerman = (value) => /\b(weitere|informationen|aufgrund|zug(?:es)?|züge|verkehr|sicherheitsgründen|wird|werden|zwischen)\b/i.test(String(value || ''));
+        const looksFrench = (value) => /\b(circulation|train|trains|travaux|retard|information|sécurité|supprimé|remplacé|votre|entre|les|des)\b/i.test(String(value || ''));
+        if (looksGerman(shortDescription) && looksFrench(fullDescription)) {
+          shortDescription = fullDescription;
+        }
+        if (looksGerman(fullDescription) && !looksFrench(fullDescription)
+            && looksGerman(shortDescription) && !looksFrench(shortDescription)) {
+          return;
+        }
+
         const searchable = normalizeAlertText(`${shortDescription} ${fullDescription}`);
 
         let title = String(situation.summary || '').trim();
+        if (/^(weitere informationen|more info|más información|maggiori informazioni|meer informatie)\s*:?$/i.test(title)) {
+          title = 'Information trafic';
+        }
         if (!title && /thionville/.test(searchable) && /luxembourg/.test(searchable)
             && /(travaux|supprim|remplac|cars?)/.test(searchable)) {
           title = 'Travaux Thionville–Luxembourg';
@@ -10394,6 +10411,48 @@ async function chargerEtAfficherAlertes() {
 
         return false;
       });
+
+      /*
+       * Déduplication croisée GTFS/SIRI.
+       * Une description suffisamment précise identique ne doit produire qu'une carte.
+       * On conserve la version la plus riche (détail/liens SIRI) et on fusionne les cibles.
+       */
+      const alertesUniques = new Map();
+      alertesFiltres.forEach((alert) => {
+        const titleKey = normalizeAlertText(alert.header_text || '');
+        const descriptionKey = normalizeAlertText(alert.description_text || '');
+        const targetKey = (Array.isArray(alert.informed_entities) ? alert.informed_entities : [])
+          .map((ent) => extractTrainNumber([
+            ent?.trip_id, ent?.vehicle_journey_id, ent?.name
+          ].filter(Boolean).join(' ')))
+          .filter(Boolean)
+          .sort()
+          .join(',');
+        const fingerprint = descriptionKey.length >= 24
+          ? `${titleKey}|${descriptionKey}`
+          : `${titleKey}|${descriptionKey}|${targetKey}`;
+
+        if (!alertesUniques.has(fingerprint)) {
+          alertesUniques.set(fingerprint, alert);
+          return;
+        }
+
+        const current = alertesUniques.get(fingerprint);
+        const incomingIsRicher = Boolean(alert.detail_html)
+          && String(alert.detail_html).length > String(current.detail_html || '').length;
+        const preferred = incomingIsRicher ? alert : current;
+        const secondary = incomingIsRicher ? current : alert;
+        preferred.informed_entities = [
+          ...(Array.isArray(preferred.informed_entities) ? preferred.informed_entities : []),
+          ...(Array.isArray(secondary.informed_entities) ? secondary.informed_entities : [])
+        ];
+        preferred.source = Array.from(new Set([
+          ...String(preferred.source || '').split(' + '),
+          ...String(secondary.source || '').split(' + ')
+        ].filter(Boolean))).join(' + ');
+        alertesUniques.set(fingerprint, preferred);
+      });
+      alertesFiltres = Array.from(alertesUniques.values());
 
       // 2) Tri par priorité (effect)
       alertesFiltres.sort((A, B) => {
