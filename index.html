@@ -26022,8 +26022,15 @@ async function loadAffluenceDate(dateStr){
     }
     const status = String(liveBundle.status || '').toUpperCase();
     if (status.includes('PARTIAL')) {
-      return { className: 'is-partial', label: 'SUPPRESSION PARTIELLE', live: true };
-    }
+    const partialDelay = Math.max(0, Number(liveBundle?.maxDelay || 0));
+    return {
+      className: 'is-partial',
+      label: partialDelay > 0
+        ? `SUPPRESSION PARTIELLE · +${Math.round(partialDelay)} MIN`
+        : 'SUPPRESSION PARTIELLE',
+      live: true
+    };
+      }
     if (status.includes('CANCEL') || status.includes('SUPPR') || status.includes('NO_SERVICE')) {
       return { className: 'is-cancel', label: 'SUPPRIMÉE', live: true };
     }
@@ -26099,37 +26106,119 @@ async function loadAffluenceDate(dateStr){
   }
 
   function renderDisruption(liveBundle, status) {
-    const host = byId('trainDetailDisruption');
-    if (!host) return;
-    const cause = String(liveBundle?.cause || '').trim();
-    const isDisrupted = ['is-delay', 'is-cancel', 'is-partial'].includes(status?.className);
-    if (!liveBundle || !isDisrupted || !cause) {
-      host.hidden = true;
-      host.className = 'lb-train-profile__disruption';
-      host.innerHTML = '';
-      return;
-    }
-    const type = status.className === 'is-cancel'
-      ? { icon: '❌', label: 'Suppression', className: 'is-cancel' }
-      : (status.className === 'is-partial'
-        ? { icon: '⚠️', label: 'Suppression partielle', className: 'is-partial' }
-        : { icon: '⏰', label: 'Retard', className: 'is-delay' });
-    const delaySuffix = type.className === 'is-delay' && Number(liveBundle.maxDelay) > 0
-      ? ` +${Math.round(liveBundle.maxDelay)} min`
-      : '';
-    host.className = `lb-train-profile__disruption ${type.className}`;
-    host.innerHTML = `
-      <span class="lb-train-profile__disruption-icon" aria-hidden="true">${type.icon}</span>
-      <div>
-        <div class="lb-train-profile__disruption-head">
-          <strong>${safe(type.label + delaySuffix)}</strong>
-          ${liveBundle.causeSource ? `<span>Source ${safe(liveBundle.causeSource)}</span>` : ''}
-        </div>
-        <p>${safe(cause)}</p>
-      </div>
-    `;
-    host.hidden = false;
+  const host = byId('trainDetailDisruption');
+  if (!host) return;
+  const cause = String(liveBundle?.cause || '').trim();
+  const isDisrupted = ['is-delay', 'is-cancel', 'is-partial'].includes(status?.className);
+  const hide = () => {
+    host.hidden = true;
+    host.className = 'lb-train-profile__disruption';
+    host.innerHTML = '';
+  };
+  if (!liveBundle || !isDisrupted) {
+    hide();
+    return;
   }
+
+  const type = status.className === 'is-cancel'
+    ? { icon: '❌', label: 'Suppression', className: 'is-cancel' }
+    : (status.className === 'is-partial'
+      ? { icon: '⚠️', label: 'Suppression partielle', className: 'is-partial' }
+      : { icon: '⏰', label: 'Retard', className: 'is-delay' });
+  const maxDelay = Math.max(0, Number(liveBundle?.maxDelay || 0));
+  const delaySuffix = type.className === 'is-delay' && maxDelay > 0
+    ? ` +${Math.round(maxDelay)} min`
+    : '';
+
+  // Les statuts SNCF arrivée/départ ont priorité sur stop_time_effect.
+  // Exemple 88503 : arrivée à Metz maintenue/retardée, départ de Metz supprimé,
+  // puis Hagondange/Uckange/Thionville supprimés => terminus exceptionnel Metz.
+  let partialDetails = null;
+  if (type.className === 'is-partial') {
+    try {
+      const scheduledRows = normalizeJourneyRows(liveBundle);
+      const effectiveRows = scheduledRows.length
+        ? applyEffectiveServicePattern(scheduledRows, liveBundle)
+        : [];
+      if (scheduledRows.length && effectiveRows.length) {
+        const scheduledOrigin = String(scheduledRows[0]?.name || '').trim();
+        const scheduledDestination = String(scheduledRows[scheduledRows.length - 1]?.name || '').trim();
+        const effectiveOrigin = String(effectiveRows[0]?.name || '').trim();
+        const effectiveDestination = String(effectiveRows[effectiveRows.length - 1]?.name || '').trim();
+        const partialStart = !!scheduledOrigin && !!effectiveOrigin
+          && normalizeStopKey(scheduledOrigin) !== normalizeStopKey(effectiveOrigin);
+        const partialEnd = !!scheduledDestination && !!effectiveDestination
+          && normalizeStopKey(scheduledDestination) !== normalizeStopKey(effectiveDestination);
+        if (partialStart || partialEnd) {
+          partialDetails = {
+            scheduledOrigin,
+            scheduledDestination,
+            effectiveOrigin,
+            effectiveDestination,
+            partialStart,
+            partialEnd
+          };
+        }
+      }
+    } catch (error) {
+      console.warn('[Fiche Bétaillère] analyse suppression partielle impossible', error);
+    }
+  }
+
+  const details = [];
+  if (type.className === 'is-partial' && maxDelay > 0) {
+    const number = normalizeTrainNumber(liveBundle?.number || '') || String(liveBundle?.number || '').trim();
+    const from = partialDetails?.effectiveOrigin || '';
+    const to = partialDetails?.effectiveDestination || '';
+    if (from && to) {
+      details.push(`${number ? `TER ${number}` : 'Train'} retardé d’environ ${Math.round(maxDelay)} min entre ${from} et ${to}.`);
+    } else {
+      details.push(`${number ? `TER ${number}` : 'Train'} retardé d’environ ${Math.round(maxDelay)} min.`);
+    }
+  }
+  if (partialDetails?.partialStart) {
+    details.push(`Départ exceptionnel ${partialDetails.effectiveOrigin} : circulation supprimée entre ${partialDetails.scheduledOrigin} et ${partialDetails.effectiveOrigin}.`);
+  }
+  if (partialDetails?.partialEnd) {
+    details.push(`Terminus exceptionnel ${partialDetails.effectiveDestination} : circulation supprimée entre ${partialDetails.effectiveDestination} et ${partialDetails.scheduledDestination}.`);
+  }
+
+  if (!cause && !details.length) {
+    hide();
+    return;
+  }
+
+  const heading = type.className === 'is-partial'
+    ? 'Circulation perturbée'
+    : type.label + delaySuffix;
+  const detailsHtml = details.map((line, index) => {
+    if (index === details.length - 1 && partialDetails?.partialEnd) {
+      const prefix = `Terminus exceptionnel ${partialDetails.effectiveDestination}`;
+      if (line.startsWith(prefix)) {
+        return `<p><strong>${safe(prefix)}</strong>${safe(line.slice(prefix.length))}</p>`;
+      }
+    }
+    if (partialDetails?.partialStart && line.startsWith(`Départ exceptionnel ${partialDetails.effectiveOrigin}`)) {
+      const prefix = `Départ exceptionnel ${partialDetails.effectiveOrigin}`;
+      return `<p><strong>${safe(prefix)}</strong>${safe(line.slice(prefix.length))}</p>`;
+    }
+    return `<p>${safe(line)}</p>`;
+  }).join('');
+
+  host.className = `lb-train-profile__disruption ${type.className}`;
+  host.innerHTML = `
+    <span class="lb-train-profile__disruption-icon" aria-hidden="true">${type.icon}</span>
+    <div>
+      <div class="lb-train-profile__disruption-head">
+        <strong>${safe(heading)}</strong>
+        ${liveBundle.causeSource ? `<span>Source ${safe(liveBundle.causeSource)}</span>` : ''}
+      </div>
+      ${cause ? `<p><strong>${safe(cause)}</strong></p>` : ''}
+      ${detailsHtml}
+    </div>
+  `;
+  host.hidden = false;
+}
 
   function renderHero(number, dateIso, rows, liveBundle) {
     const first = rows[0] || null;
@@ -26262,9 +26351,9 @@ async function loadAffluenceDate(dateStr){
       const delayLabel = row.canceled
         ? 'SUPPRIMÉ'
         : (row.isNewOrigin
-          ? 'DÉPART EFFECTIF'
+          ? 'DÉPART EXCEPTIONNEL'
           : (row.isNewTerminus
-            ? 'TERMINUS EFFECTIF'
+            ? 'TERMINUS EXCEPTIONNEL'
             : (row.delay > 0 ? `+${Math.round(row.delay)} min` : (liveBundle ? 'À L’HEURE' : ''))));
       return `
         <div class="${classes.join(' ')}">
