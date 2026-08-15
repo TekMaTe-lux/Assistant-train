@@ -1,6 +1,6 @@
 'use strict';
 
-document.documentElement.dataset.homeMajorAlertsController = '3';
+document.documentElement.dataset.homeMajorAlertsController = '4';
 
 function setHomeMajorAlertModal(open) {
   const modal = document.getElementById('homeMajorAlertModal');
@@ -83,8 +83,34 @@ window.addEventListener('click', (event) => {
   const isCorridorTrain = (number) =>
     /^(?:885\d{2}|887\d{2}|888\d{2}|837[56]\d{2}|8340\d{2})$/.test(String(number || ''));
 
-  const isCorridorText = (text) =>
-    /(nancy|pont-a-mousson|pont à mousson|pagny|metz|hagondange|uckange|thionville|hettange|bettembourg|luxembourg)/.test(text);
+  const CORRIDOR_PLACE_GROUPS = [
+    ['nancy'], ['champigneulles'], ['frouard'], ['pompey'], ['dieulouard'],
+    ['pont-a-mousson', 'pont a mousson'], ['pagny-sur-moselle', 'pagny'],
+    ['noveant'], ['ars-sur-moselle'], ['metz'], ['woippy'], ['maizieres-les-metz'],
+    ['hagondange'], ['uckange'], ['thionville'], ['hettange-grande', 'hettange'],
+    ['zoufftgen'], ['bettembourg'], ['luxembourg']
+  ];
+  const OUTSIDE_CORRIDOR_PLACES = [
+    'varangeville', 'luneville', 'saint-nicolas-de-port', 'saint nicolas de port',
+    'dombasle', 'blainville', 'epinal', 'remiremont', 'saint-die', 'saint die',
+    'sarrebourg', 'saverne', 'strasbourg', 'bar-le-duc', 'bar le duc',
+    'toul', 'longwy', 'verdun'
+  ];
+
+  const corridorPlacesIn = (text) => CORRIDOR_PLACE_GROUPS
+    .filter((aliases) => aliases.some((place) => text.includes(place)))
+    .map((aliases) => aliases[0]);
+
+  const isCorridorText = (text) => corridorPlacesIn(text).length > 0;
+
+  // Certains broadcasts SIRI régionaux associent des centaines de trains à un
+  // chantier local. Un unique terminus du corridor (ex. Nancy) ne suffit pas :
+  // l'alerte doit citer au moins deux points du sillon si elle mentionne une zone extérieure.
+  const isOutsideCorridorOnly = (text) => {
+    const hasOutsidePlace = OUTSIDE_CORRIDOR_PLACES.some((place) => text.includes(place));
+    if (!hasOutsidePlace) return false;
+    return corridorPlacesIn(text).length < 2;
+  };
 
   const hasMajorImpact = (text) =>
     /(tous les trains[^.]{0,90}(supprim|remplac)|interruption (totale|des circulations)|circulation[^.]{0,80}(interromp|tres perturbee|très perturbée)|aucun train|nombreuses suppressions|remplac[ée]s? par des cars|forts? retards?|retards? importants?)/.test(text);
@@ -117,6 +143,8 @@ window.addEventListener('click', (event) => {
     const corridorTrains = Array.from(allTrains).filter(isCorridorTrain);
     const participant = String(situation?.participant_ref || '').toUpperCase();
     const scope = String(situation?.scope_type || '').toLowerCase();
+
+    if (isOutsideCorridorOnly(text)) return null;
 
     const relevant = corridorTrains.length > 0
       || ((participant === 'LOR' || scope === 'general') && isCorridorText(text));
@@ -223,10 +251,12 @@ window.addEventListener('click', (event) => {
   }
 
   function openModal(){
+    if (modal.parentElement !== document.body) document.body.appendChild(modal);
     modal.classList.add('is-open');
     modal.style.display = 'flex';
     modal.setAttribute('aria-hidden', 'false');
     document.body.style.overflow = 'hidden';
+    body.scrollTop = 0;
     closeButton?.focus();
   }
 
