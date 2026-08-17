@@ -14,6 +14,7 @@ const infrastructureLayer = L.geoJSON(null, {
 }).addTo(map);
 const trainLayer = L.layerGroup().addTo(map);
 let selectedPathLayer = null;
+const selectedStopsLayer = L.layerGroup().addTo(map);
 let refreshTimer = null;
 let requestSerial = 0;
 let selectedTime = null;
@@ -70,8 +71,26 @@ async function showTrain(train) {
     getJson(`/api/map-v2/paths/${encodeURIComponent(train.pathId)}`)
   ]);
   if (selectedPathLayer) selectedPathLayer.remove();
+  selectedStopsLayer.clearLayers();
   selectedPathLayer = L.geoJSON(path, { style: { color: '#168dff', weight: 7, opacity: .95 } }).addTo(map);
   selectedPathLayer.bringToFront();
+  for (const stop of trip.stops || []) {
+    if (!Number.isFinite(stop.lat) || !Number.isFinite(stop.lon)) continue;
+    L.circleMarker([stop.lat, stop.lon], {
+      radius: 5,
+      color: '#eaffff',
+      weight: 2,
+      fillColor: '#00eaff',
+      fillOpacity: 1
+    })
+      .bindTooltip(`<strong>${stop.name}</strong><span>${stop.time}</span>`, {
+        permanent: true,
+        direction: 'top',
+        className: 'station-tooltip',
+        offset: [0, -5]
+      })
+      .addTo(selectedStopsLayer);
+  }
   const stops = trip.stops.map(stop => `<li><span class="stop-time">${stop.time}</span>${stop.name}</li>`).join('');
   const title = trip.number ? `${train.category.toUpperCase()} ${trip.number}` : `${train.category.toUpperCase()} · ${trip.label || train.label || 'Train'}`;
   detailContentEl.innerHTML = `<h2>${title}</h2><div class="meta">${trip.origin} → ${trip.destination}</div><ul class="stops">${stops}</ul>`;
@@ -119,8 +138,13 @@ map.on('moveend', scheduleRefresh);
 map.on('click', () => {
   detailEl.classList.add('hidden');
   if (selectedPathLayer) { selectedPathLayer.remove(); selectedPathLayer = null; }
+  selectedStopsLayer.clearLayers();
 });
-document.querySelector('#close-detail').addEventListener('click', () => detailEl.classList.add('hidden'));
+document.querySelector('#close-detail').addEventListener('click', () => {
+  detailEl.classList.add('hidden');
+  if (selectedPathLayer) { selectedPathLayer.remove(); selectedPathLayer = null; }
+  selectedStopsLayer.clearLayers();
+});
 document.querySelector('#sillon').addEventListener('click', () => map.fitBounds(SILLON_BOUNDS));
 timeInputEl.value = localTimeValue();
 timeInputEl.addEventListener('change', () => {
