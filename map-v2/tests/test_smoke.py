@@ -92,6 +92,19 @@ class MapV2SmokeTest(unittest.TestCase):
             self.assertIn("T2", trips)
             self.assertEqual(trips["T2"]["displayLabel"], "TER")
 
+    def test_router_rejects_a_fast_but_absurd_detour(self):
+        namespace = {}
+        source = (ROOT / "scripts/build_dataset.py").read_text(encoding="utf-8")
+        exec(compile(source.split("def main():", 1)[0], "build_dataset.py", "exec"), namespace)
+        graph = namespace["RailGraph"]()
+        graph.add_line([[6.0, 49.0], [6.2, 49.0]], speed=80, is_lgv=False, status="EXPLOITE", code="direct")
+        graph.add_line([[6.0, 49.0], [6.0, 49.5], [6.2, 49.5], [6.2, 49.0]], speed=320, is_lgv=True, status="EXPLOITE", code="detour")
+        start = graph.node_by_coord[(6.0, 49.0)]
+        end = graph.node_by_coord[(6.2, 49.0)]
+        nodes = graph.route(start, end, "tgv")
+        coords = [graph.coords[node] for node in nodes]
+        self.assertEqual(coords, [(6.0, 49.0), (6.2, 49.0)])
+
 
 if __name__ == "__main__":
     unittest.main()
