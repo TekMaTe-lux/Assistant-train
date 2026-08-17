@@ -135,6 +135,6 @@ liveTimeButtonEl.addEventListener('click', () => {
   refreshTrains(++requestSerial).catch(showError);
 });
 liveTimeButtonEl.classList.add('active');
-for (const checkbox of document.querySelectorAll('.filters input')) checkbox.addEventListener('change', refreshAll);
+for (const checkbox of document.querySelectorAll('.filters input[type="checkbox"]')) checkbox.addEventListener('change', refreshAll);
 setInterval(() => refreshTrains(requestSerial).catch(showError), 10_000);
 refreshAll();
