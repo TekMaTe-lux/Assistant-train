@@ -266,7 +266,13 @@
       .stop-time{ font-size:10px; min-width:64px; }
       .stop-time .time-entry-rt{ font-size:9px; }
     }
-  </style>
+    /* Parcours du train sélectionné : couche isolée des données LIVE. */
+  .selected-trip-station-tooltip{pointer-events:none!important;border:1px solid rgba(22,141,255,.58)!important;border-radius:5px!important;background:rgba(2,10,24,.84)!important;color:#edfaff!important;box-shadow:0 2px 7px rgba(0,0,0,.3)!important;padding:2px 4px!important;font:750 8.5px/1 Rajdhani,system-ui,sans-serif!important;white-space:nowrap!important}
+  .selected-trip-station-tooltip::before{border-top-color:rgba(2,10,24,.84)!important}
+  .selected-trip-station-tooltip strong{display:inline;font-size:9px}
+  .selected-trip-station-tooltip span{display:inline;margin-left:3px;color:#62c8ff;font-size:8px;font-variant-numeric:tabular-nums}
+  @media(max-width:720px){.selected-trip-station-tooltip{padding:1px 3px!important;font-size:7.5px!important}.selected-trip-station-tooltip strong{font-size:8px}.selected-trip-station-tooltip span{font-size:7px}}
+</style>
 </head>
 <body>
   <header>
@@ -3818,6 +3824,17 @@ function sanitizeCflStationName(name){
   let activeStationId = null;
   let returnToStationId = null;
 
+  // Couches temporaires de la circulation sélectionnée.
+  map.createPane('selectedTripRoutePane');
+  map.getPane('selectedTripRoutePane').style.zIndex = '460';
+  map.getPane('selectedTripRoutePane').style.pointerEvents = 'none';
+  map.createPane('selectedTripStopsPane');
+  map.getPane('selectedTripStopsPane').style.zIndex = '640';
+  map.getPane('selectedTripStopsPane').style.pointerEvents = 'none';
+  const selectedTripRouteLayer = L.layerGroup().addTo(map);
+  const selectedTripStopsLayer = L.layerGroup().addTo(map);
+  let selectedTripDrawToken = 0;
+
   const tripPanelEl = document.getElementById('trip-panel');
   const tripPanelCloseBtn = document.getElementById('trip-panel-close');
   const tripPanelBackBtn = document.getElementById('trip-panel-back');
@@ -3955,10 +3972,128 @@ function sanitizeCflStationName(name){
 
   renderAxisStations();
 
+  function clearSelectedTripRoute(){
+    selectedTripDrawToken += 1;
+    selectedTripRouteLayer.clearLayers();
+    selectedTripStopsLayer.clearLayers();
+  }
+
+  function tripIdForSelectedRoute(trainId){
+    const data = trainDataById.get(trainId);
+    const mergedIds = Array.isArray(data?.mergedTripIds) ? data.mergedTripIds : [];
+    const candidates = [trainId, ...mergedIds];
+    for (const candidate of candidates){
+      const seq = stopTimesByTrip.get(candidate);
+      if (Array.isArray(seq) && seq.length >= 2) return candidate;
+    }
+    return null;
+  }
+
+  function safeSelectedSegment(stopA, stopB){
+    const path = pathBetweenStops(stopA, stopB);
+    if (!path || path.isFallback || !Array.isArray(path.coords) || path.coords.length < 2) return null;
+    const directDistance = distLL(stopA, stopB);
+    const corridorLimit = Math.max(directDistance * 2.5, directDistance + 6000);
+    if (!isFinite(path.totalDist) || path.totalDist > corridorLimit) return null;
+    return path;
+  }
+
+  function addSelectedLatLonPath(coords){
+    if (!Array.isArray(coords) || coords.length < 2) return;
+    L.polyline(coords, {pane:'selectedTripRoutePane',color:'#020611',weight:9,opacity:.82,lineCap:'round',lineJoin:'round',interactive:false}).addTo(selectedTripRouteLayer);
+    L.polyline(coords, {pane:'selectedTripRoutePane',color:'#006cff',weight:5,opacity:1,lineCap:'round',lineJoin:'round',interactive:false}).addTo(selectedTripRouteLayer);
+  }
+
+  function focusSelectedRoute(coords){
+    if (!Array.isArray(coords) || coords.length < 2) return;
+    const bounds = L.latLngBounds(coords);
+    if (!bounds.isValid()) return;
+    const mobile = window.matchMedia && window.matchMedia('(max-width:720px)').matches;
+    map.fitBounds(bounds.pad(0.04), {
+      animate:true,
+      duration:.55,
+      maxZoom:11,
+      paddingTopLeft:mobile ? [12,12] : [18,70],
+      paddingBottomRight:mobile ? [12,250] : [470,24]
+    });
+  }
+
+  function drawSelectedStations(routeTripId, seq){
+    const realtimeProfile = realtimeStopDataByTrip.get(routeTripId);
+    for (let i=0; i<seq.length; i++){
+      const st = seq[i];
+      const stop = stopsById.get(st.stop_id);
+      if (!stop || !isFinite(stop.lat) || !isFinite(stop.lon)) continue;
+      const realtimeStop = realtimeProfile?.stops?.[i] || null;
+      const passSec = realtimeStop?.departureRealtime ?? realtimeStop?.arrivalRealtime ?? st.departure ?? st.arrival ?? null;
+      const timeText = passSec != null ? fmtHHMM(passSec) : '';
+      const isEndpoint = i === 0 || i === seq.length - 1;
+      const marker = L.circleMarker([stop.lat, stop.lon], {pane:'selectedTripStopsPane',radius:isEndpoint ? 4.5 : 3,color:'#effcff',weight:2,fillColor:'#00eaff',fillOpacity:1,interactive:false});
+      const tooltipHtml = '<strong>' + escapeHTML(stop.name || st.stop_id) + '</strong>' + (timeText ? '<span>' + escapeHTML(timeText) + '</span>' : '');
+      marker.bindTooltip(tooltipHtml, {permanent:true,direction:'top',offset:[0,-5],opacity:1,className:'selected-trip-station-tooltip',interactive:false});
+      marker.addTo(selectedTripStopsLayer);
+    }
+  }
+
+  async function fetchSelectedV2Path(seq, trainId){
+    const names = seq.map(st => stopsById.get(st.stop_id)?.name || st.stop_id).filter(Boolean);
+    if (names.length < 2) return null;
+    const data = trainDataById.get(trainId) || buildStaticPanelTrainData(trainId);
+    const category = String(data?.branding?.category || '').toLowerCase();
+    const source = String(data?.source || '').toUpperCase();
+    const profile = category === 'tgv-roi' ? 'tgv' : source === 'CFL' ? 'cfl' : 'ter';
+    const query = encodeURIComponent(names.join('|'));
+    const profileQuery = '&profile=' + encodeURIComponent(profile);
+    const requestedNumber = data?.numberDigits || data?.numberKey || data?.number || trainId || '';
+    const numberQuery = '&number=' + encodeURIComponent(requestedNumber);
+    const urls = [
+      '/api/map-v2/match-path?stops=' + query + profileQuery + numberQuery,
+      'http://localhost:8111/api/map-v2/match-path?stops=' + query + profileQuery + numberQuery,
+      'http://127.0.0.1:8111/api/map-v2/match-path?stops=' + query + profileQuery + numberQuery
+    ];
+    for (const url of urls){
+      try {
+        const response = await fetch(url, { headers:{ Accept:'application/json' } });
+        if (response.ok){
+          const payload = await response.json();
+          if (payload?.path?.geometry?.type === 'LineString') return payload.path;
+        }
+      } catch(_) {}
+    }
+    return null;
+  }
+
+  async function drawSelectedTripRoute(trainId){
+    clearSelectedTripRoute();
+    const drawToken = selectedTripDrawToken;
+    const routeTripId = tripIdForSelectedRoute(trainId);
+    if (!routeTripId) return;
+    const seq = stopTimesByTrip.get(routeTripId) || [];
+    drawSelectedStations(routeTripId, seq);
+
+    const v2Path = await fetchSelectedV2Path(seq, trainId);
+    if (drawToken !== selectedTripDrawToken || activeTripId !== trainId) return;
+    if (v2Path){
+      const latLonCoords = v2Path.geometry.coordinates.map(coord => [coord[1], coord[0]]);
+      addSelectedLatLonPath(latLonCoords);
+      focusSelectedRoute(latLonCoords);
+      return;
+    }
+
+    for (let i=0; i<seq.length-1; i++){
+      const stopA = stopsById.get(seq[i].stop_id);
+      const stopB = stopsById.get(seq[i+1].stop_id);
+      if (!stopA || !stopB) continue;
+      const path = safeSelectedSegment(stopA, stopB);
+      if (path) addSelectedLatLonPath(path.coords);
+    }
+  }
+
   function clearActiveSelection(){
     activeTripId = null;
     activeStationId = null;
     returnToStationId = null;
+    clearSelectedTripRoute();
   }
 
   function handleTripPanelClose(ev){
@@ -4158,6 +4293,7 @@ const mapContainerEl = map.getContainer();
   function hideTripPanel(){
     tripPanelEl.classList.add('hidden');
     document.body.classList.remove('trip-panel-open');
+    clearSelectedTripRoute();
     tripPanelEl.classList.remove('cancelled');
     tripPanelEl.classList.remove('station-board-mode');
     tripPanelIconEl.textContent = '🐄';
@@ -4211,9 +4347,11 @@ const mapContainerEl = map.getContainer();
     tripPanelEl.classList.remove('hidden');
     document.body.classList.add('trip-panel-open');
     renderPanel();
+    drawSelectedTripRoute(trainId);
   }
 
   function openStationPanel(stationId){
+    clearSelectedTripRoute();
     activeStationId = stationId;
     activeTripId = null;
     returnToStationId = null;
