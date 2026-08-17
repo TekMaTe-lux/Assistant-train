@@ -121,7 +121,7 @@ function sameStopName(a, b) {
   return Math.min(a.length, b.length) >= 6 && (a.includes(b) || b.includes(a));
 }
 
-function matchPathByStops(rawStops) {
+function matchPathByStops(rawStops, requestedProfile = '') {
   const wanted = String(rawStops || '').split('|').map(normalizeStopName).filter(Boolean);
   if (wanted.length < 2) return null;
   let best = null;
@@ -140,7 +140,9 @@ function matchPathByStops(rawStops) {
     const lastMatches = sameStopName(wanted.at(-1), candidate.at(-1));
     const required = Math.max(2, Math.ceil(Math.min(wanted.length, candidate.length) * 0.6));
     if (matched < required || (!firstMatches && !lastMatches)) continue;
+    const profileMatches = requestedProfile && String(trip.category || '').toLowerCase() === requestedProfile;
     const score = matched * 100 + (firstMatches ? 35 : 0) + (lastMatches ? 35 : 0)
+      + (profileMatches ? 80 : 0)
       - Math.abs(wanted.length - candidate.length) * 3;
     if (!best || score > best.score) best = { trip, score, matched };
   }
@@ -234,7 +236,8 @@ const server = http.createServer((req, res) => {
     return send(res, 200, visibleTrains(parseBbox(url.searchParams.get('bbox')), url.searchParams.get('at')));
   }
   if (url.pathname === '/api/map-v2/match-path') {
-    const match = matchPathByStops(url.searchParams.get('stops'));
+    const requestedProfile = String(url.searchParams.get('profile') || '').toLowerCase();
+    const match = matchPathByStops(url.searchParams.get('stops'), requestedProfile);
     return match ? send(res, 200, match) : send(res, 404, { error: 'Aucun parcours V2 correspondant' });
   }
   if (url.pathname.startsWith('/api/map-v2/paths/')) {
