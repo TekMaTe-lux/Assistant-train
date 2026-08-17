@@ -45,21 +45,25 @@ Copier ensuite le dossier `map-v2/` dans ce répertoire, puis :
 python3 scripts/download_sources.py --output data/sources
 python3 scripts/build_dataset.py \
   --gtfs data/sources/sncf-gtfs.zip \
+  --gtfs-cfl data/sources/lux-gtfs.zip \
   --network data/sources/lignes-par-statut.geojson \
+  --network-extra data/sources/lux-network.geojson \
   --connections data/sources/lignes-par-type.geojson \
   --lgv data/sources/lignes-lgv.geojson \
   --speed data/sources/vitesses.geojson \
   --output data/generated
 ```
 
-Le fichier `lignes-par-type.geojson` ajoute les raccordements ferroviaires et permet notamment aux TGV Strasbourg–Metz d'emprunter correctement la LGV Est puis le raccordement de Lucy.
+Les fichiers `lux-gtfs.zip` et `lux-network.geojson` ajoutent les circulations CFL et le réseau ferroviaire luxembourgeois au même calcul.\n\nLe fichier `lignes-par-type.geojson` ajoute les raccordements ferroviaires et permet notamment aux TGV Strasbourg–Metz d'emprunter correctement la LGV Est puis le raccordement de Lucy.
 
 Le premier calcul national peut prendre du temps. Pour valider d'abord le principe sur Nancy–Metz–Luxembourg :
 
 ```bash
 python3 scripts/build_dataset.py \
   --gtfs data/sources/sncf-gtfs.zip \
+  --gtfs-cfl data/sources/lux-gtfs.zip \
   --network data/sources/lignes-par-statut.geojson \
+  --network-extra data/sources/lux-network.geojson \
   --connections data/sources/lignes-par-type.geojson \
   --lgv data/sources/lignes-lgv.geojson \
   --speed data/sources/vitesses.geojson \
@@ -74,7 +78,9 @@ national mais filtrer uniquement les circulations par leur passage dans la zone 
 ```bash
 python3 scripts/build_dataset.py \
   --gtfs data/sources/sncf-gtfs.zip \
+  --gtfs-cfl data/sources/lux-gtfs.zip \
   --network data/sources/lignes-par-statut.geojson \
+  --network-extra data/sources/lux-network.geojson \
   --connections data/sources/lignes-par-type.geojson \
   --lgv data/sources/lignes-lgv.geojson \
   --speed data/sources/vitesses.geojson \
