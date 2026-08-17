@@ -147,6 +147,8 @@ function tripResponse(trip) {
     stops: (trip.stops || []).map((stop, index) => ({
       name: stop.name,
       time: stop.displayTime || '',
+      lat: Number.isFinite(Number(stop.lat)) ? Number(stop.lat) : null,
+      lon: Number.isFinite(Number(stop.lon)) ? Number(stop.lon) : null,
       offset: trip.offsets?.[index] ?? null
     }))
   };
