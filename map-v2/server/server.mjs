@@ -133,7 +133,7 @@ function matchPathByStops(rawStops, requestedProfile = '', requestedNumber = '')
   let best = null;
   for (const trip of Object.values(trips)) {
     const candidateNumber = normalizeTrainNumber(trip.number || trip.headsign);
-    if (wantedNumber && candidateNumber !== wantedNumber) continue;
+    const numberMatches = !wantedNumber || candidateNumber === wantedNumber;
     const candidate = (trip.stops || []).map(stop => normalizeStopName(stop.name)).filter(Boolean);
     if (candidate.length < 2 || !paths[trip.pathId]) continue;
     let cursor = 0;
@@ -146,11 +146,14 @@ function matchPathByStops(rawStops, requestedProfile = '', requestedNumber = '')
     }
     const firstMatches = sameStopName(wanted[0], candidate[0]);
     const lastMatches = sameStopName(wanted.at(-1), candidate.at(-1));
+    const exactCflPattern = requestedProfile === 'cfl' && firstMatches && lastMatches && matched === wanted.length;
+    if (!numberMatches && !exactCflPattern) continue;
     const required = Math.max(2, Math.ceil(Math.min(wanted.length, candidate.length) * 0.6));
     if (matched < required || (!firstMatches && !lastMatches)) continue;
     const profileMatches = requestedProfile && String(trip.category || '').toLowerCase() === requestedProfile;
     const score = matched * 100 + (firstMatches ? 35 : 0) + (lastMatches ? 35 : 0)
       + (profileMatches ? 80 : 0)
+      + (numberMatches && wantedNumber ? 500 : 0)
       - Math.abs(wanted.length - candidate.length) * 3;
     if (!best || score > best.score) best = { trip, score, matched };
   }
