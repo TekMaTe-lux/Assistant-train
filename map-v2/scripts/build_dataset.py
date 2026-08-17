@@ -105,6 +105,19 @@ def metadata_by_line(geojson, value_builder):
     return result
 
 
+def properties_blob(properties: dict) -> str:
+    return norm(" ".join(str(value) for value in (properties or {}).values()))
+
+
+def is_lgv_properties(properties: dict) -> bool:
+    value = properties_blob(properties)
+    return "LGV" in value or "GRANDEVITESSE" in value
+
+
+def is_connector_properties(properties: dict) -> bool:
+    return "RACCORDEMENT" in properties_blob(properties)
+
+
 class RailGraph:
     def __init__(self):
         self.coords = []
@@ -339,8 +352,15 @@ def build_services(calendar_rows, exception_rows):
     return {key: sorted(values) for key, values in result.items()}
 
 
-def route_profile(route):
-    label = norm(f"{route.get('route_short_name', '')} {route.get('route_long_name', '')}")
+def route_profile(route, trip=None, sequence=None, stops=None):
+    trip = trip or {}
+    stop_labels = ""
+    if sequence and stops:
+        stop_labels = " ".join(stops[item[1]]["name"] for item in sequence if item[1] in stops)
+    label = norm(
+        f"{route.get('route_short_name', '')} {route.get('route_long_name', '')} "
+        f"{trip.get('trip_short_name', '')} {trip.get('trip_headsign', '')} {stop_labels}"
+    )
     return "tgv" if any(token in label for token in ("TGV", "OUIGO", "EUROSTAR", "LYRIA", "FRECCIAROSSA")) else "ter"
 
 
@@ -358,6 +378,7 @@ def main():
     parser.add_argument("--network", required=True)
     parser.add_argument("--lgv", required=True)
     parser.add_argument("--speed", required=True)
+    parser.add_argument("--connections", help="géométries des raccordements ferroviaires")
     parser.add_argument("--output", required=True)
     parser.add_argument("--bbox", help="ouest,sud,est,nord")
     parser.add_argument(
@@ -374,7 +395,7 @@ def main():
     network_data = load_geojson(args.network)
     lgv_data = load_geojson(args.lgv)
     speed_data = load_geojson(args.speed)
-    lgv_by_line = metadata_by_line(lgv_data, lambda props: "LGV" in norm(pick(props, TYPE_KEYS, "")))
+    lgv_by_line = metadata_by_line(lgv_data, is_lgv_properties)
     speed_by_line = metadata_by_line(speed_data, lambda props: parse_speed(props))
     lgv_codes = {code for code, values in lgv_by_line.items() if any(values)}
     max_speeds = {code: max(values) for code, values in speed_by_line.items() if values}
@@ -400,6 +421,26 @@ def main():
             "properties": {"line": code, "kind": "closed" if closed else "lgv" if is_lgv else "classic", "speed": speed, "bbox": bbox},
             "geometry": feature.get("geometry")
         })
+    if args.connections:
+        connection_data = load_geojson(args.connections)
+        for feature in connection_data.get("features", []):
+            properties = feature.get("properties") or {}
+            if not is_connector_properties(properties):
+                continue
+            lines = list(iter_lines(feature.get("geometry")))
+            bbox = geometry_bbox(lines)
+            if not intersects(bbox, wanted_bbox):
+                continue
+            code = line_code(properties)
+            is_lgv = code in lgv_codes or is_lgv_properties(properties)
+            speed = max_speeds.get(code, 220.0 if is_lgv else 100.0)
+            for coords in lines:
+                graph.add_line(coords, speed=speed, is_lgv=is_lgv, status="EXPLOITE", code=code)
+            public_features.append({
+                "type": "Feature",
+                "properties": {"line": code, "kind": "connector", "speed": speed, "bbox": bbox},
+                "geometry": feature.get("geometry")
+            })
     connectors = graph.connect_nearby_endpoints()
     print(f"      {len(graph.coords):,} nœuds ; {len(public_features):,} tronçons ; {connectors:,} raccordements automatiques")
 
@@ -454,7 +495,7 @@ def main():
         # route_type=2 correspond au rail. Les flux SNCF ne le renseignent pas toujours.
         if route.get("route_type") not in (None, "", "2", 2):
             continue
-        profile = route_profile(route)
+        profile = route_profile(route, meta, sequence, stops)
         signature = profile + ":" + "|".join(item[1] for item in sequence)
         path_id = pattern_cache.get(signature)
         offsets = None
