@@ -58,6 +58,40 @@ class MapV2SmokeTest(unittest.TestCase):
             self.assertIn(trips["T1"]["pathId"], paths)
             self.assertGreater(paths[trips["T1"]["pathId"]]["length"], 10_000)
 
+    def test_builder_connects_small_gaps_between_rfn_features(self):
+        with tempfile.TemporaryDirectory() as raw:
+            tmp = pathlib.Path(raw)
+            network = {
+                "type": "FeatureCollection",
+                "features": [
+                    {"type": "Feature", "properties": {"code_ligne": "1"},
+                     "geometry": {"type": "LineString", "coordinates": [[6.0, 49.0], [6.0995, 49.0]]}},
+                    {"type": "Feature", "properties": {"code_ligne": "2"},
+                     "geometry": {"type": "LineString", "coordinates": [[6.1005, 49.0], [6.2, 49.0]]}}
+                ]
+            }
+            for name, payload in (("network.json", network), ("lgv.json", {"type": "FeatureCollection", "features": []}),
+                                  ("speed.json", {"type": "FeatureCollection", "features": []})):
+                (tmp / name).write_text(json.dumps(payload), encoding="utf-8")
+            with zipfile.ZipFile(tmp / "gtfs.zip", "w") as archive:
+                files = {
+                    "stops.txt": [["stop_id", "stop_name", "stop_lat", "stop_lon"], ["A", "Alpha", "49", "6"], ["B", "Bravo", "49", "6.2"]],
+                    "routes.txt": [["route_id", "route_short_name", "route_long_name", "route_type"], ["R", "TER", "Alpha Bravo", "2"]],
+                    "trips.txt": [["route_id", "service_id", "trip_id", "trip_short_name"], ["R", "S", "T2", "INCONNU"]],
+                    "stop_times.txt": [["trip_id", "arrival_time", "departure_time", "stop_id", "stop_sequence"], ["T2", "10:00:00", "10:00:00", "A", "1"], ["T2", "11:00:00", "11:00:00", "B", "2"]],
+                    "calendar.txt": [["service_id", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday", "start_date", "end_date"], ["S", "1", "1", "1", "1", "1", "1", "1", "20260101", "20261231"]],
+                    "calendar_dates.txt": [["service_id", "date", "exception_type"]]
+                }
+                for filename, rows in files.items():
+                    archive.writestr(filename, "\n".join(",".join(row) for row in rows) + "\n")
+            output = tmp / "out"
+            subprocess.run([sys.executable, str(ROOT / "scripts/build_dataset.py"), "--gtfs", str(tmp / "gtfs.zip"),
+                            "--network", str(tmp / "network.json"), "--lgv", str(tmp / "lgv.json"),
+                            "--speed", str(tmp / "speed.json"), "--output", str(output)], check=True, capture_output=True, text=True)
+            trips = json.loads((output / "trips.json").read_text(encoding="utf-8"))
+            self.assertIn("T2", trips)
+            self.assertEqual(trips["T2"]["displayLabel"], "TER")
+
 
 if __name__ == "__main__":
     unittest.main()
