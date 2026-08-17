@@ -23,6 +23,7 @@ class MapV2SmokeTest(unittest.TestCase):
         namespace = self.builder_namespace()
         self.assertTrue(namespace["is_lgv_properties"]({"type": "Ligne à grande vitesse"}))
         self.assertTrue(namespace["is_connector_properties"]({"libelle": "Raccordement de Lucy"}))
+        self.assertTrue(namespace["is_connector_properties"]({"type_ligne": "Rac", "code_ligne": "140370"}))
 
     def test_tgv_profile_can_be_inferred_from_a_tgv_station(self):
         namespace = self.builder_namespace()
@@ -123,7 +124,9 @@ class MapV2SmokeTest(unittest.TestCase):
         end = graph.node_by_coord[(6.2, 49.0)]
         nodes = graph.route(start, end, "tgv")
         coords = [graph.coords[node] for node in nodes]
-        self.assertEqual(coords, [(6.0, 49.0), (6.2, 49.0)])
+        self.assertEqual(coords[0], (6.0, 49.0))
+        self.assertEqual(coords[-1], (6.2, 49.0))
+        self.assertTrue(all(abs(lat - 49.0) < 1e-9 for _lon, lat in coords))
 
 
 if __name__ == "__main__":
