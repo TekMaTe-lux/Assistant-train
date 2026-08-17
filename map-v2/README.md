@@ -46,10 +46,13 @@ python3 scripts/download_sources.py --output data/sources
 python3 scripts/build_dataset.py \
   --gtfs data/sources/sncf-gtfs.zip \
   --network data/sources/lignes-par-statut.geojson \
+  --connections data/sources/lignes-par-type.geojson \
   --lgv data/sources/lignes-lgv.geojson \
   --speed data/sources/vitesses.geojson \
   --output data/generated
 ```
+
+Le fichier `lignes-par-type.geojson` ajoute les raccordements ferroviaires et permet notamment aux TGV Strasbourg–Metz d'emprunter correctement la LGV Est puis le raccordement de Lucy.
 
 Le premier calcul national peut prendre du temps. Pour valider d'abord le principe sur Nancy–Metz–Luxembourg :
 
@@ -57,6 +60,7 @@ Le premier calcul national peut prendre du temps. Pour valider d'abord le princi
 python3 scripts/build_dataset.py \
   --gtfs data/sources/sncf-gtfs.zip \
   --network data/sources/lignes-par-statut.geojson \
+  --connections data/sources/lignes-par-type.geojson \
   --lgv data/sources/lignes-lgv.geojson \
   --speed data/sources/vitesses.geojson \
   --output data/generated \
@@ -71,6 +75,7 @@ national mais filtrer uniquement les circulations par leur passage dans la zone 
 python3 scripts/build_dataset.py \
   --gtfs data/sources/sncf-gtfs.zip \
   --network data/sources/lignes-par-statut.geojson \
+  --connections data/sources/lignes-par-type.geojson \
   --lgv data/sources/lignes-lgv.geojson \
   --speed data/sources/vitesses.geojson \
   --output data/generated \
