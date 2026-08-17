@@ -64,6 +64,26 @@
   }
 
   function enhanceHeader() {
+    const brand = qs(".top-bar__brand");
+    if (brand && brand.dataset.lbHomeLinkReady !== "1") {
+      brand.dataset.lbHomeLinkReady = "1";
+      brand.setAttribute("role", "link");
+      brand.setAttribute("tabindex", "0");
+      brand.setAttribute("aria-label", "Retour à l’accueil");
+      brand.style.cursor = "pointer";
+
+      const goHome = () => {
+        window.location.href = "./index.html#home";
+      };
+
+      brand.addEventListener("click", goHome);
+      brand.addEventListener("keydown", (event) => {
+        if (event.key !== "Enter" && event.key !== " ") return;
+        event.preventDefault();
+        goHome();
+      });
+    }
+
     const actions = qs(".top-bar__actions");
     if (!actions) return;
 
