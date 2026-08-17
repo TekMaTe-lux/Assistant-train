@@ -8,6 +8,7 @@ import pathlib
 import shutil
 import tempfile
 import urllib.request
+import json
 
 
 SOURCES = {
@@ -28,7 +29,21 @@ SOURCES = {
         "https://ressources.data.sncf.com/api/explore/v2.1/catalog/datasets/"
         "vitesse-maximale-nominale-sur-ligne/exports/geojson?lang=fr&timezone=Europe%2FParis"
     ),
+    "lux-network.geojson": "https://data.geoportail.lu/mymaps?category=403&format=geojson",
 }
+
+LUX_GTFS_API = "https://data.public.lu/api/1/datasets/horaires-et-arrets-des-transport-publics-gtfs/"
+
+
+def latest_lux_gtfs_url() -> str:
+    request = urllib.request.Request(LUX_GTFS_API, headers={"User-Agent": "LaBetaillere-MapV2/1.0"})
+    with urllib.request.urlopen(request, timeout=60) as response:
+        payload = json.load(response)
+    resources = [item for item in payload.get("resources", []) if str(item.get("url", "")).lower().endswith(".zip")]
+    if not resources:
+        raise RuntimeError("Aucun GTFS luxembourgeois trouvé")
+    resources.sort(key=lambda item: item.get("last_modified") or item.get("modified") or item.get("created_at") or "", reverse=True)
+    return resources[0]["url"]
 
 
 def download(url: str, destination: pathlib.Path) -> None:
@@ -59,6 +74,14 @@ def main() -> None:
             continue
         print(f"[téléchargement] {filename}")
         download(url, destination)
+        print(f"[ok] {destination} ({destination.stat().st_size:,} octets)")
+
+    destination = output / "lux-gtfs.zip"
+    if destination.exists() and not args.force:
+        print(f"[conservé] {destination}")
+    else:
+        print("[téléchargement] lux-gtfs.zip")
+        download(latest_lux_gtfs_url(), destination)
         print(f"[ok] {destination} ({destination.stat().st_size:,} octets)")
 
 
