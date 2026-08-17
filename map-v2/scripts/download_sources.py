@@ -20,6 +20,10 @@ SOURCES = {
         "https://ressources.data.sncf.com/api/explore/v2.1/catalog/datasets/"
         "lignes-lgv-et-par-ecartement/exports/geojson?lang=fr&timezone=Europe%2FParis"
     ),
+    "lignes-par-type.geojson": (
+        "https://ressources.data.sncf.com/api/explore/v2.1/catalog/datasets/"
+        "lignes-par-type/exports/geojson?lang=fr&timezone=Europe%2FParis"
+    ),
     "vitesses.geojson": (
         "https://ressources.data.sncf.com/api/explore/v2.1/catalog/datasets/"
         "vitesse-maximale-nominale-sur-ligne/exports/geojson?lang=fr&timezone=Europe%2FParis"
