@@ -105,6 +105,60 @@ function serviceRuns(serviceId, date) {
   return Array.isArray(dates) && dates.includes(date);
 }
 
+function normalizeStopName(value) {
+  return String(value || '')
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .toUpperCase()
+    .replace(/\bGARE\b|\bDE\b|\bLA\b|\bLE\b/g, ' ')
+    .replace(/[^A-Z0-9]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function sameStopName(a, b) {
+  if (!a || !b) return false;
+  if (a === b) return true;
+  return Math.min(a.length, b.length) >= 6 && (a.includes(b) || b.includes(a));
+}
+
+function matchPathByStops(rawStops) {
+  const wanted = String(rawStops || '').split('|').map(normalizeStopName).filter(Boolean);
+  if (wanted.length < 2) return null;
+  let best = null;
+  for (const trip of Object.values(trips)) {
+    const candidate = (trip.stops || []).map(stop => normalizeStopName(stop.name)).filter(Boolean);
+    if (candidate.length < 2 || !paths[trip.pathId]) continue;
+    let cursor = 0;
+    let matched = 0;
+    for (const wantedName of wanted) {
+      while (cursor < candidate.length && !sameStopName(wantedName, candidate[cursor])) cursor += 1;
+      if (cursor >= candidate.length) break;
+      matched += 1;
+      cursor += 1;
+    }
+    const firstMatches = sameStopName(wanted[0], candidate[0]);
+    const lastMatches = sameStopName(wanted.at(-1), candidate.at(-1));
+    const required = Math.max(2, Math.ceil(Math.min(wanted.length, candidate.length) * 0.6));
+    if (matched < required || (!firstMatches && !lastMatches)) continue;
+    const score = matched * 100 + (firstMatches ? 35 : 0) + (lastMatches ? 35 : 0)
+      - Math.abs(wanted.length - candidate.length) * 3;
+    if (!best || score > best.score) best = { trip, score, matched };
+  }
+  if (!best) return null;
+  const pathInfo = paths[best.trip.pathId];
+  return {
+    matchedTripId: best.trip.id,
+    pathId: best.trip.pathId,
+    score: best.score,
+    matchedStops: best.matched,
+    path: {
+      type: 'Feature',
+      properties: { pathId: best.trip.pathId },
+      geometry: { type: 'LineString', coordinates: pathInfo.coordinates }
+    }
+  };
+}
+
 function visibleTrains(bbox, at) {
   const now = at ? new Date(at) : new Date();
   const date = serviceDate(now);
@@ -178,6 +232,10 @@ const server = http.createServer((req, res) => {
   }
   if (url.pathname === '/api/map-v2/trains') {
     return send(res, 200, visibleTrains(parseBbox(url.searchParams.get('bbox')), url.searchParams.get('at')));
+  }
+  if (url.pathname === '/api/map-v2/match-path') {
+    const match = matchPathByStops(url.searchParams.get('stops'));
+    return match ? send(res, 200, match) : send(res, 404, { error: 'Aucun parcours V2 correspondant' });
   }
   if (url.pathname.startsWith('/api/map-v2/paths/')) {
     const id = decodeURIComponent(url.pathname.slice('/api/map-v2/paths/'.length));
