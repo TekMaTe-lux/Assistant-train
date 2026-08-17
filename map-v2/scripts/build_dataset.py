@@ -231,6 +231,22 @@ class RailGraph:
             return None
         if start == end:
             return [start]
+        direct_distance = haversine(self.coords[start], self.coords[end])
+        # Deux gares consécutives encadrent fortement le parcours. Cette ellipse
+        # empêche un Metz -> Ars-sur-Moselle de remonter vers Thionville/Jarny
+        # simplement parce que ces tronçons ont une vitesse nominale supérieure.
+        corridor_limit = max(direct_distance * 2.5, direct_distance + 6_000.0)
+
+        def inside_corridor(node):
+            if direct_distance < 100.0:
+                return True
+            coord = self.coords[node]
+            return (
+                haversine(self.coords[start], coord)
+                + haversine(coord, self.coords[end])
+                <= corridor_limit
+            )
+
         distances = {start: 0.0}
         previous = {}
         queue = [(0.0, start)]
@@ -244,6 +260,8 @@ class RailGraph:
                 break
             for neighbour, attrs in self.edges.get(node, ()):
                 if neighbour in visited:
+                    continue
+                if neighbour != end and not inside_corridor(neighbour):
                     continue
                 candidate = distance + self.edge_cost(attrs, profile)
                 if candidate < distances.get(neighbour, float("inf")):
@@ -259,6 +277,12 @@ class RailGraph:
                 return None
             nodes.append(parent)
         nodes.reverse()
+        routed_length = sum(
+            haversine(self.coords[nodes[index - 1]], self.coords[nodes[index]])
+            for index in range(1, len(nodes))
+        )
+        if routed_length > corridor_limit:
+            return None
         return nodes
 
 
@@ -455,7 +479,12 @@ def main():
             raw_number = ""
         route_short_name = str(route.get("route_short_name") or "").strip()
         display_label = raw_number or route_short_name or profile.upper()
-        stop_payload = [{"name": stops[item[1]]["name"], "displayTime": display_time(item[2])} for item in sequence]
+        stop_payload = [{
+            "name": stops[item[1]]["name"],
+            "displayTime": display_time(item[2]),
+            "lon": stops[item[1]]["coord"][0],
+            "lat": stops[item[1]]["coord"][1]
+        } for item in sequence]
         trip_store[trip_id] = {
             "id": trip_id, "number": raw_number, "displayLabel": display_label,
             "serviceId": meta.get("service_id"), "routeName": route.get("route_long_name", ""),
