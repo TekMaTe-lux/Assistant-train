@@ -12,6 +12,28 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 
 
 class MapV2SmokeTest(unittest.TestCase):
+    @staticmethod
+    def builder_namespace():
+        namespace = {}
+        source = (ROOT / "scripts/build_dataset.py").read_text(encoding="utf-8")
+        exec(compile(source.split("def main():", 1)[0], "build_dataset.py", "exec"), namespace)
+        return namespace
+
+    def test_lgv_and_raccordement_labels_are_recognized(self):
+        namespace = self.builder_namespace()
+        self.assertTrue(namespace["is_lgv_properties"]({"type": "Ligne à grande vitesse"}))
+        self.assertTrue(namespace["is_connector_properties"]({"libelle": "Raccordement de Lucy"}))
+
+    def test_tgv_profile_can_be_inferred_from_a_tgv_station(self):
+        namespace = self.builder_namespace()
+        profile = namespace["route_profile"](
+            {"route_short_name": "9898"},
+            {"trip_short_name": "9898"},
+            [(1, "A"), (2, "B")],
+            {"A": {"name": "Montpellier Saint-Roch"}, "B": {"name": "Belfort - Montbéliard TGV"}},
+        )
+        self.assertEqual(profile, "tgv")
+
     def test_builder_creates_a_trip_and_path(self):
         with tempfile.TemporaryDirectory() as raw:
             tmp = pathlib.Path(raw)
@@ -93,9 +115,7 @@ class MapV2SmokeTest(unittest.TestCase):
             self.assertEqual(trips["T2"]["displayLabel"], "TER")
 
     def test_router_rejects_a_fast_but_absurd_detour(self):
-        namespace = {}
-        source = (ROOT / "scripts/build_dataset.py").read_text(encoding="utf-8")
-        exec(compile(source.split("def main():", 1)[0], "build_dataset.py", "exec"), namespace)
+        namespace = self.builder_namespace()
         graph = namespace["RailGraph"]()
         graph.add_line([[6.0, 49.0], [6.2, 49.0]], speed=80, is_lgv=False, status="EXPLOITE", code="direct")
         graph.add_line([[6.0, 49.0], [6.0, 49.5], [6.2, 49.5], [6.2, 49.0]], speed=320, is_lgv=True, status="EXPLOITE", code="detour")
