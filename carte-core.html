@@ -3833,6 +3833,7 @@ function sanitizeCflStationName(name){
   map.getPane('selectedTripStopsPane').style.pointerEvents = 'none';
   const selectedTripRouteLayer = L.layerGroup().addTo(map);
   const selectedTripStopsLayer = L.layerGroup().addTo(map);
+  let selectedTripDrawToken = 0;
 
   const tripPanelEl = document.getElementById('trip-panel');
   const tripPanelCloseBtn = document.getElementById('trip-panel-close');
@@ -3972,6 +3973,7 @@ function sanitizeCflStationName(name){
   renderAxisStations();
 
   function clearSelectedTripRoute(){
+    selectedTripDrawToken += 1;
     selectedTripRouteLayer.clearLayers();
     selectedTripStopsLayer.clearLayers();
   }
@@ -3996,22 +3998,13 @@ function sanitizeCflStationName(name){
     return path;
   }
 
-  function drawSelectedTripRoute(trainId){
-    clearSelectedTripRoute();
-    const routeTripId = tripIdForSelectedRoute(trainId);
-    if (!routeTripId) return;
+  function addSelectedLatLonPath(coords){
+    if (!Array.isArray(coords) || coords.length < 2) return;
+    L.polyline(coords, {pane:'selectedTripRoutePane',color:'#020611',weight:10,opacity:.76,lineCap:'round',lineJoin:'round',interactive:false}).addTo(selectedTripRouteLayer);
+    L.polyline(coords, {pane:'selectedTripRoutePane',color:'#168dff',weight:6,opacity:.98,lineCap:'round',lineJoin:'round',interactive:false}).addTo(selectedTripRouteLayer);
+  }
 
-    const seq = stopTimesByTrip.get(routeTripId) || [];
-    for (let i=0; i<seq.length-1; i++){
-      const stopA = stopsById.get(seq[i].stop_id);
-      const stopB = stopsById.get(seq[i+1].stop_id);
-      if (!stopA || !stopB) continue;
-      const path = safeSelectedSegment(stopA, stopB);
-      if (!path) continue;
-      L.polyline(path.coords, {pane:'selectedTripRoutePane',color:'#020611',weight:10,opacity:.76,lineCap:'round',lineJoin:'round',interactive:false}).addTo(selectedTripRouteLayer);
-      L.polyline(path.coords, {pane:'selectedTripRoutePane',color:'#168dff',weight:6,opacity:.98,lineCap:'round',lineJoin:'round',interactive:false}).addTo(selectedTripRouteLayer);
-    }
-
+  function drawSelectedStations(routeTripId, seq){
     const realtimeProfile = realtimeStopDataByTrip.get(routeTripId);
     for (let i=0; i<seq.length; i++){
       const st = seq[i];
@@ -4025,6 +4018,51 @@ function sanitizeCflStationName(name){
       const tooltipHtml = '<strong>' + escapeHTML(stop.name || st.stop_id) + '</strong>' + (timeText ? '<span>' + escapeHTML(timeText) + '</span>' : '');
       marker.bindTooltip(tooltipHtml, {permanent:true,direction:'top',offset:[0,-5],opacity:1,className:'selected-trip-station-tooltip',interactive:false});
       marker.addTo(selectedTripStopsLayer);
+    }
+  }
+
+  async function fetchSelectedV2Path(seq){
+    const names = seq.map(st => stopsById.get(st.stop_id)?.name || st.stop_id).filter(Boolean);
+    if (names.length < 2) return null;
+    const query = encodeURIComponent(names.join('|'));
+    const urls = [
+      'http://localhost:8111/api/map-v2/match-path?stops=' + query,
+      'http://127.0.0.1:8111/api/map-v2/match-path?stops=' + query
+    ];
+    for (const url of urls){
+      try {
+        const response = await fetch(url, { headers:{ Accept:'application/json' } });
+        if (response.ok){
+          const payload = await response.json();
+          if (payload?.path?.geometry?.type === 'LineString') return payload.path;
+        }
+      } catch(_) {}
+    }
+    return null;
+  }
+
+  async function drawSelectedTripRoute(trainId){
+    clearSelectedTripRoute();
+    const drawToken = selectedTripDrawToken;
+    const routeTripId = tripIdForSelectedRoute(trainId);
+    if (!routeTripId) return;
+    const seq = stopTimesByTrip.get(routeTripId) || [];
+    drawSelectedStations(routeTripId, seq);
+
+    const v2Path = await fetchSelectedV2Path(seq);
+    if (drawToken !== selectedTripDrawToken || activeTripId !== trainId) return;
+    if (v2Path){
+      const latLonCoords = v2Path.geometry.coordinates.map(coord => [coord[1], coord[0]]);
+      addSelectedLatLonPath(latLonCoords);
+      return;
+    }
+
+    for (let i=0; i<seq.length-1; i++){
+      const stopA = stopsById.get(seq[i].stop_id);
+      const stopB = stopsById.get(seq[i+1].stop_id);
+      if (!stopA || !stopB) continue;
+      const path = safeSelectedSegment(stopA, stopB);
+      if (path) addSelectedLatLonPath(path.coords);
     }
   }
 
