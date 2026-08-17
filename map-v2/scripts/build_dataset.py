@@ -111,6 +111,9 @@ class RailGraph:
         self.node_by_coord = {}
         self.edges = defaultdict(list)
         self.grid = defaultdict(list)
+        self.node_parts = defaultdict(set)
+        self.endpoints = set()
+        self.part_counter = 0
 
     @staticmethod
     def coord_key(coord):
@@ -133,11 +136,16 @@ class RailGraph:
         return node
 
     def add_line(self, coords, *, speed, is_lgv, status, code):
+        self.part_counter += 1
+        part_id = self.part_counter
         previous = None
+        line_nodes = []
         for coord in coords:
             if not isinstance(coord, list) or len(coord) < 2:
                 continue
             current = self.node(coord)
+            self.node_parts[current].add(part_id)
+            line_nodes.append(current)
             if previous is not None and current != previous:
                 length = haversine(self.coords[previous], self.coords[current])
                 if 0.2 <= length <= 20_000:
@@ -145,6 +153,48 @@ class RailGraph:
                     self.edges[previous].append((current, attrs))
                     self.edges[current].append((previous, attrs))
             previous = current
+        if line_nodes:
+            self.endpoints.add(line_nodes[0])
+            self.endpoints.add(line_nodes[-1])
+
+    def connect_nearby_endpoints(self, max_distance=120.0):
+        """Raccorde les extrémités RFN presque jointives sans relier deux voies parallèles.
+
+        Les jeux SNCF contiennent parfois deux géométries qui s'arrêtent à quelques
+        mètres l'une de l'autre. Visuellement elles se touchent, mais le graphe les
+        considère séparées. On relie uniquement une extrémité à un nœud appartenant
+        à une autre géométrie, dans un rayon volontairement limité.
+        """
+        added = 0
+        for endpoint in sorted(self.endpoints):
+            coord = self.coords[endpoint]
+            gx, gy = self.grid_key(coord)
+            neighbours = {node for node, _attrs in self.edges.get(endpoint, ())}
+            best = None
+            best_distance = max_distance
+            for x in range(gx - 1, gx + 2):
+                for y in range(gy - 1, gy + 2):
+                    for candidate in self.grid.get((x, y), ()):
+                        if candidate == endpoint or candidate in neighbours:
+                            continue
+                        if self.node_parts[endpoint] & self.node_parts[candidate]:
+                            continue
+                        distance = haversine(coord, self.coords[candidate])
+                        if distance < best_distance:
+                            best, best_distance = candidate, distance
+            if best is None:
+                continue
+            attrs = {
+                "length": best_distance,
+                "speed": 40.0,
+                "lgv": False,
+                "status": "AUTO_CONNECTOR",
+                "line": "connector"
+            }
+            self.edges[endpoint].append((best, attrs))
+            self.edges[best].append((endpoint, attrs))
+            added += 1
+        return added
 
     def nearest(self, coord, max_distance=8_000):
         gx, gy = self.grid_key(coord)
@@ -321,7 +371,8 @@ def main():
             "properties": {"line": code, "kind": "closed" if closed else "lgv" if is_lgv else "classic", "speed": speed, "bbox": bbox},
             "geometry": feature.get("geometry")
         })
-    print(f"      {len(graph.coords):,} nœuds ; {len(public_features):,} tronçons")
+    connectors = graph.connect_nearby_endpoints()
+    print(f"      {len(graph.coords):,} nœuds ; {len(public_features):,} tronçons ; {connectors:,} raccordements automatiques")
 
     print("[3/6] Lecture du GTFS")
     stops_rows = read_gtfs(args.gtfs, "stops.txt")
@@ -399,10 +450,16 @@ def main():
             cumulative, length = path_metrics(full_coords)
             path_store[path_id] = {"coordinates": full_coords, "cumulative": cumulative, "length": length, "stopOffsets": offsets, "profile": profile}
             pattern_cache[signature] = path_id
-        number = meta.get("trip_short_name") or route.get("route_short_name") or re.sub(r"\D", "", trip_id)[-6:] or trip_id
+        raw_number = str(meta.get("trip_short_name") or "").strip()
+        if norm(raw_number) in ("", "INCONNU", "UNKNOWN", "TRAIN"):
+            raw_number = ""
+        route_short_name = str(route.get("route_short_name") or "").strip()
+        display_label = raw_number or route_short_name or profile.upper()
         stop_payload = [{"name": stops[item[1]]["name"], "displayTime": display_time(item[2])} for item in sequence]
         trip_store[trip_id] = {
-            "id": trip_id, "number": number, "serviceId": meta.get("service_id"), "routeName": route.get("route_long_name", ""),
+            "id": trip_id, "number": raw_number, "displayLabel": display_label,
+            "serviceId": meta.get("service_id"), "routeName": route.get("route_long_name", ""),
+            "routeShortName": route_short_name, "headsign": meta.get("trip_headsign", ""),
             "category": profile, "pathId": path_id, "times": [item[2] for item in sequence], "offsets": offsets,
             "stops": stop_payload
         }
