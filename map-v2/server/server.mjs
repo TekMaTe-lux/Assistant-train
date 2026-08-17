@@ -123,7 +123,8 @@ function visibleTrains(bbox, at) {
     result.push({
       tripId: trip.id,
       pathId: trip.pathId,
-      number: trip.number,
+      number: trip.number || '',
+      label: trip.displayLabel || trip.number || trip.routeShortName || categoryFor(trip).toUpperCase(),
       category: categoryFor(trip),
       lat: position.lat,
       lon: position.lon,
@@ -138,6 +139,9 @@ function tripResponse(trip) {
   return {
     id: trip.id,
     number: trip.number,
+    label: trip.displayLabel || trip.number || trip.routeShortName || '',
+    routeName: trip.routeName || '',
+    headsign: trip.headsign || '',
     origin: trip.stops?.[0]?.name || '',
     destination: trip.stops?.at(-1)?.name || '',
     stops: (trip.stops || []).map((stop, index) => ({
