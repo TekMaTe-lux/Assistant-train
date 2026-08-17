@@ -63,6 +63,23 @@ python3 scripts/build_dataset.py \
   --bbox 5.70,48.45,6.35,49.65
 ```
 
+Pour conserver les parcours complets des trains qui traversent le sillon, y compris
+les TGV poursuivant vers Strasbourg, Lyon ou Montpellier, construire le réseau
+national mais filtrer uniquement les circulations par leur passage dans la zone :
+
+```bash
+python3 scripts/build_dataset.py \
+  --gtfs data/sources/sncf-gtfs.zip \
+  --network data/sources/lignes-par-statut.geojson \
+  --lgv data/sources/lignes-lgv.geojson \
+  --speed data/sources/vitesses.geojson \
+  --output data/generated \
+  --trip-bbox 5.70,48.45,6.35,49.65
+```
+
+Contrairement à `--bbox`, `--trip-bbox` ne coupe pas les gares situées hors du
+rectangle. Il limite seulement la liste aux trains qui traversent ce rectangle.
+
 Lancer le serveur de test :
 
 ```bash
