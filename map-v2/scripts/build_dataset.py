@@ -360,8 +360,13 @@ def main():
     parser.add_argument("--speed", required=True)
     parser.add_argument("--output", required=True)
     parser.add_argument("--bbox", help="ouest,sud,est,nord")
+    parser.add_argument(
+        "--trip-bbox",
+        help="ne garder que les trains touchant cette zone, tout en conservant leur parcours complet"
+    )
     args = parser.parse_args()
     wanted_bbox = [float(value) for value in args.bbox.split(",")] if args.bbox else None
+    trip_bbox = [float(value) for value in args.trip_bbox.split(",")] if args.trip_bbox else None
     output = pathlib.Path(args.output)
     output.mkdir(parents=True, exist_ok=True)
 
@@ -431,6 +436,12 @@ def main():
     failures = 0
     for trip_id, sequence in by_trip.items():
         sequence.sort()
+        if trip_bbox and not any(
+            trip_bbox[0] <= stops[item[1]]["coord"][0] <= trip_bbox[2]
+            and trip_bbox[1] <= stops[item[1]]["coord"][1] <= trip_bbox[3]
+            for item in sequence
+        ):
+            continue
         if wanted_bbox:
             sequence = [item for item in sequence if (
                 wanted_bbox[0] <= stops[item[1]]["coord"][0] <= wanted_bbox[2]
@@ -505,7 +516,14 @@ def main():
         "paths.json": path_store,
         "trips.json": trip_store,
         "services.json": services,
-        "manifest.json": {"generatedAt": dt.datetime.now(dt.timezone.utc).isoformat(), "nodes": len(graph.coords), "paths": len(path_store), "trips": len(trip_store), "bbox": wanted_bbox}
+        "manifest.json": {
+            "generatedAt": dt.datetime.now(dt.timezone.utc).isoformat(),
+            "nodes": len(graph.coords),
+            "paths": len(path_store),
+            "trips": len(trip_store),
+            "bbox": wanted_bbox,
+            "tripBbox": trip_bbox
+        }
     }
     for filename, payload in payloads.items():
         with open(output / filename, "w", encoding="utf-8") as handle:
