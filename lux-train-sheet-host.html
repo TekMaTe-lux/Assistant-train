@@ -18,23 +18,66 @@
   (()=>{
     'use strict';
     const VPS='https://vps.labetaillere.fr';
+    const DEFAULT_RETURN=`${VPS}/map-v2/tests/luxembourg-user-preview-v5-private-maplike-trainclick.html?v=6133`;
+    const returnUrl=(document.referrer && document.referrer.startsWith(VPS + '/map-v2/tests/luxembourg-user-preview-v5-private-maplike-trainclick.html'))
+      ? document.referrer
+      : DEFAULT_RETURN;
     const frame=document.getElementById('host');
     let payload=null;
     let childReady=false;
     let bridgeReady=false;
+    let closeRequested=false;
+
+    function returnToStation(){
+      if(closeRequested) return;
+      closeRequested=true;
+      try{
+        window.parent.postMessage({type:'LB_CLOSE_TRAIN_SHEET'},VPS);
+      }catch(_){ }
+      // Le parent VPS supprimera l'overlay dès qu'il sait gérer ce message.
+      // En attendant, fallback fiable : retour vers la gare qui a ouvert la fiche.
+      setTimeout(()=>{
+        try{
+          if(window.top && window.top!==window) window.top.location.href=returnUrl;
+        }catch(_){
+          try{ window.location.href=returnUrl; }catch(__){ }
+        }
+      },180);
+    }
+
+    function installCloseHook(){
+      try{
+        const doc=frame.contentDocument;
+        if(!doc || doc.documentElement.dataset.lbLuxCloseHook==='1') return;
+        doc.documentElement.dataset.lbLuxCloseHook='1';
+
+        doc.addEventListener('click',(event)=>{
+          if(!event.target?.closest?.('#trainDetailClose')) return;
+          setTimeout(returnToStation,0);
+        },true);
+
+        doc.addEventListener('keydown',(event)=>{
+          if(event.key!=='Escape') return;
+          const panel=doc.getElementById('trainDetailPanel');
+          if(!panel || panel.hidden) return;
+          setTimeout(returnToStation,0);
+        },true);
+      }catch(err){
+        console.error('[lux train sheet host] hook fermeture impossible',err);
+      }
+    }
 
     function dispatchToChild(){
       if(!payload || !childReady || !bridgeReady) return;
       try{
         const w=frame.contentWindow;
-        // Le wrapper n'accepte des données que du VPS. On rejoue ensuite
-        // l'événement dans la page fille une fois le pont chargé.
         w.dispatchEvent(new MessageEvent('message',{
           data:payload,
           origin:VPS,
           source:window
         }));
         document.body.classList.add('ready');
+        installCloseHook();
       }catch(err){
         console.error('[lux train sheet host] dispatch impossible',err);
       }
@@ -45,6 +88,7 @@
         const doc=frame.contentDocument;
         if(!doc) return;
         childReady=true;
+        installCloseHook();
 
         const existing=doc.getElementById('lb-lux-train-sheet-forced');
         if(existing){
@@ -60,6 +104,7 @@
         script.src='/assets/lux-train-sheet.js?v=20260826-3';
         script.onload=()=>{
           bridgeReady=true;
+          installCloseHook();
           dispatchToChild();
         };
         script.onerror=()=>console.error('[lux train sheet host] pont impossible à charger');
@@ -73,9 +118,9 @@
       childReady=true;
       bridgeReady=false;
       installBridge();
-      // garde-fou si le script principal finit quelques ms plus tard
       setTimeout(installBridge,150);
       setTimeout(()=>{
+        installCloseHook();
         if(frame.contentWindow?.__lbLuxTrainSheetBridgeV2){
           bridgeReady=true;
           dispatchToChild();
@@ -86,6 +131,7 @@
     window.addEventListener('message',(event)=>{
       if(event.origin!==VPS) return;
       if(!event.data || event.data.type!=='LB_OPEN_TRAIN_SHEET') return;
+      closeRequested=false;
       payload=event.data;
       dispatchToChild();
       if(!bridgeReady) installBridge();
