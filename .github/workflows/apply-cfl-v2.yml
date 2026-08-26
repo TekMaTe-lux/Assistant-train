@@ -1,0 +1,410 @@
+name: Apply CFL Gare V2
+
+on:
+  push:
+    branches: [cfl-gare-v2-chatgpt]
+    paths: [.github/workflows/apply-cfl-v2.yml]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: cfl-gare-v2-chatgpt
+          fetch-depth: 0
+
+      - name: Patch index.html
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          p=Path('index.html')
+          s=p.read_text()
+
+          def one(old,new,label):
+              global s
+              c=s.count(old)
+              if c!=1:
+                  raise SystemExit(f'{label}: attendu 1, trouvé {c}')
+              s=s.replace(old,new,1)
+
+          one("""  window.addEventListener('message', (ev) => {
+            const d = ev && ev.data;
+            if (!d || d.type !== 'lb:open-train-detail') return;
+          ""","""  window.addEventListener('message', (ev) => {
+            const d = ev && ev.data;
+            if (!d) return;
+
+            // CFL_PROFILE_FROM_LUX_GARE_V2
+            // Message émis par la gare dynamique Luxembourg.
+            if (d.type === 'LB_OPEN_TRAIN_SHEET') {
+              // La fiche gare ne peut être déclenchée que par notre VPS.
+              if (ev.origin !== 'https://vps.labetaillere.fr') return;
+
+              const raw = String(d.trainNumber || '').match(/\\d{3,6}/);
+              if (!raw) return;
+
+              const trainType = String(d.trainType || '').trim().toUpperCase();
+              const isCfl = /^(RE|RB|IC)$/.test(trainType);
+
+              closeCarteSourcePanel(ev.source);
+
+              if (isCfl && typeof window.lbOpenCflTrainProfile === 'function') {
+                Promise.resolve(
+                  window.lbOpenCflTrainProfile(d, { origin:'lux-gare' })
+                ).catch((error) => {
+                  console.error('[Gare Luxembourg] fiche CFL impossible', error);
+                });
+                return;
+              }
+
+              const payloadDate = /^\\d{4}-\\d{2}-\\d{2}$/.test(String(d.date || ''))
+                ? String(d.date)
+                : '';
+              const dateIso = payloadDate || document.getElementById('trainDate')?.value || luxTodayYMD();
+              const openProfile = typeof window.lbOpenTrainProfile === 'function'
+                ? window.lbOpenTrainProfile
+                : (typeof window.lbOpenTrainDetail === 'function' ? window.lbOpenTrainDetail : openInternalTrainPanel);
+
+              Promise.resolve(
+                openProfile.call(window, raw[0], dateIso, { origin:'lux-gare' })
+              ).catch((error) => {
+                console.error('[Gare Luxembourg] fiche TER/TGV impossible', error);
+              });
+              return;
+            }
+
+            if (d.type !== 'lb:open-train-detail') return;
+          """,'receiver')
+
+          one("""  function updateProfileTitle(number) {
+            const normalized = normalizeTrainNumber(number);
+          ""","""  function updateProfileTitle(number) {
+            if (state.lastBundle?.provider === 'cfl-hafas') return;
+            const normalized = normalizeTrainNumber(number);
+          """,'updateProfileTitle')
+
+          one("""  async function ensureProfileTitle(number) {
+            updateProfileTitle(number);
+          ""","""  async function ensureProfileTitle(number) {
+            if (state.lastBundle?.provider === 'cfl-hafas') return;
+            updateProfileTitle(number);
+          """,'ensureProfileTitle')
+
+          one("""    byId('trainDetailMessage').textContent = '';
+            byId('trainDetailMessage').classList.remove('is-error');
+            refreshFavoriteButton();
+          ""","""    byId('trainDetailMessage').textContent = '';
+            byId('trainDetailMessage').classList.remove('is-error');
+
+            const refreshButton = byId('trainDetailRefresh');
+            if (refreshButton) {
+              refreshButton.disabled = false;
+              refreshButton.title = 'Actualiser la fiche';
+            }
+
+            refreshFavoriteButton();
+          """,'resetProfile')
+
+          one("""    const statsButton = byId('trainDetailStatsBtn');
+            statsButton.onclick = (event) => {
+          ""","""    const statsButton = byId('trainDetailStatsBtn');
+            statsButton.removeAttribute('aria-disabled');
+            statsButton.classList.remove('is-disabled');
+            statsButton.textContent = '📊 Historique complet';
+            statsButton.title = '';
+
+            statsButton.onclick = (event) => {
+          """,'setupProfileActions')
+
+          marker="""  function removeLegacyTrainFinder() {
+          """
+          if s.count(marker)!=1:
+              raise SystemExit(f'removeLegacyTrainFinder: trouvé {s.count(marker)}')
+
+          v2=r'''
+          // ========================================================
+          // CFL_PROFILE_FROM_LUX_GARE_V2
+          // GTFS CFL statique local + LIVE déjà reçu par la gare.
+          // Aucun appel HAFAS n'est effectué depuis cette fiche.
+          // ========================================================
+          async function openCflTrainProfileFromGare(payload, options = {}) {
+            const numberMatch = String(payload?.trainNumber || '').match(/\d{3,6}/);
+            if (!numberMatch) return;
+
+            const number = numberMatch[0];
+            const trainType = String(payload?.trainType || 'CFL').trim().toUpperCase() || 'CFL';
+            const payloadDate = /^\d{4}-\d{2}-\d{2}$/.test(String(payload?.date || ''))
+              ? String(payload.date)
+              : '';
+            const dateIso = payloadDate || todayIso();
+            const mode = String(payload?.mode || '').toLowerCase() === 'arr' ? 'arr' : 'dep';
+
+            const plannedArrival = String(payload?.plannedArrival || '').trim();
+            const realtimeArrival = String(payload?.realtimeArrival || plannedArrival || '').trim();
+            const plannedDeparture = String(payload?.plannedDeparture || '').trim();
+            const realtimeDeparture = String(payload?.realtimeDeparture || plannedDeparture || '').trim();
+            const queryTime = mode === 'arr' ? plannedArrival : plannedDeparture;
+            const queryPlace = mode === 'arr'
+              ? String(payload?.origin || '').trim()
+              : String(payload?.destination || '').trim();
+
+            const requestId = ++state.requestId;
+            state.trainNumber = number;
+            state.dateIso = dateIso;
+            state.origin = 'lux-gare';
+            state.lastBundle = { provider:'cfl-hafas', payload };
+            document.body.classList.add('lb-train-detail-from-map');
+            resetProfile(number, dateIso);
+
+            const setIdentity = () => {
+              const title = byId('trainDetailTitle');
+              if (title) title.textContent = `${trainType} ${number}`;
+            };
+            setIdentity();
+
+            const message = byId('trainDetailMessage');
+            if (message) {
+              message.textContent = 'Chargement du parcours CFL…';
+              message.classList.remove('is-error');
+            }
+            byId('trainDetailPanel')?.setAttribute('aria-busy','true');
+
+            const shortTime = (value) => {
+              const m=String(value||'').match(/^(\d{1,3}):(\d{2})/);
+              if(!m) return '';
+              return `${String(Number(m[1])%24).padStart(2,'0')}:${m[2]}`;
+            };
+            const toMin = (value) => {
+              const m=String(value||'').match(/^(\d{1,3}):(\d{2})/);
+              return m ? Number(m[1])*60+Number(m[2]) : null;
+            };
+            const delayMinutes = (planned,realtime) => {
+              const p=toMin(planned), r=toMin(realtime);
+              if(!Number.isFinite(p)||!Number.isFinite(r)) return 0;
+              let d=r-p;
+              if(d < -720) d+=1440;
+              if(d > 720) d-=1440;
+              return Math.max(0,Math.round(d));
+            };
+            const durationMinutes = (start,end) => {
+              const a=toMin(start), b=toMin(end);
+              if(!Number.isFinite(a)||!Number.isFinite(b)) return null;
+              let d=b-a;
+              while(d<0)d+=1440;
+              return d;
+            };
+            const isLuxembourgStop = (stop) => {
+              if(!stop)return false;
+              if(String(stop.stopId||'')==='000200405060')return true;
+              const n=String(stop.name||'').toLowerCase();
+              return n.includes('luxembourg') && n.includes('gare centrale');
+            };
+
+            let gtfs=null;
+            try {
+              if(!queryTime) throw new Error('horaire planifié Luxembourg absent');
+              const url=new URL('https://vps.labetaillere.fr/api/cfl-trip');
+              url.searchParams.set('date',dateIso);
+              url.searchParams.set('number',number);
+              url.searchParams.set('time',shortTime(queryTime));
+              url.searchParams.set('mode',mode);
+              if(queryPlace)url.searchParams.set('place',queryPlace);
+
+              const response=await fetch(url.toString(),{
+                method:'GET',cache:'no-store',credentials:'omit'
+              });
+              if(!response.ok)throw new Error(`GTFS CFL HTTP ${response.status}`);
+              gtfs=await response.json();
+              if(!gtfs?.ok||!gtfs?.match)throw new Error('réponse GTFS CFL invalide');
+            } catch(error) {
+              if(requestId!==state.requestId)return;
+              console.error('[CFL fiche] parcours GTFS indisponible',error);
+              setIdentity();
+              const track=String(payload?.track||'').trim();
+              byId('trainDetailSourceState').innerHTML='<i></i> LIVE CFL / HAFAS';
+              byId('trainDetailPlatform').textContent=track?`Voie ${track}`:'Voie non communiquée';
+              if(message){
+                message.textContent='LIVE disponible, mais parcours GTFS CFL momentanément indisponible.';
+                message.classList.add('is-error');
+              }
+              byId('trainDetailPanel')?.setAttribute('aria-busy','false');
+              byId('trainDetailPanel')?.setAttribute('aria-hidden','false');
+              return {provider:'cfl-hafas',number,trainType,payload,error};
+            }
+
+            if(requestId!==state.requestId)return;
+
+            const match=gtfs.match;
+            const stops=Array.isArray(match.stops)?match.stops:[];
+            const firstStop=stops[0]||{};
+            const lastStop=stops[stops.length-1]||{};
+            const origin=String(match.origin||firstStop.name||payload?.origin||'').trim();
+            const destination=String(match.destination||lastStop.name||payload?.destination||'').trim();
+            const firstPlanned=String(firstStop.departure||firstStop.arrival||'');
+            const lastPlanned=String(lastStop.arrival||lastStop.departure||'');
+
+            const track=String(payload?.track||'').trim();
+            const physicalStatus=String(payload?.status||'').toLowerCase();
+            const phase=physicalStatus==='arrow'||physicalStatus==='enter'?'EN APPROCHE'
+              :physicalStatus==='dwell'?'À QUAI'
+              :physicalStatus==='exit'?'EN DÉPART':'LIVE';
+            const currentPlanned=mode==='arr'?plannedArrival:plannedDeparture;
+            const currentRealtime=mode==='arr'
+              ?(realtimeArrival||plannedArrival)
+              :(realtimeDeparture||plannedDeparture);
+            const currentDelay=delayMinutes(currentPlanned,currentRealtime);
+
+            let firstActual=firstPlanned, firstDelay=0;
+            let lastActual=lastPlanned, lastDelay=0;
+            if(isLuxembourgStop(firstStop)){
+              firstActual=realtimeDeparture||plannedDeparture||firstPlanned;
+              firstDelay=delayMinutes(plannedDeparture||firstPlanned,firstActual);
+            }
+            if(isLuxembourgStop(lastStop)){
+              lastActual=realtimeArrival||plannedArrival||lastPlanned;
+              lastDelay=delayMinutes(plannedArrival||lastPlanned,lastActual);
+            }
+
+            renderHeroTime(byId('trainDetailDeparture'),{
+              planned:shortTime(firstPlanned)||'—',
+              actual:shortTime(firstActual)||shortTime(firstPlanned)||'—',
+              delay:firstDelay
+            },false);
+            renderHeroTime(byId('trainDetailArrival'),{
+              planned:shortTime(lastPlanned)||'—',
+              actual:shortTime(lastActual)||shortTime(lastPlanned)||'—',
+              delay:lastDelay
+            },false);
+
+            byId('trainDetailOrigin').textContent=origin||'Origine';
+            byId('trainDetailDestination').textContent=destination||'Destination';
+            const duration=durationMinutes(firstPlanned,lastPlanned);
+            byId('trainDetailDuration').textContent=Number.isFinite(duration)?`${duration} min`:'GTFS CFL';
+            byId('trainDetailPlatform').textContent=track?`Voie ${track}`:'Voie non communiquée';
+            byId('trainDetailLiveStatus').className='lb-train-profile__status';
+            byId('trainDetailLiveStatus').innerHTML=`<i></i> ${safe(phase)}${currentDelay>0?` · +${currentDelay} MIN`:''}`;
+            byId('trainDetailSourceState').className='lb-train-profile__source';
+            byId('trainDetailSourceState').innerHTML='<i></i> LIVE CFL / HAFAS + GTFS';
+            byId('trainDetailRouteMode').textContent='GTFS CFL + LIVE';
+            byId('trainDetailPath').textContent=origin&&destination?`${origin} → ${destination}`:'Parcours CFL';
+
+            const routeHost=byId('trainDetailStops');
+            if(routeHost){
+              routeHost.innerHTML=stops.map((stop)=>{
+                const isLux=isLuxembourgStop(stop);
+                const arr=shortTime(stop.arrival), dep=shortTime(stop.departure);
+                const staticTime=dep||arr||'—';
+                let times=`<b>${safe(staticTime)}</b>`;
+                let meta=(arr&&dep&&arr!==dep)?`Arr. ${safe(arr)} · Dép. ${safe(dep)} · GTFS CFL`:'GTFS CFL';
+                let delay='';
+
+                if(isLux){
+                  const livePlanned=shortTime(currentPlanned)||(mode==='arr'?arr:dep)||staticTime;
+                  const liveActual=shortTime(currentRealtime)||livePlanned;
+                  times=currentDelay>0
+                    ?`<s>${safe(livePlanned)}</s><b>${safe(liveActual)}</b>`
+                    :`<b>${safe(liveActual)}</b>`;
+                  const parts=[];
+                  if(arr)parts.push(`Arr. ${arr}`);
+                  if(dep)parts.push(`Dép. ${dep}`);
+                  if(track)parts.push(`Voie ${track}`);
+                  parts.push('LIVE HAFAS');
+                  meta=parts.map(safe).join(' · ');
+                  delay=currentDelay>0
+                    ?`<span class="lb-train-profile__delay">+${currentDelay} min</span>`
+                    :`<span class="lb-train-profile__delay is-ok">À L’HEURE</span>`;
+                }
+
+                return `<div class="lb-train-profile__stop${isLux?' is-current':''}">
+                  <div class="lb-train-profile__times">${times}</div>
+                  <i class="lb-train-profile__dot"></i>
+                  <div class="lb-train-profile__stop-name">
+                    <strong>${safe(stop.name||'Arrêt')}</strong><span>${meta}</span>
+                  </div>${delay}
+                </div>`;
+              }).join('');
+            }
+
+            byId('trainDetailNext').textContent=`${origin} → ${destination} · ${phase.toLowerCase()}${currentDelay>0?` · retard +${currentDelay} min`:''}.`;
+            byId('trainDetailCompo').textContent='Non disponible';
+            byId('trainDetailCompoConfidence').textContent='CFL';
+            byId('trainDetailCompoConfidence').classList.add('is-estimated');
+            renderCompositionDrawing('');
+            byId('trainDetailCompoMeta').textContent='Composition CFL non disponible pour le moment.';
+            renderAffluence(null);
+            renderReliability(null);
+            byId('trainDetailReliabilitySample').textContent='CFL · PAS ENCORE DE STATS';
+            byId('trainDetailReliabilityDetails').textContent='Les statistiques historiques CFL ne sont pas encore disponibles.';
+
+            setupProfileActions(number,dateIso,true);
+            const statsButton=byId('trainDetailStatsBtn');
+            if(statsButton){
+              statsButton.setAttribute('aria-disabled','true');
+              statsButton.classList.add('is-disabled');
+              statsButton.textContent='📊 Statistiques CFL bientôt';
+              statsButton.title='Historique CFL pas encore disponible';
+              statsButton.onclick=(event)=>event.preventDefault();
+            }
+            const refreshButton=byId('trainDetailRefresh');
+            if(refreshButton){
+              refreshButton.disabled=true;
+              refreshButton.title='Actualisation assurée par le LIVE de la gare';
+            }
+            refreshFavoriteButton();
+            setIdentity();
+            if(message){message.textContent='';message.classList.remove('is-error');}
+            byId('trainDetailPanel')?.setAttribute('aria-busy','false');
+            byId('trainDetailPanel')?.setAttribute('aria-hidden','false');
+            setFinderStatus(`Fiche ${trainType} ${number} · parcours CFL chargé.`,'success');
+            window.setTimeout(()=>{
+              if(state.trainNumber===number&&state.lastBundle?.provider==='cfl-hafas')setIdentity();
+            },300);
+            byId('trainDetailPanel')?.focus?.({preventScroll:true});
+            return {provider:'cfl-hafas',number,trainType,payload,gtfs};
+          }
+
+          window.lbOpenCflTrainProfile = openCflTrainProfileFromGare;
+
+          '''
+          s=s.replace(marker,v2+marker,1)
+          p.write_text(s)
+          print('CFL_PROFILE_FROM_LUX_GARE_V2 installé')
+          PY
+
+      - name: Validate JavaScript
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          s=Path('index.html').read_text()
+          needle='async function openCflTrainProfileFromGare'
+          pos=s.find(needle)
+          if pos<0: raise SystemExit('fonction CFL V2 introuvable')
+          start=s.rfind('<script',0,pos)
+          start=s.find('>',start)+1
+          end=s.find('</script>',pos)
+          Path('/tmp/cfl-v2-script.js').write_text(s[start:end])
+          PY
+          node --check /tmp/cfl-v2-script.js
+          git diff --check
+          grep -q 'CFL_PROFILE_FROM_LUX_GARE_V2' index.html
+          grep -q 'api/cfl-trip' index.html
+
+      - name: Commit patched index
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f .github/workflows/apply-cfl-v2.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add index.html .github/workflows/apply-cfl-v2.yml
+          git commit -m 'Branche la fiche CFL sur la gare dynamique Luxembourg'
+          git push origin HEAD:cfl-gare-v2-chatgpt
