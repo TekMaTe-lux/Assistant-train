@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <title>Fiche train La Bétaillère</title>
+  <style>
+    html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#06131f}
+    #host{position:fixed;inset:0;width:100%;height:100%;border:0;background:#06131f}
+    #boot{position:fixed;inset:0;display:grid;place-items:center;color:#9eeeff;background:#06131f;font:700 14px system-ui,sans-serif;z-index:3;letter-spacing:.04em}
+    body.ready #boot{display:none}
+  </style>
+</head>
+<body>
+  <div id="boot">Chargement de la fiche…</div>
+  <iframe id="host" src="/?luxsheet=host-20260826#search" title="Fiche train La Bétaillère"></iframe>
+  <script>
+  (()=>{
+    'use strict';
+    const VPS='https://vps.labetaillere.fr';
+    const frame=document.getElementById('host');
+    let payload=null;
+    let childReady=false;
+    let bridgeReady=false;
+
+    function dispatchToChild(){
+      if(!payload || !childReady || !bridgeReady) return;
+      try{
+        const w=frame.contentWindow;
+        // Le wrapper n'accepte des données que du VPS. On rejoue ensuite
+        // l'événement dans la page fille une fois le pont chargé.
+        w.dispatchEvent(new MessageEvent('message',{
+          data:payload,
+          origin:VPS,
+          source:window
+        }));
+        document.body.classList.add('ready');
+      }catch(err){
+        console.error('[lux train sheet host] dispatch impossible',err);
+      }
+    }
+
+    function installBridge(){
+      try{
+        const doc=frame.contentDocument;
+        if(!doc) return;
+        childReady=true;
+
+        const existing=doc.getElementById('lb-lux-train-sheet-forced');
+        if(existing){
+          if(frame.contentWindow.__lbLuxTrainSheetBridgeV2){
+            bridgeReady=true;
+            dispatchToChild();
+          }
+          return;
+        }
+
+        const script=doc.createElement('script');
+        script.id='lb-lux-train-sheet-forced';
+        script.src='/assets/lux-train-sheet.js?v=20260826-3';
+        script.onload=()=>{
+          bridgeReady=true;
+          dispatchToChild();
+        };
+        script.onerror=()=>console.error('[lux train sheet host] pont impossible à charger');
+        (doc.head||doc.documentElement).appendChild(script);
+      }catch(err){
+        console.error('[lux train sheet host] injection impossible',err);
+      }
+    }
+
+    frame.addEventListener('load',()=>{
+      childReady=true;
+      bridgeReady=false;
+      installBridge();
+      // garde-fou si le script principal finit quelques ms plus tard
+      setTimeout(installBridge,150);
+      setTimeout(()=>{
+        if(frame.contentWindow?.__lbLuxTrainSheetBridgeV2){
+          bridgeReady=true;
+          dispatchToChild();
+        }
+      },500);
+    });
+
+    window.addEventListener('message',(event)=>{
+      if(event.origin!==VPS) return;
+      if(!event.data || event.data.type!=='LB_OPEN_TRAIN_SHEET') return;
+      payload=event.data;
+      dispatchToChild();
+      if(!bridgeReady) installBridge();
+    });
+  })();
+  </script>
+</body>
+</html>
