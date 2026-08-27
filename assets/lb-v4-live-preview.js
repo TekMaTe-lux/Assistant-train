@@ -5,9 +5,9 @@
   const status = document.getElementById('lbV4LiveStatus');
   const reload = document.getElementById('lbV4Reload');
   const openProd = document.getElementById('lbV4OpenProd');
-  const BASE_CSS_HREF = '/assets/lb-v4-live-preview.css?v=20260827-2';
-  const COCKPIT_CSS_HREF = '/assets/lb-v4-cockpit-live.css?v=20260827-2';
-  const COCKPIT_JS_HREF = '/assets/lb-v4-cockpit-live.js?v=20260827-2';
+  const BASE_CSS_HREF = '/assets/lb-v4-live-preview.css?v=20260827-3';
+  const HARMONY_CSS_HREF = '/assets/lb-v4-cockpit-live.css?v=20260827-3';
+  const HARMONY_JS_HREF = '/assets/lb-v4-cockpit-live.js?v=20260827-3';
 
   function setStatus(text, type = '') {
     if (!status) return;
@@ -17,12 +17,13 @@
 
   function ensureStylesheet(doc, id, href) {
     let link = doc.getElementById(id);
-    if (link) return link;
-    link = doc.createElement('link');
-    link.id = id;
-    link.rel = 'stylesheet';
-    link.href = href;
-    doc.head.appendChild(link);
+    if (!link) {
+      link = doc.createElement('link');
+      link.id = id;
+      link.rel = 'stylesheet';
+      doc.head.appendChild(link);
+    }
+    if (link.href !== new URL(href, location.origin).href) link.href = href;
     return link;
   }
 
@@ -55,8 +56,8 @@
     if (doc.body) doc.body.dataset.lbV4Live = '1';
 
     ensureStylesheet(doc, 'lbV4LivePreviewCss', BASE_CSS_HREF);
-    ensureStylesheet(doc, 'lbV4CockpitLiveCss', COCKPIT_CSS_HREF);
-    ensureScript(doc, 'lbV4CockpitLiveJs', COCKPIT_JS_HREF);
+    ensureStylesheet(doc, 'lbV4CockpitLiveCss', HARMONY_CSS_HREF);
+    ensureScript(doc, 'lbV4CockpitLiveJs', HARMONY_JS_HREF);
 
     let meta = doc.querySelector('meta[name="robots"][data-lb-v4-preview]');
     if (!meta) {
@@ -67,7 +68,7 @@
       doc.head.appendChild(meta);
     }
 
-    setStatus('INDEX RÉEL · COCKPIT V4', 'ok');
+    setStatus('INDEX RÉEL · V4 HARMONISÉE', 'ok');
     document.documentElement.dataset.ready = '1';
 
     const checks = {
@@ -81,7 +82,7 @@
   }
 
   frame?.addEventListener('load', () => {
-    setStatus('CONSTRUCTION COCKPIT…');
+    setStatus('HARMONISATION…');
     requestAnimationFrame(() => requestAnimationFrame(inject));
   });
 
