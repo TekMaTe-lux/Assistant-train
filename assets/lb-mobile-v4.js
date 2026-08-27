@@ -19,7 +19,6 @@
   const LUX_ARRIVALS_URL =
     "https://vps.labetaillere.fr/gtfs/retards_cfl_arrivals.json";
   const LUX_ARRIVALS_REFRESH_MS = 120000;
-  const LUX_TABLE_MUTATION_DEBOUNCE_MS = 120;
 
   const TRAIN_NUMBER_EQUIVALENCE_GROUPS = [
     ["2870", "2871"],
@@ -55,7 +54,6 @@
   let luxArrivalRenderQueued = false;
   let luxArrivalTimer = null;
   let luxTableMutationObserver = null;
-  let luxTableMutationDebounce = null;
 
   function isMobileLayout() {
     return mobileQuery.matches;
@@ -272,8 +270,7 @@
   }
 
   function installLuxArrivalStyle() {
-    // Les voies Luxembourg réutilisent exactement le badge natif du tableau.
-    // On supprime seulement un éventuel style injecté par une ancienne version.
+    // Réutilise strictement le style natif .voie-badge du tableau.
     document.getElementById("lb-lux-arrival-track-style")?.remove();
   }
 
@@ -421,27 +418,12 @@
     }, LUX_ARRIVALS_REFRESH_MS);
   }
 
-  function isLuxArrivalInjectedNode(node) {
-    if (!(node instanceof Element)) return false;
-    return (
-      node.classList.contains("lb-lux-arrival-track") ||
-      node.closest(".lb-lux-arrival-track") ||
-      node.classList.contains("lb-table-swipe-hint") ||
-      node.closest(".lb-table-swipe-hint")
+  function mutationTouchesTable(mutations) {
+    return Array.isArray(mutations) && mutations.some((mutation) =>
+      mutation.type === "childList" &&
+      ((mutation.addedNodes && mutation.addedNodes.length) ||
+       (mutation.removedNodes && mutation.removedNodes.length))
     );
-  }
-
-  function shouldIgnoreTableMutations(mutations) {
-    if (!Array.isArray(mutations) || !mutations.length) return true;
-    return mutations.every((mutation) => {
-      if (mutation.type !== "childList") return false;
-      const changedNodes = [
-        ...Array.from(mutation.addedNodes || []),
-        ...Array.from(mutation.removedNodes || [])
-      ];
-      if (!changedNodes.length) return false;
-      return changedNodes.every((node) => isLuxArrivalInjectedNode(node));
-    });
   }
 
   function enhanceTrainTable() {
@@ -506,12 +488,11 @@
     enhanceTrainTable();
     luxTableMutationObserver?.disconnect?.();
     luxTableMutationObserver = new MutationObserver((mutations) => {
-      if (shouldIgnoreTableMutations(mutations)) return;
-      if (luxTableMutationDebounce) window.clearTimeout(luxTableMutationDebounce);
-      luxTableMutationDebounce = window.setTimeout(() => {
-        luxTableMutationDebounce = null;
-        enhanceTrainTable();
-      }, LUX_TABLE_MUTATION_DEBOUNCE_MS);
+      if (!mutationTouchesTable(mutations)) return;
+      // Important : si le moteur live reconstruit une cellule et retire notre badge,
+      // on le réapplique au frame suivant. L'ajout du badge retriggera l'observer
+      // une seule fois, puis aucun DOM n'est réécrit si la voie n'a pas changé.
+      scheduleLuxArrivalBadges();
     });
 
     luxTableMutationObserver.observe(host, {
