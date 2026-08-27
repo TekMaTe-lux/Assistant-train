@@ -50,6 +50,19 @@
     });
   }
 
+  function openDynamicStation() {
+    const message = {
+      type: 'lb:open-lux-dynamic',
+      url: DYNAMIC_URL,
+      station: 'Luxembourg'
+    };
+    if (window.parent && window.parent !== window) {
+      window.parent.postMessage(message, '*');
+      return;
+    }
+    window.open(DYNAMIC_URL, '_blank', 'noopener,noreferrer');
+  }
+
   function enhancePanel(panel) {
     if (!isLuxembourgStationPanel(panel)) return;
     const tabs = panel.querySelector('.lb-station-tabs');
@@ -64,8 +77,7 @@
     button.addEventListener('click', (event) => {
       event.preventDefault();
       event.stopPropagation();
-      const opened = window.open(DYNAMIC_URL, '_blank', 'noopener,noreferrer');
-      if (opened) opened.opener = null;
+      openDynamicStation();
     });
     tabs.appendChild(button);
   }
