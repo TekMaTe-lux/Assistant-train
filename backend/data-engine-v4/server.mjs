@@ -180,7 +180,7 @@ function firstAncillary(index, number) {
 function normalizeSncfTrains(payload, context) {
   const result = [];
   if (!payload || typeof payload !== 'object') return result;
-  const compositionMap = context.compositions;
+  const compositionMap = context.compositionMap;
   const cflIndex = context.cflIndex;
   const arrivalIndex = context.arrivalIndex;
 
