@@ -1,0 +1,58 @@
+name: Mise a jour GTFS SNCF France
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 3 * * *"
+  push:
+    paths:
+      - ".github/workflows/update-sncf-static-gtfs.yml"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: update-sncf-static-gtfs
+  cancel-in-progress: true
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Cloner le depot
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Telecharger le GTFS SNCF officiel
+        run: |
+          set -euo pipefail
+          mkdir -p data/france-gtfs
+          URL="https://eu.ftp.opendatasoft.com/sncf/plandata/Export_OpenData_SNCF_GTFS_NewTripId.zip"
+          TMP="data/france-gtfs/sncf-current.zip.tmp"
+          OUT="data/france-gtfs/sncf-current.zip"
+          curl -L --fail --retry 4 --retry-delay 5 --connect-timeout 20 "$URL" -o "$TMP"
+          unzip -t "$TMP" >/dev/null
+          mv "$TMP" "$OUT"
+          sha256sum "$OUT" | awk '{print $1}' > data/france-gtfs/sncf-current.sha256
+          date -u +'%Y-%m-%dT%H:%M:%SZ' > data/france-gtfs/updated-at.txt
+          ls -lh "$OUT"
+
+      - name: Publier si le GTFS a change
+        env:
+          PAT_TOKEN: ${{ secrets.PAT_TOKEN }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
+          git add data/france-gtfs/sncf-current.zip data/france-gtfs/sncf-current.sha256 data/france-gtfs/updated-at.txt
+          if git diff --staged --quiet; then
+            echo "GTFS SNCF inchange"
+            exit 0
+          fi
+          git commit -m "Met a jour le GTFS SNCF France"
+          if [ -n "${PAT_TOKEN:-}" ]; then
+            git push "https://x-access-token:${PAT_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" HEAD:main
+          else
+            git push origin HEAD:main
+          fi
