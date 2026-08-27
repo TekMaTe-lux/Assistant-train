@@ -7,6 +7,7 @@
   const openProd = document.getElementById('lbV4OpenProd');
   const BASE_CSS_HREF = '/assets/lb-v4-live-preview.css?v=20260827-3';
   const HARMONY_CSS_HREF = '/assets/lb-v4-cockpit-live.css?v=20260827-3';
+  const LAYOUT_CSS_HREF = '/assets/lb-v4-layout-lock.css?v=20260827-1';
   const HARMONY_JS_HREF = '/assets/lb-v4-cockpit-live.js?v=20260827-3';
 
   function setStatus(text, type = '') {
@@ -57,6 +58,7 @@
 
     ensureStylesheet(doc, 'lbV4LivePreviewCss', BASE_CSS_HREF);
     ensureStylesheet(doc, 'lbV4CockpitLiveCss', HARMONY_CSS_HREF);
+    ensureStylesheet(doc, 'lbV4LayoutLockCss', LAYOUT_CSS_HREF);
     ensureScript(doc, 'lbV4CockpitLiveJs', HARMONY_JS_HREF);
 
     let meta = doc.querySelector('meta[name="robots"][data-lb-v4-preview]');
