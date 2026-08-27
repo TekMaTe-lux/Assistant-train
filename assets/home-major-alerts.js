@@ -38,8 +38,10 @@
     style('./assets/lb-v4-tokens.css?v=1', 'lb-v4-tokens');
     style('./assets/lb-v4-command-center.css?v=1', 'lb-v4-command-center-style');
     style('./assets/lb-train-components-v4.css?v=1', 'lb-v4-train-components-style');
+    style('./assets/lb-command-center-home-v4.css?v=1', 'lb-v4-command-center-home-style');
     load('./assets/lb-data-client-v4.js?v=1', 'lb-data-client-v4');
     load('./assets/lb-train-components-v4.js?v=1', 'lb-train-components-v4');
     load('./assets/lb-v4-command-center.js?v=1', 'lb-v4-command-center-script');
+    load('./assets/lb-command-center-home-v4.js?v=1', 'lb-v4-command-center-home-script');
   }
 })();
