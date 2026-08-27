@@ -197,10 +197,10 @@ def canonical_station(name):
 def cfl_by_station(stations):
     return {canonical_station(x.get('name')): x for x in stations if x.get('name')}
 
-def status_from(raw, delay, any_cancelled=False):
+def status_from(raw, delay, station_cancelled=False):
     txt = str(raw or '').upper().replace('-','_').replace(' ','_')
-    if any_cancelled or re.search(r'CANCEL|SUPPR|ANNUL',txt): return 'cancelled'
-    if re.search(r'PARTIAL|PARTIEL|REDUCED',txt): return 'partial'
+    if re.search(r'CANCEL|SUPPR|ANNUL',txt): return 'cancelled'
+    if station_cancelled or re.search(r'PARTIAL|PARTIEL|REDUCED',txt): return 'partial'
     if delay > 0 or re.search(r'DELAY|LATE|RETARD',txt): return 'delay'
     if re.search(r'LIVE|RUNNING',txt): return 'live'
     return 'on-time'
