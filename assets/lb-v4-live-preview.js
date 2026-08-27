@@ -5,12 +5,36 @@
   const status = document.getElementById('lbV4LiveStatus');
   const reload = document.getElementById('lbV4Reload');
   const openProd = document.getElementById('lbV4OpenProd');
-  const CSS_HREF = '/assets/lb-v4-live-preview.css?v=20260827-1';
+  const BASE_CSS_HREF = '/assets/lb-v4-live-preview.css?v=20260827-2';
+  const COCKPIT_CSS_HREF = '/assets/lb-v4-cockpit-live.css?v=20260827-2';
+  const COCKPIT_JS_HREF = '/assets/lb-v4-cockpit-live.js?v=20260827-2';
 
   function setStatus(text, type = '') {
     if (!status) return;
     status.textContent = text;
     status.dataset.state = type;
+  }
+
+  function ensureStylesheet(doc, id, href) {
+    let link = doc.getElementById(id);
+    if (link) return link;
+    link = doc.createElement('link');
+    link.id = id;
+    link.rel = 'stylesheet';
+    link.href = href;
+    doc.head.appendChild(link);
+    return link;
+  }
+
+  function ensureScript(doc, id, src) {
+    let script = doc.getElementById(id);
+    if (script) return script;
+    script = doc.createElement('script');
+    script.id = id;
+    script.src = src;
+    script.defer = true;
+    (doc.body || doc.head).appendChild(script);
+    return script;
   }
 
   function inject() {
@@ -30,14 +54,9 @@
     doc.documentElement.dataset.lbV4Live = '1';
     if (doc.body) doc.body.dataset.lbV4Live = '1';
 
-    let link = doc.getElementById('lbV4LivePreviewCss');
-    if (!link) {
-      link = doc.createElement('link');
-      link.id = 'lbV4LivePreviewCss';
-      link.rel = 'stylesheet';
-      link.href = CSS_HREF;
-      doc.head.appendChild(link);
-    }
+    ensureStylesheet(doc, 'lbV4LivePreviewCss', BASE_CSS_HREF);
+    ensureStylesheet(doc, 'lbV4CockpitLiveCss', COCKPIT_CSS_HREF);
+    ensureScript(doc, 'lbV4CockpitLiveJs', COCKPIT_JS_HREF);
 
     let meta = doc.querySelector('meta[name="robots"][data-lb-v4-preview]');
     if (!meta) {
@@ -48,10 +67,9 @@
       doc.head.appendChild(meta);
     }
 
-    setStatus('INDEX RÉEL + V4', 'ok');
+    setStatus('INDEX RÉEL · COCKPIT V4', 'ok');
     document.documentElement.dataset.ready = '1';
 
-    // Diagnostic non intrusif : on vérifie uniquement la présence des grands blocs.
     const checks = {
       tableau: !![...doc.querySelectorAll('h1,h2,h3')].find(el => /tableau dynamique/i.test(el.textContent || '')),
       favoris: !![...doc.querySelectorAll('h1,h2,h3')].find(el => /bétaillères favorites/i.test(el.textContent || '')),
@@ -63,7 +81,7 @@
   }
 
   frame?.addEventListener('load', () => {
-    setStatus('INJECTION V4…');
+    setStatus('CONSTRUCTION COCKPIT…');
     requestAnimationFrame(() => requestAnimationFrame(inject));
   });
 
@@ -74,9 +92,4 @@
   });
 
   openProd?.addEventListener('click', () => window.open('/', '_blank', 'noopener'));
-
-  window.addEventListener('message', event => {
-    if (event.origin !== location.origin) return;
-    if (event.data?.type === 'lb-v4-preview-ready') setStatus('INDEX RÉEL + V4', 'ok');
-  });
 })();
