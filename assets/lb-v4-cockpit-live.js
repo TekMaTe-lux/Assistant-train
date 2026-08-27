@@ -15,17 +15,20 @@
       .forEach(el => el.classList.remove('lb4-zone-traffic', 'lb4-zone-live', 'lb4-zone-quick', 'lb4-zone-punct', 'lb4-zone-favs', 'lb4-zone-actions'));
   }
 
-  function detectFavoriteState(card, stateEl, causeEl) {
+  function detectFavoriteState(card, kind, stateEl, causeEl) {
+    const metaEl = document.getElementById(`favMeta${kind}`);
     const stateText = text(stateEl).toLowerCase();
     const causeText = text(causeEl).toLowerCase();
-    const all = `${stateText} ${causeText} ${text(card)}`.toLowerCase();
+    const metaText = text(metaEl).toLowerCase();
+    // Ne surtout pas lire l'historique 30 j : « retard moyen » ne décrit pas l'état actuel.
+    const operational = `${stateText} ${causeText} ${metaText}`;
     const live = /\blive\b|en approche|à quai|a quai|en départ|en depart|circule/.test(stateText)
       || !!card.querySelector('.is-live, .live, [data-state="live"], [data-status="live"]');
 
     let state = 'normal';
-    if (/suppression partielle|supprim(?:é|e)e? partiel|service réduit|service reduit|\bpartiel(?:le)?\b/.test(all)) state = 'partial';
-    else if (/train supprim|supprim(?:é|e)e?\b|annul(?:é|e)e?\b/.test(all)) state = 'cancelled';
-    else if (/retard|\+\s*\d+\s*min/.test(all)) state = 'delay';
+    if (/suppression partielle|supprim(?:é|e)e? partiel|service réduit|service reduit|\bpartiel(?:le)?\b/.test(operational)) state = 'partial';
+    else if (/train supprim|supprim(?:é|e)e?\b|annul(?:é|e)e?\b/.test(operational)) state = 'cancelled';
+    else if (/retard|\+\s*\d+\s*min/.test(operational)) state = 'delay';
     else if (/arriv(?:é|e)|termin(?:é|e)/.test(stateText)) state = 'arrived';
     else if (live) state = 'live';
 
@@ -35,7 +38,7 @@
   function ensureFavoriteStatus(card, kind) {
     const stateEl = document.getElementById(`favState${kind}`);
     const causeEl = document.getElementById(`favCause${kind}`);
-    const detected = detectFavoriteState(card, stateEl, causeEl);
+    const detected = detectFavoriteState(card, kind, stateEl, causeEl);
     card.dataset.lb4State = detected.state;
     card.dataset.lb4Live = detected.live ? '1' : '0';
 
@@ -59,11 +62,8 @@
 
     const showRail = ['partial', 'cancelled', 'delay'].includes(detected.state);
     rail.hidden = !showRail;
-    if (showRail) {
-      rail.innerHTML = `<strong>${main}</strong>${cause ? `<span>${cause}</span>` : ''}`;
-    } else {
-      rail.textContent = '';
-    }
+    const wanted = showRail ? `<strong>${main}</strong>${cause ? `<span>${cause}</span>` : ''}` : '';
+    if (rail.innerHTML !== wanted) rail.innerHTML = wanted;
 
     let liveChip = card.querySelector('.lb4-fav-live-chip');
     if (!liveChip) {
@@ -74,7 +74,7 @@
       const head = card.querySelector('.fav-card-head');
       head?.appendChild(liveChip);
     }
-    liveChip.hidden = !detected.live;
+    if (liveChip.hidden === detected.live) liveChip.hidden = !detected.live;
   }
 
   function improveFavoriteCard(kind) {
@@ -144,7 +144,13 @@
   function start() {
     decorate();
     const observer = new MutationObserver(scheduleDecorate);
-    observer.observe(document.body, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ['class', 'data-state', 'data-status'] });
+    observer.observe(document.body, {
+      childList: true,
+      subtree: true,
+      characterData: true,
+      attributes: true,
+      attributeFilter: ['class', 'data-state', 'data-status']
+    });
     window.addEventListener('hashchange', scheduleDecorate, { passive: true });
   }
 
