@@ -234,7 +234,6 @@
       new Set([exactKey, ...equivalentTrainNumbers(exactKey)])
     );
 
-    // Priorité au numéro exact, puis aux équivalences connues.
     for (const key of candidateKeys) {
       const infos = luxArrivalsByNumber.get(key);
       if (!Array.isArray(infos) || !infos.length) continue;
@@ -257,9 +256,6 @@
       const arrivalTrack = getLuxArrivalTrack(trainNumber);
       if (!arrivalTrack) return base;
 
-      // Clone uniquement la petite Map du train : on ne modifie jamais les données CFL
-      // globales. Le moteur natif du tableau lira ensuite "luxembourg" et fabriquera
-      // lui-même le même .voie-badge que pour toutes les autres gares.
       const result = base instanceof Map ? new Map(base) : new Map();
       result.set("luxembourg", arrivalTrack);
       return result;
@@ -282,7 +278,6 @@
 
   function ensureNativePatch() {
     if (patchNativeCflVoiesResolver()) return;
-    // Sécurité si ce fichier est exécuté avant le gros script historique.
     let attempts = 0;
     const timer = window.setInterval(() => {
       attempts += 1;
@@ -296,9 +291,6 @@
     const host = document.getElementById("trainInfo");
     if (!host?.querySelector("table")) return;
 
-    // Le moteur LIVE historique observe les enfants directs de #trainInfo.
-    // Un commentaire invisible suffit à lui demander un refresh natif, sans toucher
-    // aux cellules ni provoquer de flash visuel.
     const marker = document.createComment("lb-lux-arrivals-refresh");
     host.appendChild(marker);
     marker.remove();
@@ -361,10 +353,8 @@
       );
     }
 
-    // Nettoyage d'un éventuel badge hérité des versions précédentes.
     host.querySelectorAll(".lb-lux-arrival-track").forEach((node) => node.remove());
 
-    // Si les arrivées sont déjà en mémoire, le moteur natif peut les appliquer.
     if (luxArrivalsByNumber.size) pokeNativeTableRefresh();
   }
 
@@ -374,9 +364,19 @@
 
     enhanceTrainTable();
     trainHostObserver?.disconnect?.();
-    trainHostObserver = new MutationObserver(() => {
-      // On observe seulement les enfants directs : génération/remplacement du tableau,
-      // jamais les modifications internes des cellules.
+    trainHostObserver = new MutationObserver((mutations) => {
+      const meaningful = mutations.some((mutation) => {
+        const nodes = [
+          ...Array.from(mutation.addedNodes || []),
+          ...Array.from(mutation.removedNodes || [])
+        ];
+        return nodes.some((node) => !(
+          node.nodeType === Node.COMMENT_NODE &&
+          node.nodeValue === "lb-lux-arrivals-refresh"
+        ));
+      });
+      if (!meaningful) return;
+
       window.setTimeout(enhanceTrainTable, 0);
     });
     trainHostObserver.observe(host, {
@@ -425,7 +425,6 @@
     syncGenerateButton();
     syncViewport();
 
-    // Précharge la même source StationBoard que la carte avant la génération du tableau.
     ensureLuxArrivals().catch((error) => {
       console.warn("[Luxembourg arrivées] voies indisponibles", error);
     });
