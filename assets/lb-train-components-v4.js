@@ -9,7 +9,8 @@
     '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
   }[char]));
 
-  const icon = (name, label = '') => `<svg class="lb-v4-icon" aria-hidden="${label ? 'false' : 'true'}"${label ? ` aria-label="${esc(label)}" role="img"` : ''}><use href="./assets/lb-v4-icons.svg#${esc(name)}"></use></svg>`;
+  const iconSprite = window.LB_V4_ICON_SPRITE || '/assets/lb-v4-icons.svg';
+  const icon = (name, label = '') => `<svg class="lb-v4-icon" aria-hidden="${label ? 'false' : 'true'}"${label ? ` aria-label="${esc(label)}" role="img"` : ''}><use href="${iconSprite}#${esc(name)}"></use></svg>`;
 
   const statusLabels = {
     'on-time': 'À l’heure',
@@ -116,7 +117,7 @@
   function stopsMarkup(train) {
     const stops = Array.isArray(train?.stops) ? train.stops : [];
     if (!stops.length) return '<div class="lb-empty-state">Parcours non disponible.</div>';
-    return `<ol class="lb-train-stops">${stops.map((stop, index) => {
+    return `<ol class="lb-train-stops">${stops.map((stop) => {
       const delay = Number(stop?.delayMinutes || 0);
       return `<li class="lb-train-stop${delay > 0 ? ' is-delay' : ''}">
         <span class="lb-train-stop__rail" aria-hidden="true"></span>
