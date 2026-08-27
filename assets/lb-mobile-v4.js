@@ -1,6 +1,10 @@
 /*
  * La Bétaillère — contrôleur mobile v4.
- * Mesures de viewport PWA, clavier mobile et enrichissement du tableau.
+ * Mesures de viewport PWA, clavier mobile et enrichissement léger du tableau.
+ *
+ * Luxembourg : les voies d'arrivée ne sont PAS injectées dans le DOM.
+ * Elles sont fournies au moteur natif du tableau via getCflVoiesForTrain(),
+ * afin que le même rendu .voie-badge soit utilisé partout sans scintillement.
  */
 (function () {
   "use strict";
@@ -9,13 +13,6 @@
     "(max-width: 720px), (hover: none) and (pointer: coarse) and (max-width: 900px)"
   );
 
-  /*
-   * Voies d'arrivée Luxembourg
-   * --------------------------
-   * Source volontairement identique au correctif BER V9 du tableau
-   * « Arrivées » de la carte : le snapshot HAFAS StationBoard dédié.
-   * Le navigateur ne contacte jamais HAFAS directement.
-   */
   const LUX_ARRIVALS_URL =
     "https://vps.labetaillere.fr/gtfs/retards_cfl_arrivals.json";
   const LUX_ARRIVALS_REFRESH_MS = 120000;
@@ -49,11 +46,10 @@
   }
 
   let luxArrivalsByNumber = new Map();
-  let luxArrivalsLastLoadedAt = 0;
   let luxArrivalsPromise = null;
-  let luxArrivalRenderQueued = false;
-  let luxArrivalTimer = null;
-  let luxTableMutationObserver = null;
+  let luxArrivalsLastLoadedAt = 0;
+  let luxArrivalsRefreshTimer = null;
+  let trainHostObserver = null;
 
   function isMobileLayout() {
     return mobileQuery.matches;
@@ -153,18 +149,6 @@
     return `${String(Number(match[1])).padStart(2, "0")}:${match[2]}`;
   }
 
-  function cellClocks(cell) {
-    const clocks = new Set();
-    const text = String(cell?.textContent || "");
-    for (const match of text.matchAll(/\b(\d{1,2}):(\d{2})\b/g)) {
-      clocks.add(`${String(Number(match[1])).padStart(2, "0")}:${match[2]}`);
-    }
-    const baseTime = cell?.dataset?.baseTime || cell?.getAttribute?.("data-base-time");
-    const normalizedBase = normalizeClock(baseTime);
-    if (normalizedBase) clocks.add(normalizedBase);
-    return clocks;
-  }
-
   function parseLuxArrivalSnapshot(payload) {
     const byNumber = new Map();
     const data = payload?.data;
@@ -182,14 +166,11 @@
 
       const info = {
         number,
-        train: String(rawInfo.train || label || number),
         track,
         planned: normalizeClock(rawInfo.arrivalPlanned),
         realtime: normalizeClock(rawInfo.arrivalRealtime),
-        platformChanged: rawInfo.platformChanged === true,
         plannedTrack: normalizeTrack(rawInfo.arrivalPlatformPlanned),
-        realtimeTrack: normalizeTrack(rawInfo.arrivalPlatformRealtime),
-        origin: String(rawInfo.origin || "").trim()
+        realtimeTrack: normalizeTrack(rawInfo.arrivalPlatformRealtime)
       };
 
       if (!byNumber.has(number)) byNumber.set(number, []);
@@ -215,6 +196,114 @@
     }
   }
 
+  function getLuxembourgArrivalContext() {
+    const table = document.querySelector("#trainInfo .table-scroll table, #trainInfo table");
+    if (!table) return null;
+
+    const rows = Array.from(table.querySelectorAll("tbody tr")).filter((row) =>
+      row.querySelector("td:first-child")
+    );
+    if (!rows.length) return null;
+
+    const luxRow = rows.find((row) => {
+      const firstCell = row.querySelector("td:first-child");
+      const label =
+        firstCell?.querySelector("a.gare-link")?.textContent ||
+        firstCell?.querySelector(".gare-label")?.textContent ||
+        firstCell?.textContent ||
+        "";
+      return canonicalStationName(label).startsWith("luxembourg");
+    });
+    if (!luxRow) return null;
+
+    return {
+      table,
+      luxRow,
+      isArrivalLayout: rows[rows.length - 1] === luxRow
+    };
+  }
+
+  function getLuxArrivalTrack(trainNumber) {
+    const context = getLuxembourgArrivalContext();
+    if (!context?.isArrivalLayout) return null;
+
+    const exactKey = normalizeTrainNumberKey(trainNumber);
+    if (!exactKey) return null;
+
+    const candidateKeys = Array.from(
+      new Set([exactKey, ...equivalentTrainNumbers(exactKey)])
+    );
+
+    // Priorité au numéro exact, puis aux équivalences connues.
+    for (const key of candidateKeys) {
+      const infos = luxArrivalsByNumber.get(key);
+      if (!Array.isArray(infos) || !infos.length) continue;
+      const info = infos[0];
+      const track = normalizeTrack(info?.realtimeTrack ?? info?.track ?? info?.plannedTrack);
+      if (track) return track;
+    }
+
+    return null;
+  }
+
+  function patchNativeCflVoiesResolver() {
+    const current = window.getCflVoiesForTrain;
+    if (typeof current !== "function") return false;
+    if (current.__lbLuxArrivalsNative === true) return true;
+
+    const original = current;
+    const wrapped = function (trainNumber) {
+      const base = original.apply(this, arguments);
+      const arrivalTrack = getLuxArrivalTrack(trainNumber);
+      if (!arrivalTrack) return base;
+
+      // Clone uniquement la petite Map du train : on ne modifie jamais les données CFL
+      // globales. Le moteur natif du tableau lira ensuite "luxembourg" et fabriquera
+      // lui-même le même .voie-badge que pour toutes les autres gares.
+      const result = base instanceof Map ? new Map(base) : new Map();
+      result.set("luxembourg", arrivalTrack);
+      return result;
+    };
+
+    Object.defineProperty(wrapped, "__lbLuxArrivalsNative", {
+      value: true,
+      configurable: false,
+      enumerable: false
+    });
+    Object.defineProperty(wrapped, "__lbLuxArrivalsOriginal", {
+      value: original,
+      configurable: false,
+      enumerable: false
+    });
+
+    window.getCflVoiesForTrain = wrapped;
+    return window.getCflVoiesForTrain === wrapped;
+  }
+
+  function ensureNativePatch() {
+    if (patchNativeCflVoiesResolver()) return;
+    // Sécurité si ce fichier est exécuté avant le gros script historique.
+    let attempts = 0;
+    const timer = window.setInterval(() => {
+      attempts += 1;
+      if (patchNativeCflVoiesResolver() || attempts >= 30) {
+        window.clearInterval(timer);
+      }
+    }, 100);
+  }
+
+  function pokeNativeTableRefresh() {
+    const host = document.getElementById("trainInfo");
+    if (!host?.querySelector("table")) return;
+
+    // Le moteur LIVE historique observe les enfants directs de #trainInfo.
+    // Un commentaire invisible suffit à lui demander un refresh natif, sans toucher
+    // aux cellules ni provoquer de flash visuel.
+    const marker = document.createComment("lb-lux-arrivals-refresh");
+    host.appendChild(marker);
+    marker.remove();
+  }
+
   async function ensureLuxArrivals({ force = false } = {}) {
     const age = Date.now() - luxArrivalsLastLoadedAt;
     if (!force && luxArrivalsByNumber.size && age < LUX_ARRIVALS_REFRESH_MS) {
@@ -229,6 +318,8 @@
         luxArrivalsByNumber = parsed;
         luxArrivalsLastLoadedAt = Date.now();
       }
+      ensureNativePatch();
+      pokeNativeTableRefresh();
       return luxArrivalsByNumber;
     })();
 
@@ -239,191 +330,14 @@
     }
   }
 
-  function chooseLuxArrival(trainNumber, cell) {
-    const exactKey = normalizeTrainNumberKey(trainNumber);
-    if (!exactKey) return null;
-
-    const candidateKeys = Array.from(
-      new Set([exactKey, ...equivalentTrainNumbers(exactKey)])
-    );
-    const clocks = cellClocks(cell);
-    let best = null;
-    let bestScore = -Infinity;
-
-    for (const key of candidateKeys) {
-      const infos = luxArrivalsByNumber.get(key) || [];
-      for (const info of infos) {
-        let score = key === exactKey ? 100 : 50;
-        if (info.realtime && clocks.has(info.realtime)) score += 80;
-        if (info.planned && clocks.has(info.planned)) score += 70;
-        if (info.realtimeTrack) score += 4;
-        if (info.platformChanged) score += 1;
-
-        if (score > bestScore) {
-          bestScore = score;
-          best = info;
-        }
-      }
-    }
-
-    return best;
-  }
-
-  function installLuxArrivalStyle() {
-    // Réutilise strictement le style natif .voie-badge du tableau.
-    document.getElementById("lb-lux-arrival-track-style")?.remove();
-  }
-
-  function getLuxembourgArrivalTableContext() {
-    const table = document.querySelector("#trainInfo .table-scroll table");
-    if (!table) return null;
-
-    const rows = Array.from(table.querySelectorAll("tbody tr")).filter((row) =>
-      row.querySelector("td:first-child")
-    );
-    if (!rows.length) return null;
-
-    const luxRow = rows.find((row) => {
-      const firstCell = row.querySelector("td:first-child");
-      const label =
-        firstCell?.querySelector("a.gare-link")?.textContent || firstCell?.textContent || "";
-      return canonicalStationName(label).startsWith("luxembourg");
-    });
-    if (!luxRow) return null;
-
-    return {
-      table,
-      luxRow,
-      isArrivalLayout: rows[rows.length - 1] === luxRow
-    };
-  }
-
-  function removeLuxArrivalBadges(row) {
-    row?.querySelectorAll?.(".lb-lux-arrival-track").forEach((badge) => badge.remove());
-  }
-
-  function renderLuxArrivalBadges() {
-    const context = getLuxembourgArrivalTableContext();
-    if (!context) return false;
-
-    const { table, luxRow, isArrivalLayout } = context;
-    if (!isArrivalLayout) {
-      removeLuxArrivalBadges(luxRow);
-      return false;
-    }
-
-    installLuxArrivalStyle();
-
-    const headers = Array.from(table.querySelectorAll("thead th"));
-    const cells = Array.from(luxRow.querySelectorAll("td"));
-    if (headers.length < 2 || cells.length < 2) return false;
-
-    for (let i = 1; i < cells.length; i += 1) {
-      const cell = cells[i];
-      const header = headers[i];
-      if (!cell || !header) continue;
-
-      const trainNumber = extractTrainNumberCandidate(header.textContent || "");
-      const existing = cell.querySelector(".lb-lux-arrival-track");
-      const hasTime = /\b\d{1,2}:\d{2}\b/.test(cell.textContent || "");
-
-      if (!trainNumber || !hasTime) {
-        existing?.remove();
-        continue;
-      }
-
-      const info = chooseLuxArrival(trainNumber, cell);
-      if (!info?.track) {
-        existing?.remove();
-        continue;
-      }
-
-      const title =
-        info.platformChanged && info.plannedTrack && info.realtimeTrack
-          ? `Voie d’arrivée HAFAS : ${info.plannedTrack} → ${info.realtimeTrack}`
-          : "Voie d’arrivée HAFAS";
-
-      if (existing) {
-        let changed = false;
-        if (existing.dataset.track !== info.track) {
-          existing.dataset.track = info.track;
-          existing.textContent = `Voie ${info.track}`;
-          changed = true;
-        }
-        if (existing.title !== title) {
-          existing.title = title;
-          changed = true;
-        }
-        const aria = `Voie ${info.track} à l'arrivée à Luxembourg`;
-        if (existing.getAttribute("aria-label") !== aria) {
-          existing.setAttribute("aria-label", aria);
-          changed = true;
-        }
-        if (!changed) {
-          // Rien à faire : on évite toute mutation DOM inutile qui provoquerait un scintillement.
-        }
-        continue;
-      }
-
-      const badge = document.createElement("span");
-      badge.className = "voie-badge lb-lux-arrival-track";
-      badge.dataset.track = info.track;
-      badge.dataset.source = "hafas-stationboard-arrivals";
-      badge.style.marginLeft = "6px";
-      badge.textContent = `Voie ${info.track}`;
-      badge.title = title;
-      badge.setAttribute("aria-label", `Voie ${info.track} à l'arrivée à Luxembourg`);
-      cell.appendChild(badge);
-    }
-
-    return true;
-  }
-
-  function scheduleLuxArrivalBadges() {
-    if (luxArrivalRenderQueued) return;
-    luxArrivalRenderQueued = true;
-
-    const run = async () => {
-      luxArrivalRenderQueued = false;
-      const context = getLuxembourgArrivalTableContext();
-      if (!context) return;
-      if (!context.isArrivalLayout) {
-        removeLuxArrivalBadges(context.luxRow);
-        return;
-      }
-
-      try {
-        await ensureLuxArrivals();
-        renderLuxArrivalBadges();
-      } catch (error) {
-        console.warn("[Luxembourg arrivées] voies indisponibles", error);
-      }
-    };
-
-    if (typeof requestAnimationFrame === "function") requestAnimationFrame(run);
-    else window.setTimeout(run, 0);
-  }
-
   function startLuxArrivalRefresh() {
-    if (luxArrivalTimer) return;
-    luxArrivalTimer = window.setInterval(async () => {
-      const context = getLuxembourgArrivalTableContext();
-      if (!context?.isArrivalLayout) return;
-      try {
-        await ensureLuxArrivals({ force: true });
-        renderLuxArrivalBadges();
-      } catch (error) {
+    if (luxArrivalsRefreshTimer) return;
+    luxArrivalsRefreshTimer = window.setInterval(() => {
+      if (document.hidden) return;
+      ensureLuxArrivals({ force: true }).catch((error) => {
         console.warn("[Luxembourg arrivées] rafraîchissement impossible", error);
-      }
+      });
     }, LUX_ARRIVALS_REFRESH_MS);
-  }
-
-  function mutationTouchesTable(mutations) {
-    return Array.isArray(mutations) && mutations.some((mutation) =>
-      mutation.type === "childList" &&
-      ((mutation.addedNodes && mutation.addedNodes.length) ||
-       (mutation.removedNodes && mutation.removedNodes.length))
-    );
   }
 
   function enhanceTrainTable() {
@@ -447,7 +361,28 @@
       );
     }
 
-    scheduleLuxArrivalBadges();
+    // Nettoyage d'un éventuel badge hérité des versions précédentes.
+    host.querySelectorAll(".lb-lux-arrival-track").forEach((node) => node.remove());
+
+    // Si les arrivées sont déjà en mémoire, le moteur natif peut les appliquer.
+    if (luxArrivalsByNumber.size) pokeNativeTableRefresh();
+  }
+
+  function watchTrainTable() {
+    const host = document.getElementById("trainInfo");
+    if (!host) return;
+
+    enhanceTrainTable();
+    trainHostObserver?.disconnect?.();
+    trainHostObserver = new MutationObserver(() => {
+      // On observe seulement les enfants directs : génération/remplacement du tableau,
+      // jamais les modifications internes des cellules.
+      window.setTimeout(enhanceTrainTable, 0);
+    });
+    trainHostObserver.observe(host, {
+      childList: true,
+      subtree: false
+    });
   }
 
   function syncSecondaryNavigation() {
@@ -481,33 +416,19 @@
     syncSecondaryNavigation();
   }
 
-  function watchTrainTable() {
-    const host = document.getElementById("trainInfo");
-    if (!host) return;
-
-    enhanceTrainTable();
-    luxTableMutationObserver?.disconnect?.();
-    luxTableMutationObserver = new MutationObserver((mutations) => {
-      if (!mutationTouchesTable(mutations)) return;
-      // Important : si le moteur live reconstruit une cellule et retire notre badge,
-      // on le réapplique au frame suivant. L'ajout du badge retriggera l'observer
-      // une seule fois, puis aucun DOM n'est réécrit si la voie n'a pas changé.
-      scheduleLuxArrivalBadges();
-    });
-
-    luxTableMutationObserver.observe(host, {
-      childList: true,
-      subtree: true
-    });
-  }
-
   function init() {
     document.body.classList.add("lb-mobile-v4");
     removeCompactMoreMenu();
+    ensureNativePatch();
     watchTrainTable();
     watchSecondaryNavigation();
     syncGenerateButton();
     syncViewport();
+
+    // Précharge la même source StationBoard que la carte avant la génération du tableau.
+    ensureLuxArrivals().catch((error) => {
+      console.warn("[Luxembourg arrivées] voies indisponibles", error);
+    });
     startLuxArrivalRefresh();
 
     window.addEventListener("resize", syncViewport, { passive: true });
