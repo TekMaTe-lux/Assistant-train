@@ -19,6 +19,7 @@
   const LUX_ARRIVALS_URL =
     "https://vps.labetaillere.fr/gtfs/retards_cfl_arrivals.json";
   const LUX_ARRIVALS_REFRESH_MS = 120000;
+  const LUX_TABLE_MUTATION_DEBOUNCE_MS = 120;
 
   const TRAIN_NUMBER_EQUIVALENCE_GROUPS = [
     ["2870", "2871"],
@@ -53,6 +54,8 @@
   let luxArrivalsPromise = null;
   let luxArrivalRenderQueued = false;
   let luxArrivalTimer = null;
+  let luxTableMutationObserver = null;
+  let luxTableMutationDebounce = null;
 
   function isMobileLayout() {
     return mobileQuery.matches;
@@ -175,7 +178,7 @@
       if (!number) continue;
 
       const track = normalizeTrack(
-        rawInfo.arrivalPlatformRealtime || rawInfo.arrivalPlatformPlanned
+        rawInfo.arrivalPlatformRealtime ?? rawInfo.arrivalPlatformPlanned
       );
       if (!track) continue;
 
@@ -269,36 +272,9 @@
   }
 
   function installLuxArrivalStyle() {
-    if (document.getElementById("lb-lux-arrival-track-style")) return;
-    const style = document.createElement("style");
-    style.id = "lb-lux-arrival-track-style";
-    style.textContent = `
-      #trainInfo .lb-lux-arrival-track{
-        display:inline-flex;
-        align-items:center;
-        justify-content:center;
-        margin-left:5px;
-        padding:2px 6px;
-        border:1px solid rgba(0,240,255,.68);
-        border-radius:999px;
-        background:rgba(0,240,255,.11);
-        color:#00f0ff;
-        font-size:10px;
-        font-weight:700;
-        line-height:1.05;
-        white-space:nowrap;
-        vertical-align:middle;
-        box-shadow:0 0 8px rgba(0,240,255,.14), inset 0 0 6px rgba(0,240,255,.05);
-      }
-      #trainInfo .lb-lux-arrival-track::before{
-        content:"Voie ";
-        margin-right:2px;
-        font-size:.82em;
-        font-weight:600;
-        opacity:.88;
-      }
-    `;
-    document.head.appendChild(style);
+    // Les voies Luxembourg réutilisent exactement le badge natif du tableau.
+    // On supprime seulement un éventuel style injecté par une ancienne version.
+    document.getElementById("lb-lux-arrival-track-style")?.remove();
   }
 
   function getLuxembourgArrivalTableContext() {
@@ -318,8 +294,6 @@
     });
     if (!luxRow) return null;
 
-    // Les voies demandées ici sont les voies d'ARRIVÉE : Luxembourg doit donc
-    // être le terminus affiché du tableau (sens France -> Luxembourg).
     return {
       table,
       luxRow,
@@ -367,24 +341,39 @@
         continue;
       }
 
-      const title = info.platformChanged && info.plannedTrack && info.realtimeTrack
-        ? `Voie d’arrivée HAFAS : ${info.plannedTrack} → ${info.realtimeTrack}`
-        : "Voie d’arrivée HAFAS";
+      const title =
+        info.platformChanged && info.plannedTrack && info.realtimeTrack
+          ? `Voie d’arrivée HAFAS : ${info.plannedTrack} → ${info.realtimeTrack}`
+          : "Voie d’arrivée HAFAS";
 
       if (existing) {
+        let changed = false;
         if (existing.dataset.track !== info.track) {
           existing.dataset.track = info.track;
-          existing.textContent = info.track;
+          existing.textContent = `Voie ${info.track}`;
+          changed = true;
         }
-        existing.title = title;
+        if (existing.title !== title) {
+          existing.title = title;
+          changed = true;
+        }
+        const aria = `Voie ${info.track} à l'arrivée à Luxembourg`;
+        if (existing.getAttribute("aria-label") !== aria) {
+          existing.setAttribute("aria-label", aria);
+          changed = true;
+        }
+        if (!changed) {
+          // Rien à faire : on évite toute mutation DOM inutile qui provoquerait un scintillement.
+        }
         continue;
       }
 
       const badge = document.createElement("span");
-      badge.className = "lb-lux-arrival-track";
+      badge.className = "voie-badge lb-lux-arrival-track";
       badge.dataset.track = info.track;
       badge.dataset.source = "hafas-stationboard-arrivals";
-      badge.textContent = info.track;
+      badge.style.marginLeft = "6px";
+      badge.textContent = `Voie ${info.track}`;
       badge.title = title;
       badge.setAttribute("aria-label", `Voie ${info.track} à l'arrivée à Luxembourg`);
       cell.appendChild(badge);
@@ -430,6 +419,29 @@
         console.warn("[Luxembourg arrivées] rafraîchissement impossible", error);
       }
     }, LUX_ARRIVALS_REFRESH_MS);
+  }
+
+  function isLuxArrivalInjectedNode(node) {
+    if (!(node instanceof Element)) return false;
+    return (
+      node.classList.contains("lb-lux-arrival-track") ||
+      node.closest(".lb-lux-arrival-track") ||
+      node.classList.contains("lb-table-swipe-hint") ||
+      node.closest(".lb-table-swipe-hint")
+    );
+  }
+
+  function shouldIgnoreTableMutations(mutations) {
+    if (!Array.isArray(mutations) || !mutations.length) return true;
+    return mutations.every((mutation) => {
+      if (mutation.type !== "childList") return false;
+      const changedNodes = [
+        ...Array.from(mutation.addedNodes || []),
+        ...Array.from(mutation.removedNodes || [])
+      ];
+      if (!changedNodes.length) return false;
+      return changedNodes.every((node) => isLuxArrivalInjectedNode(node));
+    });
   }
 
   function enhanceTrainTable() {
@@ -490,8 +502,19 @@
   function watchTrainTable() {
     const host = document.getElementById("trainInfo");
     if (!host) return;
+
     enhanceTrainTable();
-    new MutationObserver(enhanceTrainTable).observe(host, {
+    luxTableMutationObserver?.disconnect?.();
+    luxTableMutationObserver = new MutationObserver((mutations) => {
+      if (shouldIgnoreTableMutations(mutations)) return;
+      if (luxTableMutationDebounce) window.clearTimeout(luxTableMutationDebounce);
+      luxTableMutationDebounce = window.setTimeout(() => {
+        luxTableMutationDebounce = null;
+        enhanceTrainTable();
+      }, LUX_TABLE_MUTATION_DEBOUNCE_MS);
+    });
+
+    luxTableMutationObserver.observe(host, {
       childList: true,
       subtree: true
     });
