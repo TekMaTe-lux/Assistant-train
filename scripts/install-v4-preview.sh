@@ -27,7 +27,7 @@ echo "=== Téléchargement de la preview V4 depuis ${BRANCH} ==="
 fetch "v4/index.html" "$TMP/index.html"
 fetch "v4/site.html" "$TMP/site.html"
 fetch "v4/site.css" "$TMP/site.css"
-fetch "v4/site.js" "$TMP/site.js"
+fetch "v4/site-v2.js" "$TMP/site-v2.js"
 fetch "v4/data-bridge.js" "$TMP/data-bridge.js"
 fetch "v4/components.html" "$TMP/components.html"
 fetch "v4/preview.css" "$TMP/preview.css"
@@ -52,25 +52,37 @@ for page in "$TMP/index.html" "$TMP/components.html" "$TMP/site.html"; do
     "$page"
 done
 
-# Le bridge fait lire à site.html le snapshot statique produit par le moteur V4,
-# sans nécessiter de modifier nginx pour exposer /api/v4.
+# La page complète utilise désormais le renderer V2 qui lit directement
+# ./data/snapshot.json. Pas de fallback DEMO dès qu'un snapshot V4 existe.
+sed -i -E 's|<script src="\./site\.js\?v=[^"]+"></script>|<script src="./site-v2.js?v=20260827-2"></script>|' "$TMP/site.html"
+if grep -q '<script src="\./site\.js' "$TMP/site.html"; then
+  sed -i 's|<script src="\./site\.js[^>]*></script>|<script src="./site-v2.js?v=20260827-2"></script>|' "$TMP/site.html"
+fi
+# Bridge conservé pour les futurs composants qui appelleront /api/v4/snapshot.
 if ! grep -q 'data-bridge.js' "$TMP/site.html"; then
-  sed -i 's|<script src="\./site\.js|<script src="./data-bridge.js?v=1"></script>\n  <script src="./site.js|' "$TMP/site.html"
+  sed -i 's|<script src="\./site-v2\.js|<script src="./data-bridge.js?v=2"></script>\n  <script src="./site-v2.js|' "$TMP/site.html"
 fi
 
 node --check "$TMP/preview.js"
 node --check "$TMP/components.js"
-node --check "$TMP/site.js"
+node --check "$TMP/site-v2.js"
 node --check "$TMP/data-bridge.js"
 node --check "$TMP/assets/lb-train-components-v4.js"
 for page in "$TMP/index.html" "$TMP/components.html" "$TMP/site.html"; do grep -q 'noindex,nofollow,noarchive' "$page"; done
 grep -q 'Laboratoire V4' "$TMP/index.html"
 grep -q 'APERÇU COMPLET' "$TMP/site.html"
-grep -q 'data-bridge.js' "$TMP/site.html"
+grep -q 'site-v2.js' "$TMP/site.html"
 
 if grep -Eq 'href="https://www\.labetaillere\.fr/?"' "$TMP/site.html"; then
   echo "ERREUR: la preview complète pointe vers l'accueil de production, installation annulée." >&2
   exit 4
+fi
+
+# Préserver le snapshot réel déjà produit par labetaillere-data-v4.
+if [[ -d "$TARGET/data" ]]; then
+  echo "=== Préservation du snapshot V4 ==="
+  mkdir -p "$TMP/data"
+  cp -a "$TARGET/data/." "$TMP/data/"
 fi
 
 if [[ -e "$TARGET" ]]; then
@@ -83,13 +95,18 @@ mkdir -p "$TARGET"
 cp -a "$TMP/." "$TARGET/"
 find "$TARGET" -type d -exec chmod 0755 {} +
 find "$TARGET" -type f -exec chmod 0644 {} +
+# Le moteur tourne sous ubuntu : conserver/garantir l'écriture du dossier data.
+if [[ -d "$TARGET/data" ]]; then
+  chown -R ubuntu:ubuntu "$TARGET/data" 2>/dev/null || true
+fi
 
 echo
 printf '%s\n' "==============================================="
-printf '%s\n' "PREVIEW V4 INSTALLÉE SANS TOUCHER À LA PROD"
+printf '%s\n' "PREVIEW V4 LIVE INSTALLÉE SANS TOUCHER À LA PROD"
 printf '%s\n' "==============================================="
 printf '%s\n' "Dossier : $TARGET"
-printf '%s\n' "APERÇU DU SITE : https://vps.labetaillere.fr/map-v2/v4-preview/site.html"
+printf '%s\n' "Renderer : site-v2.js — données réelles uniquement en mode V4"
+printf '%s\n' "APERÇU DU SITE : https://vps.labetaillere.fr/map-v2/v4-preview/site.html?v=20260827-2"
 printf '%s\n' "Cockpit technique : https://vps.labetaillere.fr/map-v2/v4-preview/index.html"
 printf '%s\n' "Showroom : https://vps.labetaillere.fr/map-v2/v4-preview/components.html"
 printf '%s\n' "Aucun index.html public, nginx ou service de production n'a été modifié."
