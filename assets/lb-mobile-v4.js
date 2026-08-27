@@ -10,7 +10,20 @@
   );
 
   const LUX_TRACK_REFRESH_MS = 120000;
-  const LUX_TRACK_SOURCES = [
+
+  // IMPORTANT : c'est la même base que le tableau dynamique « Gare de Luxembourg ».
+  // Elle est déjà alimentée côté VPS par le StationBoard HAFAS : aucun appel HAFAS
+  // supplémentaire n'est effectué depuis le navigateur.
+  const LUX_STATION_LIVE_SOURCES = [
+    {
+      label: "lux_station_live",
+      urls: ["https://vps.labetaillere.fr/gtfs/lux_station_live.json"]
+    }
+  ];
+
+  // Secours uniquement : les anciennes consolidations peuvent encore dépanner
+  // si le snapshot spécifique de Luxembourg est momentanément indisponible.
+  const LUX_TRACK_FALLBACK_SOURCES = [
     {
       label: "voies_by_train",
       urls: ["https://vps.labetaillere.fr/gtfs/voies_by_train.json"]
@@ -24,6 +37,7 @@
       urls: ["https://vps.labetaillere.fr/gtfs/retards_cfl_by_station.json"]
     }
   ];
+
   const TRAIN_NUMBER_EQUIVALENCE_GROUPS = [
     ["2870", "2871"],
     ["2864", "2865"],
@@ -148,15 +162,38 @@
     return compact || null;
   }
 
-  function ingestTrackRecord(targetMap, trainRawKey, payload, sourceLabel) {
+  function normalizeEventType(value) {
+    return normalizeStationName(value).replace(/[^a-z]/g, "");
+  }
+
+  function isArrivalEventType(value) {
+    const type = normalizeEventType(value);
+    if (!type) return false;
+    return type === "arr" || type === "arrival" || type === "arrivee" || type.startsWith("arriv");
+  }
+
+  function isDepartureEventType(value) {
+    const type = normalizeEventType(value);
+    if (!type) return false;
+    return type === "dep" || type === "departure" || type === "depart" || type.startsWith("depart");
+  }
+
+  function ingestTrackRecord(targetMap, trainRawKey, payload, sourceLabel, options = {}) {
     if (!trainRawKey || !payload || typeof payload !== "object") return;
     const normalizedKey = normalizeTrainNumberKey(trainRawKey);
     if (!normalizedKey) return;
 
     const stationName =
-      payload.station ?? payload.gare ?? payload.stop_name ?? payload.stop ?? payload.name ?? null;
+      options.stationName ||
+      payload.station ??
+      payload.gare ??
+      payload.stop_name ??
+      payload.stop ??
+      payload.name ??
+      null;
     const stationNorm = stationName ? canonicalStationName(stationName) : null;
-    const depTrack = normalizeTrackValue(
+
+    let depTrack = normalizeTrackValue(
       payload.departure_track ??
         payload.dep_track ??
         payload.departure_platform ??
@@ -167,7 +204,7 @@
         payload.depVoie ??
         payload.dep
     );
-    const arrTrack = normalizeTrackValue(
+    let arrTrack = normalizeTrackValue(
       payload.arrival_track ??
         payload.arr_track ??
         payload.arrival_platform ??
@@ -181,6 +218,9 @@
     const genericTrack = normalizeTrackValue(
       payload.track ?? payload.platform ?? payload.voie ?? payload.quai
     );
+
+    if (options.mode === "arr" && !arrTrack && genericTrack) arrTrack = genericTrack;
+    if (options.mode === "dep" && !depTrack && genericTrack) depTrack = genericTrack;
     if (!depTrack && !arrTrack && !genericTrack) return;
 
     if (!targetMap.has(normalizedKey)) targetMap.set(normalizedKey, []);
@@ -193,7 +233,72 @@
     });
   }
 
-  function registerTracksFromPayload(targetMap, payload, sourceLabel) {
+  // Parse le snapshot EXACT utilisé par le tableau dynamique de Luxembourg.
+  // Le snapshot expose des objets du type :
+  // { type, number, place, planned, realtime, track, journeyRef/journeyId, date }
+  function registerLuxStationLive(targetMap, payload) {
+    if (!payload) return;
+
+    const seenObjects = new Set();
+
+    const visit = (node, inheritedType = "") => {
+      if (node == null) return;
+      if (Array.isArray(node)) {
+        for (const item of node) visit(item, inheritedType);
+        return;
+      }
+      if (typeof node !== "object") return;
+      if (seenObjects.has(node)) return;
+      seenObjects.add(node);
+
+      const explicitType = node.type ?? node.mode ?? node.eventType ?? node.event_type ?? node.kind ?? "";
+      const effectiveType = explicitType || inheritedType;
+      const trainRaw =
+        node.number ??
+        node.trainNumber ??
+        node.train_number ??
+        node.train ??
+        node.name ??
+        node.line ??
+        null;
+      const track = normalizeTrackValue(
+        node.track ?? node.platform ?? node.voie ?? node.quai ?? node.arrivalTrack ?? node.arrival_track
+      );
+
+      // Le fichier est le snapshot de la gare de Luxembourg elle-même : pour une
+      // entrée ARRIVAL, « track » est donc bien la voie d'arrivée à Luxembourg.
+      if (trainRaw != null && track && isArrivalEventType(effectiveType)) {
+        ingestTrackRecord(
+          targetMap,
+          trainRaw,
+          { station: "Luxembourg", arrival_track: track },
+          "lux_station_live",
+          { stationName: "Luxembourg", mode: "arr" }
+        );
+      }
+
+      for (const [key, value] of Object.entries(node)) {
+        if (value == null || typeof value !== "object") continue;
+        const keyNorm = normalizeEventType(key);
+        let childType = effectiveType;
+        if (keyNorm === "arrivals" || keyNorm === "arrival" || keyNorm === "arrivees" || keyNorm === "arrivee") {
+          childType = "arrival";
+        } else if (
+          keyNorm === "departures" ||
+          keyNorm === "departure" ||
+          keyNorm === "departs" ||
+          keyNorm === "depart"
+        ) {
+          childType = "departure";
+        }
+        visit(value, childType);
+      }
+    };
+
+    visit(payload, "");
+  }
+
+  function registerFallbackTracksFromPayload(targetMap, payload, sourceLabel) {
     if (!payload) return;
 
     if (
@@ -212,7 +317,12 @@
             stationPayload.platform ?? stationPayload.voie ?? stationPayload.track ?? stationPayload.quai
           );
           if (!platform) continue;
-          ingestTrackRecord(targetMap, trainCandidate, { station: stationName, voie: platform }, sourceLabel);
+          ingestTrackRecord(
+            targetMap,
+            trainCandidate,
+            { station: stationName, voie: platform },
+            sourceLabel
+          );
         }
       }
     }
@@ -227,15 +337,35 @@
       for (const [stationName, stationInfo] of Object.entries(payload.stations)) {
         const departures = Array.isArray(stationInfo?.departures) ? stationInfo.departures : [];
         const arrivals = Array.isArray(stationInfo?.arrivals) ? stationInfo.arrivals : [];
-        for (const item of [...departures, ...arrivals]) {
+        for (const item of departures) {
           if (!item || typeof item !== "object") continue;
           const trainCandidate = extractTrainNumberCandidate(
             item.train ?? item.name ?? item.number ?? item.trainNumber
           );
-          if (trainCandidate == null) continue;
           const platform = normalizeTrackValue(item.platform ?? item.track ?? item.voie ?? item.quai);
-          if (!platform) continue;
-          ingestTrackRecord(targetMap, trainCandidate, { station: stationName, voie: platform }, sourceLabel);
+          if (trainCandidate == null || !platform) continue;
+          ingestTrackRecord(
+            targetMap,
+            trainCandidate,
+            { station: stationName, departure_track: platform },
+            sourceLabel,
+            { mode: "dep" }
+          );
+        }
+        for (const item of arrivals) {
+          if (!item || typeof item !== "object") continue;
+          const trainCandidate = extractTrainNumberCandidate(
+            item.train ?? item.name ?? item.number ?? item.trainNumber
+          );
+          const platform = normalizeTrackValue(item.platform ?? item.track ?? item.voie ?? item.quai);
+          if (trainCandidate == null || !platform) continue;
+          ingestTrackRecord(
+            targetMap,
+            trainCandidate,
+            { station: stationName, arrival_track: platform },
+            sourceLabel,
+            { mode: "arr" }
+          );
         }
       }
     }
@@ -337,21 +467,37 @@
 
     luxTrackLoadPromise = (async () => {
       const freshMap = new Map();
-      let loadedAnySource = false;
-      for (const source of LUX_TRACK_SOURCES) {
+      let loadedLive = false;
+
+      // 1) La vraie source du tableau « Arrivées » de Luxembourg.
+      for (const source of LUX_STATION_LIVE_SOURCES) {
         for (const url of source.urls) {
           try {
             const data = await fetchJsonWithTimeout(url);
-            registerTracksFromPayload(freshMap, data, source.label);
-            loadedAnySource = true;
+            registerLuxStationLive(freshMap, data);
+            loadedLive = true;
             break;
           } catch (_) {
-            // Une source de secours peut encore fournir la voie.
+            // On essaiera les snapshots de secours ci-dessous.
           }
         }
       }
 
-      if (loadedAnySource) {
+      // 2) Compléments/fallbacks. Ils ne remplacent jamais une voie déjà trouvée
+      // dans lux_station_live : findLuxembourgArrivalTrack donne la priorité au live.
+      for (const source of LUX_TRACK_FALLBACK_SOURCES) {
+        for (const url of source.urls) {
+          try {
+            const data = await fetchJsonWithTimeout(url);
+            registerFallbackTracksFromPayload(freshMap, data, source.label);
+            break;
+          } catch (_) {
+            // Source suivante.
+          }
+        }
+      }
+
+      if (loadedLive || freshMap.size) {
         luxTracksByTrainNumber = freshMap;
         luxTrackLastLoadedAt = Date.now();
       }
@@ -368,11 +514,24 @@
   function findLuxembourgArrivalTrack(trainNumber) {
     const key = normalizeTrainNumberKey(trainNumber);
     if (!key) return null;
+
     const candidateKeys = [];
     for (const candidate of [key, ...equivalentTrainNumbers(key)]) {
       if (candidate && !candidateKeys.includes(candidate)) candidateKeys.push(candidate);
     }
 
+    // 1) Numéro exact + source live spécifique Luxembourg.
+    for (const candidate of candidateKeys) {
+      const records = luxTracksByTrainNumber.get(candidate);
+      if (!Array.isArray(records) || !records.length) continue;
+      const liveRecord = records.find(
+        (record) => record.stationNorm === "luxembourg" && record.source === "lux_station_live"
+      );
+      const liveTrack = liveRecord?.arrTrack || liveRecord?.genericTrack;
+      if (liveTrack) return liveTrack;
+    }
+
+    // 2) Fallback sur les consolidations existantes.
     for (const candidate of candidateKeys) {
       const records = luxTracksByTrainNumber.get(candidate);
       if (!Array.isArray(records) || !records.length) continue;
@@ -431,9 +590,10 @@
     });
     if (!luxRow) return null;
 
-    // On ne met une voie d'arrivée que lorsque Luxembourg est le terminus affiché.
-    // En sens Luxembourg -> France, la ligne Luxembourg est en tête : aucun badge d'arrivée.
-    if (stationRows[stationRows.length - 1] !== luxRow) return { table, luxRow, isArrivalLayout: false };
+    // Luxembourg doit être le terminus du tableau (sens France -> Luxembourg).
+    if (stationRows[stationRows.length - 1] !== luxRow) {
+      return { table, luxRow, isArrivalLayout: false };
+    }
 
     return { table, luxRow, isArrivalLayout: true };
   }
@@ -526,7 +686,7 @@
         await ensureLuxTrackAssignments({ force: true });
         renderLuxembourgArrivalTracks();
       } catch (_) {
-        // On garde les dernières voies connues en cas de panne temporaire du flux.
+        // On garde les dernières voies connues si le snapshot est momentanément indisponible.
       }
     }, LUX_TRACK_REFRESH_MS);
   }
