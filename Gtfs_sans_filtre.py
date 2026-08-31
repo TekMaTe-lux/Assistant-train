@@ -25,9 +25,26 @@ for row in reader:
         if id_num not in stop_id_to_name:
             stop_id_to_name[id_num] = stop_name  # premier nom rencontré
 
+
 def nettoyer_stop_id(stop_id):
     match = re.search(r"(\d{8})", stop_id or "")
     return match.group(1) if match else (stop_id or "").strip()
+
+
+def extraire_numero_train(trip_id):
+    """Extrait le numéro SNCF complet sans tronquer les circulations à 6 chiffres.
+
+    Exemples :
+      OCESN88748F1187...  -> 88748
+      OCESN887483F1187... -> 887483
+    """
+    raw = str(trip_id or "")
+    match = re.search(r"OCESN(\d+)F", raw)
+    if match:
+        return match.group(1)
+    match = re.search(r"(?<!\d)(\d{5,6})(?!\d)", raw)
+    return match.group(1) if match else "?????"
+
 
 # Gares d'intérêt (Nancy / Metz / Luxembourg / Paris-Est)
 gares_nancy_metz_lux = {"87141002", "87192039", "87191007", "82001000"}
@@ -64,7 +81,10 @@ STOP_SR = {
 
 prefixes_autorises = ("885", "887", "888")
 
+
 def compute_status(trip_sr_name, stops_out):
+    # Le statut du voyage est autoritaire : CANCELED = suppression totale,
+    # même si une autre source fournit encore une heure sur un arrêt.
     if trip_sr_name == "CANCELED":
         return "CANCELED"
     if any(s.get("schedule_relationship") == "SKIPPED" for s in stops_out):
@@ -72,6 +92,7 @@ def compute_status(trip_sr_name, stops_out):
     if any(((s.get("arr_delay_min") or 0) > 0) or ((s.get("dep_delay_min") or 0) > 0) for s in stops_out):
         return "DELAYED"
     return "ON_TIME"
+
 
 # Sortie
 trains_out = {}
@@ -84,8 +105,7 @@ for entity in feed.entity:
     trip = tu.trip
 
     trip_id = trip.trip_id or ""
-    m = re.search(r"(\d{5})", trip_id)
-    train_number = m.group(1) if m else "?????"
+    train_number = extraire_numero_train(trip_id)
     if not train_number.startswith(prefixes_autorises):
         continue
 
@@ -123,17 +143,24 @@ for entity in feed.entity:
 
     status = compute_status(trip_sr_name, stops_out)
 
-    # Tous les arrêts : retard >0 en minutes, sinon 0
+    # Tous les arrêts : retard >0 en minutes, sinon 0.
+    # On conserve aussi explicitement les arrêts SKIPPED afin que tous les écrans
+    # puissent distinguer une suppression partielle d'une suppression totale.
     stops_map = {}
+    cancelled_stops = []
     for s in stops_out:
         best = max(s.get("arr_delay_min", 0), s.get("dep_delay_min", 0))
         stops_map[s["stop_name"]] = (best if best > 0 else 0)
+        if s.get("schedule_relationship") == "SKIPPED":
+            cancelled_stops.append(s["stop_name"])
 
     trains_out[train_number] = {
         "train_id": trip_id,
         "train_number": train_number,
+        "trip_schedule_relationship": trip_sr_name,
         "status": status,
-        "stops": stops_map
+        "stops": stops_map,
+        "cancelled_stops": cancelled_stops
     }
 
 os.makedirs("Assistant-train", exist_ok=True)
@@ -141,7 +168,7 @@ output_path = "Assistant-train/retards_nancymetzlux.json"
 with open(output_path, "w", encoding="utf-8") as f:
     json.dump(trains_out, f, ensure_ascii=False, indent=2)
 
-counts = {"CANCELED":0, "PARTIAL_CANCELLATION":0, "DELAYED":0, "ON_TIME":0}
+counts = {"CANCELED": 0, "PARTIAL_CANCELLATION": 0, "DELAYED": 0, "ON_TIME": 0}
 for v in trains_out.values():
     counts[v["status"]] = counts.get(v["status"], 0) + 1
 
