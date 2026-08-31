@@ -14,11 +14,34 @@ function between(start, end) {
   return source.slice(a, b);
 }
 
-test('LIVE classifies a partial cancellation before a full cancellation', () => {
+test('LIVE gives trip-level full cancellation priority without breaking partial cancellations', () => {
   const block = between('function classifyOfficialLiveDisruption(', 'function extractLiveTrains()');
-  assert.ok(block.indexOf("statusClass:'partial'") < block.indexOf("statusClass:'cancel'"));
-  assert.match(block, /partiel/);
-  assert.match(block, /entre .* et /);
+  const classify = Function(`${block}\nreturn classifyOfficialLiveDisruption;`)();
+  const deleted = { stop_time_effect: 'deleted' };
+  const running = { stop_time_effect: 'scheduled' };
+
+  // Cas réel 88748 : le voyage SNCF est CANCELED. Même si un texte ou une
+  // autre source laisse croire à un terminus exceptionnel, il reste supprimé.
+  assert.equal(classify({
+    status: 'CANCELED',
+    cause: 'Suppression partielle · terminus exceptionnel à Bettembourg',
+    stops: [deleted, running]
+  }).statusClass, 'cancel');
+
+  // Une vraie suppression partielle continue de fonctionner normalement.
+  assert.equal(classify({
+    status: 'SCHEDULED',
+    cause: 'Suppression partielle entre Thionville et Luxembourg',
+    stops: [running, deleted]
+  }).statusClass, 'partial');
+
+  // Tous les arrêts supprimés = suppression totale, même sans libellé CANCELED.
+  assert.equal(classify({
+    status: 'SCHEDULED',
+    stops: [deleted, deleted]
+  }).statusClass, 'cancel');
+
+  assert.match(block, /explicitTripCanceled/);
   assert.match(block, /deletedStops > 0 && runningStops > 0/);
 });
 
