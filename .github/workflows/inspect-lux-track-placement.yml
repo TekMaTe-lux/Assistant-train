@@ -1,0 +1,43 @@
+name: Inspect Luxembourg track placement
+on:
+  push:
+    paths:
+      - '.github/workflows/inspect-lux-track-placement.yml'
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fetch live Luxembourg page and inspect placement logic
+        shell: bash
+        run: |
+          set -euo pipefail
+          URL='https://vps.labetaillere.fr/map-v2/tests/luxembourg-user-preview-v5-private-maplike-trainclick.html'
+          curl -fsSL "$URL" -o /tmp/lux.html
+          echo "bytes=$(wc -c < /tmp/lux.html)"
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+          p=Path('/tmp/lux.html')
+          s=p.read_text(encoding='utf-8', errors='replace')
+          pats=[
+            r'14AB', r'13AB', r'12AB', r'11AB', r'10AB', r'9AB',
+            r'track[^\n]{0,120}(?:y|lane|side|platform)',
+            r'(?:y|lane|side|platform)[^\n]{0,120}track',
+            r'pair', r'odd', r'even', r'%\s*2', r'parseInt\([^\n]{0,80}track',
+            r'platformY', r'trackY', r'laneY', r'getTrack', r'positionTrain', r'renderTrain'
+          ]
+          lines=s.splitlines()
+          hits=[]
+          for i,line in enumerate(lines,1):
+              if any(re.search(p,line,re.I) for p in pats):
+                  hits.append(i)
+          seen=set()
+          for i in hits:
+              a=max(1,i-5); b=min(len(lines),i+8)
+              key=(a,b)
+              if key in seen: continue
+              seen.add(key)
+              print(f'\n===== lines {a}-{b} =====')
+              for n in range(a,b+1):
+                  print(f'{n:05d}: {lines[n-1]}')
+          PY
