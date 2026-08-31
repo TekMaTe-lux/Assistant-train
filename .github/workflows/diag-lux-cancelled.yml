@@ -10,40 +10,41 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Inspect SNCF hub response for cancelled examples
+      - name: Inspect aggregate cancellation feeds
         shell: bash
         run: |
           set -euo pipefail
           : > tmp-lux-cancelled-diag.txt
-          for N in 88748 88813; do
-            echo "=== TRAIN $N ===" >> tmp-lux-cancelled-diag.txt
-            URL="https://vps.labetaillere.fr/sncf/hub?date=2026-08-31&nums=$N&client=lux-station"
-            curl -fsSL "$URL" -o "/tmp/hub-$N.json"
-            python3 - "$N" <<'PY' >> tmp-lux-cancelled-diag.txt
-          import json,sys
-          n=sys.argv[1]
-          p=f'/tmp/hub-{n}.json'
-          data=json.load(open(p,encoding='utf-8'))
-          print('top_type=',type(data).__name__)
-          if isinstance(data,dict): print('top_keys=',sorted(data.keys()))
-          def relevant(k):
-              k=str(k).lower()
-              return any(x in k for x in ('cancel','suppr','annul','status','state','relationship','train','number','journey','trip','disruption','deleted','partial','circul'))
-          def walk(x,path='root',depth=0):
-              if depth>8:return
-              if isinstance(x,dict):
-                  compact={k:v for k,v in x.items() if relevant(k) and not isinstance(v,(dict,list))}
-                  if compact: print(path, json.dumps(compact,ensure_ascii=False,sort_keys=True))
-                  for k,v in x.items():
-                      if isinstance(v,(dict,list)): walk(v,f'{path}.{k}',depth+1)
-              elif isinstance(x,list):
-                  for i,v in enumerate(x[:80]): walk(v,f'{path}[{i}]',depth+1)
-          walk(data)
-          print('raw_prefix=',json.dumps(data,ensure_ascii=False)[:3000])
+          for U in \
+            'https://vps.labetaillere.fr/gtfs/retards_carte.json' \
+            'https://vps.labetaillere.fr/gtfs/retards_nancymetzlux.json' \
+            'https://vps.labetaillere.fr/gtfs/siri_sx_alertes.json' \
+            'https://vps.labetaillere.fr/gtfs/alertes_sillon_lorrain.json'; do
+            echo "=== $U ===" >> tmp-lux-cancelled-diag.txt
+            curl -fsSL "$U?t=$(date +%s)" -o /tmp/x.json || { echo FETCH_FAILED >> tmp-lux-cancelled-diag.txt; continue; }
+            python3 - <<'PY' >> tmp-lux-cancelled-diag.txt
+          import json,re
+          data=json.load(open('/tmp/x.json',encoding='utf-8'))
+          raw=json.dumps(data,ensure_ascii=False)
+          for n in ('88748','88813'):
+              print('\nTRAIN',n,'present=',n in raw)
+              if n not in raw: continue
+              def walk(x,path='root',depth=0):
+                  if depth>10:return
+                  if isinstance(x,dict):
+                      txt=json.dumps(x,ensure_ascii=False)
+                      if n in txt and len(txt)<12000:
+                          print(path,txt[:12000])
+                      for k,v in x.items():
+                          if isinstance(v,(dict,list)) and n in json.dumps(v,ensure_ascii=False): walk(v,f'{path}.{k}',depth+1)
+                  elif isinstance(x,list):
+                      for i,v in enumerate(x):
+                          if n in json.dumps(v,ensure_ascii=False): walk(v,f'{path}[{i}]',depth+1)
+              walk(data)
           PY
           done
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add tmp-lux-cancelled-diag.txt
-          git commit -m 'Inspect SNCF hub cancellation response' || exit 0
+          git commit -m 'Inspect aggregate cancellation feeds' || exit 0
           git push
