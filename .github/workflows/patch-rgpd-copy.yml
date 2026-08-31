@@ -1,0 +1,83 @@
+name: Patch RGPD wording
+
+on:
+  push:
+    paths:
+      - '.github/workflows/patch-rgpd-copy.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch-index:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Patch index wording safely
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('index.html')
+          text = path.read_text(encoding='utf-8')
+
+          replacements = [
+              (
+                  'aria-label="Bandeau cookies"',
+                  'aria-label="Information sur les stockages techniques"'
+              ),
+              (
+                  '🍪 Ce site utilise des cookies pour améliorer l’expérience. Tu peux en savoir plus via la',
+                  '🔒 Ce site utilise uniquement des stockages techniques nécessaires au fonctionnement et à la mémorisation de certains choix. Détails dans la'
+              ),
+              (
+                  '<button class="cookie-accept" type="button">OK</button>',
+                  '<button class="cookie-accept" type="button">Compris</button>'
+              ),
+              (
+                  'J’accepte que La Bétaillère utilise mon email et mes préférences pour personnaliser mon expérience, conformément à la <a href="/confidentialite.html" target="_blank">politique de confidentialité</a>.',
+                  'J’ai pris connaissance de la <a href="/confidentialite.html" target="_blank">politique de confidentialité</a> et des informations relatives au traitement de mes données personnelles.'
+              ),
+              (
+                  '❌ Merci d’accepter la politique de confidentialité',
+                  '❌ Merci de confirmer la prise de connaissance de la politique de confidentialité'
+              ),
+          ]
+
+          for old, new in replacements:
+              count = text.count(old)
+              if count < 1:
+                  raise SystemExit(f'Pattern not found: {old[:100]}')
+              text = text.replace(old, new)
+              print(f'Patched {count} occurrence(s): {old[:80]}')
+
+          path.write_text(text, encoding='utf-8')
+          PY
+
+      - name: Verify account logic untouched
+        shell: bash
+        run: |
+          grep -q 'id="lbRegEmail"' index.html
+          grep -q 'id="lbRegPassword"' index.html
+          grep -q 'id="lbRegRgpd"' index.html
+          grep -q 'id="lbBtnRegister"' index.html
+          grep -q 'password.length < 10' index.html
+          grep -q 'api/auth/register' index.html
+          echo "Account form IDs, password validation and register endpoint still present."
+
+      - name: Commit patched index
+        shell: bash
+        run: |
+          if git diff --quiet -- index.html; then
+            echo "No index change to commit"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add index.html
+          git commit -m "Clarify privacy consent and technical storage wording"
+          git push
