@@ -54,6 +54,7 @@
     }
 
     doc.documentElement.dataset.lbV4Live = '1';
+    doc.documentElement.dataset.lbV4Preview = '1';
     if (doc.body) doc.body.dataset.lbV4Live = '1';
 
     ensureStylesheet(doc, 'lbV4LivePreviewCss', BASE_CSS_HREF);
