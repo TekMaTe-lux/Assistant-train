@@ -2,6 +2,22 @@
  * La Bétaillère — App shell v3
  * Améliorations d'interface uniquement : aucune donnée ni API métier modifiée.
  */
+
+// Filet de sécurité : une page ouverte en HTTP sur le domaine public
+// bascule immédiatement vers la même URL en HTTPS.
+if (
+  window.location.protocol === "http:" &&
+  ["www.labetaillere.fr", "labetaillere.fr"].includes(window.location.hostname)
+) {
+  window.location.replace(
+    "https://" +
+      window.location.host +
+      window.location.pathname +
+      window.location.search +
+      window.location.hash
+  );
+}
+
 (function () {
   "use strict";
 
