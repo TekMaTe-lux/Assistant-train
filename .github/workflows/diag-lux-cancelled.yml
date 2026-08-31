@@ -10,63 +10,55 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Diagnose cancellation authorities
+      - name: Inspect website cancellation authority
         shell: bash
         run: |
           set -euo pipefail
-          PAGE='https://vps.labetaillere.fr/map-v2/tests/luxembourg-user-preview-v5-private-maplike-trainclick.html'
-          FEED='https://vps.labetaillere.fr/gtfs/lux_station_live.json'
-          curl -fsSL "$PAGE" -o /tmp/lux.html
-          curl -fsSL "$FEED" -o /tmp/luxfeed.json
+          curl -fsSL 'https://www.labetaillere.fr/?v='"$(date +%s)" -o /tmp/site.html
+          curl -fsSL 'https://vps.labetaillere.fr/map-v2/tests/luxembourg-user-preview-v5-private-maplike-trainclick.html?v='"$(date +%s)" -o /tmp/lux.html
+          curl -fsSL 'https://vps.labetaillere.fr/gtfs/lux_station_live.json?v='"$(date +%s)" -o /tmp/luxfeed.json
 
           python3 - <<'PY' > tmp-lux-cancelled-diag.txt
           from pathlib import Path
-          import json,re,subprocess
+          import re,json
 
-          print('=== LUX HAFAS TARGET ROWS ===')
-          data=json.loads(Path('/tmp/luxfeed.json').read_text(encoding='utf-8'))
+          print('=== LUX FEED TARGETS ===')
+          data=json.loads(Path('/tmp/luxfeed.json').read_text())
           for mode in ('arrivals','departures'):
-              for i,row in enumerate(data.get(mode,[])):
+              for row in data.get(mode,[]):
                   raw=json.dumps(row,ensure_ascii=False)
-                  if '88813' in raw or '88748' in raw:
-                      keep={k:row.get(k) for k in ['id','journeyRef','mode','type','number','train','place','origin','destination','planned','realtime','track','date','cancelled','source','_serverHistorical','_serverLastSeenAt'] if k in row}
-                      print(mode,i,json.dumps(keep,ensure_ascii=False,sort_keys=True))
+                  if '88748' in raw or '88813' in raw:
+                      print(mode,json.dumps(row,ensure_ascii=False,sort_keys=True))
 
-          print('\n=== CANDIDATE AUTHORITATIVE JSONS ===')
-          urls=[
-            'https://vps.labetaillere.fr/gtfs/retards_nancymetzlux.json',
-            'https://vps.labetaillere.fr/retards_nancymetzlux.json',
-            'https://www.labetaillere.fr/Assistant-train/retards_nancymetzlux.json',
-            'https://raw.githubusercontent.com/TekMaTe-lux/Assistant-train/main/Assistant-train/retards_nancymetzlux.json',
-          ]
-          for url in urls:
-              try:
-                  p=subprocess.run(['curl','-fsSL','--max-time','10',url],capture_output=True,text=True)
-                  print('\nURL',url,'rc',p.returncode,'bytes',len(p.stdout))
-                  if p.returncode!=0:
-                      print('ERR',p.stderr.strip()[:300]); continue
-                  try:
-                      j=json.loads(p.stdout)
-                  except Exception as e:
-                      print('NOT JSON',repr(e),p.stdout[:200]); continue
-                  for n in ('88748','88813'):
-                      hit=j.get(n) if isinstance(j,dict) else None
-                      print(n, json.dumps(hit,ensure_ascii=False,sort_keys=True) if hit is not None else 'MISSING')
-              except Exception as e:
-                  print('EXC',url,repr(e))
-
-          print('\n=== CLIENT CANCELLATION LOGIC ===')
-          s=Path('/tmp/lux.html').read_text(encoding='utf-8',errors='replace')
+          print('\n=== SITE SOURCE: FETCH / CANCELLATION CONTEXT ===')
+          s=Path('/tmp/site.html').read_text(encoding='utf-8',errors='replace')
           lines=s.splitlines()
+          pats=[
+            r'fetch\(', r'CANCELED', r'CANCELLED', r'supprim', r'cancel',
+            r'gtfs', r'siri', r'sncf', r'live', r'retards_nancymetzlux',
+            r'88748', r'88813'
+          ]
+          hits=[]
           for i,l in enumerate(lines,1):
-              if 'function cancelledFor' in l or 'EVENTS=EVENTS.filter(e=>!e.cancelled)' in l:
-                  a=max(1,i-6); b=min(len(lines),i+18)
-                  print(f'--- {a}-{b} ---')
-                  for n in range(a,b+1): print(f'{n:05d}: {lines[n-1]}')
+              ll=l.lower()
+              if ('fetch(' in ll or 'retards_nancymetzlux' in ll or 'canceled' in ll or 'cancelled' in ll or 'iscancel' in ll or 'trip_schedule_relationship' in ll or 'schedule_relationship' in ll):
+                  hits.append(i)
+          intervals=[]
+          for i in hits:
+              a=max(1,i-8); b=min(len(lines),i+12)
+              if intervals and a<=intervals[-1][1]+1: intervals[-1]=(intervals[-1][0],max(intervals[-1][1],b))
+              else: intervals.append((a,b))
+          for a,b in intervals[:80]:
+              print(f'\n--- site lines {a}-{b} ---')
+              for n in range(a,b+1): print(f'{n:05d}: {lines[n-1][:1200]}')
+
+          print('\n=== SCRIPT SRCS ===')
+          for m in re.finditer(r'<script[^>]+src=["\']([^"\']+)',s,re.I):
+              print(m.group(1))
           PY
 
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add tmp-lux-cancelled-diag.txt
-          git commit -m 'Check Luxembourg cancellation authority feeds' || exit 0
+          git commit -m 'Inspect website cancellation authority' || exit 0
           git push
