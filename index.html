@@ -22246,6 +22246,28 @@ async function loadAffluenceDate(dateStr){
     return (idx.get(key) || []).slice(0, 2).join(' • ');
   }
 
+  function classifyOfficialLiveDisruption({ status = '', cause = '', disruptions = [], stops = [] } = {}){
+    const statusText = String(status || '').toLowerCase();
+    const detailText = [cause, JSON.stringify(disruptions || [])].join(' ').toLowerCase();
+    const combined = `${statusText} ${detailText}`;
+    const stopRows = Array.isArray(stops) ? stops : [];
+    let deletedStops = 0;
+    let runningStops = 0;
+    stopRows.forEach((stop)=>{
+      const raw = JSON.stringify(stop || {}).toLowerCase();
+      const deleted = /"(?:stop_time_effect|arrival_status|departure_status)"\s*:\s*"deleted"/.test(raw);
+      if (deleted) deletedStops += 1;
+      else runningStops += 1;
+    });
+    const partial = /partial|partiel|service reduit|service réduit|terminus exceptionnel|depart exceptionnel|départ exceptionnel|a partir de|à partir de|entre .{2,40} et /.test(combined)
+      || (deletedStops > 0 && runningStops > 0);
+    if (partial) return { statusClass:'partial', statusLabel:'Suppression partielle' };
+    const canceled = /no_service|cancell|cancel|supprim|trip canceled/.test(combined)
+      || (deletedStops > 0 && runningStops === 0);
+    if (canceled) return { statusClass:'cancel', statusLabel:'Supprimé' };
+    return { statusClass:'', statusLabel:'' };
+  }
+
   function extractLiveTrains(){
     const raw = getRawLiveTrainPayload();
 	const rawAll = window.retardsGTFS_RAW;
@@ -22270,11 +22292,18 @@ async function loadAffluenceDate(dateStr){
         });
       }
       const statusRaw = String(payload.status || '').toUpperCase();
+      const sncfCause = getSncfCauseForTrain(trainNumber, payload, causeIndex);
       let statusLabel = 'À l\'heure';
       let statusClass = 'ok';
-      if (statusRaw.includes('CANCEL') || statusRaw.includes('SUPPR')){
-        statusLabel = 'Supprimé';
-        statusClass = 'cancel';
+      const officialState = classifyOfficialLiveDisruption({
+        status: statusRaw,
+        cause: sncfCause,
+        disruptions: payload.disruptions,
+        stops: Array.isArray(payload.stop_times) ? payload.stop_times : []
+      });
+      if (officialState.statusClass){
+        statusLabel = officialState.statusLabel;
+        statusClass = officialState.statusClass;
       } else if (maxDelay > 0){
         statusLabel = `+${maxDelay} min`;
         statusClass = 'delay';
@@ -22288,7 +22317,7 @@ async function loadAffluenceDate(dateStr){
         to: routeTo,
         statusLabel,
         statusClass,
-		sncfCause: getSncfCauseForTrain(trainNumber, payload, causeIndex),
+		sncfCause,
         maxDelay,
         stops: stopNames,
         raw: payload
@@ -22296,7 +22325,7 @@ async function loadAffluenceDate(dateStr){
     });
     list.sort((a,b)=>{
       if (a.statusClass === b.statusClass) return Number(b.maxDelay||0) - Number(a.maxDelay||0) || a.trainNumber.localeCompare(b.trainNumber, 'fr');
-      const rank = { delay:0, cancel:1, ok:2 };
+      const rank = { delay:0, partial:1, cancel:2, ok:3 };
       return (rank[a.statusClass] ?? 9) - (rank[b.statusClass] ?? 9);
     });
     return list;
@@ -22988,12 +23017,17 @@ async function loadAffluenceDate(dateStr){
     let statusClass = '';
     let statusLabel = '';
     let maxDelay = 0;
-    const disruptionText = JSON.stringify(disruptions).toLowerCase();
-    if (/no_service|cancell|cancel|supprim|trip canceled/.test(disruptionText)){
-      statusClass = 'cancel';
-      statusLabel = 'Supprimé';
-    }
     const stops = Array.isArray(train?.stop_times) ? train.stop_times : [];
+    const officialState = classifyOfficialLiveDisruption({
+      status: train?.status || data?.status || '',
+      cause: causes.join(' • '),
+      disruptions,
+      stops
+    });
+    if (officialState.statusClass){
+      statusClass = officialState.statusClass;
+      statusLabel = officialState.statusLabel;
+    }
     stops.forEach((st)=>{
       const planned = String(st?.base_departure_time || st?.base_arrival_time || st?.departure_time || st?.arrival_time || '').trim();
       const amended = String(st?.amended_departure_time || st?.amended_arrival_time || '').trim();
@@ -23067,14 +23101,14 @@ async function loadAffluenceDate(dateStr){
       }
       const card = document.querySelector(`[data-lb-live-train="${String(num).replace(/"/g, '\"')}"]`);
       if (!card) return;
-      card.classList.remove('lb-live-card--ok','lb-live-card--delay','lb-live-card--cancel');
+      card.classList.remove('lb-live-card--ok','lb-live-card--delay','lb-live-card--partial','lb-live-card--cancel');
       card.classList.add(`lb-live-card--${finalInfo.statusClass || 'ok'}`);
       const statusEl = card.querySelector('.lb-live-status');
       if (statusEl){
         statusEl.className = `lb-live-status lb-live-status--${finalInfo.statusClass || 'ok'}`;
         statusEl.textContent = finalInfo.statusLabel || 'À l\'heure';
       }
-      if (finalInfo.sncfCause && (finalInfo.statusClass === 'delay' || finalInfo.statusClass === 'cancel')){
+      if (finalInfo.sncfCause && ['delay','partial','cancel'].includes(finalInfo.statusClass)){
         let causeEl = card.querySelector('.lb-live-sncf-cause');
         if (!causeEl){
           const right = card.querySelector('.lb-live-right');
@@ -23086,7 +23120,8 @@ async function loadAffluenceDate(dateStr){
         }
         if (causeEl){
           causeEl.classList.toggle('lb-live-sncf-cause--cancel', finalInfo.statusClass === 'cancel');
-          causeEl.textContent = `${finalInfo.statusClass === 'cancel' ? 'Suppression' : 'Retard'} : ${finalInfo.sncfCause}`;
+          const causePrefix = finalInfo.statusClass === 'partial' ? 'Suppression partielle' : (finalInfo.statusClass === 'cancel' ? 'Suppression' : 'Retard');
+          causeEl.textContent = `${causePrefix} : ${finalInfo.sncfCause}`;
         }
       }
     }));
@@ -23132,6 +23167,7 @@ async function loadAffluenceDate(dateStr){
       const effectiveCompo = getEffectiveCompositionCode(train.trainNumber);
       const cardState = (()=> {
         if (train.statusClass === 'cancel') return 'cancel';
+        if (train.statusClass === 'partial') return 'partial';
         if (train.statusClass === 'delay') return 'delay';
         if (train.statusClass === 'ok' && travelerDisruption?.type === 'suppression') return 'cancel';
         if (train.statusClass === 'ok' && travelerDisruption?.type === 'retard') return 'delay';
@@ -23177,8 +23213,8 @@ async function loadAffluenceDate(dateStr){
 	                    ? `<span class="lb-live-user-alert lb-live-user-alert--cancel" title="Signalement usager récent (visible même avec statut SNCF existant)">❌ Supprimé (usager)</span>`
 	                    : `<span class="lb-live-user-alert" title="Signalement usager récent (visible même avec statut SNCF existant)">Signalé: +${safeEscape(travelerDisruption.delayMin || '?')} min</span>`)
 	                : ''}
-			  ${(train.statusClass === 'delay' || train.statusClass === 'cancel') && train.sncfCause
-                ? `<div class="lb-live-sncf-cause ${train.statusClass === 'cancel' ? 'lb-live-sncf-cause--cancel' : ''}">${safeEscape(train.statusClass === 'cancel' ? 'Suppression' : 'Retard')} : ${safeEscape(train.sncfCause)}</div>`
+			  ${['delay','partial','cancel'].includes(train.statusClass) && train.sncfCause
+                ? `<div class="lb-live-sncf-cause ${train.statusClass === 'cancel' ? 'lb-live-sncf-cause--cancel' : ''}">${safeEscape(train.statusClass === 'partial' ? 'Suppression partielle' : (train.statusClass === 'cancel' ? 'Suppression' : 'Retard'))} : ${safeEscape(train.sncfCause)}</div>`
                 : ''}
             </div>
           </div>
@@ -23309,9 +23345,9 @@ async function loadAffluenceDate(dateStr){
     route.textContent = train.route;
     if (cause){
       const txt = String(train.sncfCause || '').trim();
-      if ((train.statusClass === 'delay' || train.statusClass === 'cancel') && txt){
+      if (['delay','partial','cancel'].includes(train.statusClass) && txt){
         cause.hidden = false;
-        cause.textContent = `${train.statusClass === 'cancel' ? 'Suppression' : 'Retard'} : ${txt}`;
+        cause.textContent = `${train.statusClass === 'partial' ? 'Suppression partielle' : (train.statusClass === 'cancel' ? 'Suppression' : 'Retard')} : ${txt}`;
       } else {
         cause.hidden = true;
         cause.textContent = '';
