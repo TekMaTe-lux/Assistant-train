@@ -19,6 +19,8 @@
   <meta name="theme-color" content="#06131f" />
   <meta name="application-name" content="La Bétaillère" />
   <meta name="apple-mobile-web-app-title" content="La Bétaillère" />
+  <link rel="preconnect" href="https://vps.labetaillere.fr" crossorigin>
+  <link rel="preload" href="https://vps.labetaillere.fr/gtfs/Compotrains.json" as="fetch" crossorigin>
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/nouislider@15.7.1/dist/nouislider.min.css">
   <script src="https://cdn.jsdelivr.net/npm/nouislider@15.7.1/dist/nouislider.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.2/Sortable.min.js"></script>
@@ -33,7 +35,7 @@
   <link rel="stylesheet" href="./assets/lb-legacy.css?v=4">
   <link rel="stylesheet" href="./assets/lb-design-system-v3.css?v=9">
   <link rel="stylesheet" href="./assets/lb-mobile-v4.css?v=11">
-  <link rel="stylesheet" href="./assets/lb-v4-live-preview.css?v=20260831-1">
+  <link rel="stylesheet" href="./assets/lb-v4-live-preview.css?v=20260831-2">
 
 
 <script>
@@ -3168,6 +3170,7 @@ async function loadCompoData({ forceFresh = false, background = false } = {}) {
       if (cached && typeof cached === 'object') {
         window.compoData = cached;
         updateCompoHeaderColors();
+        if (typeof lbRenderHomeFavPreview === 'function') lbRenderHomeFavPreview();
         // En arrière-plan, on réutilise le cache pour l'affichage immédiat,
         // mais on continue quand même pour récupérer les éventuelles mises à jour distantes.
         if (!background) return cached;
@@ -3193,6 +3196,7 @@ async function loadCompoData({ forceFresh = false, background = false } = {}) {
     window.compoData = { ...(json.NancyMetzLux||{}), ...(json.LuxMetzNancy||{}) };
     lbCacheWrite('compoData', window.compoData);
     updateCompoHeaderColors();
+    if (typeof lbRenderHomeFavPreview === 'function') lbRenderHomeFavPreview();
     return window.compoData;
   } catch (error) {
     console.error("Erreur lors du chargement des compositions :", error);
@@ -9969,6 +9973,14 @@ const normalized = mergeGtfsNormalizedPayloads(datasetResults.map(r => r.normali
 }
 
 // 1er chargement + rafraîchissement intelligent en arrière-plan
+// Composition des favoris : démarrage anticipé. Le preload du <head>
+// a déjà lancé le téléchargement pendant le parsing de la page.
+const LB_COMPO_EARLY_PROMISE = loadCompoData({ forceFresh: false, background: true })
+  .catch((err) => {
+    console.warn('[COMPO] Préchargement anticipé échoué', err?.message || err);
+    return null;
+  });
+
 const LB_BG_REFRESH_STATE = { timer: null, inFlight: false };
 
 async function refreshLiveDataInBackground({ forceFresh = false } = {}){
@@ -9999,7 +10011,7 @@ function scheduleBackgroundRefresh(immediate = false){
 
 window.addEventListener('load', () => {
   // Charge d'abord le strict nécessaire puis échelonne le reste pour éviter un pic CPU/réseau au démarrage.
-  loadCompoData({ forceFresh: false, background: false });
+  // Compotrains est déjà préchargé avant window.load.
   setTimeout(() => {
     lbRunInBackground(() => {
       loadVoiesByTrain({ forceFresh: false, onlyIfChanged: false })
@@ -10010,7 +10022,8 @@ window.addEventListener('load', () => {
   // Pas de loadGtfsRetards() au démarrage : évite le chargement de stop_times.txt.
 
   lbRunInBackground(() => {
-    refreshLiveDataInBackground({ forceFresh: true });
+    // Pas de second téléchargement Compotrains immédiat : le prochain contrôle
+    // normal est planifié à 75 s lorsque la page est visible.
     scheduleBackgroundRefresh(false);
   });
 });
@@ -18684,6 +18697,10 @@ function lbRenderHomeFavPreview(){
     const compoBadge = (trainNumberForCompo && typeof window.buildFavTrainTypeBadge === 'function')
       ? window.buildFavTrainTypeBadge(trainNumberForCompo)
       : '';
+    const compoDataReady = !!(window.compoData && Object.keys(window.compoData).length);
+    const compoSlot = compoBadge || ((!compoDataReady && trainNumberForCompo)
+      ? '<span class="home-fav-compo-loading" aria-hidden="true"><i></i></span>'
+      : '');
 
     return `
       <div class="home-fav-row" data-fav-k="${k}" role="button" tabindex="0" aria-label="Ouvrir favoris ${label}">
@@ -18694,7 +18711,7 @@ function lbRenderHomeFavPreview(){
               ${trainCompo ? `<span class="home-fav-train-compo">${escapeHtml(trainCompo)}</span>` : ''}
             </span>
           </div>
-          <div class="fav-train-badge home-fav-badge">${compoBadge}${renderBadge(data.state)}</div>
+          <div class="fav-train-badge home-fav-badge">${compoSlot}${renderBadge(data.state)}</div>
         </div>
         <div class="home-fav-route">${escapeHtml(parsed.route)}</div>
         <div class="home-fav-time">${parsed.timeHtml}</div>
