@@ -1,0 +1,93 @@
+name: Fix community detail return to LIVE
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/one-shot-community-detail-back-to-live.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Keep LIVE as parent of train detail
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('index.html')
+          text = path.read_text(encoding='utf-8')
+
+          wanted = """    const returningToSignal = id === 'lbInfoQuickModal'
+      && $id('lbSignalModal')?.classList.contains('is-open');
+    if (returningToSignal) modal.dataset.lbReturnModal = 'lbSignalModal';
+"""
+          replacement = """    const returningToSignal = id === 'lbInfoQuickModal'
+      && $id('lbSignalModal')?.classList.contains('is-open');
+    const returningToLive = id === 'lbTrainDetailModal'
+      && $id('lbLiveModal')?.classList.contains('is-open');
+    if (returningToSignal) modal.dataset.lbReturnModal = 'lbSignalModal';
+    if (returningToLive) modal.dataset.lbReturnModal = 'lbLiveModal';
+"""
+
+          if "const returningToLive = id === 'lbTrainDetailModal'" not in text:
+              count = text.count(wanted)
+              if count < 1:
+                  raise SystemExit('openCommunityModal return marker not found')
+              text = text.replace(wanted, replacement)
+              print(f'Patched {count} openCommunityModal occurrence(s)')
+          else:
+              print('LIVE return logic already present')
+
+          path.write_text(text, encoding='utf-8')
+
+          test_path = Path('tests/community-modal-return.test.js')
+          test_path.write_text(r'''const { test } = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+
+const source = fs.readFileSync(path.resolve(__dirname, '..', 'index.html'), 'utf8');
+
+test('Voix du betail train detail returns to LIVE when it was opened from LIVE', () => {
+  assert.match(source, /const returningToLive = id === 'lbTrainDetailModal'\s*&& \$id\('lbLiveModal'\)\?\.classList\.contains\('is-open'\);/);
+  assert.match(source, /if \(returningToLive\) modal\.dataset\.lbReturnModal = 'lbLiveModal';/);
+
+  const start = source.indexOf('function closeCommunityModal(id)');
+  const end = source.indexOf('function refreshCommunityViews', start);
+  assert.notEqual(start, -1, 'closeCommunityModal missing');
+  assert.notEqual(end, -1, 'refreshCommunityViews marker missing');
+  const closeBlock = source.slice(start, end);
+  assert.match(closeBlock, /const returnModalId = modal\.dataset\.lbReturnModal \|\| '';/);
+  assert.match(closeBlock, /if \(returnModalId\) openCommunityModal\(returnModalId\);/);
+});
+''', encoding='utf-8')
+          PY
+
+      - name: Run focused tests
+        shell: bash
+        run: |
+          node --test tests/community-modal-return.test.js
+          node --test tests/live-partial-cancellation.test.js
+
+      - name: Commit application fix
+        shell: bash
+        run: |
+          git diff --check
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add index.html tests/community-modal-return.test.js
+          if git diff --cached --quiet; then
+            echo "No application change to commit"
+            exit 0
+          fi
+          git commit -m "Return Voix train detail to LIVE"
+          git push origin main
