@@ -118,11 +118,46 @@
     improveFavoriteCard('PM');
   }
 
+  function improveHomeFavoriteRoute(card) {
+    const route = card.querySelector('.home-fav-route');
+    if (!route) return;
+
+    const raw = route.dataset.lb4RawRoute || text(route);
+    const match = raw.match(/^(.*?)\s*(?:→|➜|›|->)\s*(.*?)$/);
+    if (!match) return;
+
+    const from = match[1].trim();
+    const to = match[2].trim();
+    if (!from || !to) return;
+
+    const signature = `${from}|${to}`;
+    if (route.dataset.lb4RouteSignature === signature && route.querySelector('.lb4-home-fav-route-stop')) return;
+
+    route.dataset.lb4RawRoute = raw;
+    route.dataset.lb4RouteSignature = signature;
+    route.classList.add('lb4-home-fav-route-clean');
+    route.setAttribute('aria-label', `${from} vers ${to}`);
+    route.textContent = '';
+
+    const origin = document.createElement('span');
+    origin.className = 'lb4-home-fav-route-stop lb4-home-fav-route-origin';
+    origin.textContent = from;
+
+    const destination = document.createElement('span');
+    destination.className = 'lb4-home-fav-route-stop lb4-home-fav-route-destination';
+    destination.textContent = to;
+
+    route.append(origin, destination);
+  }
+
   function improveHomeFavorites() {
     const slot = document.getElementById('homeFavSlot');
     if (!slot) return;
     slot.classList.add('lb4-home-fav-sheets');
-    [...slot.children].forEach(card => card.classList.add('lb4-home-fav-sheet'));
+    [...slot.children].forEach(card => {
+      card.classList.add('lb4-home-fav-sheet');
+      improveHomeFavoriteRoute(card);
+    });
   }
 
   function decorate() {
