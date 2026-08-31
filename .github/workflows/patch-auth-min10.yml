@@ -1,0 +1,88 @@
+name: Patch auth password minimum
+
+on:
+  push:
+    paths:
+      - '.github/workflows/patch-auth-min10.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch-index:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Patch index safely
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('index.html')
+          text = path.read_text(encoding='utf-8')
+
+          old_fields = '''        <label for="lbRegPassword">Mot de passe</label>
+                  <input id="lbRegPassword" type="password" autocomplete="new-password" placeholder="••••••••">
+                  <label for="lbRegPasswordConfirm">Confirmer le mot de passe</label>
+                  <input id="lbRegPasswordConfirm" type="password" autocomplete="new-password" placeholder="••••••••">'''
+          new_fields = '''        <label for="lbRegPassword">Mot de passe — 10 caractères minimum</label>
+                  <input id="lbRegPassword" type="password" autocomplete="new-password" minlength="10" placeholder="10 caractères minimum">
+                  <label for="lbRegPasswordConfirm">Confirmer le mot de passe</label>
+                  <input id="lbRegPasswordConfirm" type="password" autocomplete="new-password" minlength="10" placeholder="••••••••">'''
+
+          # Indentation can differ in this large legacy file, so patch the exact
+          # four semantic lines independently while still asserting each match.
+          replacements = [
+              ('<label for="lbRegPassword">Mot de passe</label>',
+               '<label for="lbRegPassword">Mot de passe — 10 caractères minimum</label>'),
+              ('<input id="lbRegPassword" type="password" autocomplete="new-password" placeholder="••••••••">',
+               '<input id="lbRegPassword" type="password" autocomplete="new-password" minlength="10" placeholder="10 caractères minimum">'),
+              ('<input id="lbRegPasswordConfirm" type="password" autocomplete="new-password" placeholder="••••••••">',
+               '<input id="lbRegPasswordConfirm" type="password" autocomplete="new-password" minlength="10" placeholder="••••••••">'),
+          ]
+
+          for old, new in replacements:
+              count = text.count(old)
+              if count < 1:
+                  raise SystemExit(f'Pattern not found: {old}')
+              text = text.replace(old, new)
+              print(f'Patched {count} occurrence(s): {old[:55]}')
+
+          old_validation = '''      if (!email || !password) {
+                  if (regMsg) regMsg.textContent = "❌ Email + mot de passe requis";
+                  return;
+                }
+                if (password !== passwordConfirm) {'''
+
+          # Use a whitespace-tolerant insertion point instead of rewriting the handler.
+          needle = '      if (password !== passwordConfirm) {'
+          count = text.count(needle)
+          if count < 1:
+              raise SystemExit('Registration password-confirm validation point not found')
+          insertion = '''      if (password.length < 10) {
+                  if (regMsg) regMsg.textContent = "❌ Le mot de passe doit contenir au moins 10 caractères";
+                  return;
+                }
+                if (password !== passwordConfirm) {'''
+          text = text.replace(needle, insertion)
+          print(f'Added minimum-length validation at {count} occurrence(s)')
+
+          path.write_text(text, encoding='utf-8')
+          PY
+
+      - name: Commit patched index
+        shell: bash
+        run: |
+          if git diff --quiet -- index.html; then
+            echo "No index change to commit"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add index.html
+          git commit -m "Clarify 10-character password minimum"
+          git push
