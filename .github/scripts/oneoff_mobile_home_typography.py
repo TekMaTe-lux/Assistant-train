@@ -1,5 +1,37 @@
 from pathlib import Path
+import subprocess
 
+# First remove the obsolete high-specificity desktop/design-system exception.
+# This is the actual source of the oversized "Ponctualité" title on mobile.
+design_path = Path("assets/lb-design-system-v3.css")
+design_text = design_path.read_text(encoding="utf-8")
+design_block = '''body.lb-v3.page-home:not(.monde-betaillere) #home .home-dashboard > .home-punct-card #homePunctCardTitle {
+  margin: 0 0 10px !important;
+  min-height: 1.2em !important;
+  font-size: clamp(1.05rem, 1.35vw, 1.28rem) !important;
+  line-height: 1.2 !important;
+}
+
+'''
+if design_text.count(design_block) != 1:
+    raise SystemExit("Expected exactly one design-system punctuality override")
+design_text = design_text.replace(design_block, "", 1)
+if "home-punct-card #homePunctCardTitle" in design_text:
+    raise SystemExit("Specific punctuality title override still present")
+if design_text.count("{") != design_text.count("}"):
+    raise SystemExit("Design-system CSS braces unbalanced")
+design_path.write_text(design_text, encoding="utf-8")
+
+# Commit this source cleanup separately. The existing one-off workflow then
+# validates the mobile refactor in its normal CSS-only validation step.
+subprocess.run(["git", "config", "user.name", "github-actions[bot]"], check=True)
+subprocess.run(["git", "config", "user.email", "41898282+github-actions[bot]@users.noreply.github.com"], check=True)
+subprocess.run(["git", "add", "assets/lb-design-system-v3.css"], check=True)
+subprocess.run(["git", "diff", "--cached", "--check"], check=True)
+subprocess.run(["git", "commit", "-m", "fix: supprime l’override spécifique de Ponctualité"], check=True)
+
+# Keep the already validated mobile refactor exactly as before so the existing
+# one-off workflow can perform its original structural checks.
 path = Path("assets/lb-mobile-v4.css")
 text = path.read_text(encoding="utf-8")
 original = text
