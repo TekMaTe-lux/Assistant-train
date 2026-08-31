@@ -1,0 +1,55 @@
+name: Diagnose Luxembourg cancelled trains
+on:
+  push:
+    paths:
+      - '.github/workflows/diag-lux-cancelled.yml'
+permissions:
+  contents: write
+jobs:
+  diag:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Diagnose live feed and cancellation logic
+        shell: bash
+        run: |
+          set -euo pipefail
+          PAGE='https://vps.labetaillere.fr/map-v2/tests/luxembourg-user-preview-v5-private-maplike-trainclick.html'
+          FEED='https://vps.labetaillere.fr/gtfs/lux_station_live.json'
+          curl -fsSL "$PAGE" -o /tmp/lux.html
+          curl -fsSL "$FEED" -o /tmp/feed.json
+          python3 - <<'PY' > tmp-lux-cancelled-diag.txt
+          from pathlib import Path
+          import json,re
+          s=Path('/tmp/lux.html').read_text(encoding='utf-8', errors='replace')
+          lines=s.splitlines()
+          data=json.loads(Path('/tmp/feed.json').read_text(encoding='utf-8'))
+          print('=== FEED rows matching 88813 / 88748 ===')
+          def walk(x,path='root'):
+              if isinstance(x,dict):
+                  txt=json.dumps(x,ensure_ascii=False)
+                  if '88813' in txt or '88748' in txt:
+                      print(path, txt)
+                  for k,v in x.items(): walk(v,f'{path}.{k}')
+              elif isinstance(x,list):
+                  for i,v in enumerate(x): walk(v,f'{path}[{i}]')
+          walk(data)
+          print('\n=== cancellation-related source ===')
+          pats=[r'function\s+cancelledFor',r'cancelledFor\s*=',r'function\s+stableMovementKey',r'stableMovementKey\s*=',r'cancelled:',r'BER CANCELLED BEFORE TURNBACK',r'MOVEMENT_CACHE\.set']
+          hits=[]
+          for i,l in enumerate(lines,1):
+              if any(re.search(p,l,re.I) for p in pats): hits.append(i)
+          intervals=[]
+          for i in hits:
+              a=max(1,i-18); b=min(len(lines),i+30)
+              if intervals and a<=intervals[-1][1]+1: intervals[-1]=(intervals[-1][0],max(intervals[-1][1],b))
+              else: intervals.append((a,b))
+          for a,b in intervals:
+              print(f'\n--- lines {a}-{b} ---')
+              for n in range(a,b+1): print(f'{n:05d}: {lines[n-1]}')
+          PY
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add tmp-lux-cancelled-diag.txt
+          git commit -m 'Temporary Luxembourg cancellation diagnostic' || exit 0
+          git push
