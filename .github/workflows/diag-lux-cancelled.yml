@@ -10,7 +10,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Inspect website cancellation authority
+      - name: Inspect website train-status sources
         shell: bash
         run: |
           set -euo pipefail
@@ -21,44 +21,39 @@ jobs:
           python3 - <<'PY' > tmp-lux-cancelled-diag.txt
           from pathlib import Path
           import re,json
+          s=Path('/tmp/site.html').read_text(encoding='utf-8',errors='replace')
+          lines=s.splitlines()
+          print('=== ALL URL / ENDPOINT CONSTANTS RELEVANT TO TRAIN STATUS ===')
+          for i,l in enumerate(lines,1):
+              ll=l.lower()
+              if any(k in ll for k in ['lb_endpoints','sncf','retards_nancymetzlux','retards_carte','siri','journey','departure','trip_update','trip-update','gtfs']) and ('http' in ll or 'url' in ll or 'endpoint' in ll or 'fetch(' in ll):
+                  print(f'{i:05d}: {l[:1800]}')
 
-          print('=== LUX FEED TARGETS ===')
+          print('\n=== CANCELLATION / STATUS MERGE FUNCTIONS ===')
+          needles=['isGtfsTrainClearlyRunning','statusFlags(','hasSuppression','isCanceled','isCancelled','PARTIAL_CANCELLATION','CANCELED','SUPPRIM']
+          hits=[]
+          for i,l in enumerate(lines,1):
+              if any(n.lower() in l.lower() for n in needles): hits.append(i)
+          intervals=[]
+          for i in hits:
+              a=max(1,i-12); b=min(len(lines),i+24)
+              if intervals and a<=intervals[-1][1]+1: intervals[-1]=(intervals[-1][0],max(intervals[-1][1],b))
+              else: intervals.append((a,b))
+          for a,b in intervals[:60]:
+              print(f'\n--- site {a}-{b} ---')
+              for n in range(a,b+1): print(f'{n:05d}: {lines[n-1][:1800]}')
+
+          print('\n=== LUX FEED TARGETS ===')
           data=json.loads(Path('/tmp/luxfeed.json').read_text())
           for mode in ('arrivals','departures'):
               for row in data.get(mode,[]):
                   raw=json.dumps(row,ensure_ascii=False)
                   if '88748' in raw or '88813' in raw:
                       print(mode,json.dumps(row,ensure_ascii=False,sort_keys=True))
-
-          print('\n=== SITE SOURCE: FETCH / CANCELLATION CONTEXT ===')
-          s=Path('/tmp/site.html').read_text(encoding='utf-8',errors='replace')
-          lines=s.splitlines()
-          pats=[
-            r'fetch\(', r'CANCELED', r'CANCELLED', r'supprim', r'cancel',
-            r'gtfs', r'siri', r'sncf', r'live', r'retards_nancymetzlux',
-            r'88748', r'88813'
-          ]
-          hits=[]
-          for i,l in enumerate(lines,1):
-              ll=l.lower()
-              if ('fetch(' in ll or 'retards_nancymetzlux' in ll or 'canceled' in ll or 'cancelled' in ll or 'iscancel' in ll or 'trip_schedule_relationship' in ll or 'schedule_relationship' in ll):
-                  hits.append(i)
-          intervals=[]
-          for i in hits:
-              a=max(1,i-8); b=min(len(lines),i+12)
-              if intervals and a<=intervals[-1][1]+1: intervals[-1]=(intervals[-1][0],max(intervals[-1][1],b))
-              else: intervals.append((a,b))
-          for a,b in intervals[:80]:
-              print(f'\n--- site lines {a}-{b} ---')
-              for n in range(a,b+1): print(f'{n:05d}: {lines[n-1][:1200]}')
-
-          print('\n=== SCRIPT SRCS ===')
-          for m in re.finditer(r'<script[^>]+src=["\']([^"\']+)',s,re.I):
-              print(m.group(1))
           PY
 
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add tmp-lux-cancelled-diag.txt
-          git commit -m 'Inspect website cancellation authority' || exit 0
+          git commit -m 'Inspect website train-status sources' || exit 0
           git push
