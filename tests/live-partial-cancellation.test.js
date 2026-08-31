@@ -36,3 +36,20 @@ test('LIVE renders a distinct partial state and official cause', () => {
   assert.match(css, /\.lb-live-card--partial/);
   assert.match(css, /\.lb-live-status--partial/);
 });
+
+
+test('Voix detail reuses the unified official service pattern', () => {
+  const profile = between('async function getOfficialServicePattern(numberValue, dateValue)', 'function init()');
+  assert.match(profile, /loadLiveBundle/);
+  assert.match(profile, /applyEffectiveServicePattern/);
+  assert.match(source, /window\.lbGetOfficialServicePattern = getOfficialServicePattern/);
+
+  const detail = between('async function renderTrainDetail(trainNumber)', 'function signalTrainOptionsSignature');
+  assert.match(detail, /lbGetOfficialServicePattern/);
+  assert.match(detail, /officialDeleted/);
+  assert.match(detail, /officialNewOrigin/);
+  assert.match(detail, /officialNewTerminus/);
+  assert.match(detail, /SUPPRIMÉ · arrêt non desservi/);
+  assert.match(detail, /DÉPART EXCEPTIONNEL/);
+  assert.match(detail, /TERMINUS EXCEPTIONNEL/);
+});
