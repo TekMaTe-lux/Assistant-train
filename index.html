@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="fr">
+<html lang="fr" data-lb-v4-live="1">
 <head>
   <script id="lb-home-major-alert-script" src="./assets/home-major-alerts.js?v=20260815-4"></script>
   <meta charset="UTF-8" />
@@ -31,6 +31,9 @@
 
   <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;600;700;800&family=Rajdhani:wght@500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="./assets/lb-legacy.css?v=3">
+  <link rel="stylesheet" href="./assets/lb-design-system-v3.css?v=9">
+  <link rel="stylesheet" href="./assets/lb-mobile-v4.css?v=11">
+  <link rel="stylesheet" href="./assets/lb-v4-live-preview.css?v=20260831-1">
 
 
 <script>
@@ -21763,6 +21766,9 @@ async function loadAffluenceDate(dateStr){
     signals: [],
     presences: [],
     staticInfoCache: new Map(),
+    signalOptionsSignature: '',
+    signalOptionsHydrationKey: '',
+    signalOptionsHydrationPromise: null,
     localSignals: []
   };
 
@@ -22451,7 +22457,9 @@ async function loadAffluenceDate(dateStr){
     }
     if (!force && LB_TRAIN_STATIC_TODAY_PROMISE) return LB_TRAIN_STATIC_TODAY_PROMISE;
 
-    LB_TRAIN_STATIC_TODAY_PROMISE = fetch(`${LB_TRAIN_STATIC_TODAY_URL}?v=${Date.now()}`, { cache:'no-store' })
+    // Une URL stable par journée permet au navigateur de revalider le JSON au lieu
+    // de retélécharger la même base à chaque ouverture de LIVE / SIGNALER.
+    LB_TRAIN_STATIC_TODAY_PROMISE = fetch(`${LB_TRAIN_STATIC_TODAY_URL}?v=${today}`, { cache:'no-cache' })
       .then((res)=>{
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         return res.json();
@@ -23401,7 +23409,21 @@ async function loadAffluenceDate(dateStr){
     }).join('');
   }
 
-  function refreshSignalModal(){
+  function signalTrainOptionsSignature(trains){
+    return (Array.isArray(trains) ? trains : []).map((train)=> [
+      normalizeKey(train?.trainNumber),
+      String(train?.route || ''),
+      Array.isArray(train?.stops) ? train.stops.join('>') : ''
+    ].join('|')).join('||');
+  }
+
+  function signalTrainOptionLabel(train, info = null){
+    const departure = info?.departure || '—';
+    const arrival = info?.arrival || '—';
+    return `${train.label} — ${train.route} (${departure} - ${arrival})`;
+  }
+
+  function refreshSignalModal({ forceOptions = false } = {}){
     const liveExtractor = (typeof window.extractLiveTrains === 'function' ? window.extractLiveTrains : (()=>[]));
     COMMUNITY.liveTrains = liveExtractor();
     const trainSelect = $id('lbSignalTrainSelect');
@@ -23411,14 +23433,24 @@ async function loadAffluenceDate(dateStr){
     const can = typeof isCommentingAllowed === 'function' ? isCommentingAllowed() : false;
     if (trainSelect){
       const current = normalizeKey(trainSelect.value || COMMUNITY.selectedTrain);
-      trainSelect.innerHTML = '<option value="">Choisir un train live</option>' + COMMUNITY.liveTrains.map((train)=>{
-        const info = COMMUNITY.staticInfoCache.get(`${normalizeKey(train.trainNumber)}_${toYmd()}`) || null;
-        const times = info ? `${info.departure} - ${info.arrival}` : '--:-- - --:--';
-        return `<option value="${safeEscape(train.trainNumber)}">${safeEscape(train.label)} — ${safeEscape(train.route)} (${safeEscape(times)})</option>`;
-      }).join('');
-      if (current) trainSelect.value = current;
+      const signature = signalTrainOptionsSignature(COMMUNITY.liveTrains);
+      const mustRebuild = forceOptions
+        || !trainSelect.options.length
+        || COMMUNITY.signalOptionsSignature !== signature;
+      if (mustRebuild){
+        trainSelect.innerHTML = '<option value="">Choisir un train live</option>' + COMMUNITY.liveTrains.map((train)=>{
+          const info = COMMUNITY.staticInfoCache.get(`${normalizeKey(train.trainNumber)}_${toYmd()}`)
+            || getTrainStaticTodayInfo(train.trainNumber)
+            || null;
+          return `<option value="${safeEscape(train.trainNumber)}">${safeEscape(signalTrainOptionLabel(train, info))}</option>`;
+        }).join('');
+        COMMUNITY.signalOptionsSignature = signature;
+        if (current && COMMUNITY.liveTrains.some((train)=> normalizeKey(train.trainNumber) === current)){
+          trainSelect.value = current;
+        }
+      }
     }
-    hydrateSignalTrainOptions();
+    hydrateSignalTrainOptions().catch((err)=> console.warn('[SIGNAL horaires groupés] indisponibles', err?.message || err));
     updateSignalStationOptions();
     if (submitBtn) submitBtn.textContent = COMMUNITY.editingSignalId ? 'Mettre à jour le signalement' : 'Publier le signalement';
     if (feedback){
@@ -23436,12 +23468,30 @@ async function loadAffluenceDate(dateStr){
   async function hydrateSignalTrainOptions(){
     const trainSelect = $id('lbSignalTrainSelect');
     if (!trainSelect || !COMMUNITY.liveTrains.length) return;
-    await Promise.all(COMMUNITY.liveTrains.slice(0, 30).map(async (train)=>{
-      const info = await getLiveTrainStaticInfo(train.trainNumber);
-      const option = trainSelect.querySelector(`option[value="${String(train.trainNumber)}"]`);
-      if (!option || !info) return;
-      option.textContent = `${train.label} — ${train.route} (${info.departure} - ${info.arrival})`;
-    }));
+    const hydrationKey = `${toYmd()}|${signalTrainOptionsSignature(COMMUNITY.liveTrains)}`;
+    if (COMMUNITY.signalOptionsHydrationKey === hydrationKey){
+      return COMMUNITY.signalOptionsHydrationPromise || undefined;
+    }
+    COMMUNITY.signalOptionsHydrationKey = hydrationKey;
+    COMMUNITY.signalOptionsHydrationPromise = (async()=>{
+      // Un seul JSON groupé pour toute la liste. Le détail /api/train-static
+      // n'est demandé qu'après la sélection d'un train, jamais 30 fois en parallèle.
+      await loadTrainStaticToday();
+      COMMUNITY.liveTrains.slice(0, 60).forEach((train)=>{
+        const key = normalizeKey(train.trainNumber);
+        const info = COMMUNITY.staticInfoCache.get(`${key}_${toYmd()}`)
+          || getTrainStaticTodayInfo(key)
+          || null;
+        const option = trainSelect.querySelector(`option[value="${String(train.trainNumber)}"]`);
+        if (option) option.textContent = signalTrainOptionLabel(train, info);
+      });
+      updateSignalStationOptions();
+    })();
+    try{
+      await COMMUNITY.signalOptionsHydrationPromise;
+    } finally {
+      COMMUNITY.signalOptionsHydrationPromise = null;
+    }
   }
 
   function updateSignalTypeUI(){
@@ -23461,8 +23511,14 @@ async function loadAffluenceDate(dateStr){
     const stationSelect = $id('lbSignalStationSelect');
     if (!trainSelect || !stationSelect) return;
     const selectedStation = String(stationSelect.value || '').trim();
-    const train = COMMUNITY.liveTrains.find((it)=> normalizeKey(it.trainNumber) === normalizeKey(trainSelect.value));
-    const options = train?.stops || [];
+    const trainKey = normalizeKey(trainSelect.value);
+    const train = COMMUNITY.liveTrains.find((it)=> normalizeKey(it.trainNumber) === trainKey);
+    const staticInfo = COMMUNITY.staticInfoCache.get(`${trainKey}_${toYmd()}`)
+      || getTrainStaticTodayInfo(trainKey)
+      || null;
+    const options = (Array.isArray(staticInfo?.stops) && staticInfo.stops.length)
+      ? staticInfo.stops
+      : (Array.isArray(train?.stops) ? train.stops : []);
     stationSelect.innerHTML = '<option value="">Choisir la gare concernée</option>' + options.map((name)=>`<option value="${safeEscape(name)}">${safeEscape(name)}</option>`).join('');
     if (selectedStation && options.some((name)=> String(name) === selectedStation)){
       stationSelect.value = selectedStation;
@@ -23943,6 +23999,26 @@ async function loadAffluenceDate(dateStr){
       const holder = e.target.closest('[data-lb-inline-editor]');
       const delaySel = holder?.querySelector('[data-lb-inline-delay]');
       if (delaySel) delaySel.hidden = String(e.target.value || '') !== 'retard';
+      return;
+    }
+    if (e.target && e.target.id === 'lbSignalTrainSelect'){
+      const trainKey = normalizeKey(e.target.value);
+      COMMUNITY.selectedTrain = trainKey;
+      updateSignalStationOptions();
+      const stationSelect = $id('lbSignalStationSelect');
+      if (!trainKey) return;
+      stationSelect?.setAttribute('aria-busy', 'true');
+      getLiveTrainStaticInfo(trainKey).then((info)=>{
+        if (normalizeKey($id('lbSignalTrainSelect')?.value) !== trainKey) return;
+        const train = COMMUNITY.liveTrains.find((it)=> normalizeKey(it.trainNumber) === trainKey);
+        const option = $id('lbSignalTrainSelect')?.querySelector(`option[value="${String(trainKey)}"]`);
+        if (option && train && info) option.textContent = signalTrainOptionLabel(train, info);
+        updateSignalStationOptions();
+      }).catch((err)=>{
+        console.warn('[SIGNAL horaire train] indisponible', err?.message || err);
+      }).finally(()=>{
+        stationSelect?.removeAttribute('aria-busy');
+      });
       return;
     }
     if (e.target && e.target.id === 'lbLiveDirectionSelect'){
@@ -27628,8 +27704,6 @@ async function loadAffluenceDate(dateStr){
 
 <script src="./config/territory.nancy-metz-lux.js?v=4"></script>
 <script src="./assets/lb-app-shell-v3.js?v=7"></script>
-<link rel="stylesheet" href="./assets/lb-design-system-v3.css?v=9">
-<link rel="stylesheet" href="./assets/lb-mobile-v4.css?v=11">
 <script src="./assets/lb-mobile-v4.js?v=6"></script>
 
 
