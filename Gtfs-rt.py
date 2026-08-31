@@ -24,12 +24,25 @@ for row in reader:
         id_num = match.group(1)
         stop_id_to_name.setdefault(id_num, stop_name or stop_id_raw)
 
+
 def nettoyer_stop_id(stop_id: str) -> str:
     match = re.search(r"(\d{8})", stop_id or "")
     return match.group(1) if match else (stop_id or "").strip()
 
+
+def extraire_numero_train(trip_id: str) -> str:
+    """Extrait le numéro SNCF complet sans confondre 88748, 887483, 887485, etc."""
+    raw = str(trip_id or "")
+    match = re.search(r"OCESN(\d+)F", raw)
+    if match:
+        return match.group(1)
+    match = re.search(r"(?<!\d)(\d{5,6})(?!\d)", raw)
+    return match.group(1) if match else "?????"
+
+
 # --- Charger le GTFS-RT Trip Updates ---
-url = "https://proxy.transport.data.gouv.fr/resource/sncf-all-gtfs-rt-trip-updates"
+# Ressource SNCF actuelle publiée via transport.data.gouv.fr.
+url = "https://proxy.transport.data.gouv.fr/resource/sncf-gtfs-rt-trip-updates"
 response = requests.get(url, timeout=20)
 response.raise_for_status()
 
@@ -46,8 +59,10 @@ TRIP_SCHEDULE_RELATIONSHIP_NAME = {
     TripSchRel.CANCELED: "CANCELED",
     TripSchRel.REPLACEMENT: "REPLACEMENT",
     TripSchRel.DUPLICATED: "DUPLICATED",
-    TripSchRel.MODIFIED: "MODIFIED",
 }
+if hasattr(TripSchRel, "MODIFIED"):
+    TRIP_SCHEDULE_RELATIONSHIP_NAME[TripSchRel.MODIFIED] = "MODIFIED"
+
 STOP_SCHEDULE_RELATIONSHIP_NAME = {
     StopSchRel.SCHEDULED: "SCHEDULED",
     StopSchRel.SKIPPED: "SKIPPED",
@@ -64,18 +79,21 @@ trains_groupes = defaultdict(lambda: {
     "stops": [],                                # liste d'arrêts
 })
 
+
 def compute_status(trip_sr_name: str, stops: list) -> str:
     # Priorités: CANCELED > PARTIAL_CANCELLATION > ADDED/MODIFIED > DELAYED > SCHEDULED
+    # Le statut au niveau du voyage est autoritaire : une suppression totale ne
+    # doit jamais être rétrogradée en suppression partielle à cause d'une autre source.
     if trip_sr_name == "CANCELED":
         return "CANCELED"
     if any(s.get("schedule_relationship") == "SKIPPED" for s in stops):
         return "PARTIAL_CANCELLATION"
     if trip_sr_name in ("ADDED", "MODIFIED"):
         return trip_sr_name
-    # Si pas annulé/partiel, regarder le délai
     if any((s.get("arrival_delay") or 0) != 0 or (s.get("departure_delay") or 0) != 0 for s in stops):
         return "DELAYED"
     return "SCHEDULED"
+
 
 # Traiter chaque trip_update
 for entity in feed.entity:
@@ -86,8 +104,7 @@ for entity in feed.entity:
     trip = trip_update.trip
 
     trip_id = trip.trip_id or ""
-    match_num = re.search(r"(\d{5})", trip_id)
-    train_number = match_num.group(1) if match_num else "?????"
+    train_number = extraire_numero_train(trip_id)
 
     # Trip-level schedule relationship (peut signaler une suppression totale)
     trip_sr_val = trip.schedule_relationship
@@ -101,7 +118,7 @@ for entity in feed.entity:
     stops_out = []
 
     # IMPORTANT: Même si le trip est CANCELED, certains producteurs n'envoient pas de stop_time_update.
-    # On garde quand même l'entité pour l'export, avec stops Out vide + status = CANCELED.
+    # On garde quand même l'entité pour l'export, avec stops_out vide + status = CANCELED.
     for stu in trip_update.stop_time_update:
         stop_id_clean = nettoyer_stop_id(stu.stop_id)
         stop_name = stop_id_to_name.get(stop_id_clean, stu.stop_id or stop_id_clean)
