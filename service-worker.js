@@ -1,4 +1,4 @@
-const CACHE_VERSION = 'v38';
+const CACHE_VERSION = 'v39';
 const APP_CACHE = `lbetaillere-app-${CACHE_VERSION}`;
 const STATIC_CACHE = `lbetaillere-static-${CACHE_VERSION}`;
 const CACHE_PREFIX = 'lbetaillere-';
@@ -11,8 +11,8 @@ const APP_SHELL = [
   './assets/lb-app-shell-v3.js?v=7',
   './assets/lb-legacy.css?v=4',
   './assets/lb-design-system-v3.css?v=9',
-  './assets/lb-mobile-v4.css?v=12',
-  './assets/lb-v4-live-preview.css?v=20260831-1',
+  './assets/lb-mobile-v4.css?v=13',
+  './assets/lb-v4-live-preview.css?v=20260831-3',
   './assets/lb-mobile-v4.js?v=6',
   './assets/lb-traffic-details-v1.css?v=4',
   './assets/lb-traffic-details-v1.js?v=4',
@@ -113,6 +113,18 @@ async function staleWhileRevalidate(request, cacheName = STATIC_CACHE) {
   return cached || (await refresh) || Response.error();
 }
 
+async function uiStyleNetworkFirst(request) {
+  const cache = await caches.open(STATIC_CACHE);
+  try {
+    const response = await fetch(request, { cache: 'no-store' });
+    if (response?.ok) {
+      await cache.put(request, response.clone()).catch(() => {});
+      return response;
+    }
+  } catch (_) {}
+  return (await cache.match(request, { ignoreSearch: true })) || Response.error();
+}
+
 function isStaticAsset(url) {
   return /\.(?:css|js|mjs|png|jpe?g|gif|webp|svg|ico|woff2?|mp3)$/i.test(url.pathname);
 }
@@ -123,6 +135,15 @@ function isDynamicData(url) {
     url.pathname.includes('/api/') ||
     url.pathname.includes('/gtfs/') ||
     url.pathname.includes('/sncf/')
+  );
+}
+
+function isUiStyle(url) {
+  return (
+    url.pathname.endsWith('/assets/lb-mobile-v4.css') ||
+    url.pathname.endsWith('/assets/lb-home-favorites-pro.css') ||
+    url.pathname.endsWith('/assets/lb-home-mobile-layout-v2.css') ||
+    url.pathname.endsWith('/assets/lb-v4-live-preview.css')
   );
 }
 
@@ -147,9 +168,15 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // Horaires, API, GTFS et JSON dynamiques passent toujours directement
-  // par le réseau : aucune réponse potentiellement périmée n'est conservée.
   if (isDynamicData(url)) {
+    return;
+  }
+
+  // Les feuilles qui pilotent le rendu de l'accueil doivent être fraîches dès
+  // le premier rechargement après une mise à jour, même si index.html garde un
+  // ancien query-string pendant quelques minutes.
+  if (sameOrigin && isUiStyle(url)) {
+    event.respondWith(uiStyleNetworkFirst(request));
     return;
   }
 
