@@ -80,3 +80,27 @@ window.LB_TERRITORY_CONFIG = Object.freeze({
     document.head.append(script);
   }
 })();
+
+/*
+ * Favoris accueil — heures réelles lisibles, retards départ/arrivée distincts
+ * et parcours sans flèche redondante sous les horaires.
+ */
+(function loadHomeFavoritesRealtimePresentation() {
+  if (typeof document === 'undefined') return;
+
+  if (!document.getElementById('lbHomeFavDelayStyles')) {
+    const stylesheet = document.createElement('link');
+    stylesheet.id = 'lbHomeFavDelayStyles';
+    stylesheet.rel = 'stylesheet';
+    stylesheet.href = './assets/lb-home-favorites-delay-v1.css?v=20260901-1';
+    document.head.append(stylesheet);
+  }
+
+  if (!document.getElementById('lbHomeFavDelayScript')) {
+    const script = document.createElement('script');
+    script.id = 'lbHomeFavDelayScript';
+    script.src = './assets/lb-home-favorites-delay-v1.js?v=20260901-1';
+    script.async = false;
+    document.head.append(script);
+  }
+})();
