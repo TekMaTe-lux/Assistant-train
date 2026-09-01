@@ -1,4 +1,4 @@
-const CACHE_VERSION = 'v37';
+const CACHE_VERSION = 'v38';
 const APP_CACHE = `lbetaillere-app-${CACHE_VERSION}`;
 const STATIC_CACHE = `lbetaillere-static-${CACHE_VERSION}`;
 const CACHE_PREFIX = 'lbetaillere-';
@@ -11,7 +11,7 @@ const APP_SHELL = [
   './assets/lb-app-shell-v3.js?v=7',
   './assets/lb-legacy.css?v=4',
   './assets/lb-design-system-v3.css?v=9',
-  './assets/lb-mobile-v4.css?v=11',
+  './assets/lb-mobile-v4.css?v=12',
   './assets/lb-v4-live-preview.css?v=20260831-1',
   './assets/lb-mobile-v4.js?v=6',
   './assets/lb-traffic-details-v1.css?v=4',
