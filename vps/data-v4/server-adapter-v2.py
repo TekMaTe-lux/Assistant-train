@@ -2,9 +2,14 @@
 """
 Adapter de compatibilité SNCF pour le Data Engine V4 canonique.
 
-Il ne décide d'aucune priorité territoriale. Son seul rôle est de rendre les
+Il ne décide d'aucune priorité territoriale. Son rôle est de rendre les
 formats SNCF hétérogènes lisibles par server.py tout en conservant les
 métadonnées par arrêt lorsqu'elles existent.
+
+Garde-fous de schéma :
+- une source SNCF/CFL ne suffit jamais à inventer le pays d'une gare inconnue ;
+- realtimeAuthority reste un identifiant machine stable en minuscules ;
+- les gares connues conservent strictement la politique territoriale du core.
 """
 
 import importlib.util
@@ -177,6 +182,43 @@ def normalize_sncf_payload(payload):
     return normalized, path, len(found)
 
 
+# ---------------------------------------------------------------------------
+# Garde-fou territoire : provider != pays.
+# Le core connaît explicitement Nancy/Metz/Thionville/Hettange et les gares LU.
+# Pour une gare inconnue (ex. Saarbrücken), on garde le provider utilisable mais
+# on laisse country=None au lieu d'inventer FR ou LU. Cela prépare SNCB/DB/GPS.
+# ---------------------------------------------------------------------------
+_original_station_policy = core.station_policy
+
+
+def safe_station_policy(name, source_hint=None):
+    registered = _original_station_policy(name, None)
+    if any(registered.get(k) is not None for k in ("country", "network", "realtimeAuthority")):
+        return registered
+    if source_hint == "cfl":
+        return {"country": None, "network": "CFL", "realtimeAuthority": "cfl"}
+    if source_hint == "sncf":
+        return {"country": None, "network": "SNCF", "realtimeAuthority": "sncf"}
+    return {"country": None, "network": None, "realtimeAuthority": None}
+
+
+core.station_policy = safe_station_policy
+
+_original_make_canonical_stop = core.make_canonical_stop
+
+
+def safe_make_canonical_stop(name, sncf_stop, cfl_stop, arrivals, source_meta):
+    stop = _original_make_canonical_stop(name, sncf_stop, cfl_stop, arrivals, source_meta)
+    hint = "sncf" if sncf_stop else "cfl" if cfl_stop else None
+    policy = safe_station_policy(name, hint)
+    stop["realtimeAuthority"] = policy.get("realtimeAuthority")
+    stop["territoryKnown"] = bool(policy.get("country"))
+    return stop
+
+
+core.make_canonical_stop = safe_make_canonical_stop
+
+
 _original_build = core.build_snapshot_from_payloads
 
 
@@ -188,6 +230,7 @@ def patched_build(payloads, source_meta=None):
     snapshot.setdefault("meta", {})["sncfFormat"] = path
     snapshot["meta"]["sncfRecordCount"] = seen
     snapshot["meta"]["sncfNormalizedCount"] = len(normalized)
+    snapshot["meta"]["territoryPolicy"] = "registry-only-country-v1"
     return snapshot
 
 
@@ -226,8 +269,18 @@ def adapter_fixture_test():
             ],
         }]
     }
+    foreign = {
+        "trains": [{
+            "train_number": "88835",
+            "status": "ON_TIME",
+            "stops": [
+                {"station": "Forbach", "delayMinutes": 0},
+                {"station": "Saarbrücken", "delayMinutes": 0},
+            ],
+        }]
+    }
 
-    for payload in (direct, wrapped, cancelled):
+    for payload in (direct, wrapped, cancelled, foreign):
         n, path, seen = normalize_sncf_payload(payload)
         if not n:
             raise AssertionError(f"adapter SNCF invalide: {path} / {seen}")
@@ -246,7 +299,28 @@ def adapter_fixture_test():
 
     n, _, _ = normalize_sncf_payload(cancelled)
     assert n["88503"]["_canonicalStops"][0]["status"] == "cancelled"
-    print(json.dumps({"ok": True, "adapter": "sncf-v3-canonical"}))
+
+    snap = patched_build(
+        {"sncfRt": direct, "cflRt": {}, "cflArrivals": {}, "traffic": {}, "compositions": {}},
+        [{"name": "sncfRt", "ok": True, "stale": False, "observedAt": core.iso_utc()}],
+    )
+    t = next(t for t in snap["trains"] if t["number"] == "88742")
+    metz = next(s for s in t["stops"] if s["name"] == "Metz")
+    lux = next(s for s in t["stops"] if s["name"] == "Luxembourg")
+    assert metz["country"] == "FR" and metz["realtimeAuthority"] == "sncf"
+    assert lux["country"] == "LU" and lux["realtimeAuthority"] == "cfl"
+
+    snap = patched_build(
+        {"sncfRt": foreign, "cflRt": {}, "cflArrivals": {}, "traffic": {}, "compositions": {}},
+        [{"name": "sncfRt", "ok": True, "stale": False, "observedAt": core.iso_utc()}],
+    )
+    t = next(t for t in snap["trains"] if t["number"] == "88835")
+    sb = next(s for s in t["stops"] if s["name"] == "Saarbrücken")
+    assert sb["country"] is None
+    assert sb["realtimeAuthority"] == "sncf"
+    assert sb["territoryKnown"] is False
+
+    print(json.dumps({"ok": True, "adapter": "sncf-v4-territory-safe"}))
 
 
 if __name__ == "__main__":
