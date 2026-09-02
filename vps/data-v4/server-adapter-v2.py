@@ -6,9 +6,12 @@ Rôles :
 - normaliser les formats SNCF hétérogènes sans perdre les métadonnées d'arrêt ;
 - enrichir le registre des gares à partir des GTFS statiques ;
 - ne jamais déduire le pays d'une gare depuis le seul fournisseur temps réel ;
-- conserver la politique FR=SNCF / LU=CFL arrêt par arrêt.
+- conserver la politique FR=SNCF / LU=CFL arrêt par arrêt ;
+- rattacher les horaires planifiés GTFS au même objet canonique, sans changer
+  l'autorité temps réel ni transformer une absence de RT en « à l'heure ».
 """
 
+import concurrent.futures
 import csv
 import importlib.util
 import io
@@ -16,7 +19,9 @@ import json
 import os
 import re
 import sys
+import threading
 import time
+import urllib.parse
 import urllib.request
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -480,6 +485,322 @@ def commit_snapshot_with_completed(snap):
 
 core.commit_snapshot = commit_snapshot_with_completed
 
+# ---------- horaires planifiés GTFS SNCF ----------
+# On réutilise l'API statique déjà employée par les fiches/signalements. Elle ne
+# devient jamais une source temps réel : elle ne fournit que le planifié. Le
+# cache évite de refaire une requête pour chaque snapshot de 15 s.
+STATIC_TRAIN_BASE = os.getenv(
+    "LB_STATIC_TRAIN_BASE",
+    "https://vps.labetaillere.fr/api/train-static",
+).strip()
+STATIC_TIMETABLE_TTL = max(300, int(os.getenv("LB_STATIC_TIMETABLE_TTL_SEC", str(6 * 3600))))
+STATIC_TIMETABLE_ERROR_TTL = max(30, int(os.getenv("LB_STATIC_TIMETABLE_ERROR_TTL_SEC", "120")))
+STATIC_TIMETABLE_TIMEOUT = max(1.0, float(os.getenv("LB_STATIC_TIMETABLE_TIMEOUT_SEC", "5")))
+STATIC_TIMETABLE_WORKERS = max(1, min(8, int(os.getenv("LB_STATIC_TIMETABLE_WORKERS", "6"))))
+_static_timetable_cache = {}
+_static_timetable_lock = threading.Lock()
+
+
+def static_row_name(row):
+    name = station_name(row)
+    if name:
+        return name
+    if not isinstance(row, dict):
+        return ""
+    for key in ("stop_point", "stopPoint", "stationInfo"):
+        child = row.get(key)
+        if isinstance(child, dict):
+            name = str(child.get("name") or child.get("stop_name") or "").strip()
+            if name:
+                return name
+    return ""
+
+
+def static_row_sequence(row):
+    if not isinstance(row, dict):
+        return 0
+    for key in ("stop_sequence", "stopSequence", "sequence", "order"):
+        try:
+            return int(row.get(key))
+        except (TypeError, ValueError):
+            pass
+    return 0
+
+
+def static_time_value(row, kind):
+    if not isinstance(row, dict):
+        return None
+    keys = (
+        ("arrival_time", "arrival", "arrivalPlanned", "plannedArrival", "scheduledArrival", "base_arrival_time")
+        if kind == "arrival"
+        else ("departure_time", "departure", "departurePlanned", "plannedDeparture", "scheduledDeparture", "base_departure_time")
+    )
+    for key in keys:
+        value = row.get(key)
+        if isinstance(value, dict):
+            value = (
+                value.get("planned") or value.get("scheduled") or value.get("base")
+                or value.get("time") or value.get("value")
+            )
+        value = core.normalize_time_text(value)
+        if value:
+            return value
+    return None
+
+
+def add_delay_to_gtfs_clock(value, delay_minutes):
+    match = re.match(r"^(\d{1,3}):(\d{2})(?::(\d{2}))?", str(value or "").strip())
+    delay = core.safe_num(delay_minutes)
+    if not match or delay is None:
+        return None
+    total = int(match.group(1)) * 60 + int(match.group(2)) + int(round(delay))
+    if total < 0:
+        return None
+    return f"{total // 60:02d}:{total % 60:02d}"
+
+
+def static_candidates(payload):
+    if isinstance(payload, list):
+        rows = payload
+    elif isinstance(payload, dict):
+        rows = payload.get("stop_times") or payload.get("stops")
+        if not isinstance(rows, list):
+            match = payload.get("match")
+            rows = match.get("stops") if isinstance(match, dict) else None
+        if not isinstance(rows, list):
+            data = payload.get("data")
+            if isinstance(data, dict):
+                rows = data.get("stop_times") or data.get("stops")
+    else:
+        rows = None
+
+    if not isinstance(rows, list):
+        return []
+
+    groups = {}
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        trip_id = str(
+            row.get("trip_id") or row.get("tripId") or row.get("vehicle_journey")
+            or row.get("journey_id") or "default"
+        )
+        groups.setdefault(trip_id, []).append(row)
+
+    out = []
+    for trip_id, group in groups.items():
+        ordered = sorted(group, key=static_row_sequence)
+        if any(static_row_name(row) for row in ordered):
+            out.append({"tripId": trip_id, "rows": ordered})
+    return out
+
+
+def choose_static_candidate(train, payload):
+    candidates = static_candidates(payload)
+    target_stops = [
+        core.canonical_station(stop.get("name"))
+        for stop in (train.get("stops") or [])
+        if stop.get("name")
+    ]
+    target_stops = [key for key in target_stops if key]
+    if not target_stops:
+        return None
+    target_set = set(target_stops)
+    train_id = str(train.get("id") or "")
+
+    best = None
+    best_score = -10**9
+    best_overlap = 0
+    for candidate in candidates:
+        rows = candidate["rows"]
+        keys = [core.canonical_station(static_row_name(row)) for row in rows]
+        keys = [key for key in keys if key]
+        if not keys:
+            continue
+        overlap = sum(1 for key in keys if key in target_set)
+        score = overlap * 20 - abs(len(keys) - len(target_stops)) * 2
+        if keys[0] == target_stops[0]:
+            score += 35
+        if keys[-1] == target_stops[-1]:
+            score += 35
+        if train_id and candidate["tripId"] == train_id:
+            score += 150
+        if score > best_score:
+            best_score = score
+            best_overlap = overlap
+            best = candidate
+
+    minimum = 1 if len(target_stops) == 1 else 2
+    return best if best is not None and best_overlap >= minimum else None
+
+
+def fetch_static_train(number, service_date):
+    number = norm_train(number)
+    service_date = str(service_date or "")
+    if not STATIC_TRAIN_BASE or not number or not re.fullmatch(r"20\d{2}-\d{2}-\d{2}", service_date):
+        return None, "configuration statique incomplète", False
+
+    cache_key = f"{service_date}:{number}"
+    now = time.time()
+    with _static_timetable_lock:
+        cached = _static_timetable_cache.get(cache_key)
+        if cached:
+            ttl = STATIC_TIMETABLE_TTL if cached.get("payload") is not None else STATIC_TIMETABLE_ERROR_TTL
+            if now - float(cached.get("storedAt") or 0) < ttl:
+                return cached.get("payload"), cached.get("error"), True
+
+    query = urllib.parse.urlencode({
+        "date": service_date.replace("-", ""),
+        "train": number,
+    })
+    separator = "&" if "?" in STATIC_TRAIN_BASE else "?"
+    url = f"{STATIC_TRAIN_BASE}{separator}{query}"
+    try:
+        req = urllib.request.Request(
+            url,
+            headers={"Accept": "application/json", "User-Agent": "labetaillere-data-v4-static/1.0"},
+        )
+        with urllib.request.urlopen(req, timeout=STATIC_TIMETABLE_TIMEOUT) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+        error = None
+    except Exception as exc:
+        payload = None
+        error = str(exc)
+
+    with _static_timetable_lock:
+        _static_timetable_cache[cache_key] = {
+            "storedAt": now,
+            "payload": payload,
+            "error": error,
+        }
+    return payload, error, False
+
+
+def enrich_train_static(train, payload):
+    candidate = choose_static_candidate(train, payload)
+    if not candidate:
+        return {"matched": False, "enrichedStops": 0, "derivedRealtimeFields": 0}
+
+    rows_by_station = {}
+    for row in candidate["rows"]:
+        key = core.canonical_station(static_row_name(row))
+        if key and key not in rows_by_station:
+            rows_by_station[key] = row
+
+    enriched_stops = 0
+    derived_fields = 0
+    for stop in train.get("stops") or []:
+        key = core.canonical_station(stop.get("name"))
+        row = rows_by_station.get(key)
+        if not row:
+            continue
+        planned_arrival = static_time_value(row, "arrival")
+        planned_departure = static_time_value(row, "departure")
+        touched = False
+
+        arrival = stop.get("arrival") if isinstance(stop.get("arrival"), dict) else {}
+        departure = stop.get("departure") if isinstance(stop.get("departure"), dict) else {}
+        stop["arrival"] = arrival
+        stop["departure"] = departure
+
+        if planned_arrival:
+            arrival["planned"] = planned_arrival
+            arrival["plannedSource"] = "SNCF_GTFS_STATIC"
+            arrival["plannedQuality"] = "scheduled"
+            touched = True
+        if planned_departure:
+            departure["planned"] = planned_departure
+            departure["plannedSource"] = "SNCF_GTFS_STATIC"
+            departure["plannedQuality"] = "scheduled"
+            touched = True
+
+        # Une heure réelle dérivée n'existe que si le RT de l'arrêt est réellement
+        # connu et frais. On n'interprète donc jamais « pas de RT » comme +0.
+        delay = core.safe_num(stop.get("delayMinutes"))
+        rt_known = bool(stop.get("realtimeKnown")) and stop.get("cancelled") is not True
+        rt_fresh = (stop.get("delay") or {}).get("fresh") is not False
+        if rt_known and rt_fresh and delay is not None:
+            if not arrival.get("realtime") and planned_arrival:
+                derived = add_delay_to_gtfs_clock(planned_arrival, delay)
+                if derived:
+                    arrival["realtime"] = derived
+                    arrival["realtimeDerived"] = True
+                    arrival["realtimeDerivation"] = "planned+canonical-delay"
+                    derived_fields += 1
+            if not departure.get("realtime") and planned_departure:
+                derived = add_delay_to_gtfs_clock(planned_departure, delay)
+                if derived:
+                    departure["realtime"] = derived
+                    departure["realtimeDerived"] = True
+                    departure["realtimeDerivation"] = "planned+canonical-delay"
+                    derived_fields += 1
+
+        if touched:
+            enriched_stops += 1
+
+    if enriched_stops:
+        train["timetable"] = {
+            "source": "SNCF_GTFS_STATIC",
+            "quality": "scheduled",
+            "tripId": candidate.get("tripId"),
+            "matched": True,
+        }
+    return {
+        "matched": enriched_stops > 0,
+        "enrichedStops": enriched_stops,
+        "derivedRealtimeFields": derived_fields,
+    }
+
+
+def enrich_snapshot_static_timetables(snapshot):
+    trains = [
+        train for train in (snapshot.get("trains") or [])
+        if str(train.get("operator") or "").upper() == "SNCF"
+        and norm_train(train.get("number"))
+        and train.get("serviceDate")
+        and train.get("stops")
+    ]
+    stats = {
+        "source": "SNCF_GTFS_STATIC",
+        "endpoint": STATIC_TRAIN_BASE,
+        "requestedTrains": len(trains),
+        "matchedTrains": 0,
+        "enrichedStops": 0,
+        "derivedRealtimeFields": 0,
+        "cacheHits": 0,
+        "errors": [],
+    }
+    if not trains or not STATIC_TRAIN_BASE:
+        return stats
+
+    def load(train):
+        payload, error, cache_hit = fetch_static_train(train.get("number"), train.get("serviceDate"))
+        return train, payload, error, cache_hit
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=STATIC_TIMETABLE_WORKERS) as pool:
+        futures = [pool.submit(load, train) for train in trains]
+        for future in concurrent.futures.as_completed(futures):
+            try:
+                train, payload, error, cache_hit = future.result()
+            except Exception as exc:
+                stats["errors"].append(str(exc))
+                continue
+            if cache_hit:
+                stats["cacheHits"] += 1
+            if error:
+                if len(stats["errors"]) < 12:
+                    stats["errors"].append(f"{train.get('number')}: {error}")
+                continue
+            result = enrich_train_static(train, payload)
+            if result["matched"]:
+                stats["matchedTrains"] += 1
+            stats["enrichedStops"] += result["enrichedStops"]
+            stats["derivedRealtimeFields"] += result["derivedRealtimeFields"]
+
+    stats["ok"] = stats["matchedTrains"] > 0 or stats["requestedTrains"] == 0
+    return stats
+
+
 _original_build = core.build_snapshot_from_payloads
 
 
@@ -506,6 +827,29 @@ def patched_build(payloads, source_meta=None):
 
 
 core.build_snapshot_from_payloads = patched_build
+
+# On enrichit uniquement les vrais snapshots du moteur. Les fixtures unitaires
+# restent 100 % locales et ne dépendent donc jamais de l'API statique.
+_original_build_snapshot = core.build_snapshot
+
+
+def build_snapshot_with_static_timetable():
+    snapshot = _original_build_snapshot()
+    static_stats = enrich_snapshot_static_timetables(snapshot)
+    meta = snapshot.setdefault("meta", {})
+    meta["staticTimetablePolicy"] = "sncf-train-static-cache-v1"
+    meta["staticTimetable"] = static_stats
+    meta["plannedStopCount"] = sum(
+        1
+        for train in snapshot.get("trains") or []
+        for stop in train.get("stops") or []
+        if (stop.get("arrival") or {}).get("planned")
+        or (stop.get("departure") or {}).get("planned")
+    )
+    return snapshot
+
+
+core.build_snapshot = build_snapshot_with_static_timetable
 
 
 def adapter_fixture_test():
@@ -559,11 +903,26 @@ def adapter_fixture_test():
         "sncfRt",
     )
 
+    fixture_static = {
+        "stop_times": [
+            {"trip_id": "fixture", "stop_sequence": 1, "stop_name": "Metz", "arrival_time": "09:00:00", "departure_time": "09:03:00"},
+            {"trip_id": "fixture", "stop_sequence": 2, "stop_name": "Thionville", "arrival_time": "09:30:00", "departure_time": "09:32:00"},
+            {"trip_id": "fixture", "stop_sequence": 3, "stop_name": "Luxembourg", "arrival_time": "10:00:00", "departure_time": "10:00:00"},
+        ]
+    }
+    enriched = enrich_train_static(t, fixture_static)
+    assert enriched["matched"] is True
+    assert metz["departure"]["planned"] == "09:03:00"
+    assert metz["departure"]["realtime"] == "09:03"
+    assert metz["departure"]["realtimeDerived"] is True
+    assert lux["arrival"]["planned"] == "10:00:00"
+
     print(json.dumps({
         "ok": True,
-        "adapter": "sncf-v6-gtfs-station-registry-history",
+        "adapter": "sncf-v7-static-timetable-history",
         "stationRegistryCount": len(GTFS_STATION_REGISTRY),
         "registryErrors": GTFS_REGISTRY_META.get("errors") or [],
+        "staticFixture": enriched,
     }, ensure_ascii=False))
 
 
