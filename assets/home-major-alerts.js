@@ -113,7 +113,7 @@
     return canonicalPending;
   };
 
-  // Exposé pour les prochaines migrations (tableau/carte), sans changer leurs comportements aujourd’hui.
+  // Exposé pour les migrations progressives des autres vues.
   window.lbCanonicalV4 = {
     refresh: refreshCanonicalSnapshot,
     get snapshot(){ return canonicalSnapshot; },
@@ -125,19 +125,23 @@
     const canonicalTrain = canonicalCurrentTrainByNumber(trainNumber);
     if (!canonicalTrain?.realtimePresence || canonicalTrain?.realtimePresenceFresh === false) return null;
     const stop = canonicalStopByName(canonicalTrain, destination || canonicalTrain?.destination?.name);
-    if (!stop || stop.cancelled || !stop.realtimeKnown) return null;
+    if (!stop || stop.cancelled || !stop.realtimeKnown || stop?.delay?.fresh === false) return null;
     const delay = Number(stop.delayMinutes);
     return Number.isFinite(delay) ? Math.max(0, Math.round(delay)) : null;
   };
 
   const destinationDelayForTrain = (train) => {
-    if (!train || train.statusClass !== 'delay') return null;
+    if (!train) return null;
 
     // Première autorité : état canonique par arrêt (SNCF en FR, CFL/HAFAS au LU).
+    // On le consulte même si l'ancien rendu LIVE pensait le train à l'heure : c'est
+    // précisément ce qui permet à un retard territorial CFL d'être visible au terminus LU.
     const canonicalDelay = canonicalDestinationDelay(train.trainNumber, train.to);
     if (Number.isFinite(canonicalDelay)) return canonicalDelay;
 
-    // Fallback de compatibilité : ancien flux LIVE SNCF/GTFS, uniquement si V4 est indisponible.
+    // Fallback de compatibilité : ancien flux LIVE SNCF/GTFS, seulement quand V4
+    // ne connaît pas la valeur. Les suppressions restent gérées par le moteur natif.
+    if (train.statusClass !== 'delay') return null;
     const stops = train?.raw?.stops;
     if (stops && typeof stops === 'object' && !Array.isArray(stops)) {
       const destination = normalizeStation(train.to);
@@ -177,8 +181,45 @@
     });
   };
 
+  const syncLiveStatusFromCanonical = (root = document) => {
+    root.querySelectorAll?.('.lb-live-card[data-lb-live-train]').forEach((card) => {
+      const number = normalizeTrainNumber(card.getAttribute('data-lb-live-train'));
+      const train = canonicalCurrentTrainByNumber(number);
+      if (!train?.realtimePresence || train?.realtimePresenceFresh === false) return;
+
+      // Le classement SNCF des suppressions reste prioritaire. V4 harmonise ici
+      // uniquement le couple à-l'heure / retard afin de respecter la frontière.
+      if (
+        card.classList.contains('lb-live-card--cancel')
+        || card.classList.contains('lb-live-card--partial')
+        || train.status === 'cancelled'
+        || train.status === 'partial'
+      ) return;
+
+      const status = card.querySelector('.lb-live-status');
+      if (!status) return;
+      const delay = Math.max(0, Math.round(Number(train.delayMinutes) || 0));
+
+      if (train.status === 'delay' && delay > 0) {
+        card.classList.remove('lb-live-card--ok');
+        card.classList.add('lb-live-card--delay');
+        status.classList.remove('lb-live-status--ok');
+        status.classList.add('lb-live-status--delay');
+        status.textContent = `+${delay} min`;
+        status.title = 'Statut harmonisé par l’autorité temps réel de chaque gare';
+      } else if (train.status === 'on-time') {
+        card.classList.remove('lb-live-card--delay');
+        card.classList.add('lb-live-card--ok');
+        status.classList.remove('lb-live-status--delay');
+        status.classList.add('lb-live-status--ok');
+        status.textContent = 'À L’HEURE';
+        status.title = 'Statut harmonisé par l’autorité temps réel de chaque gare';
+      }
+    });
+  };
+
   // LIVE reste strictement défini par extractLiveTrains() : V4 n'ajoute jamais de carte.
-  // Il ne fait qu'harmoniser le retard de destination de la carte déjà présente.
+  // Il harmonise le statut et le retard de destination des cartes déjà présentes.
   const syncLiveDelayedArrivalTimes = (root = document) => {
     if (typeof window.extractLiveTrains !== 'function') return;
 
@@ -204,6 +245,7 @@
 
       const trainNumber = normalizeTrainNumber(card.getAttribute('data-lb-live-train'));
       const train = byNumber.get(trainNumber);
+      const canonicalTrain = canonicalCurrentTrainByNumber(trainNumber);
       const delay = destinationDelayForTrain(train);
       const plannedRoute = String(route.dataset.lbPlannedRoute || currentPlain).trim();
 
@@ -215,7 +257,15 @@
         delete route.dataset.lbDelayMinutes;
       };
 
-      if (!train || train.statusClass !== 'delay' || !Number.isFinite(delay) || delay <= 0) {
+      if (
+        !train
+        || train.statusClass === 'cancel'
+        || train.statusClass === 'partial'
+        || canonicalTrain?.status === 'cancelled'
+        || canonicalTrain?.status === 'partial'
+        || !Number.isFinite(delay)
+        || delay <= 0
+      ) {
         restorePlanned();
         return;
       }
@@ -224,7 +274,6 @@
       if (!match) return;
       const prefix = match[1];
       const plannedArrival = match[2];
-      const canonicalTrain = canonicalCurrentTrainByNumber(trainNumber);
       const canonicalStop = canonicalStopByName(canonicalTrain, train.to);
       const exactRealtime = shortTime(canonicalStop?.arrival?.realtime || canonicalStop?.departure?.realtime);
       const realtimeArrival = exactRealtime || addMinutesToHhmm(plannedArrival, delay);
@@ -261,7 +310,11 @@
   };
 
   const selectedTrainServiceDate = () => {
-    const value = String(document.getElementById('trainDate')?.value || '').trim();
+    const value = String(
+      document.getElementById('selectionDate')?.value
+      || document.getElementById('trainDate')?.value
+      || ''
+    ).trim();
     return /^\d{4}-\d{2}-\d{2}$/.test(value) ? value : '';
   };
 
@@ -345,6 +398,153 @@
     });
   };
 
+  const canonicalTableTrainNumber = (header) => normalizeTrainNumber(
+    header?.dataset?.trainNumber
+    || header?.querySelector?.('[data-train-number]')?.getAttribute?.('data-train-number')
+    || header?.querySelector?.('.train-num, .train-link')?.textContent
+    || String(header?.textContent || '').match(/\b\d{3,6}\b/)?.[0]
+    || ''
+  );
+
+  const tableStationName = (row) => {
+    const first = row?.querySelector?.('td:first-child');
+    return String(
+      first?.querySelector?.('a.gare-link')?.textContent
+      || first?.querySelector?.('.gare-label')?.textContent
+      || first?.textContent
+      || ''
+    ).trim();
+  };
+
+  const canonicalTableExactRealtime = (stop) => shortTime(
+    stop?.departure?.realtime || stop?.arrival?.realtime
+  );
+
+  const canonicalTableMarkupOk = (cell, planned, realtime, delay) => {
+    if (delay > 0) {
+      return shortTime(cell.querySelector('.delay-strike')?.textContent) === planned
+        && shortTime(cell.querySelector('.delayed')?.textContent) === realtime;
+    }
+    return !cell.querySelector('.delayed')
+      && shortTime(cell.textContent) === planned;
+  };
+
+  const renderCanonicalTableCell = (cell, planned, realtime, delay, stop, train) => {
+    const signature = [
+      planned,
+      realtime,
+      delay,
+      stop?.delay?.source || '',
+      stop?.delay?.quality || '',
+      train?.lifecycle || ''
+    ].join('|');
+
+    if (
+      cell.dataset.lbCanonicalTableSignature === signature
+      && canonicalTableMarkupOk(cell, planned, realtime, delay)
+    ) return;
+
+    // Les étiquettes de voie restent gérées par le moteur natif du tableau.
+    const badge = cell.querySelector('.voie-badge')?.cloneNode(true) || null;
+    const wasStrong = !!cell.querySelector('strong');
+
+    const appendActualWithTrack = (clockNode) => {
+      if (!badge) {
+        cell.appendChild(clockNode);
+        return;
+      }
+      const wrapper = document.createElement('span');
+      wrapper.className = 'voie-info';
+      wrapper.append(clockNode, badge);
+      cell.appendChild(wrapper);
+    };
+
+    cell.replaceChildren();
+    if (delay > 0 && realtime && realtime !== planned) {
+      const struck = document.createElement('span');
+      struck.className = 'delay-strike';
+      struck.textContent = planned;
+      const actual = document.createElement('span');
+      actual.className = 'delayed';
+      actual.textContent = realtime;
+      cell.append(struck, document.createElement('br'));
+      appendActualWithTrack(actual);
+    } else {
+      const clock = document.createElement(wasStrong ? 'strong' : 'span');
+      clock.textContent = planned;
+      appendActualWithTrack(clock);
+    }
+
+    cell.dataset.lbCanonicalTableSignature = signature;
+    cell.dataset.lbCanonicalSource = String(stop?.delay?.source || '');
+    cell.title = train?.lifecycle === 'completed'
+      ? 'État final conservé par La Bétaillère'
+      : stop?.delay?.quality === 'fallback_official'
+        ? 'Temps réel harmonisé · source officielle de secours'
+        : 'Temps réel harmonisé · autorité territoriale';
+  };
+
+  const syncTrainTableFromCanonical = () => {
+    const host = document.getElementById('trainInfo');
+    const table = host?.querySelector('.table-scroll table, table');
+    if (!table || !canonicalSnapshot) return;
+
+    const date = selectedTrainServiceDate();
+    const headerRow = table.querySelector('thead tr:first-child');
+    const headers = Array.from(headerRow?.querySelectorAll('th') || []);
+    const rows = Array.from(table.querySelectorAll('tbody tr'));
+    if (headers.length < 2 || !rows.length) return;
+
+    rows.forEach((row) => {
+      const stationName = tableStationName(row);
+      if (!stationName) return;
+      const cells = Array.from(row.querySelectorAll('td'));
+
+      for (let index = 1; index < Math.min(headers.length, cells.length); index += 1) {
+        const cell = cells[index];
+        const number = canonicalTableTrainNumber(headers[index]);
+        if (!cell || !number) continue;
+
+        const train = canonicalTrainByNumber(number, date, true);
+        if (!train || (date && train.serviceDate && train.serviceDate !== date)) continue;
+        const stop = canonicalStopByName(train, stationName);
+        if (
+          !stop
+          || stop.cancelled
+          || !stop.realtimeKnown
+          || stop.territoryKnown === false
+          || stop?.delay?.fresh === false
+        ) continue;
+
+        // Ne jamais écraser les cellules de suppression partielle / origine ou terminus
+        // exceptionnel : leur sémantique reste produite par applyEffectiveServicePattern.
+        if (
+          cell.querySelector('.deleted')
+          || /SUPPRIM|EXCEPTIONNEL/i.test(String(cell.textContent || ''))
+        ) continue;
+
+        const planned = shortTime(cell.dataset.baseTime || cell.getAttribute('data-base-time'));
+        const delay = Math.max(0, Math.round(Number(stop.delayMinutes) || 0));
+        if (!planned) continue;
+        const exactRealtime = canonicalTableExactRealtime(stop);
+        const realtime = exactRealtime || addMinutesToHhmm(planned, delay);
+        if (!realtime) continue;
+
+        // On ne réécrit une cellule à l'heure que si le moteur natif affichait
+        // effectivement un retard. Sinon on laisse son HTML intact (voie, gras, etc.).
+        if (delay <= 0 && !cell.querySelector('.delayed')) {
+          cell.dataset.lbCanonicalTableSignature = [
+            planned, planned, 0, stop?.delay?.source || '', stop?.delay?.quality || '', train?.lifecycle || ''
+          ].join('|');
+          cell.dataset.lbCanonicalSource = String(stop?.delay?.source || '');
+          continue;
+        }
+
+        renderCanonicalTableCell(cell, planned, realtime, delay, stop, train);
+      }
+    });
+  };
+
   const installCanonicalDetailSync = () => {
     const panel = document.getElementById('trainDetailPanel');
     if (!panel || panel.dataset.lbCanonicalSync === '1') return;
@@ -370,6 +570,28 @@
     schedule();
   };
 
+  const installCanonicalTableSync = () => {
+    const host = document.getElementById('trainInfo');
+    if (!host || host.dataset.lbCanonicalTableSync === '1') return;
+    host.dataset.lbCanonicalTableSync = '1';
+
+    let frame = 0;
+    const schedule = () => {
+      if (frame) return;
+      frame = window.requestAnimationFrame(() => {
+        frame = 0;
+        syncTrainTableFromCanonical();
+      });
+    };
+
+    const observer = new MutationObserver(schedule);
+    observer.observe(host, { childList: true, subtree: true });
+    ['selectionDate', 'trainDate'].forEach((id) => {
+      document.getElementById(id)?.addEventListener('change', schedule);
+    });
+    schedule();
+  };
+
   const installLiveCardSync = () => {
     const host = document.getElementById('lbLiveTrainCards');
     if (!host || host.dataset.lbLiveCardSync === '1') return;
@@ -379,6 +601,7 @@
     const sync = () => {
       frame = 0;
       syncLivePresenceButtons(host);
+      syncLiveStatusFromCanonical(host);
       syncLiveDelayedArrivalTimes(host);
     };
     const scheduleSync = () => {
@@ -393,11 +616,13 @@
     refreshCanonicalSnapshot().then(() => {
       scheduleSync();
       syncTrainDetailFromCanonical();
+      syncTrainTableFromCanonical();
     });
     window.setInterval(() => {
       refreshCanonicalSnapshot(true).then(() => {
         scheduleSync();
         syncTrainDetailFromCanonical();
+        syncTrainTableFromCanonical();
       });
     }, CANONICAL_REFRESH_MS);
   };
@@ -405,9 +630,12 @@
   const install = () => {
     installLiveCardSync();
     installCanonicalDetailSync();
+    installCanonicalTableSync();
     refreshCanonicalSnapshot().then(() => {
+      syncLiveStatusFromCanonical(document);
       syncLiveDelayedArrivalTimes(document);
       syncTrainDetailFromCanonical();
+      syncTrainTableFromCanonical();
     });
   };
 
