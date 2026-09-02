@@ -31,19 +31,28 @@ python3 -m py_compile "$TMP/server.py" "$TMP/server-adapter-v2.py"
 python3 "$TMP/server.py" --fixture-test
 python3 "$TMP/server-adapter-v2.py" --adapter-fixture-test
 
-# Test avec LES VRAIES sources avant de remplacer le service. Ce self-test
-# construit aussi le cache GTFS local du jour : le redémarrage qui suit reste rapide.
+# Test avec LES VRAIES sources avant de remplacer le service. Les caches de test
+# sont isolés : un changement de normalisation ne réutilise jamais un ancien
+# registre/index uniquement parce que son TTL n'est pas écoulé.
 if [[ -f "$ENV_FILE" ]]; then
   set -a
   # shellcheck disable=SC1090
   . "$ENV_FILE"
   set +a
 fi
+LB_STATION_REGISTRY_CACHE="$TMP/station-registry.json" \
+LB_STATIC_GTFS_CACHE="$TMP/static-gtfs-current.pkl" \
 python3 "$TMP/server-adapter-v2.py" --self-test
 
 install -m 0644 "$TMP/server.py" "$TARGET/server.py"
 install -m 0644 "$TMP/server-adapter-v2.py" "$TARGET/server-adapter-v2.py"
 install -d -o ubuntu -g ubuntu "$TARGET/state"
+
+# Caches régénérables : on les invalide volontairement lors d'une mise à jour du
+# moteur afin que les nouvelles règles d'alias/GTFS s'appliquent immédiatement.
+rm -f \
+  "$TARGET/state/station-registry.json" \
+  "$TARGET/state/static-gtfs-current.pkl"
 
 rollback(){
   echo "ROLLBACK vers $BACKUP" >&2
@@ -107,11 +116,23 @@ for t in trains:
 assert checked > 0
 meta=s.get('meta') or {}
 static=meta.get('staticTimetable') or {}
-assert meta.get('staticTimetablePolicy') == 'local-gtfs-memory-index-v2', meta.get('staticTimetablePolicy')
+assert meta.get('staticTimetablePolicy') == 'local-gtfs-memory-index-v3', meta.get('staticTimetablePolicy')
 requested=int(static.get('requestedTrains') or 0)
 matched=int(static.get('matchedTrains') or 0)
 if requested > 0:
     assert matched > 0, static
+
+# Une réussite globale SNCF ne doit plus masquer une panne d'appariement CFL.
+# Pour un fournisseur avec un échantillon significatif, on exige au moins 80 %
+# d'appariement avant de considérer la migration comme sûre.
+for provider,info in (static.get('providers') or {}).items():
+    req=int(info.get('requestedTrains') or 0)
+    mat=int(info.get('matchedTrains') or 0)
+    if req >= 5:
+        assert mat * 100 >= req * 80, (
+            f"couverture GTFS insuffisante pour {provider}: {mat}/{req}", info
+        )
+
 print(f"OK canonique: {len(trains)} trains / {checked} arrêts vérifiés")
 print(
     "GTFS statique local: "
@@ -128,6 +149,11 @@ for provider,info in (static.get('providers') or {}).items():
         f"{info.get('tripCount',0)} trajets actifs · "
         f"{info.get('root') or 'racine inconnue'}"
     )
+print(
+    "Territoires inconnus: "
+    f"{meta.get('unknownTerritoryStopCount',0)} / "
+    f"registre={meta.get('stationRegistryCount',0)}"
+)
 if static.get('indexErrors'):
     print("ATTENTION index GTFS:", static.get('indexErrors')[:5])
 if static.get('errors'):
