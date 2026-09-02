@@ -17,6 +17,7 @@ import importlib.util
 import io
 import json
 import os
+import pickle
 import re
 import sys
 import threading
@@ -485,20 +486,30 @@ def commit_snapshot_with_completed(snap):
 
 core.commit_snapshot = commit_snapshot_with_completed
 
-# ---------- horaires planifiés GTFS SNCF ----------
-# On réutilise l'API statique déjà employée par les fiches/signalements. Elle ne
-# devient jamais une source temps réel : elle ne fournit que le planifié. Le
-# cache évite de refaire une requête pour chaque snapshot de 15 s.
-STATIC_TRAIN_BASE = os.getenv(
-    "LB_STATIC_TRAIN_BASE",
-    "https://vps.labetaillere.fr/api/train-static",
-).strip()
-STATIC_TIMETABLE_TTL = max(300, int(os.getenv("LB_STATIC_TIMETABLE_TTL_SEC", str(6 * 3600))))
-STATIC_TIMETABLE_ERROR_TTL = max(30, int(os.getenv("LB_STATIC_TIMETABLE_ERROR_TTL_SEC", "120")))
-STATIC_TIMETABLE_TIMEOUT = max(1.0, float(os.getenv("LB_STATIC_TIMETABLE_TIMEOUT_SEC", "5")))
-STATIC_TIMETABLE_WORKERS = max(1, min(8, int(os.getenv("LB_STATIC_TIMETABLE_WORKERS", "6"))))
-_static_timetable_cache = {}
-_static_timetable_lock = threading.Lock()
+# ---------- horaires planifiés GTFS locaux ----------
+# Le planifié ne repasse plus par /api/train-static : les fichiers GTFS présents
+# sur le VPS sont lus une seule fois, filtrés sur les services du jour puis mis
+# en cache. Ajouter un fournisseur revient à ajouter une entrée à cette table.
+STATIC_GTFS_CACHE = Path(os.getenv(
+    "LB_STATIC_GTFS_CACHE",
+    "/opt/labetaillere-data-v4/state/static-gtfs-current.pkl",
+))
+STATIC_GTFS_RECHECK_SEC = max(60, int(os.getenv("LB_STATIC_GTFS_RECHECK_SEC", "300")))
+STATIC_GTFS_PROVIDERS = {
+    "sncf": {
+        "operator": "SNCF",
+        "source": "SNCF_GTFS_STATIC",
+        "root": Path(os.getenv("LB_STATIC_GTFS_SNCF_DIR", "/var/www/html/gtfs/static")),
+    },
+    "cfl": {
+        "operator": "CFL",
+        "source": "CFL_GTFS_STATIC",
+        "root": Path(os.getenv("LB_STATIC_GTFS_CFL_DIR", "/var/www/html/gtfs/static/CFL")),
+    },
+}
+_static_gtfs_lock = threading.Lock()
+_static_gtfs_index = None
+_static_gtfs_checked_at = 0.0
 
 
 def static_row_name(row):
@@ -634,49 +645,7 @@ def choose_static_candidate(train, payload):
     return best if best is not None and best_overlap >= minimum else None
 
 
-def fetch_static_train(number, service_date):
-    number = norm_train(number)
-    service_date = str(service_date or "")
-    if not STATIC_TRAIN_BASE or not number or not re.fullmatch(r"20\d{2}-\d{2}-\d{2}", service_date):
-        return None, "configuration statique incomplète", False
-
-    cache_key = f"{service_date}:{number}"
-    now = time.time()
-    with _static_timetable_lock:
-        cached = _static_timetable_cache.get(cache_key)
-        if cached:
-            ttl = STATIC_TIMETABLE_TTL if cached.get("payload") is not None else STATIC_TIMETABLE_ERROR_TTL
-            if now - float(cached.get("storedAt") or 0) < ttl:
-                return cached.get("payload"), cached.get("error"), True
-
-    query = urllib.parse.urlencode({
-        "date": service_date.replace("-", ""),
-        "train": number,
-    })
-    separator = "&" if "?" in STATIC_TRAIN_BASE else "?"
-    url = f"{STATIC_TRAIN_BASE}{separator}{query}"
-    try:
-        req = urllib.request.Request(
-            url,
-            headers={"Accept": "application/json", "User-Agent": "labetaillere-data-v4-static/1.0"},
-        )
-        with urllib.request.urlopen(req, timeout=STATIC_TIMETABLE_TIMEOUT) as response:
-            payload = json.loads(response.read().decode("utf-8"))
-        error = None
-    except Exception as exc:
-        payload = None
-        error = str(exc)
-
-    with _static_timetable_lock:
-        _static_timetable_cache[cache_key] = {
-            "storedAt": now,
-            "payload": payload,
-            "error": error,
-        }
-    return payload, error, False
-
-
-def enrich_train_static(train, payload):
+def enrich_train_static(train, payload, source_label="SNCF_GTFS_STATIC"):
     candidate = choose_static_candidate(train, payload)
     if not candidate:
         return {"matched": False, "enrichedStops": 0, "derivedRealtimeFields": 0}
@@ -705,17 +674,17 @@ def enrich_train_static(train, payload):
 
         if planned_arrival:
             arrival["planned"] = planned_arrival
-            arrival["plannedSource"] = "SNCF_GTFS_STATIC"
+            arrival["plannedSource"] = source_label
             arrival["plannedQuality"] = "scheduled"
             touched = True
         if planned_departure:
             departure["planned"] = planned_departure
-            departure["plannedSource"] = "SNCF_GTFS_STATIC"
+            departure["plannedSource"] = source_label
             departure["plannedQuality"] = "scheduled"
             touched = True
 
         # Une heure réelle dérivée n'existe que si le RT de l'arrêt est réellement
-        # connu et frais. On n'interprète donc jamais « pas de RT » comme +0.
+        # connu et frais. Une absence de RT ne devient donc jamais artificiellement +0.
         delay = core.safe_num(stop.get("delayMinutes"))
         rt_known = bool(stop.get("realtimeKnown")) and stop.get("cancelled") is not True
         rt_fresh = (stop.get("delay") or {}).get("fresh") is not False
@@ -740,7 +709,7 @@ def enrich_train_static(train, payload):
 
     if enriched_stops:
         train["timetable"] = {
-            "source": "SNCF_GTFS_STATIC",
+            "source": source_label,
             "quality": "scheduled",
             "tripId": candidate.get("tripId"),
             "matched": True,
@@ -752,50 +721,339 @@ def enrich_train_static(train, payload):
     }
 
 
+def train_number_from_trip(provider, row):
+    if not isinstance(row, dict):
+        return ""
+    if provider == "cfl":
+        number = norm_train(row.get("trip_short_name"))
+        if number:
+            return number
+    trip_id = str(row.get("trip_id") or "")
+    match = re.search(r"OCESN(\d{3,6})F", trip_id)
+    if match:
+        return match.group(1).lstrip("0") or "0"
+    match = re.search(r"(?<!\d)(\d{4,6})(?!\d)", trip_id)
+    return (match.group(1).lstrip("0") or "0") if match else ""
+
+
+def provider_paths(provider):
+    cfg = STATIC_GTFS_PROVIDERS[provider]
+    root = Path(cfg["root"])
+    return {
+        "root": root,
+        "trips": root / "trips.txt",
+        "stop_times": root / "stop_times.txt",
+        "stops": root / "stops.txt",
+        "calendar": root / "calendar.txt",
+        "calendar_dates": root / "calendar_dates.txt",
+    }
+
+
+def active_services_for_date(paths, service_date):
+    compact = service_date.replace("-", "")
+    try:
+        target = core.datetime.strptime(compact, "%Y%m%d")
+    except Exception:
+        return None
+    weekday = ("monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday")[target.weekday()]
+    active = set()
+    calendar_seen = False
+    exceptions_seen = False
+
+    if paths["calendar"].exists():
+        calendar_seen = True
+        with paths["calendar"].open("r", encoding="utf-8-sig", newline="") as f:
+            for row in csv.DictReader(f):
+                service_id = str(row.get("service_id") or "").strip()
+                if not service_id:
+                    continue
+                start = str(row.get("start_date") or "")
+                end = str(row.get("end_date") or "")
+                if start <= compact <= end and str(row.get(weekday) or "0") == "1":
+                    active.add(service_id)
+
+    if paths["calendar_dates"].exists():
+        with paths["calendar_dates"].open("r", encoding="utf-8-sig", newline="") as f:
+            for row in csv.DictReader(f):
+                if str(row.get("date") or "").strip() != compact:
+                    continue
+                exceptions_seen = True
+                service_id = str(row.get("service_id") or "").strip()
+                try:
+                    exception_type = int(row.get("exception_type") or 0)
+                except (TypeError, ValueError):
+                    exception_type = 0
+                if exception_type == 1:
+                    active.add(service_id)
+                elif exception_type == 2:
+                    active.discard(service_id)
+
+    if not calendar_seen and not exceptions_seen:
+        return None
+    return active
+
+
+def static_gtfs_fingerprint(service_date):
+    pieces = [service_date]
+    for provider in sorted(STATIC_GTFS_PROVIDERS):
+        paths = provider_paths(provider)
+        for key in ("trips", "stop_times", "stops", "calendar", "calendar_dates"):
+            path = paths[key]
+            if key in ("trips", "stop_times", "stops") and not path.exists():
+                raise FileNotFoundError(f"{provider}: {path}")
+            if path.exists():
+                st = path.stat()
+                pieces.append(f"{provider}:{key}:{st.st_size}:{st.st_mtime_ns}")
+    return "|".join(pieces)
+
+
+def build_provider_static_index(provider, service_date):
+    cfg = STATIC_GTFS_PROVIDERS[provider]
+    paths = provider_paths(provider)
+    active_services = active_services_for_date(paths, service_date)
+    if active_services is None:
+        raise RuntimeError(f"{provider}: calendrier actif introuvable pour {service_date}")
+
+    stops = {}
+    with paths["stops"].open("r", encoding="utf-8-sig", newline="") as f:
+        for row in csv.DictReader(f):
+            stop_id = str(row.get("stop_id") or "").strip()
+            stop_name = str(row.get("stop_name") or "").strip()
+            if stop_id and stop_name and stop_id not in stops:
+                stops[stop_id] = stop_name
+
+    trip_ids = set()
+    by_train = {}
+    with paths["trips"].open("r", encoding="utf-8-sig", newline="") as f:
+        for row in csv.DictReader(f):
+            service_id = str(row.get("service_id") or "").strip()
+            if service_id not in active_services:
+                continue
+            trip_id = str(row.get("trip_id") or "").strip()
+            number = train_number_from_trip(provider, row)
+            if not trip_id or not number:
+                continue
+            trip_ids.add(trip_id)
+            by_train.setdefault(number, []).append(trip_id)
+
+    by_trip = {trip_id: [] for trip_id in trip_ids}
+    with paths["stop_times"].open("r", encoding="utf-8-sig", newline="") as f:
+        for row in csv.DictReader(f):
+            trip_id = str(row.get("trip_id") or "").strip()
+            if trip_id not in by_trip:
+                continue
+            stop_id = str(row.get("stop_id") or "").strip()
+            try:
+                sequence = int(row.get("stop_sequence") or 0)
+            except (TypeError, ValueError):
+                sequence = 0
+            by_trip[trip_id].append({
+                "trip_id": trip_id,
+                "stop_sequence": sequence,
+                "stop_id": stop_id,
+                "stop_name": stops.get(stop_id, stop_id),
+                "arrival_time": str(row.get("arrival_time") or "").strip(),
+                "departure_time": str(row.get("departure_time") or "").strip(),
+            })
+
+    empty = [trip_id for trip_id, rows in by_trip.items() if not rows]
+    for trip_id in empty:
+        by_trip.pop(trip_id, None)
+    if empty:
+        for number, ids in list(by_train.items()):
+            kept = [trip_id for trip_id in ids if trip_id in by_trip]
+            if kept:
+                by_train[number] = kept
+            else:
+                by_train.pop(number, None)
+
+    stop_time_count = sum(len(rows) for rows in by_trip.values())
+    return {
+        "operator": cfg["operator"],
+        "source": cfg["source"],
+        "root": str(paths["root"]),
+        "activeServiceCount": len(active_services),
+        "trainNumberCount": len(by_train),
+        "tripCount": len(by_trip),
+        "stopTimeCount": stop_time_count,
+        "byTrain": by_train,
+        "byTrip": by_trip,
+    }
+
+
+def load_static_gtfs_cache(fingerprint, service_date):
+    try:
+        if not STATIC_GTFS_CACHE.exists():
+            return None
+        with STATIC_GTFS_CACHE.open("rb") as f:
+            payload = pickle.load(f)
+        if not isinstance(payload, dict):
+            return None
+        if payload.get("fingerprint") != fingerprint or payload.get("serviceDate") != service_date:
+            return None
+        if not isinstance(payload.get("providers"), dict):
+            return None
+        payload["cacheReused"] = True
+        return payload
+    except Exception:
+        return None
+
+
+def write_static_gtfs_cache(payload):
+    try:
+        STATIC_GTFS_CACHE.parent.mkdir(parents=True, exist_ok=True)
+        tmp = STATIC_GTFS_CACHE.with_name(STATIC_GTFS_CACHE.name + ".tmp")
+        with tmp.open("wb") as f:
+            pickle.dump(payload, f, protocol=pickle.HIGHEST_PROTOCOL)
+        os.replace(tmp, STATIC_GTFS_CACHE)
+    except Exception:
+        pass
+
+
+def ensure_static_gtfs_index(service_date, force=False):
+    global _static_gtfs_index, _static_gtfs_checked_at
+    now = time.time()
+    with _static_gtfs_lock:
+        if (
+            not force
+            and isinstance(_static_gtfs_index, dict)
+            and _static_gtfs_index.get("serviceDate") == service_date
+            and (now - _static_gtfs_checked_at) < STATIC_GTFS_RECHECK_SEC
+        ):
+            return _static_gtfs_index
+
+        fingerprint = static_gtfs_fingerprint(service_date)
+        cached = load_static_gtfs_cache(fingerprint, service_date)
+        if cached:
+            _static_gtfs_index = cached
+            _static_gtfs_checked_at = now
+            return cached
+
+        started = time.perf_counter()
+        providers = {}
+        errors = []
+        for provider in STATIC_GTFS_PROVIDERS:
+            try:
+                providers[provider] = build_provider_static_index(provider, service_date)
+            except Exception as exc:
+                errors.append(f"{provider}: {exc}")
+
+        payload = {
+            "version": "local-current-day-v2",
+            "serviceDate": service_date,
+            "fingerprint": fingerprint,
+            "generatedAt": core.iso_utc(),
+            "buildMs": round((time.perf_counter() - started) * 1000),
+            "cacheReused": False,
+            "providers": providers,
+            "errors": errors,
+        }
+        if providers:
+            write_static_gtfs_cache(payload)
+        _static_gtfs_index = payload
+        _static_gtfs_checked_at = now
+        return payload
+
+
+def local_static_payload(train, static_index):
+    operator = str(train.get("operator") or "").upper()
+    provider = "sncf" if operator == "SNCF" else "cfl" if operator == "CFL" else None
+    if not provider:
+        return None, None, "fournisseur GTFS statique inconnu"
+    provider_index = (static_index.get("providers") or {}).get(provider)
+    if not isinstance(provider_index, dict):
+        return None, None, f"index {provider} indisponible"
+
+    number = norm_train(train.get("number"))
+    candidate_ids = []
+    exact = str(train.get("id") or "")
+    by_trip = provider_index.get("byTrip") or {}
+    by_train = provider_index.get("byTrain") or {}
+    if exact in by_trip:
+        candidate_ids.append(exact)
+    for trip_id in by_train.get(number, []):
+        if trip_id not in candidate_ids:
+            candidate_ids.append(trip_id)
+    candidate_ids = candidate_ids[:40]
+    rows = []
+    for trip_id in candidate_ids:
+        rows.extend(by_trip.get(trip_id) or [])
+    if not rows:
+        return None, provider_index.get("source"), "aucun trajet statique candidat"
+    return {"stop_times": rows}, provider_index.get("source"), None
+
+
 def enrich_snapshot_static_timetables(snapshot):
     trains = [
         train for train in (snapshot.get("trains") or [])
-        if str(train.get("operator") or "").upper() == "SNCF"
+        if str(train.get("operator") or "").upper() in ("SNCF", "CFL")
         and norm_train(train.get("number"))
         and train.get("serviceDate")
         and train.get("stops")
     ]
+    service_dates = sorted({str(train.get("serviceDate")) for train in trains if train.get("serviceDate")})
     stats = {
-        "source": "SNCF_GTFS_STATIC",
-        "endpoint": STATIC_TRAIN_BASE,
+        "source": "LOCAL_GTFS_STATIC",
+        "mode": "memory-index-current-day",
         "requestedTrains": len(trains),
         "matchedTrains": 0,
         "enrichedStops": 0,
         "derivedRealtimeFields": 0,
-        "cacheHits": 0,
         "errors": [],
+        "providers": {},
     }
-    if not trains or not STATIC_TRAIN_BASE:
+    if not trains:
+        stats["ok"] = True
+        return stats
+    if len(service_dates) != 1:
+        stats["errors"].append(f"dates de service multiples: {service_dates}")
+        stats["ok"] = False
         return stats
 
-    def load(train):
-        payload, error, cache_hit = fetch_static_train(train.get("number"), train.get("serviceDate"))
-        return train, payload, error, cache_hit
+    service_date = service_dates[0]
+    try:
+        static_index = ensure_static_gtfs_index(service_date)
+    except Exception as exc:
+        stats["errors"].append(str(exc))
+        stats["ok"] = False
+        return stats
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=STATIC_TIMETABLE_WORKERS) as pool:
-        futures = [pool.submit(load, train) for train in trains]
-        for future in concurrent.futures.as_completed(futures):
-            try:
-                train, payload, error, cache_hit = future.result()
-            except Exception as exc:
-                stats["errors"].append(str(exc))
-                continue
-            if cache_hit:
-                stats["cacheHits"] += 1
-            if error:
-                if len(stats["errors"]) < 12:
-                    stats["errors"].append(f"{train.get('number')}: {error}")
-                continue
-            result = enrich_train_static(train, payload)
-            if result["matched"]:
-                stats["matchedTrains"] += 1
-            stats["enrichedStops"] += result["enrichedStops"]
-            stats["derivedRealtimeFields"] += result["derivedRealtimeFields"]
+    stats["serviceDate"] = service_date
+    stats["indexVersion"] = static_index.get("version")
+    stats["indexBuildMs"] = static_index.get("buildMs")
+    stats["cacheReused"] = bool(static_index.get("cacheReused"))
+    stats["indexErrors"] = static_index.get("errors") or []
+    for provider, info in (static_index.get("providers") or {}).items():
+        stats["providers"][provider] = {
+            "root": info.get("root"),
+            "source": info.get("source"),
+            "activeServiceCount": info.get("activeServiceCount"),
+            "trainNumberCount": info.get("trainNumberCount"),
+            "tripCount": info.get("tripCount"),
+            "stopTimeCount": info.get("stopTimeCount"),
+            "requestedTrains": 0,
+            "matchedTrains": 0,
+            "enrichedStops": 0,
+        }
+
+    for train in trains:
+        provider = "sncf" if str(train.get("operator") or "").upper() == "SNCF" else "cfl"
+        provider_stats = stats["providers"].setdefault(provider, {
+            "requestedTrains": 0, "matchedTrains": 0, "enrichedStops": 0
+        })
+        provider_stats["requestedTrains"] = int(provider_stats.get("requestedTrains") or 0) + 1
+        payload, source_label, error = local_static_payload(train, static_index)
+        if error:
+            if len(stats["errors"]) < 20:
+                stats["errors"].append(f"{train.get('number')}: {error}")
+            continue
+        result = enrich_train_static(train, payload, source_label or "GTFS_STATIC")
+        if result["matched"]:
+            stats["matchedTrains"] += 1
+            provider_stats["matchedTrains"] = int(provider_stats.get("matchedTrains") or 0) + 1
+        stats["enrichedStops"] += result["enrichedStops"]
+        provider_stats["enrichedStops"] = int(provider_stats.get("enrichedStops") or 0) + result["enrichedStops"]
+        stats["derivedRealtimeFields"] += result["derivedRealtimeFields"]
 
     stats["ok"] = stats["matchedTrains"] > 0 or stats["requestedTrains"] == 0
     return stats
@@ -829,7 +1087,7 @@ def patched_build(payloads, source_meta=None):
 core.build_snapshot_from_payloads = patched_build
 
 # On enrichit uniquement les vrais snapshots du moteur. Les fixtures unitaires
-# restent 100 % locales et ne dépendent donc jamais de l'API statique.
+# restent 100 % locales et ne dépendent jamais d'un endpoint HTTP.
 _original_build_snapshot = core.build_snapshot
 
 
@@ -837,7 +1095,7 @@ def build_snapshot_with_static_timetable():
     snapshot = _original_build_snapshot()
     static_stats = enrich_snapshot_static_timetables(snapshot)
     meta = snapshot.setdefault("meta", {})
-    meta["staticTimetablePolicy"] = "sncf-train-static-cache-v1"
+    meta["staticTimetablePolicy"] = "local-gtfs-memory-index-v2"
     meta["staticTimetable"] = static_stats
     meta["plannedStopCount"] = sum(
         1
@@ -888,6 +1146,8 @@ def adapter_fixture_test():
     assert country_from_ids("StopArea:OCE87191007") == ("FR", "SNCF")
     assert country_from_ids("StopArea:OCE82006030") == ("LU", "CFL")
     assert country_from_ids("StopArea:OCE80253914") == ("DE", "DB")
+    assert train_number_from_trip("sncf", {"trip_id": "OCESN88742F1187"}) == "88742"
+    assert train_number_from_trip("cfl", {"trip_short_name": "RE 411", "trip_id": "x"}) == "411"
 
     snap = patched_build(
         {"sncfRt": direct, "cflRt": {}, "cflArrivals": {}, "traffic": {}, "compositions": {}},
@@ -910,7 +1170,7 @@ def adapter_fixture_test():
             {"trip_id": "fixture", "stop_sequence": 3, "stop_name": "Luxembourg", "arrival_time": "10:00:00", "departure_time": "10:00:00"},
         ]
     }
-    enriched = enrich_train_static(t, fixture_static)
+    enriched = enrich_train_static(t, fixture_static, "SNCF_GTFS_STATIC")
     assert enriched["matched"] is True
     assert metz["departure"]["planned"] == "09:03:00"
     assert metz["departure"]["realtime"] == "09:03"
@@ -919,7 +1179,7 @@ def adapter_fixture_test():
 
     print(json.dumps({
         "ok": True,
-        "adapter": "sncf-v7-static-timetable-history",
+        "adapter": "sncf-v8-local-gtfs-index-history",
         "stationRegistryCount": len(GTFS_STATION_REGISTRY),
         "registryErrors": GTFS_REGISTRY_META.get("errors") or [],
         "staticFixture": enriched,
