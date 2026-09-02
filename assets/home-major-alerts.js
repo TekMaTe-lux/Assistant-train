@@ -54,11 +54,27 @@
     return `${String(Math.floor(total / 60)).padStart(2, '0')}:${String(total % 60).padStart(2, '0')}`;
   };
 
-  const canonicalTrainByNumber = (number) => {
+  const canonicalTrainByNumber = (number, serviceDate = '', includeCompleted = true) => {
     const wanted = normalizeTrainNumber(number);
     if (!wanted || !Array.isArray(canonicalSnapshot?.trains)) return null;
-    return canonicalSnapshot.trains.find((train) => normalizeTrainNumber(train?.number) === wanted) || null;
+    const wantedDate = /^\d{4}-\d{2}-\d{2}$/.test(String(serviceDate || ''))
+      ? String(serviceDate)
+      : '';
+    const sameTrain = (train) => {
+      if (normalizeTrainNumber(train?.number) !== wanted) return false;
+      return !wantedDate || !train?.serviceDate || train.serviceDate === wantedDate;
+    };
+
+    const current = canonicalSnapshot.trains.find(sameTrain);
+    if (current || !includeCompleted) return current || null;
+
+    const completed = Array.isArray(canonicalSnapshot?.completedTrains)
+      ? canonicalSnapshot.completedTrains
+      : [];
+    return completed.find(sameTrain) || null;
   };
+
+  const canonicalCurrentTrainByNumber = (number) => canonicalTrainByNumber(number, '', false);
 
   const canonicalStopByName = (train, name) => {
     const wanted = normalizeStation(name);
@@ -101,11 +117,12 @@
   window.lbCanonicalV4 = {
     refresh: refreshCanonicalSnapshot,
     get snapshot(){ return canonicalSnapshot; },
-    getTrain: canonicalTrainByNumber
+    getTrain: canonicalTrainByNumber,
+    getCurrentTrain: canonicalCurrentTrainByNumber
   };
 
   const canonicalDestinationDelay = (trainNumber, destination) => {
-    const canonicalTrain = canonicalTrainByNumber(trainNumber);
+    const canonicalTrain = canonicalCurrentTrainByNumber(trainNumber);
     if (!canonicalTrain?.realtimePresence || canonicalTrain?.realtimePresenceFresh === false) return null;
     const stop = canonicalStopByName(canonicalTrain, destination || canonicalTrain?.destination?.name);
     if (!stop || stop.cancelled || !stop.realtimeKnown) return null;
@@ -207,7 +224,7 @@
       if (!match) return;
       const prefix = match[1];
       const plannedArrival = match[2];
-      const canonicalTrain = canonicalTrainByNumber(trainNumber);
+      const canonicalTrain = canonicalCurrentTrainByNumber(trainNumber);
       const canonicalStop = canonicalStopByName(canonicalTrain, train.to);
       const exactRealtime = shortTime(canonicalStop?.arrival?.realtime || canonicalStop?.departure?.realtime);
       const realtimeArrival = exactRealtime || addMinutesToHhmm(plannedArrival, delay);
@@ -243,6 +260,11 @@
     });
   };
 
+  const selectedTrainServiceDate = () => {
+    const value = String(document.getElementById('trainDate')?.value || '').trim();
+    return /^\d{4}-\d{2}-\d{2}$/.test(value) ? value : '';
+  };
+
   const syncTrainDetailFromCanonical = () => {
     const panel = document.getElementById('trainDetailPanel');
     const host = document.getElementById('trainDetailStops');
@@ -255,8 +277,15 @@
     const match = title.match(/\b(\d{3,6})\b/);
     if (!match) return;
     const trainNumber = normalizeTrainNumber(match[1]);
-    const train = canonicalTrainByNumber(trainNumber);
+    const train = canonicalTrainByNumber(trainNumber, selectedTrainServiceDate(), true);
     if (!train || !Array.isArray(train.stops)) return;
+
+    const liveStatus = document.getElementById('trainDetailLiveStatus');
+    if (train.lifecycle === 'completed' && liveStatus) {
+      const finalDelay = Math.max(0, Math.round(Number(train.delayMinutes) || 0));
+      liveStatus.className = 'lb-train-profile__status';
+      liveStatus.innerHTML = `<i></i> TERMINÉ${finalDelay > 0 ? ` · +${finalDelay} MIN` : ''}`;
+    }
 
     host.querySelectorAll('.lb-train-profile__stop').forEach((row) => {
       const name = String(row.querySelector('.lb-train-profile__stop-name strong')?.textContent || '').trim();
@@ -280,7 +309,7 @@
 
       const exactRealtime = shortTime(stop?.arrival?.realtime || stop?.departure?.realtime);
       const realtime = exactRealtime || addMinutesToHhmm(planned, delay);
-      const signature = `${planned}|${delay}|${realtime}|${stop?.delay?.source || ''}|${stop?.delay?.quality || ''}`;
+      const signature = `${planned}|${delay}|${realtime}|${stop?.delay?.source || ''}|${stop?.delay?.quality || ''}|${train.lifecycle || ''}`;
       if (row.dataset.lbCanonicalSignature === signature) return;
 
       let badge = row.querySelector('.lb-train-profile__delay');
@@ -308,9 +337,11 @@
 
       row.dataset.lbCanonicalSignature = signature;
       row.dataset.lbCanonicalSource = String(stop?.delay?.source || '');
-      row.title = stop?.delay?.quality === 'fallback_official'
-        ? 'Temps réel harmonisé · source officielle de secours'
-        : 'Temps réel harmonisé · autorité territoriale';
+      row.title = train.lifecycle === 'completed'
+        ? 'État final conservé par La Bétaillère'
+        : stop?.delay?.quality === 'fallback_official'
+          ? 'Temps réel harmonisé · source officielle de secours'
+          : 'Temps réel harmonisé · autorité territoriale';
     });
   };
 
