@@ -1,0 +1,89 @@
+--- a/map-v2/public/carte-core-preview.html
++++ b/map-v2/public/carte-core-preview.html
+@@ -5037,6 +5037,10 @@
+   const trainCowById = new Map();
+   const trainDataById = new Map();
+   const trainMotionById = new Map();
++  // Une collecte peut omettre brièvement un train entre deux instantanés.
++  // Ne jamais fermer immédiatement une fiche que l'utilisateur vient d'ouvrir.
++  const SELECTED_TRAIN_MISSING_GRACE_MS = 30000;
++  let selectedTrainMissingSince = 0;
+ 
+ 
+   // --- Perf: éviter de recréer l'icône et de déplacer le marker si rien n'a changé ---
+@@ -8050,6 +8054,7 @@
+ 
+   function clearActiveSelection(){
+     activeTripId = null;
++    selectedTrainMissingSince = 0;
+     document.body.classList.remove('train-trip-open');
+     document.querySelectorAll('.cow-marker.train-selected')
+       .forEach(el => el.classList.remove('train-selected'));
+@@ -8058,6 +8063,11 @@
+     clearSelectedTripRoute();
+   }
+ 
++  // Leaflet et le DOM peuvent produire pointerdown + click + map click pour un
++  // seul geste. Cette garde empêche le clic de fond de refermer la fiche.
++  let berLastMarkerActivationAt = 0;
++  let berLastMarkerActivationId = null;
++
+   function handleTripPanelClose(ev){
+     if (ev){
+       ev.preventDefault();
+@@ -8093,6 +8103,7 @@
+   }
+ 
+   map.on('click', ()=>{  
++   if (Date.now() - berLastMarkerActivationAt < 700) return;
+    if (activeTripId || activeStationId){
+       clearActiveSelection();
+       hideTripPanel();
+@@ -8204,7 +8215,12 @@
+     ev.preventDefault();
+     ev.stopPropagation();
+     const id = btn.getAttribute('data-train-id');
+-    if (id) openTripPanel(id);
++    if (!id) return;
++    const now = Date.now();
++    if (berLastMarkerActivationId === id && now - berLastMarkerActivationAt < 500) return;
++    berLastMarkerActivationAt = now;
++    berLastMarkerActivationId = id;
++    openTripPanel(id);
+   }
+ 
+   function handleStationActivate(ev){
+@@ -8213,7 +8229,10 @@
+     ev.preventDefault();
+     ev.stopPropagation();
+     const id = btn.getAttribute('data-station-id');
+-    if (id) openStationPanel(id);
++    if (!id) return;
++    berLastMarkerActivationAt = Date.now();
++    berLastMarkerActivationId = `station:${id}`;
++    openStationPanel(id);
+   }
+   
+   mapContainerEl.addEventListener('pointerdown', handleTrainActivate, { passive:false });
+@@ -12415,6 +12434,7 @@
+ 
+     for (const t of list){
+       seen.add(t.id);
++      if (activeTripId === t.id) selectedTrainMissingSince = 0;
+       const delayInfo = computeTrainDelayInfo(t);
+       t.delayInfo = delayInfo;
+       const labelWithTrain = formatTrainLabel(t, { includeTrainWord:true, fallbackId:t.id });
+@@ -12520,6 +12540,13 @@
+    // nettoyage des marqueurs disparus
+     for (const [id,mk] of trainMarkers.entries()){
+       if(!seen.has(id)){
++        if (activeTripId === id){
++          const now = Date.now();
++          if (!selectedTrainMissingSince) selectedTrainMissingSince = now;
++          if (now - selectedTrainMissingSince < SELECTED_TRAIN_MISSING_GRACE_MS){
++            continue;
++          }
++        }
+         if (overlay.trains){
+           overlay.trains.removeLayer(mk);
+         }
