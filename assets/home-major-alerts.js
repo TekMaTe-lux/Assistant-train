@@ -17,4 +17,7 @@
 
   // Pont gare dynamique Luxembourg -> fiche train #BER.
   load('./assets/lux-train-sheet.js?v=20260826-1', 'lb-lux-train-sheet');
+
+  // Signalement LIVE : toujours proposer le parcours complet, jamais seulement l'origine/destination.
+  load('./assets/signal-stations-fix.js?v=20260902-1', 'lb-signal-stations-fix');
 })();
