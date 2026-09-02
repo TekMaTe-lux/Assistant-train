@@ -11,7 +11,6 @@ Rôles :
   l'autorité temps réel ni transformer une absence de RT en « à l'heure ».
 """
 
-import concurrent.futures
 import csv
 import importlib.util
 import io
@@ -22,7 +21,6 @@ import re
 import sys
 import threading
 import time
-import urllib.parse
 import urllib.request
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -252,8 +250,29 @@ def policy_for_country(country_network):
     }
 
 
+def station_match_key(name):
+    """Clé inter-sources sans altérer le libellé affiché.
+
+    Les GTFS CFL publient notamment « Luxembourg, Gare Centrale »,
+    « Bettembourg, Gare » ou « Belval (Université), Gare », alors que HAFAS
+    renvoie « Luxembourg », « Bettembourg » et « Belval-Université ».
+    Cette clé ne sert qu'aux appariements/alias ; elle ne renomme jamais la gare.
+    """
+    key = core.canonical_station(name)
+    if not key:
+        return ""
+    key = re.sub(r",\s*gare(?:\s+centrale)?\s*$", "", key, flags=re.I)
+    key = re.sub(r"\s*\(([^)]+)\)", r"-\1", key)
+    key = key.replace(",", " ")
+    key = re.sub(r"[^a-z0-9' -]+", " ", key)
+    key = re.sub(r"\s*-\s*", "-", key)
+    key = re.sub(r"\s+", " ", key)
+    return key.strip(" -")
+
+
 def registry_from_csv(text, provider):
     out = {}
+    conflicts = set()
     reader = csv.DictReader(io.StringIO(text))
     for row in reader:
         if not isinstance(row, dict):
@@ -278,12 +297,19 @@ def registry_from_csv(text, provider):
         if not policy:
             continue
 
-        key = core.canonical_station(name)
-        existing = out.get(key)
-        if existing and existing.get("country") != policy.get("country"):
-            out.pop(key, None)
-            continue
-        out[key] = policy
+        keys = {
+            core.canonical_station(name),
+            station_match_key(name),
+        }
+        for key in {k for k in keys if k}:
+            if key in conflicts:
+                continue
+            existing = out.get(key)
+            if existing and existing.get("country") != policy.get("country"):
+                out.pop(key, None)
+                conflicts.add(key)
+                continue
+            out[key] = policy
     return out
 
 
@@ -355,6 +381,16 @@ def safe_station_policy(name, source_hint=None):
     registered = _original_station_policy(name, None)
     if any(registered.get(k) is not None for k in ("country", "network", "realtimeAuthority")):
         return registered
+
+    alias = station_match_key(name)
+    if alias:
+        policy = core.STATION_AUTHORITIES.get(alias)
+        if policy:
+            return {
+                "country": policy.get("country"),
+                "network": policy.get("network"),
+                "realtimeAuthority": policy.get("realtimeAuthority"),
+            }
 
     if source_hint == "cfl":
         return {"country": None, "network": "CFL", "realtimeAuthority": "cfl"}
@@ -559,6 +595,24 @@ def static_time_value(row, kind):
     return None
 
 
+def gtfs_clock_minutes(value):
+    match = re.match(r"^(\d{1,3}):(\d{2})(?::(\d{2}))?", str(value or "").strip())
+    if not match:
+        return None
+    return int(match.group(1)) * 60 + int(match.group(2))
+
+
+def clock_distance_minutes(a, b):
+    left = gtfs_clock_minutes(a)
+    right = gtfs_clock_minutes(b)
+    if left is None or right is None:
+        return None
+    left %= 1440
+    right %= 1440
+    diff = abs(left - right)
+    return min(diff, 1440 - diff)
+
+
 def add_delay_to_gtfs_clock(value, delay_minutes):
     match = re.match(r"^(\d{1,3}):(\d{2})(?::(\d{2}))?", str(value or "").strip())
     delay = core.safe_num(delay_minutes)
@@ -606,10 +660,46 @@ def static_candidates(payload):
     return out
 
 
+def candidate_time_score(train, rows):
+    rows_by_station = {}
+    for row in rows:
+        key = station_match_key(static_row_name(row))
+        if key and key not in rows_by_station:
+            rows_by_station[key] = row
+
+    score = 0
+    anchors = 0
+    for stop in train.get("stops") or []:
+        key = station_match_key(stop.get("name"))
+        row = rows_by_station.get(key)
+        if not row:
+            continue
+        arrival = stop.get("arrival") if isinstance(stop.get("arrival"), dict) else {}
+        departure = stop.get("departure") if isinstance(stop.get("departure"), dict) else {}
+        pairs = (
+            (arrival.get("planned"), static_time_value(row, "arrival")),
+            (departure.get("planned"), static_time_value(row, "departure")),
+        )
+        for observed, scheduled in pairs:
+            distance = clock_distance_minutes(observed, scheduled)
+            if distance is None:
+                continue
+            anchors += 1
+            if distance <= 1:
+                score += 45
+            elif distance <= 3:
+                score += 30
+            elif distance <= 7:
+                score += 12
+            elif distance >= 20:
+                score -= 25
+    return score, anchors
+
+
 def choose_static_candidate(train, payload):
     candidates = static_candidates(payload)
     target_stops = [
-        core.canonical_station(stop.get("name"))
+        station_match_key(stop.get("name"))
         for stop in (train.get("stops") or [])
         if stop.get("name")
     ]
@@ -618,24 +708,29 @@ def choose_static_candidate(train, payload):
         return None
     target_set = set(target_stops)
     train_id = str(train.get("id") or "")
+    ordered_route = str(train.get("operator") or "").upper() != "CFL"
 
     best = None
     best_score = -10**9
     best_overlap = 0
     for candidate in candidates:
         rows = candidate["rows"]
-        keys = [core.canonical_station(static_row_name(row)) for row in rows]
+        keys = [station_match_key(static_row_name(row)) for row in rows]
         keys = [key for key in keys if key]
         if not keys:
             continue
         overlap = sum(1 for key in keys if key in target_set)
         score = overlap * 20 - abs(len(keys) - len(target_stops)) * 2
-        if keys[0] == target_stops[0]:
+        if ordered_route and keys[0] == target_stops[0]:
             score += 35
-        if keys[-1] == target_stops[-1]:
+        if ordered_route and keys[-1] == target_stops[-1]:
             score += 35
         if train_id and candidate["tripId"] == train_id:
             score += 150
+        time_score, time_anchors = candidate_time_score(train, rows)
+        score += time_score
+        if time_anchors:
+            candidate = dict(candidate, timeAnchors=time_anchors)
         if score > best_score:
             best_score = score
             best_overlap = overlap
@@ -652,14 +747,14 @@ def enrich_train_static(train, payload, source_label="SNCF_GTFS_STATIC"):
 
     rows_by_station = {}
     for row in candidate["rows"]:
-        key = core.canonical_station(static_row_name(row))
+        key = station_match_key(static_row_name(row))
         if key and key not in rows_by_station:
             rows_by_station[key] = row
 
     enriched_stops = 0
     derived_fields = 0
     for stop in train.get("stops") or []:
-        key = core.canonical_station(stop.get("name"))
+        key = station_match_key(stop.get("name"))
         row = rows_by_station.get(key)
         if not row:
             continue
@@ -713,6 +808,7 @@ def enrich_train_static(train, payload, source_label="SNCF_GTFS_STATIC"):
             "quality": "scheduled",
             "tripId": candidate.get("tripId"),
             "matched": True,
+            "matchPolicy": "station-alias+time-v1",
         }
     return {
         "matched": enriched_stops > 0,
@@ -939,7 +1035,7 @@ def ensure_static_gtfs_index(service_date, force=False):
                 errors.append(f"{provider}: {exc}")
 
         payload = {
-            "version": "local-current-day-v2",
+            "version": "local-current-day-v3",
             "serviceDate": service_date,
             "fingerprint": fingerprint,
             "generatedAt": core.iso_utc(),
@@ -1072,7 +1168,7 @@ def patched_build(payloads, source_meta=None):
     meta["sncfFormat"] = path
     meta["sncfRecordCount"] = seen
     meta["sncfNormalizedCount"] = len(normalized)
-    meta["territoryPolicy"] = "gtfs-static-uic-registry-v2"
+    meta["territoryPolicy"] = "gtfs-static-uic-registry-alias-v3"
     meta["stationRegistryCount"] = len(GTFS_STATION_REGISTRY)
     meta["stationRegistry"] = GTFS_REGISTRY_META
     meta["unknownTerritoryStopCount"] = sum(
@@ -1095,7 +1191,7 @@ def build_snapshot_with_static_timetable():
     snapshot = _original_build_snapshot()
     static_stats = enrich_snapshot_static_timetables(snapshot)
     meta = snapshot.setdefault("meta", {})
-    meta["staticTimetablePolicy"] = "local-gtfs-memory-index-v2"
+    meta["staticTimetablePolicy"] = "local-gtfs-memory-index-v3"
     meta["staticTimetable"] = static_stats
     meta["plannedStopCount"] = sum(
         1
@@ -1148,6 +1244,9 @@ def adapter_fixture_test():
     assert country_from_ids("StopArea:OCE80253914") == ("DE", "DB")
     assert train_number_from_trip("sncf", {"trip_id": "OCESN88742F1187"}) == "88742"
     assert train_number_from_trip("cfl", {"trip_short_name": "RE 411", "trip_id": "x"}) == "411"
+    assert station_match_key("Luxembourg, Gare Centrale") == station_match_key("Luxembourg") == "luxembourg"
+    assert station_match_key("Bettembourg, Gare") == station_match_key("Bettembourg") == "bettembourg"
+    assert station_match_key("Belval (Université), Gare") == station_match_key("Belval-Université") == "belval-universite"
 
     snap = patched_build(
         {"sncfRt": direct, "cflRt": {}, "cflArrivals": {}, "traffic": {}, "compositions": {}},
@@ -1177,12 +1276,36 @@ def adapter_fixture_test():
     assert metz["departure"]["realtimeDerived"] is True
     assert lux["arrival"]["planned"] == "10:00:00"
 
+    cfl_fixture_train = {
+        "id": "CFL:6839:fixture",
+        "number": "6839",
+        "operator": "CFL",
+        "stops": [
+            {"name": "Pétange", "arrival": {}, "departure": {}, "delay": {"fresh": True}, "delayMinutes": 0, "realtimeKnown": True, "cancelled": False},
+            {"name": "Belval-Lycée", "arrival": {}, "departure": {}, "delay": {"fresh": True}, "delayMinutes": 0, "realtimeKnown": True, "cancelled": False},
+            {"name": "Luxembourg", "arrival": {"planned": "14:00"}, "departure": {}, "delay": {"fresh": True}, "delayMinutes": 0, "realtimeKnown": True, "cancelled": False},
+        ],
+    }
+    cfl_fixture_static = {
+        "stop_times": [
+            {"trip_id": "24332025", "stop_sequence": 1, "stop_name": "Pétange, Gare", "arrival_time": "13:07:00", "departure_time": "13:07:00"},
+            {"trip_id": "24332025", "stop_sequence": 2, "stop_name": "Belval (Lycée), Gare", "arrival_time": "13:24:00", "departure_time": "13:24:00"},
+            {"trip_id": "24332025", "stop_sequence": 3, "stop_name": "Luxembourg, Gare Centrale", "arrival_time": "14:00:00", "departure_time": "14:06:00"},
+        ]
+    }
+    cfl_enriched = enrich_train_static(cfl_fixture_train, cfl_fixture_static, "CFL_GTFS_STATIC")
+    assert cfl_enriched["matched"] is True
+    assert cfl_enriched["enrichedStops"] == 3
+    assert cfl_fixture_train["stops"][2]["arrival"]["planned"] == "14:00:00"
+    assert cfl_fixture_train["timetable"]["tripId"] == "24332025"
+
     print(json.dumps({
         "ok": True,
-        "adapter": "sncf-v8-local-gtfs-index-history",
+        "adapter": "sncf-v9-cfl-station-aliases-local-gtfs-history",
         "stationRegistryCount": len(GTFS_STATION_REGISTRY),
         "registryErrors": GTFS_REGISTRY_META.get("errors") or [],
         "staticFixture": enriched,
+        "cflStaticFixture": cfl_enriched,
     }, ensure_ascii=False))
 
 
