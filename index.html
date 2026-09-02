@@ -473,6 +473,18 @@ document.addEventListener('DOMContentLoaded', () => {
   text-shadow: 0 0 8px rgba(57,168,255,.72), 0 0 14px rgba(57,168,255,.34) !important;
 }
 
+/* Une gare non desservie reste rouge et barrée dans tous les thèmes.
+   La couleur ne doit pas dépendre du mode visuel actif. */
+#trainInfo td > .deleted {
+  color: #ff3045 !important;
+  -webkit-text-fill-color: #ff3045 !important;
+  font-weight: 900 !important;
+  text-decoration-line: line-through !important;
+  text-decoration-color: #ff3045 !important;
+  text-decoration-thickness: 2px !important;
+  opacity: 1 !important;
+}
+
 /* Même code couleur dans la fiche : retard orange, terminus bleu, tronçon supprimé rouge. */
 #trainDetailStops .lb-train-profile__stop.is-effective-endpoint .lb-train-profile__times s {
   color: #ffffff !important;
@@ -8930,6 +8942,15 @@ const stopHasSchedule = (result, stopName) => {
           result.newStart !== result.train.stop_times[0]?.stop_point?.id &&
           ((stop && stop.stop_point?.id === result.newStart) || (imp?.stop_point?.id === result.newStart));
 
+        // La limite du parcours réellement assuré est prioritaire sur les statuts
+        // d'une seule jambe. À la gare d'origine théorique, SNCF peut conserver une
+        // "arrivée" technique tout en supprimant le départ. Si un nouveau départ est
+        // identifié plus loin, cette gare est supprimée : ce n'est pas un terminus.
+        // Cas réel 88503 : Nancy, Pont-à-Mousson et Pagny supprimés, départ Metz.
+        const isOutsideEffectiveService =
+          (newStartIndex >= 0 && index >= 0 && index < newStartIndex) ||
+          (newEndIndex >= 0 && index >= 0 && index > newEndIndex);
+
         // === ARRÊT AJOUTÉ ===
         const isAddedStop =
           !!amended &&
@@ -8960,7 +8981,7 @@ const stopHasSchedule = (result, stopName) => {
         const hasStopDeletedStatus = (entry) => {
           if (!entry) return false;
           // Ne jamais transformer une suppression d'un seul mouvement en suppression de la gare.
-          // Ex. 88503 à Metz : arrivée retardée/maintenue, départ supprimé = terminus exceptionnel.
+          // Ex. 88501 à Thionville : arrivée maintenue, départ supprimé = terminus exceptionnel.
           const hasPreciseStatuses = !!entry.arrival_status || !!entry.departure_status;
           if (hasPreciseStatuses) {
             return entry.arrival_status === 'deleted' && entry.departure_status === 'deleted';
@@ -9024,6 +9045,7 @@ const stopHasSchedule = (result, stopName) => {
             return !!s.departure_time;
           });
         const isDepartureKeptArrivalDeletedNewStart = !!imp
+          && !isOutsideEffectiveService
           && !isDepartureReallyDeleted(imp, stop)
           && isArrivalReallyDeleted(imp, stop)
           && !!(imp.amended_departure_time || imp.base_departure_time || stop?.departure_time)
@@ -9049,9 +9071,10 @@ const stopHasSchedule = (result, stopName) => {
 
         // SNCF : une arrivée maintenue/amendée avec un départ supprimé à un arrêt
         // intermédiaire signifie explicitement que cet arrêt devient le terminus réel.
-        // Exemple 88503 : Metz arrive 08:10 (base 07:30), départ supprimé ;
-        // Hagondange/Uckange/Thionville sont ensuite supprimés.
+        // Exemple : une arrivée maintenue à la dernière gare réellement desservie,
+        // suivie d'un départ supprimé et d'une queue d'arrêts supprimés.
         const isSncfExplicitPartialTerminal = !!imp
+          && !isOutsideEffectiveService
           && imp.arrival_status !== 'deleted'
           && imp.departure_status === 'deleted'
           && !!imp.amended_arrival_time
@@ -9060,6 +9083,7 @@ const stopHasSchedule = (result, stopName) => {
 
         const isArrivalKeptDepartureDeletedTerminal = isSncfExplicitPartialTerminal || (
           !!imp
+          && !isOutsideEffectiveService
           && !isArrivalReallyDeleted(imp, stop)
           && isDepartureReallyDeleted(imp, stop)
           && !!(imp.amended_arrival_time || imp.base_arrival_time || stop?.arrival_time)
@@ -9099,8 +9123,7 @@ const stopHasSchedule = (result, stopName) => {
           content = `${baseStrike}<span class="new-start">${mainTimeRaw}</span>`;
         } else if (
           isStopDeleted ||
-          (newStartIndex >= 0 && index >= 0 && index < newStartIndex) ||
-          (newEndIndex   >= 0 && index >= 0 && index > newEndIndex)
+          isOutsideEffectiveService
         ) {
           content = `<span class="deleted">${content}</span>`;
         } else if (amended && dl(base, amended) > 0) {
@@ -26904,7 +26927,7 @@ async function loadAffluenceDate(dateStr){
       ? (row?.arrival || row?.departure || '—')
       : (row?.departure || row?.arrival || '—');
     // Une heure SNCF amendée est plus précise qu'un simple décalage GTFS-RT.
-    // Ex. 88503 à Metz : arrivée 07:30 → 08:10, sans départ après Metz.
+    // Une heure SNCF amendée reste prioritaire sur un simple décalage GTFS-RT.
     const sncf = sncfRealtimeAtRow(row, liveBundle, isLast);
     if (sncf.known) return sncf;
     const gtfs = liveBundle
@@ -27068,8 +27091,9 @@ async function loadAffluenceDate(dateStr){
     : '';
 
   // Les statuts SNCF arrivée/départ ont priorité sur stop_time_effect.
-  // Exemple 88503 : arrivée à Metz maintenue/retardée, départ de Metz supprimé,
-  // puis Hagondange/Uckange/Thionville supprimés => terminus exceptionnel Metz.
+  // Les statuts SNCF arrivée/départ déterminent le parcours réellement assuré.
+  // Une tête supprimée produit un départ exceptionnel ; une queue supprimée,
+  // un terminus exceptionnel.
   let partialDetails = null;
   if (type.className === 'is-partial') {
     try {
