@@ -76,3 +76,54 @@ test('Voix detail reuses the unified official service pattern', () => {
   assert.match(detail, /DÉPART EXCEPTIONNEL/);
   assert.match(detail, /TERMINUS EXCEPTIONNEL/);
 });
+
+test('88503 starts exceptionally at Metz and keeps the canceled southern stops visible', () => {
+  const block = between('const normalizeStopKey = (value)', 'function chooseStaticCandidate(');
+  const applyPattern = Function(`${block}\nreturn applyEffectiveServicePattern;`)();
+  const stop = (name, arrival, departure, id) => ({
+    name,
+    arrival,
+    departure,
+    raw: { stop_point: { id, name } }
+  });
+  const impact = (id, name, arrivalStatus, departureStatus) => ({
+    stop_point: { id, name },
+    arrival_status: arrivalStatus,
+    departure_status: departureStatus,
+    stop_time_effect: (arrivalStatus === 'deleted' || departureStatus === 'deleted') ? 'deleted' : 'unchanged'
+  });
+  const rows = [
+    stop('Nancy', '06:51', '06:51', 'nancy'),
+    stop('Pont-à-Mousson', '07:07', '07:08', 'pam'),
+    stop('Pagny-sur-Moselle', '07:16', '07:17', 'pagny'),
+    stop('Metz', '07:30', '07:33', 'metz'),
+    stop('Luxembourg', '08:24', '08:24', 'lux')
+  ];
+  const liveBundle = {
+    status: 'PARTIAL_CANCELLATION',
+    impacted: {
+      nancy: impact('nancy', 'Nancy', 'unchanged', 'deleted'),
+      pam: impact('pam', 'Pont-à-Mousson', 'deleted', 'deleted'),
+      pagny: impact('pagny', 'Pagny-sur-Moselle', 'deleted', 'deleted'),
+      metz: impact('metz', 'Metz', 'deleted', 'unchanged'),
+      lux: impact('lux', 'Luxembourg', 'unchanged', 'unchanged')
+    },
+    canceledStopKeys: new Set()
+  };
+
+  const result = applyPattern(rows, liveBundle);
+  assert.deepEqual(result.slice(0, 3).map((row) => row.isDeleted), [true, true, true]);
+  assert.equal(result[0].isNewTerminus, false);
+  assert.equal(result[3].isDeleted, false);
+  assert.equal(result[3].isNewOrigin, true);
+  assert.equal(result[3].isNewTerminus, false);
+  assert.equal(result[4].isDeleted, false);
+});
+
+test('table applies effective service boundaries before endpoint labels', () => {
+  const table = between('// statuts', "html += '</tbody></table>'");
+  assert.match(table, /const isOutsideEffectiveService/);
+  assert.match(table, /isDepartureKeptArrivalDeletedNewStart = !!imp\s*&& !isOutsideEffectiveService/);
+  assert.match(table, /isSncfExplicitPartialTerminal = !!imp\s*&& !isOutsideEffectiveService/);
+  assert.match(source, /#trainInfo td > \.deleted/);
+});
