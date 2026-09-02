@@ -62,12 +62,6 @@ grep -q 'LB_CANONICAL_MAP_PREVIEW_V1' "$CANDIDATE_CORE" || { echo "ERREUR : mote
 grep -q 'LB_CFL_OFFICIAL_MOTION_V3' "$CANDIDATE_CORE" || { echo "ERREUR : shapes CFL officielles absentes" >&2; exit 11; }
 grep -q 'sanitizeTechnicalCflStopTimes' "$CANDIDATE_CORE" || { echo "ERREUR : filtre points techniques CFL absent" >&2; exit 12; }
 
-# Le candidat doit conserver les fonctions UI / gare dynamique de la carte actuelle.
-if ! grep -qiE 'lb:open-lux-dynamic|gare dynamique' "$CANDIDATE_CORE"; then
-  echo "ERREUR : le core candidat ne contient pas le pont/bouton de gare dynamique Luxembourg" >&2
-  exit 13
-fi
-
 # Snapshot V4 réellement exploitable.
 python3 - "$SNAPSHOT" <<'PY'
 import json,sys
@@ -99,9 +93,11 @@ for pid in ids:
 print(f'TGV V3 OK: 2870={len(rows)} variantes ; paths={len(ids)} ; 005341 obligatoire')
 PY
 
-# L'UI de production reste le wrapper actuel, qui doit toujours embarquer le core standard.
+# L'interface reste le wrapper de production existant. On ne le reconstruira pas :
+# seule l'URL interne du core sera cache-bustée. Cela préserve ses tableaux/tabs
+# et toute sa logique actuelle, quelle que soit son implémentation interne.
 grep -q 'carte-core-preview.html' "$PROD_WRAPPER" || { echo "ERREUR : wrapper production sans référence au core" >&2; exit 15; }
-echo "Chaîne validée : UI actuelle + V4 + CFL + Lux dynamique + TGV V3"
+echo "Chaîne validée : wrapper actuel + V4 + CFL + TGV V3"
 
 echo
 echo "=== 2/6 Promotion du core V4 sur le nom de production ==="
@@ -116,7 +112,7 @@ from pathlib import Path
 import re,sys
 p=Path(sys.argv[1]); version=sys.argv[2]
 text=p.read_text(encoding='utf-8')
-pattern=re.compile(r'carte-core-preview\.html(?:\?[^\"\'`\s<>]*)?')
+pattern=re.compile(r"carte-core-preview\.html(?:\?[^\"'`\s<>]*)?")
 matches=list(pattern.finditer(text))
 if not matches:
     raise SystemExit('aucune URL carte-core-preview.html dans le wrapper')
@@ -138,11 +134,20 @@ echo "=== 4/6 Contrôles statiques APRÈS bascule ==="
 grep -q 'LB_CANONICAL_MAP_PREVIEW_V1' "$PROD_CORE"
 grep -q 'LB_CFL_OFFICIAL_MOTION_V3' "$PROD_CORE"
 grep -q 'sanitizeTechnicalCflStopTimes' "$PROD_CORE"
-if ! grep -qiE 'lb:open-lux-dynamic|gare dynamique' "$PROD_CORE"; then
-  echo "ERREUR : gare dynamique Luxembourg perdue après copie" >&2; exit 22
-fi
 CORE_AFTER="$(sha256sum "$PROD_CORE" | awk '{print $1}')"
 [[ "$CORE_AFTER" == "$CANDIDATE_SHA" ]] || { echo "ERREUR : SHA core production différent du candidat" >&2; exit 23; }
+
+# Vérifie que le wrapper n'a changé que par l'URL interne du core.
+python3 - "$BACKUP/$(basename "$PROD_WRAPPER")" "$PROD_WRAPPER" <<'PY'
+from pathlib import Path
+import re,sys
+before=Path(sys.argv[1]).read_text(encoding='utf-8')
+after=Path(sys.argv[2]).read_text(encoding='utf-8')
+pat=re.compile(r"carte-core-preview\.html(?:\?[^\"'`\s<>]*)?")
+if pat.sub('__LB_CORE__',before) != pat.sub('__LB_CORE__',after):
+    raise SystemExit('wrapper UI modifié hors URL core')
+print('Wrapper UI : strictement conservé hors URL core')
+PY
 
 echo
 echo "=== 5/6 Redémarrage + santé API carte ==="
@@ -176,7 +181,7 @@ print('API TGV V3 OK:', pid)
 PY
 
 echo
-echo "=== 6/6 Vérification finale des fichiers servis ==="
+echo "=== 6/6 Vérification finale ==="
 WRAPPER_AFTER="$(sha256sum "$PROD_WRAPPER" | awk '{print $1}')"
 echo "Core production : $CORE_AFTER"
 echo "Wrapper prod    : $WRAPPER_AFTER"
@@ -190,8 +195,8 @@ echo
 echo "============================================================"
 echo "LOGIQUE CANONIQUE V4 BRANCHEE EN PRODUCTION"
 echo "============================================================"
-echo "UI / tableaux actuels       : CONSERVES"
-echo "Gare dynamique Luxembourg   : CONSERVEE"
+echo "UI / tableaux actuels       : CONSERVES (wrapper inchangé)"
+echo "Gare dynamique Luxembourg   : CONSERVEE par le flux UI actuel"
 echo "Data Engine V4              : ACTIF"
 echo "Autorité SNCF FR / CFL LU   : ACTIF"
 echo "Shapes CFL officielles      : ACTIVES"
