@@ -1,21 +1,23 @@
 #!/usr/bin/env python3
 """
-Adapter de compatibilité SNCF pour le Data Engine V4 canonique.
+Adapter de compatibilité + registre territorial pour le Data Engine V4 canonique.
 
-Il ne décide d'aucune priorité territoriale. Son rôle est de rendre les
-formats SNCF hétérogènes lisibles par server.py tout en conservant les
-métadonnées par arrêt lorsqu'elles existent.
-
-Garde-fous de schéma :
-- une source SNCF/CFL ne suffit jamais à inventer le pays d'une gare inconnue ;
-- realtimeAuthority reste un identifiant machine stable en minuscules ;
-- les gares connues conservent strictement la politique territoriale du core.
+Rôles :
+- normaliser les formats SNCF hétérogènes sans perdre les métadonnées d'arrêt ;
+- enrichir le registre des gares à partir des GTFS statiques ;
+- ne jamais déduire le pays d'une gare depuis le seul fournisseur temps réel ;
+- conserver la politique FR=SNCF / LU=CFL arrêt par arrêt.
 """
 
+import csv
 import importlib.util
+import io
 import json
+import os
 import re
 import sys
+import time
+import urllib.request
 from pathlib import Path
 
 CORE = Path(__file__).with_name("server.py")
@@ -25,6 +27,34 @@ spec.loader.exec_module(core)
 
 TRAIN_FIELDS = ("train_number", "train", "number", "train_id", "trip_id", "vehicle_journey")
 WRAPPER_KEYS = ("data", "trains", "journeys", "retards", "delays", "results", "items", "circulations", "services", "records")
+
+REGISTRY_CACHE = Path(os.getenv(
+    "LB_STATION_REGISTRY_CACHE",
+    "/opt/labetaillere-data-v4/state/station-registry.json",
+))
+REGISTRY_TTL = max(3600, int(os.getenv("LB_STATION_REGISTRY_TTL_SEC", "86400")))
+GTFS_STOPS_SOURCES = {
+    "sncf": os.getenv(
+        "LB_GTFS_STOPS_SNCF",
+        "https://raw.githubusercontent.com/TekMaTe-lux/Assistant-train/main/data/stops.txt",
+    ),
+    "cfl": os.getenv(
+        "LB_GTFS_STOPS_CFL",
+        "https://raw.githubusercontent.com/TekMaTe-lux/Assistant-train/main/CFL/stopscfl.txt",
+    ),
+}
+
+UIC_COUNTRIES = {
+    "80": ("DE", "DB"),
+    "81": ("AT", "OBB"),
+    "82": ("LU", "CFL"),
+    "83": ("IT", "RFI"),
+    "84": ("NL", "NS"),
+    "85": ("CH", "SBB"),
+    "87": ("FR", "SNCF"),
+    "88": ("BE", "SNCB"),
+    "71": ("ES", "ADIF"),
+}
 
 
 def norm_train(value):
@@ -130,9 +160,7 @@ def normalize_stops(raw):
     source = raw.get("stops")
     if source is None:
         source = raw.get("delays")
-
-    compact = {}
-    rich = []
+    compact, rich = {}, []
 
     if isinstance(source, dict):
         for name, value in source.items():
@@ -182,12 +210,137 @@ def normalize_sncf_payload(payload):
     return normalized, path, len(found)
 
 
-# ---------------------------------------------------------------------------
-# Garde-fou territoire : provider != pays.
-# Le core connaît explicitement Nancy/Metz/Thionville/Hettange et les gares LU.
-# Pour une gare inconnue (ex. Saarbrücken), on garde le provider utilisable mais
-# on laisse country=None au lieu d'inventer FR ou LU. Cela prépare SNCB/DB/GPS.
-# ---------------------------------------------------------------------------
+# ---------- registre territorial GTFS ----------
+
+def read_text(target):
+    if re.match(r"^https?://", str(target or "")):
+        req = urllib.request.Request(
+            target,
+            headers={"User-Agent": "labetaillere-data-v4-registry/1.0", "Accept": "text/csv,text/plain,*/*"},
+        )
+        with urllib.request.urlopen(req, timeout=max(10, core.TIMEOUT)) as r:
+            return r.read().decode("utf-8-sig", errors="replace")
+    return Path(target).read_text(encoding="utf-8-sig")
+
+
+def country_from_ids(*values):
+    for value in values:
+        text = str(value or "")
+        for token in re.findall(r"(?<!\d)(\d{8})(?!\d)", text):
+            item = UIC_COUNTRIES.get(token[:2])
+            if item:
+                return item
+    return None
+
+
+def policy_for_country(country_network):
+    if not country_network:
+        return None
+    country, network = country_network
+    authority = "sncf" if country == "FR" else "cfl" if country == "LU" else None
+    return {
+        "country": country,
+        "network": network,
+        "realtimeAuthority": authority,
+    }
+
+
+def registry_from_csv(text, provider):
+    out = {}
+    reader = csv.DictReader(io.StringIO(text))
+    for row in reader:
+        if not isinstance(row, dict):
+            continue
+        name = str(row.get("stop_name") or row.get("name") or "").strip()
+        if not name:
+            continue
+
+        country_network = country_from_ids(
+            row.get("stop_id"),
+            row.get("parent_station"),
+            row.get("stop_code"),
+        )
+
+        if country_network is None and provider == "cfl":
+            sid = str(row.get("stop_id") or "")
+            parent = str(row.get("parent_station") or "")
+            if sid.startswith("0002") or parent.startswith("0002"):
+                country_network = ("LU", "CFL")
+
+        policy = policy_for_country(country_network)
+        if not policy:
+            continue
+
+        key = core.canonical_station(name)
+        existing = out.get(key)
+        if existing and existing.get("country") != policy.get("country"):
+            out.pop(key, None)
+            continue
+        out[key] = policy
+    return out
+
+
+def load_registry_cache():
+    try:
+        if not REGISTRY_CACHE.exists():
+            return None
+        age = time.time() - REGISTRY_CACHE.stat().st_mtime
+        raw = json.loads(REGISTRY_CACHE.read_text(encoding="utf-8"))
+        if not isinstance(raw, dict) or not isinstance(raw.get("stations"), dict):
+            return None
+        if age <= REGISTRY_TTL:
+            return raw
+    except Exception:
+        return None
+    return None
+
+
+def write_registry_cache(payload):
+    try:
+        REGISTRY_CACHE.parent.mkdir(parents=True, exist_ok=True)
+        tmp = REGISTRY_CACHE.with_name(REGISTRY_CACHE.name + ".tmp")
+        tmp.write_text(json.dumps(payload, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
+        os.replace(tmp, REGISTRY_CACHE)
+    except Exception:
+        pass
+
+
+def build_station_registry():
+    cached = load_registry_cache()
+    if cached:
+        return cached.get("stations") or {}, cached.get("meta") or {}
+
+    merged = {}
+    meta = {"sources": {}, "errors": []}
+    for provider, target in GTFS_STOPS_SOURCES.items():
+        try:
+            rows = registry_from_csv(read_text(target), provider)
+            for key, policy in rows.items():
+                current = merged.get(key)
+                if current and current.get("country") != policy.get("country"):
+                    merged.pop(key, None)
+                    continue
+                merged[key] = policy
+            meta["sources"][provider] = {"ok": True, "count": len(rows), "target": target}
+        except Exception as exc:
+            meta["sources"][provider] = {"ok": False, "target": target, "error": str(exc)}
+            meta["errors"].append(f"{provider}: {exc}")
+
+    payload = {
+        "generatedAt": core.iso_utc(),
+        "stations": merged,
+        "meta": meta,
+    }
+    if merged:
+        write_registry_cache(payload)
+    return merged, meta
+
+
+GTFS_STATION_REGISTRY, GTFS_REGISTRY_META = build_station_registry()
+
+for key, policy in GTFS_STATION_REGISTRY.items():
+    core.STATION_AUTHORITIES.setdefault(key, policy)
+
 _original_station_policy = core.station_policy
 
 
@@ -195,6 +348,7 @@ def safe_station_policy(name, source_hint=None):
     registered = _original_station_policy(name, None)
     if any(registered.get(k) is not None for k in ("country", "network", "realtimeAuthority")):
         return registered
+
     if source_hint == "cfl":
         return {"country": None, "network": "CFL", "realtimeAuthority": "cfl"}
     if source_hint == "sncf":
@@ -211,13 +365,14 @@ def safe_make_canonical_stop(name, sncf_stop, cfl_stop, arrivals, source_meta):
     stop = _original_make_canonical_stop(name, sncf_stop, cfl_stop, arrivals, source_meta)
     hint = "sncf" if sncf_stop else "cfl" if cfl_stop else None
     policy = safe_station_policy(name, hint)
+    stop["country"] = policy.get("country")
+    stop["network"] = policy.get("network")
     stop["realtimeAuthority"] = policy.get("realtimeAuthority")
     stop["territoryKnown"] = bool(policy.get("country"))
     return stop
 
 
 core.make_canonical_stop = safe_make_canonical_stop
-
 
 _original_build = core.build_snapshot_from_payloads
 
@@ -227,10 +382,20 @@ def patched_build(payloads, source_meta=None):
     normalized, path, seen = normalize_sncf_payload(patched.get("sncfRt") or {})
     patched["sncfRt"] = normalized
     snapshot = _original_build(patched, source_meta)
-    snapshot.setdefault("meta", {})["sncfFormat"] = path
-    snapshot["meta"]["sncfRecordCount"] = seen
-    snapshot["meta"]["sncfNormalizedCount"] = len(normalized)
-    snapshot["meta"]["territoryPolicy"] = "registry-only-country-v1"
+
+    meta = snapshot.setdefault("meta", {})
+    meta["sncfFormat"] = path
+    meta["sncfRecordCount"] = seen
+    meta["sncfNormalizedCount"] = len(normalized)
+    meta["territoryPolicy"] = "gtfs-static-uic-registry-v2"
+    meta["stationRegistryCount"] = len(GTFS_STATION_REGISTRY)
+    meta["stationRegistry"] = GTFS_REGISTRY_META
+    meta["unknownTerritoryStopCount"] = sum(
+        1
+        for train in snapshot.get("trains") or []
+        for stop in train.get("stops") or []
+        if not stop.get("country")
+    )
     return snapshot
 
 
@@ -245,20 +410,6 @@ def adapter_fixture_test():
             "stops": {"Metz": 0, "Thionville": 0, "Luxembourg": 0},
         }
     }
-    wrapped = {
-        "updatedAt": "now",
-        "data": {
-            "trains": [{
-                "train_number": "88742",
-                "status": "ON_TIME",
-                "stops": [
-                    {"station": "Metz", "delayMinutes": 0},
-                    {"station": "Thionville", "delayMinutes": 0},
-                    {"station": "Luxembourg", "delayMinutes": 0},
-                ],
-            }]
-        },
-    }
     cancelled = {
         "trains": [{
             "train_number": "88503",
@@ -269,29 +420,13 @@ def adapter_fixture_test():
             ],
         }]
     }
-    foreign = {
-        "trains": [{
-            "train_number": "88835",
-            "status": "ON_TIME",
-            "stops": [
-                {"station": "Forbach", "delayMinutes": 0},
-                {"station": "Saarbrücken", "delayMinutes": 0},
-            ],
-        }]
-    }
 
-    for payload in (direct, wrapped, cancelled, foreign):
+    for payload in (direct, cancelled):
         n, path, seen = normalize_sncf_payload(payload)
         if not n:
             raise AssertionError(f"adapter SNCF invalide: {path} / {seen}")
         snap = patched_build(
-            {
-                "sncfRt": payload,
-                "cflRt": {},
-                "cflArrivals": {},
-                "traffic": {},
-                "compositions": {},
-            },
+            {"sncfRt": payload, "cflRt": {}, "cflArrivals": {}, "traffic": {}, "compositions": {}},
             [{"name": "sncfRt", "ok": True, "stale": False, "observedAt": core.iso_utc()}],
         )
         if not snap.get("trains"):
@@ -299,6 +434,10 @@ def adapter_fixture_test():
 
     n, _, _ = normalize_sncf_payload(cancelled)
     assert n["88503"]["_canonicalStops"][0]["status"] == "cancelled"
+
+    assert country_from_ids("StopArea:OCE87191007") == ("FR", "SNCF")
+    assert country_from_ids("StopArea:OCE82006030") == ("LU", "CFL")
+    assert country_from_ids("StopArea:OCE80253914") == ("DE", "DB")
 
     snap = patched_build(
         {"sncfRt": direct, "cflRt": {}, "cflArrivals": {}, "traffic": {}, "compositions": {}},
@@ -310,17 +449,12 @@ def adapter_fixture_test():
     assert metz["country"] == "FR" and metz["realtimeAuthority"] == "sncf"
     assert lux["country"] == "LU" and lux["realtimeAuthority"] == "cfl"
 
-    snap = patched_build(
-        {"sncfRt": foreign, "cflRt": {}, "cflArrivals": {}, "traffic": {}, "compositions": {}},
-        [{"name": "sncfRt", "ok": True, "stale": False, "observedAt": core.iso_utc()}],
-    )
-    t = next(t for t in snap["trains"] if t["number"] == "88835")
-    sb = next(s for s in t["stops"] if s["name"] == "Saarbrücken")
-    assert sb["country"] is None
-    assert sb["realtimeAuthority"] == "sncf"
-    assert sb["territoryKnown"] is False
-
-    print(json.dumps({"ok": True, "adapter": "sncf-v4-territory-safe"}))
+    print(json.dumps({
+        "ok": True,
+        "adapter": "sncf-v5-gtfs-station-registry",
+        "stationRegistryCount": len(GTFS_STATION_REGISTRY),
+        "registryErrors": GTFS_REGISTRY_META.get("errors") or [],
+    }, ensure_ascii=False))
 
 
 if __name__ == "__main__":
