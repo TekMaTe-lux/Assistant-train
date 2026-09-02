@@ -119,7 +119,8 @@
       // Secours léger : détail statique du train, sans stop_times.txt côté navigateur.
       if (names.length < 3) {
         try {
-          const url = `https://vps.labetaillere.fr/api/train-static?date=${encodeURIComponent(todayIso())}&train=${encodeURIComponent(trainKey)}`;
+          const apiDate = todayIso().replace(/-/g, '');
+          const url = `https://vps.labetaillere.fr/api/train-static?date=${encodeURIComponent(apiDate)}&train=${encodeURIComponent(trainKey)}`;
           const response = await fetch(url, { cache: 'no-cache' });
           if (response.ok) {
             const data = await response.json();
