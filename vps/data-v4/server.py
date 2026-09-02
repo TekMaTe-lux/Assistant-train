@@ -493,9 +493,31 @@ def cfl_by_station(stations):
 
 
 def sncf_stop_entries(raw):
+    """
+    Retourne des arrêts SNCF sans perdre les métadonnées si l'adapter les a gardées.
+    """
     rich = raw.get("_canonicalStops") or raw.get("canonicalStops")
     if isinstance(rich, list):
-        return [x for x in rich if isinstance(x, dict) and station_name_from_entry(x)]
+        out = []
+        for entry in rich:
+            if not isinstance(entry, dict):
+                continue
+            name = station_name_from_entry(entry)
+            if not name:
+                continue
+            p = parse_delay(entry)
+            normalized = dict(entry)
+            normalized["name"] = name
+            normalized["delayMinutes"] = p["minutes"]
+            normalized["cancelled"] = p["cancelled"]
+            normalized["known"] = p["known"]
+            normalized["platform"] = normalize_platform(pick(entry, "platform", "voie", "track", "quai"))
+            normalized["arrivalPlanned"] = normalize_time_text(pick(entry, "arrivalPlanned", "plannedArrival", "arrival_planned"))
+            normalized["arrivalRealtime"] = normalize_time_text(pick(entry, "arrivalRealtime", "realtimeArrival", "arrival_realtime"))
+            normalized["departurePlanned"] = normalize_time_text(pick(entry, "departurePlanned", "plannedDeparture", "departure_planned"))
+            normalized["departureRealtime"] = normalize_time_text(pick(entry, "departureRealtime", "realtimeDeparture", "departure_realtime"))
+            out.append(normalized)
+        return out
 
     source = raw.get("stops")
     out = []
