@@ -5,6 +5,7 @@ const path = require('node:path');
 
 const source = fs.readFileSync(path.resolve(__dirname, '..', 'index.html'), 'utf8');
 const css = fs.readFileSync(path.resolve(__dirname, '..', 'assets', 'lb-legacy.css'), 'utf8');
+const harmonizer = fs.readFileSync(path.resolve(__dirname, '..', 'assets', 'home-major-alerts.js'), 'utf8');
 
 function between(start, end) {
   const a = source.indexOf(start);
@@ -126,4 +127,16 @@ test('table applies effective service boundaries before endpoint labels', () => 
   assert.match(table, /isDepartureKeptArrivalDeletedNewStart = !!imp\s*&& !isOutsideEffectiveService/);
   assert.match(table, /isSncfExplicitPartialTerminal = !!imp\s*&& !isOutsideEffectiveService/);
   assert.match(source, /#trainInfo td > \.deleted/);
+});
+
+test('V4 harmonizer keeps LIVE membership native and uses territorial realtime for status and table cells', () => {
+  assert.match(harmonizer, /LIVE reste strictement défini par extractLiveTrains\(\)/);
+  assert.match(harmonizer, /syncLiveStatusFromCanonical/);
+  assert.match(harmonizer, /canonicalCurrentTrainByNumber/);
+  assert.match(harmonizer, /syncTrainTableFromCanonical/);
+  assert.match(harmonizer, /data-base-time/);
+  assert.match(harmonizer, /selectionDate/);
+  assert.match(harmonizer, /stop\.territoryKnown === false/);
+  assert.match(harmonizer, /stop\?\.delay\?\.fresh === false/);
+  assert.match(harmonizer, /SUPPRIM\|EXCEPTIONNEL/);
 });
