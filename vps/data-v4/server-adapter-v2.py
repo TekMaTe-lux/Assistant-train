@@ -19,6 +19,7 @@ import sys
 import time
 import urllib.request
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 CORE = Path(__file__).with_name("server.py")
 spec = importlib.util.spec_from_file_location("lb_data_v4_core", CORE)
@@ -374,6 +375,111 @@ def safe_make_canonical_stop(name, sncf_stop, cfl_stop, arrivals, source_meta):
 
 core.make_canonical_stop = safe_make_canonical_stop
 
+# ---------- date réelle de circulation + état final ----------
+# Les trip_id SNCF contiennent parfois une date de calendrier statique future :
+# elle ne doit jamais devenir la date de circulation du flux temps réel courant.
+RAIL_TZ = ZoneInfo(os.getenv("LB_RAIL_TIMEZONE", "Europe/Paris"))
+HISTORY_PUBLIC_MAX = max(10, int(os.getenv("LB_HISTORY_PUBLIC_MAX", "80")))
+HISTORY_PUBLIC_MAX_AGE = max(3600, int(os.getenv("LB_HISTORY_PUBLIC_MAX_AGE_SEC", str(18 * 3600))))
+
+
+def observed_service_date(source_meta, source_name):
+    meta = core.source_meta_by_name(source_meta).get(source_name, {})
+    observed = meta.get("observedAt")
+    ts = core.parse_iso_ts(observed)
+    if ts is not None:
+        return core.datetime.fromtimestamp(ts, core.timezone.utc).astimezone(RAIL_TZ).strftime("%Y-%m-%d")
+    return core.datetime.now(RAIL_TZ).strftime("%Y-%m-%d")
+
+
+_original_build_train_from_sncf = core.build_train_from_sncf
+
+
+def dated_build_train_from_sncf(num, raw, cfl_idx, arr_idx, comps, source_meta):
+    train = _original_build_train_from_sncf(num, raw, cfl_idx, arr_idx, comps, source_meta)
+    train["serviceDate"] = observed_service_date(source_meta, "sncfRt")
+    return train
+
+
+core.build_train_from_sncf = dated_build_train_from_sncf
+
+_original_build_train_from_cfl = core.build_train_from_cfl
+
+
+def dated_build_train_from_cfl(num, stations, arr_idx, comps, source_meta):
+    train = _original_build_train_from_cfl(num, stations, arr_idx, comps, source_meta)
+    service_date = observed_service_date(source_meta, "cflRt")
+    train["serviceDate"] = service_date
+    train["id"] = f"CFL:{norm_train(num)}:{service_date}"
+    return train
+
+
+core.build_train_from_cfl = dated_build_train_from_cfl
+
+
+def canonical_history_key(train):
+    num = norm_train((train or {}).get("number"))
+    service_date = str((train or {}).get("serviceDate") or "unknown")
+    if num:
+        return f"{num}:{service_date}"
+    return str((train or {}).get("id") or f"unknown:{service_date}")
+
+
+core.history_key = canonical_history_key
+
+
+def recent_completed_trains():
+    now = time.time()
+    rows = []
+    for item in core._history.values():
+        if not isinstance(item, dict) or not item.get("completedAt"):
+            continue
+        completed_ts = core.parse_iso_ts(item.get("completedAt"))
+        if completed_ts is None or (now - completed_ts) > HISTORY_PUBLIC_MAX_AGE:
+            continue
+        observation = item.get("lastObservation")
+        if not isinstance(observation, dict):
+            continue
+        rows.append((float(completed_ts), item))
+
+    rows.sort(key=lambda pair: pair[0], reverse=True)
+    out = []
+    for _, item in rows[:HISTORY_PUBLIC_MAX]:
+        observation = core.copy.deepcopy(item.get("lastObservation") or {})
+        observation["lifecycle"] = "completed"
+        observation["realtimePresence"] = False
+        observation["realtimePresenceFresh"] = False
+        observation["_history"] = {
+            key: value
+            for key, value in item.items()
+            if key != "lastObservation"
+        }
+        out.append(observation)
+    return out
+
+
+_original_commit_snapshot = core.commit_snapshot
+
+
+def commit_snapshot_with_completed(snap):
+    with core._lock:
+        previous = core._snapshot
+
+    core.update_history(previous, snap)
+    completed = recent_completed_trains()
+    snap["completedTrains"] = completed
+    meta = snap.setdefault("meta", {})
+    meta["historyPolicy"] = "number-service-date-v1"
+    meta["completedTrainCount"] = len(completed)
+
+    with core._lock:
+        core._snapshot = snap
+        core._last_error = None
+    core.write_snapshot(snap)
+
+
+core.commit_snapshot = commit_snapshot_with_completed
+
 _original_build = core.build_snapshot_from_payloads
 
 
@@ -448,10 +554,14 @@ def adapter_fixture_test():
     lux = next(s for s in t["stops"] if s["name"] == "Luxembourg")
     assert metz["country"] == "FR" and metz["realtimeAuthority"] == "sncf"
     assert lux["country"] == "LU" and lux["realtimeAuthority"] == "cfl"
+    assert t["serviceDate"] == observed_service_date(
+        [{"name": "sncfRt", "ok": True, "stale": False, "observedAt": core.iso_utc()}],
+        "sncfRt",
+    )
 
     print(json.dumps({
         "ok": True,
-        "adapter": "sncf-v5-gtfs-station-registry",
+        "adapter": "sncf-v6-gtfs-station-registry-history",
         "stationRegistryCount": len(GTFS_STATION_REGISTRY),
         "registryErrors": GTFS_REGISTRY_META.get("errors") or [],
     }, ensure_ascii=False))
