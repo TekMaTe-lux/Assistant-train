@@ -104,7 +104,19 @@ for t in trains:
         assert isinstance(st.get('delay'),dict)
         checked += 1
 assert checked > 0
+meta=s.get('meta') or {}
+static=meta.get('staticTimetable') or {}
 print(f"OK canonique: {len(trains)} trains / {checked} arrêts vérifiés")
+print(
+    "GTFS statique SNCF: "
+    f"{static.get('matchedTrains',0)}/{static.get('requestedTrains',0)} trains appariés · "
+    f"{static.get('enrichedStops',0)} arrêts planifiés · "
+    f"{static.get('derivedRealtimeFields',0)} heures RT dérivées"
+)
+if static.get('errors'):
+    print("ATTENTION enrichissement statique (non bloquant):", static.get('errors')[:5])
+if int(static.get('requestedTrains') or 0) > 0 and int(static.get('matchedTrains') or 0) == 0:
+    print("ATTENTION: aucun horaire statique SNCF apparié; le moteur temps réel reste valide mais le planifié V4 n'est pas encore enrichi.")
 PY
 
 echo
