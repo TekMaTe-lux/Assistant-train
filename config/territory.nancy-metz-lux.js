@@ -50,6 +50,21 @@ window.LB_TERRITORY_CONFIG = Object.freeze({
 });
 
 /*
+ * Info trafic accueil — seuils proportionnels v2.
+ * La logique est isolée dans un petit fichier pour ne pas retoucher le gros index.html.
+ */
+(function loadHomeTrafficLevelV2() {
+  if (typeof document === 'undefined') return;
+  if (document.getElementById('lbHomeTrafficLevelV2Script')) return;
+
+  const script = document.createElement('script');
+  script.id = 'lbHomeTrafficLevelV2Script';
+  script.src = './assets/lb-home-traffic-level-v2.js?v=20260903-1';
+  script.async = false;
+  document.head.append(script);
+})();
+
+/*
  * Détail Info trafic — couche progressive sur l'accueil existant.
  * On garde index.html et son calcul actuel intacts.
  */
