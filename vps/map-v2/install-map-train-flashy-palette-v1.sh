@@ -64,7 +64,6 @@ block=r'''<!-- LB_TRAIN_FLASHY_PALETTE_V1 START -->
   CSS uniquement : aucune modification moteur / position / orientation / retard.
 */
 
-/* Tous les trains : opacité pleine, rendu net. */
 html body .cow-marker .cow-glyph{
   opacity:1!important;
   transition:none!important;
@@ -72,64 +71,38 @@ html body .cow-marker .cow-glyph{
 
 /* Couleurs opérateur / catégorie disponibles dans le moteur actuel. */
 html body .cow-marker.train-sncf .cow-glyph{
-  color:#078BFF!important; /* bleu électrique TER/SNCF */
+  color:#078BFF!important;
 }
 html body .cow-marker.train-cfl .cow-glyph{
-  color:#FF244D!important; /* rouge CFL très franc */
+  color:#FF244D!important;
 }
 html body .cow-marker.train-tgv-roi .cow-glyph{
-  color:#FFD21A!important; /* jaune vif grande vitesse actuelle */
+  color:#FFD21A!important;
 }
 
-/* Trains sans perturbation : séparation sombre + micro halo blanc/cyan.
-   On exclut volontairement les états retard/suppression pour laisser leurs liserés existants agir. */
-html body .cow-marker:not(:has(.train-delay-badge--moderate))
-                    :not(:has(.train-delay-badge--major))
-                    :not(:has(.train-delay-badge--severe))
-                    :not(:has(.train-delay-badge--cancelled)) .cow-glyph{
-  filter:
-    saturate(1.62)
-    brightness(1.24)
-    contrast(1.13)
-    drop-shadow(0 0 .45px rgba(0,3,9,.98))
-    drop-shadow(0 0 1.15px rgba(255,255,255,.30))!important;
+/* Train à l'heure : contraste franc, sans grossir. */
+html body .cow-marker:not(:has(.train-delay-badge--moderate)):not(:has(.train-delay-badge--major)):not(:has(.train-delay-badge--severe)):not(:has(.train-delay-badge--cancelled)) .cow-glyph{
+  filter:saturate(1.68) brightness(1.26) contrast(1.14) drop-shadow(0 0 .45px rgba(0,3,9,.98)) drop-shadow(0 0 1.15px rgba(255,255,255,.30))!important;
 }
 
-/* Variante spécifique par opérateur, très légère, pour rendre les couleurs "flash" sans glow massif. */
-html body .cow-marker.train-sncf:not(:has(.train-delay-badge--moderate))
-                              :not(:has(.train-delay-badge--major))
-                              :not(:has(.train-delay-badge--severe))
-                              :not(:has(.train-delay-badge--cancelled)) .cow-glyph{
-  text-shadow:0 0 1.35px rgba(0,174,255,.70),0 1px .7px rgba(0,0,0,.92)!important;
+/* Micro halo de la couleur opérateur uniquement à l'heure. */
+html body .cow-marker.train-sncf:not(:has(.train-delay-badge--moderate)):not(:has(.train-delay-badge--major)):not(:has(.train-delay-badge--severe)):not(:has(.train-delay-badge--cancelled)) .cow-glyph{
+  text-shadow:0 0 1.45px rgba(0,174,255,.76),0 1px .7px rgba(0,0,0,.92)!important;
 }
-html body .cow-marker.train-cfl:not(:has(.train-delay-badge--moderate))
-                             :not(:has(.train-delay-badge--major))
-                             :not(:has(.train-delay-badge--severe))
-                             :not(:has(.train-delay-badge--cancelled)) .cow-glyph{
-  text-shadow:0 0 1.35px rgba(255,36,77,.72),0 1px .7px rgba(0,0,0,.92)!important;
+html body .cow-marker.train-cfl:not(:has(.train-delay-badge--moderate)):not(:has(.train-delay-badge--major)):not(:has(.train-delay-badge--severe)):not(:has(.train-delay-badge--cancelled)) .cow-glyph{
+  text-shadow:0 0 1.45px rgba(255,36,77,.78),0 1px .7px rgba(0,0,0,.92)!important;
 }
-html body .cow-marker.train-tgv-roi:not(:has(.train-delay-badge--moderate))
-                                 :not(:has(.train-delay-badge--major))
-                                 :not(:has(.train-delay-badge--severe))
-                                 :not(:has(.train-delay-badge--cancelled)) .cow-glyph{
-  text-shadow:0 0 1.35px rgba(255,210,26,.72),0 1px .7px rgba(0,0,0,.92)!important;
+html body .cow-marker.train-tgv-roi:not(:has(.train-delay-badge--moderate)):not(:has(.train-delay-badge--major)):not(:has(.train-delay-badge--severe)):not(:has(.train-delay-badge--cancelled)) .cow-glyph{
+  text-shadow:0 0 1.45px rgba(255,210,26,.80),0 1px .7px rgba(0,0,0,.92)!important;
 }
 
-/* États perturbés : on conserve la couleur opérateur dans le coeur.
-   Les contours retard/suppression installés précédemment restent prioritaires. */
+/* Perturbations : on garde la couleur opérateur au coeur ; les liserés existants portent l'état trafic. */
 html body .cow-marker:has(.train-delay-badge--moderate) .cow-glyph,
 html body .cow-marker:has(.train-delay-badge--major) .cow-glyph,
 html body .cow-marker:has(.train-delay-badge--severe) .cow-glyph,
 html body .cow-marker:has(.train-delay-badge--cancelled) .cow-glyph,
 html body .cow-marker.train-cancelled .cow-glyph{
   opacity:1!important;
-}
-
-/* Mobile/dézoom : ne pas grossir, seulement garder les couleurs franches. */
-@media(max-width:720px){
-  html body .cow-marker .cow-glyph{
-    opacity:1!important;
-  }
 }
 </style>
 <!-- LB_TRAIN_FLASHY_PALETTE_V1 END -->'''
@@ -159,7 +132,6 @@ if grep -q 'LB_TRAIN_CONTRAST_BOOST_V1 START' "$FILE"; then
   echo "ERREUR: ancien boost contraste encore présent" >&2
   exit 4
 fi
-# Vérifier que les briques fonctionnelles clés sont toujours présentes.
 grep -q 'LB_STATUS_VISIBILITY_MODAL_V1 START' "$FILE"
 grep -q 'LB_MARKER_BADGE_FIX_V2 START' "$FILE"
 grep -q 'LB_PARTIAL_GHOST_V2_JS START' "$FILE"
