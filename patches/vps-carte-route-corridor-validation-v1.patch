@@ -1,0 +1,138 @@
+diff --git a/map-v2/public/carte-core-preview.html b/map-v2/public/carte-core-preview.html
+index b4f93e5fa..dde77b493 100644
+--- a/map-v2/public/carte-core-preview.html
++++ b/map-v2/public/carte-core-preview.html
+@@ -8447,6 +8447,84 @@ function berDrawSelectedRouteProgress(){
+     return repaired.length >= 2 ? repaired : null;
+   }
+ 
++  /*
++   * BER SELECTED ROUTE CORRIDOR VALIDATION V1
++   *
++   * Un path peut être continu techniquement tout en empruntant une mauvaise
++   * branche du réseau. On valide donc le parcours gare par gare :
++   * - chaque arrêt doit être rencontré dans l'ordre ;
++   * - la voie doit passer réellement à proximité de la gare ;
++   * - aucun tronçon entre deux gares ne peut former un détour aberrant.
++   *
++   * Si un seul contrôle échoue, drawSelectedTripRoute() reconstruit le trajet
++   * avec les segments ferroviaires sûrs existants. Aucune ligne droite n'est
++   * dessinée en secours.
++   */
++  function validateSelectedRouteCorridor(coords, seq){
++    const route = berNormalizeSelectedRouteCoords(coords);
++    if (route.length < 2 || !Array.isArray(seq) || seq.length < 2) return null;
++
++    const stops = seq
++      .map(stopTime => stopsById.get(stopTime?.stop_id))
++      .filter(stop => (
++        stop
++        && Number.isFinite(Number(stop.lat))
++        && Number.isFinite(Number(stop.lon))
++      ));
++    if (stops.length < 2) return null;
++
++    const cumulative = [0];
++    for (let i=1; i<route.length; i++){
++      const edge = distLL(
++        { lat:route[i-1][0], lon:route[i-1][1] },
++        { lat:route[i][0], lon:route[i][1] }
++      );
++      if (!Number.isFinite(edge) || edge > RAIL_MAX_EDGE_M) return null;
++      cumulative.push(cumulative[i-1] + edge);
++    }
++
++    const projections = [];
++    let cursor = 0;
++    for (const stop of stops){
++      let bestIndex = -1;
++      let bestDistance = Infinity;
++      for (let i=cursor; i<route.length; i++){
++        const distance = distLL(
++          stop,
++          { lat:route[i][0], lon:route[i][1] }
++        );
++        if (distance < bestDistance){
++          bestDistance = distance;
++          bestIndex = i;
++        }
++      }
++
++      /* Tolérance pour les points d'arrêt décalés du quai, sans accepter une
++         autre ligne ferroviaire située dans la même région. */
++      if (bestIndex < 0 || !Number.isFinite(bestDistance) || bestDistance > 1600){
++        return null;
++      }
++      projections.push(bestIndex);
++      cursor = bestIndex;
++    }
++
++    for (let i=0; i<stops.length-1; i++){
++      const directDistance = distLL(stops[i], stops[i+1]);
++      const railDistance = cumulative[projections[i+1]] - cumulative[projections[i]];
++      const corridorLimit = Math.max(directDistance * 3.25, directDistance + 12000);
++      if (
++        !Number.isFinite(directDistance)
++        || !Number.isFinite(railDistance)
++        || railDistance <= 0
++        || railDistance > corridorLimit
++      ){
++        return null;
++      }
++    }
++
++    return route;
++  }
++
+   async function fetchSelectedV2Path(seq, trainId){
+     const names = seq.map(st => stopsById.get(st.stop_id)?.name || st.stop_id).filter(Boolean);
+     if (names.length < 2) return null;
+@@ -8486,11 +8564,13 @@ function berDrawSelectedRouteProgress(){
+     drawSelectedStations(routeTripId, seq);
+ 
+     const cachedRoute = selectedTripRailPathCache.get(routeTripId);
+-    if (Array.isArray(cachedRoute) && cachedRoute.length >= 2){
+-      addSelectedLatLonPath(cachedRoute);
+-      focusSelectedRoute(cachedRoute);
++    const validCachedRoute = validateSelectedRouteCorridor(cachedRoute, seq);
++    if (validCachedRoute){
++      addSelectedLatLonPath(validCachedRoute);
++      focusSelectedRoute(validCachedRoute);
+       return;
+     }
++    selectedTripRailPathCache.delete(routeTripId);
+ 
+     /* Source prioritaire CFL : shape GTFS officielle exacte du voyage. */
+     const officialCflShape = await fetchOfficialCflTripShape(routeTripId, seq);
+@@ -8506,10 +8586,11 @@ function berDrawSelectedRouteProgress(){
+     if (drawToken !== selectedTripDrawToken || activeTripId !== trainId) return;
+     if (v2Path){
+       const repairedCoords = repairSelectedV2Path(v2Path, seq);
+-      if (repairedCoords){
+-        selectedTripRailPathCache.set(routeTripId, repairedCoords);
+-        addSelectedLatLonPath(repairedCoords);
+-        focusSelectedRoute(repairedCoords);
++      const validatedCoords = validateSelectedRouteCorridor(repairedCoords, seq);
++      if (validatedCoords){
++        selectedTripRailPathCache.set(routeTripId, validatedCoords);
++        addSelectedLatLonPath(validatedCoords);
++        focusSelectedRoute(validatedCoords);
+         return;
+       }
+     }
+@@ -8525,10 +8606,11 @@ function berDrawSelectedRouteProgress(){
+       appendRailCoords(combinedCoords, path.coords);
+     }
+ 
+-    if (combinedCoords.length >= 2){
+-      selectedTripRailPathCache.set(routeTripId, combinedCoords);
+-      addSelectedLatLonPath(combinedCoords);
+-      focusSelectedRoute(combinedCoords);
++    const validatedCombinedCoords = validateSelectedRouteCorridor(combinedCoords, seq);
++    if (validatedCombinedCoords){
++      selectedTripRailPathCache.set(routeTripId, validatedCombinedCoords);
++      addSelectedLatLonPath(validatedCombinedCoords);
++      focusSelectedRoute(validatedCombinedCoords);
+     }
+   }
+ 
