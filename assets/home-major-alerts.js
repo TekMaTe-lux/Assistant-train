@@ -23,7 +23,7 @@
   load('./assets/signal-stations-fix.js?v=20260902-1', 'lb-signal-stations-fix');
 
   // Pont léger carte <-> Voix du Bétail + estimation GPS à la demande.
-  load('./assets/lb-community-map-bridge-v1.js?v=20260905-2', 'lb-community-map-bridge-v1');
+  load('./assets/lb-community-map-bridge-v1.js?v=20260905-3', 'lb-community-map-bridge-v1');
 
   const CANONICAL_SNAPSHOT_URL = 'https://vps.labetaillere.fr/map-v2/v4-preview/data/snapshot.json';
   const CANONICAL_REFRESH_MS = 15000;
