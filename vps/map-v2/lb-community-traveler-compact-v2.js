@@ -145,6 +145,28 @@
     });
   }
 
+  function alignCommunityMarkerDelay(marker, badge){
+    if (!marker || !badge) return;
+    const official = marker.querySelector('.train-delay-badge');
+    const glyph = marker.querySelector('.cow-glyph');
+    const anchor = official || glyph;
+    if (!anchor) return;
+
+    badge.style.right = 'auto';
+    badge.style.bottom = 'auto';
+    badge.style.transform = 'none';
+
+    if (official){
+      // Le retard communautaire est une information secondaire : même colonne
+      // et même gabarit que le badge SNCF, exactement un pixel en dessous.
+      badge.style.left = `${official.offsetLeft}px`;
+      badge.style.top = `${official.offsetTop + official.offsetHeight + 1}px`;
+    } else {
+      badge.style.left = `${glyph.offsetLeft + glyph.offsetWidth + 2}px`;
+      badge.style.top = `${glyph.offsetTop + Math.max(0, Math.round((glyph.offsetHeight - badge.offsetHeight) / 2))}px`;
+    }
+  }
+
   function decorateMarkerBadges(){
     document.querySelectorAll('.cow-marker').forEach((marker) => {
       const number = normalizeTrain(marker.getAttribute('data-train-number') || marker.textContent);
@@ -157,6 +179,7 @@
       badge.title = `Retard signalé par la communauté : +${delay} min (* = communauté)`;
       badge.setAttribute('aria-label', `Retard communautaire de ${delay} minutes`);
       badge.classList.add('lb-map-traveler-delay-community');
+      alignCommunityMarkerDelay(marker, badge);
     });
   }
 
@@ -208,8 +231,8 @@
     style.textContent = `
       /* Violet = information communautaire. Les couleurs SNCF restent intactes. */
       .trip-stop .lb-stop-traveler-delay-right{display:none!important}
-      .trip-stop .lb-stop-traveler-delay-propagated{position:absolute;z-index:3;right:8px;top:15px;display:inline-flex;align-items:center;justify-content:center;padding:1px 4px;border:1px solid rgba(183,140,255,.52);border-radius:4px;background:rgba(70,38,104,.82);color:#f1e8ff;font-size:7.5px;font-weight:900;line-height:1.1;white-space:nowrap;text-align:right;text-shadow:none;box-shadow:0 0 5px rgba(183,140,255,.13);pointer-events:none}
-      .lb-map-traveler-delay.lb-map-traveler-delay-community{min-height:13px!important;padding:1px 4px!important;border:1px solid rgba(183,140,255,.72)!important;border-radius:4px!important;background:rgba(61,34,91,.95)!important;color:#f3ebff!important;font-size:7.5px!important;font-weight:900!important;letter-spacing:.01em;box-shadow:0 0 6px rgba(183,140,255,.22)!important}
+      .trip-stop .lb-stop-traveler-delay-propagated{position:absolute;z-index:3;right:8px;top:15px;display:inline-flex;align-items:center;justify-content:center;box-sizing:border-box;height:10px;min-height:10px;padding:0 3px;border:0;border-radius:3px;background:rgba(91,54,132,.94);color:#f2eaff;font-size:6.25px;font-weight:900;line-height:10px;white-space:nowrap;text-align:right;text-shadow:none;box-shadow:none;pointer-events:none}
+      .lb-map-traveler-delay.lb-map-traveler-delay-community{box-sizing:border-box!important;width:auto!important;min-width:0!important;max-width:none!important;height:10px!important;min-height:10px!important;padding:0 3px!important;margin:0!important;border:0!important;outline:0!important;border-radius:3px!important;background:rgba(91,54,132,.97)!important;color:#f5efff!important;font-size:6.25px!important;font-weight:900!important;line-height:10px!important;letter-spacing:0!important;white-space:nowrap!important;box-shadow:none!important}
 
       /* Bloc compact : identité cyan, retard communautaire violet. */
       .lb-map-trip-community{box-sizing:border-box!important;width:100%;max-width:100%;overflow:hidden;display:grid!important;grid-template-columns:auto minmax(0,1fr) auto;grid-template-areas:'title status actions' 'source source actions';align-items:center;column-gap:7px;row-gap:2px;padding:5px 7px!important;min-height:0;border:1px solid rgba(0,234,255,.24)!important;border-radius:10px!important;background:linear-gradient(90deg,rgba(4,24,40,.88),rgba(3,18,31,.78))!important;box-shadow:inset 0 0 0 1px rgba(117,238,250,.025)}
@@ -220,7 +243,7 @@
       .lb-community-presence-status,.lb-community-empty-status{min-width:0;max-width:100%;box-sizing:border-box;padding:2px 5px;border:1px solid rgba(117,238,250,.16);border-radius:999px;background:rgba(5,31,51,.58);color:#f3feff;font-size:9.5px;font-weight:900;line-height:1.05;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
       .lb-community-presence-status{flex:0 1 auto}
       .lb-community-empty-status{color:#a9bec8;font-weight:750}
-      .lb-community-delay-status{flex:0 0 auto;box-sizing:border-box;padding:2px 5px;border:1px solid rgba(183,140,255,.64);border-radius:999px;background:rgba(77,43,113,.74);color:#f1e8ff;font-size:9.5px;font-weight:950;line-height:1.05;white-space:nowrap;box-shadow:0 0 6px rgba(183,140,255,.16)}
+      .lb-community-delay-status{flex:0 0 auto;box-sizing:border-box;padding:2px 5px;border:1px solid rgba(183,140,255,.48);border-radius:999px;background:rgba(77,43,113,.68);color:#f1e8ff;font-size:9px;font-weight:900;line-height:1.05;white-space:nowrap;box-shadow:none}
       .lb-community-source-line{grid-area:source;min-width:0;color:#c8b9dd;font-size:7.8px;font-weight:750;line-height:1.1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
       .lb-community-source-line[hidden]{display:none!important}
       .lb-map-trip-community-actions{grid-area:actions;min-width:0;display:flex!important;gap:4px!important;align-items:center;justify-content:flex-end}
@@ -239,11 +262,17 @@
       .lb-map-trip-community.lb-community-can-contribute .lb-map-trip-community-actions [data-lb-map-community-signal]{font-size:0!important}
       .lb-map-trip-community.lb-community-can-contribute .lb-map-trip-community-actions [data-lb-map-community-signal]::after{content:'Signaler';font-size:8.5px;font-weight:850}
 
+      @media(max-width:720px){
+        .lb-map-traveler-delay.lb-map-traveler-delay-community{height:9px!important;min-height:9px!important;padding:0 2px!important;font-size:5.75px!important;line-height:9px!important}
+        .trip-stop .lb-stop-traveler-delay-propagated{height:9px;min-height:9px;padding:0 2px;font-size:5.75px;line-height:9px}
+      }
+
       @media(max-width:520px){
         .lb-map-trip-community{column-gap:5px;row-gap:1px;padding:4px 6px!important;border-radius:9px!important}
         .lb-map-trip-community-title{font-size:8px!important}
         .lb-community-status-line{gap:3px}
-        .lb-community-presence-status,.lb-community-empty-status,.lb-community-delay-status{padding:2px 4px;font-size:9px}
+        .lb-community-presence-status,.lb-community-empty-status{padding:2px 4px;font-size:9px}
+        .lb-community-delay-status{padding:2px 4px;font-size:8.5px}
         .lb-community-source-line{font-size:7.4px}
         .lb-map-trip-community-actions{gap:3px!important}
         .lb-map-trip-community-actions button{min-height:25px!important;padding:3px 5px!important;font-size:8px!important}
@@ -251,13 +280,13 @@
         .lb-map-trip-community.lb-community-can-contribute:not(.lb-current-user-aboard) .lb-map-trip-community-actions [data-lb-map-community-presence]::after,
         .lb-map-trip-community.lb-community-can-contribute.lb-current-user-aboard .lb-map-trip-community-actions [data-lb-map-community-presence]::after,
         .lb-map-trip-community.lb-community-can-contribute .lb-map-trip-community-actions [data-lb-map-community-signal]::after{font-size:8px}
-        .trip-stop .lb-stop-traveler-delay-propagated{right:6px;top:14px;padding:1px 3px;font-size:7px}
       }
 
       @media(max-width:380px){
         .lb-map-trip-community{column-gap:4px;padding-left:5px!important;padding-right:5px!important}
         .lb-map-trip-community-title{font-size:7.6px!important;letter-spacing:.02em}
-        .lb-community-presence-status,.lb-community-empty-status,.lb-community-delay-status{font-size:8.5px}
+        .lb-community-presence-status,.lb-community-empty-status{font-size:8.5px}
+        .lb-community-delay-status{font-size:8px}
         .lb-map-trip-community-actions button{padding-left:4px!important;padding-right:4px!important}
       }
     `;
