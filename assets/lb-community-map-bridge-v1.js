@@ -19,6 +19,8 @@
   let lastSnapshotSignature = '';
   let gpsResultTimer = 0;
   let demoAboard = false;
+  let liveDecorateQueued = false;
+  let liveCardsObserver = null;
   const boundFrames = new WeakSet();
 
   const canContribute = () => DEMO_MODE || window.lbIsAuthed === true;
@@ -104,9 +106,6 @@
   function refreshMapAfterReturn(){
     if ((window.location.hash || '').toLowerCase() !== '#carte') return;
     bindMapFrames();
-    // Le moteur cartographique peut redessiner ses marqueurs juste après que
-    // la page Carte redevient visible. Plusieurs envois courts garantissent
-    // que la couche voyageurs est réappliquée après ce redessin.
     [0, 450].forEach((delay) => {
       window.setTimeout(() => broadcastSnapshot(true), delay);
     });
@@ -207,6 +206,109 @@
     button.classList.remove('is-loading');
   }
 
+  function liveMetaKind(node){
+    const chip = node?.matches?.('.lb-live-chip') ? node : node?.querySelector?.('.lb-live-chip');
+    if (!chip) return { kind:'', chip:null };
+    const text = String(chip.textContent || '').replace(/\s+/g, ' ').trim();
+    if (/retard\s*\+\s*\d+/i.test(text) || /^\+\s*\d+\s*min\*$/i.test(text)) return { kind:'delay', chip };
+    if (/supprim/i.test(text)) return { kind:'cancel', chip };
+    if (/^📍/u.test(text)) return { kind:'station', chip };
+    if (/^💬/u.test(text)) return { kind:'comment', chip };
+    return { kind:'info', chip };
+  }
+
+  function decorateLiveTravelerCard(card){
+    if (!card) return;
+    const statusRow = card.querySelector('.lb-live-status-row');
+    const official = statusRow?.querySelector('.lb-live-status') || null;
+    const passenger = statusRow?.querySelector('.lb-live-passenger') || null;
+    const userAlert = card.querySelector('.lb-live-user-alert');
+
+    if (userAlert){
+      const raw = String(userAlert.textContent || '').replace(/\s+/g, ' ').trim();
+      const delayMatch = raw.match(/Signalé\s*:\s*\+?\s*(\d+)\s*min/i);
+      if (delayMatch) userAlert.textContent = `+${Number(delayMatch[1])} min*`;
+      else if (/supprim/i.test(raw) && raw !== 'Supprimé*') userAlert.textContent = 'Supprimé*';
+      userAlert.classList.add('lb-live-community-alert');
+      userAlert.title = 'Signalement de la communauté (* = Voix du Bétail)';
+      if (statusRow && userAlert.parentElement !== statusRow) statusRow.appendChild(userAlert);
+    }
+
+    if (passenger){
+      const countMatch = String(passenger.textContent || '').match(/(\d+)/);
+      const count = countMatch ? Number(countMatch[1]) : 0;
+      passenger.hidden = !(count > 0);
+      passenger.title = count > 0 ? `${count} voyageur${count > 1 ? 's' : ''} signalé${count > 1 ? 's' : ''} à bord` : '';
+    }
+
+    if (statusRow){
+      // Ordre stable et lisible : officiel SNCF, communauté, présence.
+      const desired = [official, userAlert, passenger].filter(Boolean);
+      const current = Array.from(statusRow.children).filter((node) => desired.includes(node));
+      const sameOrder = desired.length === current.length
+        && desired.every((node, index) => current[index] === node);
+      if (!sameOrder) desired.forEach((node) => statusRow.appendChild(node));
+    }
+
+    const cause = card.querySelector('.lb-live-sncf-cause');
+    const top = card.querySelector('.lb-live-card-top');
+    if (cause && top && cause.previousElementSibling !== top){
+      top.insertAdjacentElement('afterend', cause);
+    }
+
+    const meta = card.querySelector('.lb-live-meta');
+    if (meta){
+      meta.classList.add('lb-live-community-meta');
+      const children = Array.from(meta.children);
+      const ranked = children.map((node, index) => {
+        const { kind, chip } = liveMetaKind(node);
+        if (kind) node.classList.add(`lb-live-meta-${kind}`);
+        if (chip){
+          chip.classList.add(`lb-live-chip--community-${kind || 'info'}`);
+          if (kind === 'delay'){
+            const match = String(chip.textContent || '').match(/\+\s*(\d+)\s*min/i);
+            if (match) {
+              const wanted = `+${Number(match[1])} min*`;
+              if (String(chip.textContent || '').trim() !== wanted) chip.textContent = wanted;
+            }
+            chip.title = 'Retard signalé par la communauté';
+          } else if (kind === 'cancel'){
+            if (!/\*$/.test(String(chip.textContent || '').trim())) chip.textContent = `${String(chip.textContent || '').trim()}*`;
+            chip.title = 'Suppression signalée par la communauté';
+          }
+        }
+        const rank = ({ delay:0, cancel:0, station:1, info:2, comment:3 })[kind] ?? 4;
+        return { node, rank, index };
+      });
+      const sorted = ranked.sort((a,b) => a.rank - b.rank || a.index - b.index);
+      const currentOrder = Array.from(meta.children);
+      const sameOrder = sorted.length === currentOrder.length
+        && sorted.every(({ node }, index) => currentOrder[index] === node);
+      if (!sameOrder) sorted.forEach(({ node }) => meta.appendChild(node));
+    }
+  }
+
+  function decorateLiveTravelerCards(){
+    liveDecorateQueued = false;
+    const root = document.getElementById('lbLiveTrainCards');
+    if (!root) return;
+    root.querySelectorAll('.lb-live-card').forEach(decorateLiveTravelerCard);
+  }
+
+  function scheduleLiveTravelerDecorate(){
+    if (liveDecorateQueued) return;
+    liveDecorateQueued = true;
+    requestAnimationFrame(decorateLiveTravelerCards);
+  }
+
+  function bindLiveCardsObserver(){
+    const root = document.getElementById('lbLiveTrainCards');
+    if (!root || liveCardsObserver) return;
+    liveCardsObserver = new MutationObserver(() => scheduleLiveTravelerDecorate());
+    liveCardsObserver.observe(root, { childList:true, subtree:true });
+    scheduleLiveTravelerDecorate();
+  }
+
   function installStyle(){
     if (document.getElementById('lb-community-map-bridge-v1-style')) return;
     const style = document.createElement('style');
@@ -219,7 +321,40 @@
       .lb-signal-gps-estimate:hover,.lb-signal-gps-estimate:focus-visible{border-color:#8ef8ff;box-shadow:0 0 0 2px rgba(0,234,255,.12)}
       .lb-signal-gps-estimate.is-loading{opacity:.7;cursor:wait}
       .lb-signal-gps-estimate[hidden]{display:none!important}
-      @media(max-width:620px){.lb-signal-gps-estimate{flex:1 1 100%;width:100%}}
+
+      /* LIVE voyageurs : officiel > communauté > détails. */
+      html[data-lb-v4-live="1"] #lbLiveModal .lb-live-status-row{display:flex!important;align-items:center!important;justify-content:flex-end!important;gap:4px!important;flex-wrap:wrap!important}
+      html[data-lb-v4-live="1"] #lbLiveModal .lb-live-status-row .lb-live-status{order:1}
+      html[data-lb-v4-live="1"] #lbLiveModal .lb-live-status-row .lb-live-community-alert{order:2}
+      html[data-lb-v4-live="1"] #lbLiveModal .lb-live-status-row .lb-live-passenger{order:3}
+      html[data-lb-v4-live="1"] #lbLiveModal .lb-live-community-alert{box-sizing:border-box!important;display:inline-flex!important;align-items:center!important;justify-content:center!important;width:auto!important;min-width:0!important;height:18px!important;min-height:18px!important;padding:0 6px!important;border:1px solid rgba(183,140,255,.52)!important;border-radius:999px!important;background:rgba(77,43,113,.78)!important;color:#f3ebff!important;font:900 .57rem/1 "Rajdhani",system-ui,sans-serif!important;letter-spacing:.01em!important;box-shadow:none!important;white-space:nowrap!important}
+      html[data-lb-v4-live="1"] #lbLiveModal .lb-live-community-alert.lb-live-user-alert--cancel{background:rgba(94,45,112,.82)!important;border-color:rgba(203,151,255,.58)!important;color:#f6eaff!important}
+      html[data-lb-v4-live="1"] #lbLiveModal .lb-live-passenger[hidden]{display:none!important}
+
+      html[data-lb-v4-live="1"] #lbLiveModal .lb-live-sncf-cause{box-sizing:border-box!important;width:100%!important;max-width:none!important;margin:5px 0 0!important;padding:4px 7px!important;border:0!important;border-left:2px solid var(--lb-live-accent,#ff9d4d)!important;border-radius:4px!important;background:color-mix(in srgb,var(--lb-live-accent,#ff9d4d) 7%,transparent)!important;color:#d8edf1!important;font:700 .62rem/1.18 "Rajdhani",system-ui,sans-serif!important;text-align:left!important;white-space:normal!important;overflow-wrap:anywhere!important;box-shadow:none!important}
+      html[data-lb-v4-live="1"] #lbLiveModal .lb-live-sncf-cause--cancel{border-left-color:#ff5967!important;background:rgba(255,89,103,.055)!important}
+
+      html[data-lb-v4-live="1"] #lbLiveModal .lb-live-community-meta{display:flex!important;align-items:center!important;gap:5px!important;flex-wrap:wrap!important;margin:7px 0 0!important;padding:6px 0 0!important;border-top:1px solid rgba(183,140,255,.15)!important}
+      html[data-lb-v4-live="1"] #lbLiveModal .lb-live-community-meta>.lb-stop-chip-wrap,
+      html[data-lb-v4-live="1"] #lbLiveModal .lb-live-community-meta>.lb-live-chip{margin:0!important}
+      html[data-lb-v4-live="1"] #lbLiveModal .lb-live-community-meta .lb-live-chip{box-sizing:border-box!important;min-height:18px!important;height:18px!important;padding:0 6px!important;border-radius:999px!important;font:800 .57rem/1 "Rajdhani",system-ui,sans-serif!important;box-shadow:none!important;white-space:nowrap!important}
+      html[data-lb-v4-live="1"] #lbLiveModal .lb-live-chip--community-delay,
+      html[data-lb-v4-live="1"] #lbLiveModal .lb-live-chip--community-cancel{border:1px solid rgba(183,140,255,.48)!important;background:rgba(77,43,113,.66)!important;color:#f1e8ff!important}
+      html[data-lb-v4-live="1"] #lbLiveModal .lb-live-chip--community-station{border:1px solid rgba(183,140,255,.18)!important;background:rgba(55,39,75,.42)!important;color:#cfbddf!important}
+      html[data-lb-v4-live="1"] #lbLiveModal .lb-live-chip--community-comment,
+      html[data-lb-v4-live="1"] #lbLiveModal .lb-live-chip--community-info{border:1px solid rgba(111,151,165,.16)!important;background:rgba(8,27,38,.55)!important;color:#a9c0c7!important}
+      html[data-lb-v4-live="1"] #lbLiveModal .lb-live-community-meta .lb-stop-chip-wrap{display:inline-flex!important;align-items:center!important;gap:3px!important}
+      html[data-lb-v4-live="1"] #lbLiveModal .lb-live-community-meta .lb-signal-vote{display:inline-flex!important;align-items:center!important;gap:1px!important;height:18px!important;padding:0 2px!important;border:0!important;background:transparent!important}
+      html[data-lb-v4-live="1"] #lbLiveModal .lb-live-community-meta .lb-signal-vote-btn{box-sizing:border-box!important;width:17px!important;min-width:17px!important;height:17px!important;min-height:17px!important;padding:0!important;border:0!important;border-radius:50%!important;background:rgba(8,27,38,.68)!important;font-size:9px!important;line-height:17px!important;box-shadow:none!important;transform:none!important}
+      html[data-lb-v4-live="1"] #lbLiveModal .lb-live-community-meta .lb-signal-vote-count{min-width:9px!important;color:#9fb4bc!important;font:800 .55rem/1 "Rajdhani",system-ui,sans-serif!important;text-align:center!important}
+
+      @media(max-width:620px){
+        .lb-signal-gps-estimate{flex:1 1 100%;width:100%}
+        html[data-lb-v4-live="1"] #lbLiveModal .lb-live-community-alert{height:17px!important;min-height:17px!important;padding:0 5px!important;font-size:.54rem!important}
+        html[data-lb-v4-live="1"] #lbLiveModal .lb-live-sncf-cause{margin-top:4px!important;padding:3px 6px!important;font-size:.59rem!important}
+        html[data-lb-v4-live="1"] #lbLiveModal .lb-live-community-meta{gap:4px!important;margin-top:6px!important;padding-top:5px!important}
+        html[data-lb-v4-live="1"] #lbLiveModal .lb-live-community-meta .lb-live-chip{height:17px!important;min-height:17px!important;padding:0 5px!important;font-size:.54rem!important}
+      }
     `;
     document.head.appendChild(style);
   }
@@ -298,9 +433,11 @@
 
   window.addEventListener('lb:community-presence-changed', () => {
     window.setTimeout(() => broadcastSnapshot(true), 0);
+    scheduleLiveTravelerDecorate();
   });
   window.addEventListener('lb:community-data-changed', () => {
     window.setTimeout(() => broadcastSnapshot(false), 0);
+    scheduleLiveTravelerDecorate();
   });
   document.addEventListener('lb:auth-state', () => {
     window.setTimeout(() => broadcastSnapshot(true), 0);
@@ -317,6 +454,11 @@
     ensureGpsButton();
     updateGpsButtonVisibility();
     bindMapFrames();
+    bindLiveCardsObserver();
+    window.setTimeout(() => {
+      bindLiveCardsObserver();
+      scheduleLiveTravelerDecorate();
+    }, 800);
     window.setTimeout(() => broadcastSnapshot(true), 1200);
     if (DEMO_MODE) console.info(`[Voix du Bétail / carte] mode démonstration actif pour le train ${DEMO_TRAIN}`);
   };
