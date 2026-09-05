@@ -59,9 +59,16 @@
     return `🐮${presence}${delay}`;
   }
 
+  function markerBadgeText(item){
+    if (!item) return '';
+    const presence = item.presenceCount > 0 ? ` (${item.presenceCount})` : '';
+    const delay = item.delayMin > 0 ? `${presence ? ' ·' : ''} +${item.delayMin} min` : '';
+    return `🐮${presence}${delay}`;
+  }
+
   function badgeHtmlForTrain(train){
     const item = communityForTrain(trainNumberFromData(train));
-    const label = badgeText(item);
+    const label = markerBadgeText(item);
     if (!label) return '';
     const details = [
       item.presenceCount > 0 ? `${item.presenceCount} voyageur${item.presenceCount > 1 ? 's' : ''} signalé${item.presenceCount > 1 ? 's' : ''} à bord` : '',
@@ -116,7 +123,7 @@
       if (!travelerLayerEnabled) return;
       const number = normalizeTrain(marker.getAttribute('data-train-number') || marker.textContent);
       const item = communityForTrain(number);
-      const label = badgeText(item);
+      const label = markerBadgeText(item);
       if (!label) return;
       const badge = document.createElement('span');
       badge.className = 'lb-map-traveler-badge';
@@ -219,7 +226,7 @@
     style.id = 'lb-community-traveler-v1-style';
     style.textContent = `
       .cow-marker{position:relative!important}
-      .lb-map-traveler-badge{position:absolute;z-index:7;left:50%;top:calc(100% + 2px);transform:translateX(-50%);display:inline-flex;align-items:center;justify-content:center;min-height:17px;padding:1px 5px;border:1px solid rgba(118,241,255,.68);border-radius:999px;background:rgba(3,18,31,.94);color:#f2fdff;font-size:9px;font-weight:850;line-height:1;letter-spacing:0;white-space:nowrap;box-shadow:0 2px 6px rgba(0,0,0,.48),0 0 7px rgba(0,234,255,.15);pointer-events:none}
+      .lb-map-traveler-badge{position:absolute;z-index:7;left:50%;top:calc(100% + 1px);transform:translateX(-50%);display:inline-flex;align-items:center;justify-content:center;min-height:12px;padding:1px 3px;border:0;border-left:2px solid rgba(117,238,250,.78);border-radius:3px;background:rgba(3,18,31,.86);color:#dffcff;font-size:7.5px;font-weight:800;line-height:1;letter-spacing:0;white-space:nowrap;box-shadow:0 1px 3px rgba(0,0,0,.34);pointer-events:none}
       html.ber-arrow-z-far .lb-map-traveler-badge,html.ber-arrow-z-wide .lb-map-traveler-badge,html.lb-travelers-layer-off .lb-map-traveler-badge{display:none!important}
       .cow-marker.train-selected .lb-map-traveler-badge,.cow-marker.ber-focus-current .lb-map-traveler-badge{display:inline-flex!important}
       .lb-map-trip-community{display:flex;align-items:stretch;gap:6px;padding:6px;border:1px solid rgba(0,234,255,.22);border-radius:10px;background:rgba(4,24,40,.74)}
@@ -230,9 +237,8 @@
       .lb-map-trip-community-actions{display:flex;gap:5px;align-items:center}
       .lb-map-trip-community-actions button{min-height:30px;padding:5px 7px;border:1px solid rgba(0,234,255,.3);border-radius:8px;background:rgba(5,31,51,.95);color:#eefcff;font-size:9px;font-weight:800;cursor:pointer;white-space:nowrap}
       .lb-map-trip-community-actions button:hover,.lb-map-trip-community-actions button:focus-visible{border-color:#8ef8ff;color:#fff}
-      .trip-stop .lb-stop-traveler-delay-right{position:absolute;z-index:2;right:8px;bottom:1px;color:#75eefa;font-size:8px;font-weight:850;line-height:1;white-space:nowrap;text-align:right;text-shadow:0 0 5px rgba(0,234,255,.18)}
-      .trip-stop:has(.lb-stop-traveler-delay-right){padding-bottom:11px!important}
-      @media(max-width:520px){.lb-map-trip-community{gap:4px;padding:5px}.lb-map-trip-community-actions button{padding:5px 6px}.lb-map-trip-community-title{font-size:8px}.lb-map-trip-community-summary strong{font-size:10px}}
+      .trip-stop .lb-stop-traveler-delay-right{position:absolute;z-index:2;right:8px;top:16px;color:#75eefa;font-size:7.5px;font-weight:850;line-height:1;white-space:nowrap;text-align:right;text-shadow:none}
+      @media(max-width:520px){.lb-map-trip-community{gap:4px;padding:5px}.lb-map-trip-community-actions button{padding:5px 6px}.lb-map-trip-community-title{font-size:8px}.lb-map-trip-community-summary strong{font-size:10px}.trip-stop .lb-stop-traveler-delay-right{right:6px;top:15px;font-size:7px}}
     `;
     document.head.appendChild(style);
     document.documentElement.classList.toggle('lb-travelers-layer-off', !travelerLayerEnabled);
