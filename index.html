@@ -12722,9 +12722,2775 @@ document.addEventListener('DOMContentLoaded', () => {
       const group = groups.get(key) || {
         key, label, total: 0, on_time: 0, delayed: 0, canceled: 0, partial: 0, impacted: 0
       };
-      group.total +
-... 116645 bytes omitted ...
- const from = fromDate.toISOString().slice(0, 10);
+      group.total += toNumber(row.total);
+      group.on_time += toNumber(row.on_time);
+      group.delayed += toNumber(row.delayed);
+      group.canceled += toNumber(row.canceled);
+      group.partial += toNumber(row.partial);
+      group.impacted += toNumber(row.impacted);
+      groups.set(key, group);
+    }
+
+    return [...groups.values()].map((group) => ({
+      ...group,
+      punctuality_rate: group.total ? (group.on_time / group.total) * 100 : 0
+    }));
+  }
+
+  function destroyChart(name){
+    if (charts[name]) {
+      try { charts[name].destroy(); } catch (_) {}
+      charts[name] = null;
+    }
+  }
+
+  function chartBaseOptions(){
+    return {
+      responsive: true,
+      maintainAspectRatio: false,
+      animation: { duration: 320 },
+      interaction: { mode: 'index', intersect: false },
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          backgroundColor: 'rgba(4,17,27,.96)',
+          borderColor: 'rgba(94,231,242,.3)',
+          borderWidth: 1,
+          titleColor: '#eaffff',
+          bodyColor: '#bad4d9',
+          padding: 10
+        }
+      },
+      scales: {
+        x: {
+          grid: { display: false },
+          ticks: { color: '#729aa4', maxRotation: 0, autoSkip: true, maxTicksLimit: 9 }
+        },
+        y: {
+          beginAtZero: true,
+          max: 100,
+          grid: { color: COLORS.grid },
+          ticks: { color: '#729aa4', callback: (value) => `${value}%` }
+        }
+      }
+    };
+  }
+
+  function renderEvolution(){
+    const series = aggregateDaily(currentOverview?.daily, granularity);
+    const pointColors = series.map((row) => punctualityColor(row.punctuality_rate));
+    const labels = { day: 'par jour', week: 'par semaine', month: 'par mois' };
+    const detailMeta = byId('statsV2EvolutionMeta');
+    const miniMeta = byId('statsV2MiniEvolutionMeta');
+    if (detailMeta) detailMeta.textContent = `${labels[granularity]} · moyenne pondérée`;
+    if (miniMeta) miniMeta.textContent = labels[granularity];
+    if (typeof Chart === 'undefined') return;
+
+    const dataset = {
+      label: 'Ponctualité',
+      data: series.map((row) => Number(row.punctuality_rate.toFixed(1))),
+      borderColor: pointColors,
+      backgroundColor: pointColors,
+      pointBackgroundColor: pointColors,
+      pointBorderColor: pointColors,
+      borderWidth: 0,
+      borderRadius: 5,
+      maxBarThickness: 34
+    };
+    const tooltipCallbacks = {
+      label: (ctx) => `Ponctualité : ${fmtPct(ctx.parsed.y)}`,
+      afterLabel: (ctx) => {
+        const row = series[ctx.dataIndex];
+        return `${fmtInt(row?.total)} circulation(s) observée(s)`;
+      }
+    };
+
+    const miniCanvas = byId('statsV2MiniEvolutionChart');
+    const evolutionSummary = byId('statsV2EvolutionSummary');
+    if (miniCanvas && !evolutionSummary?.hidden) {
+      destroyChart('evolutionMini');
+      charts.evolutionMini = new Chart(miniCanvas, {
+        type: 'bar',
+        data: { labels: series.map((row) => row.label), datasets: [{ ...dataset, maxBarThickness: 22 }] },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          animation: { duration: 260 },
+          interaction: { mode: 'index', intersect: false },
+          plugins: {
+            legend: { display: false },
+            tooltip: {
+              ...chartBaseOptions().plugins.tooltip,
+              callbacks: tooltipCallbacks
+            }
+          },
+          scales: {
+            x: {
+              grid: { display: false },
+              border: { display: false },
+              ticks: {
+                color: '#6f9ca7',
+                font: { size: 8, weight: '700' },
+                maxRotation: 0,
+                autoSkip: true,
+                maxTicksLimit: 5
+              }
+            },
+            y: {
+              min: 0,
+              max: 100,
+              display: false,
+              grid: { display: false },
+              border: { display: false }
+            }
+          }
+        }
+      });
+    } else {
+      destroyChart('evolutionMini');
+    }
+
+    const canvas = byId('statsV2EvolutionChart');
+    const detail = byId('statsV2EvolutionDetail');
+    if (!canvas || detail?.hidden) {
+      destroyChart('evolution');
+      return;
+    }
+    destroyChart('evolution');
+    charts.evolution = new Chart(canvas, {
+      type: 'bar',
+      data: { labels: series.map((row) => row.label), datasets: [dataset] },
+      options: {
+        ...chartBaseOptions(),
+        plugins: {
+          ...chartBaseOptions().plugins,
+          tooltip: {
+            ...chartBaseOptions().plugins.tooltip,
+            callbacks: tooltipCallbacks
+          }
+        }
+      }
+    });
+  }
+
+  function renderHourly(payload){
+    const source = Array.isArray(payload?.hourly) ? payload.hourly : [];
+    const byHour = new Map(source.map((row) => [Number(row.hour), row]));
+    const rows = Array.from({ length: 25 }, (_, hour) => {
+      const row = byHour.get(hour);
+      return row ? { ...row, hour } : { hour, total: 0, punctuality_rate: null };
+    });
+    const canvas = byId('statsV2HourlyChart');
+    if (!canvas || typeof Chart === 'undefined') return;
+    destroyChart('hourly');
+    const hourlyColors = rows.map((row) =>
+      toNumber(row.total) > 0 ? punctualityColor(row.punctuality_rate) : 'transparent'
+    );
+    charts.hourly = new Chart(canvas, {
+      type: 'bar',
+      data: {
+        labels: rows.map((row) => `${String(row.hour).padStart(2, '0')}h`),
+        datasets: [{
+          label: 'Ponctualité',
+          data: rows.map((row) => toNumber(row.total) > 0 ? toNumber(row.punctuality_rate) : null),
+          backgroundColor: hourlyColors,
+          borderColor: hourlyColors,
+          borderWidth: 1,
+          borderRadius: 5,
+          maxBarThickness: 22
+        }]
+      },
+      options: {
+        ...chartBaseOptions(),
+        plugins: {
+          ...chartBaseOptions().plugins,
+          tooltip: {
+            ...chartBaseOptions().plugins.tooltip,
+            callbacks: {
+              label: (ctx) => ctx.parsed.y == null ? 'Aucune circulation observée' : `Ponctualité : ${fmtPct(ctx.parsed.y)}`,
+              afterLabel: (ctx) => `${fmtInt(rows[ctx.dataIndex]?.total)} train(s)`
+            }
+          }
+        }
+      }
+    });
+  }
+
+  function renderCauses(payload){
+    const host = byId('statsV2CauseList');
+    if (!host) return;
+    const causes = (Array.isArray(payload?.causes) ? payload.causes : []).slice(0, 7);
+    if (!causes.length) {
+      host.innerHTML = '<div class="stats-v2__empty">Aucune cause détaillée disponible sur cette période.</div>';
+      return;
+    }
+    const max = Math.max(1, ...causes.map((item) => toNumber(item.occurrences)));
+    host.innerHTML = causes.map((item) => {
+      const width = Math.max(4, (toNumber(item.occurrences) / max) * 100);
+      const label = String(item.cause || 'Cause non précisée').replace(/\s+/g, ' ').trim();
+      return `
+        <div class="stats-v2__cause-row" title="${escapeHtml(label)}">
+          <span class="stats-v2__cause-label">${escapeHtml(label)}</span>
+          <span class="stats-v2__cause-track"><i style="width:${width.toFixed(1)}%"></i></span>
+          <strong class="stats-v2__cause-count">${fmtInt(item.occurrences)}</strong>
+        </div>
+      `;
+    }).join('');
+  }
+
+  function renderTopTrains(payload){
+    const host = byId('statsV2TrainList');
+    const datalist = byId('statsV2TrainListData');
+    if (!host) return;
+    const trains = (Array.isArray(payload?.dashboard?.top_trains) ? payload.dashboard.top_trains : []).slice(0, 10);
+    if (datalist) {
+      const values = new Set([
+        settings.favoriteTrain,
+        window.lbPrefsCache?.favoriteMorningTrain,
+        window.lbPrefsCache?.favoriteEveningTrain,
+        ...trains.map((item) => item.train_number)
+      ].filter(Boolean).map(String));
+      datalist.innerHTML = [...values].map((value) => `<option value="${escapeHtml(value)}"></option>`).join('');
+    }
+    if (!trains.length) {
+      host.innerHTML = '<div class="stats-v2__empty">Aucun classement disponible sur cette période.</div>';
+      return;
+    }
+    host.innerHTML = trains.map((item, index) => {
+      const total = toNumber(item.total);
+      const impacted = toNumber(item.impacted);
+      const rate = total ? (impacted / total) * 100 : 0;
+      return `
+        <button class="stats-v2__train-row" type="button" data-stats-train="${escapeHtml(item.train_number)}" style="--impact:${Math.min(100, rate).toFixed(1)}%">
+          <span class="stats-v2__rank">${index + 1}</span>
+          <span class="stats-v2__train-identity">
+            <span class="stats-v2__train-number">TER ${escapeHtml(item.train_number)}</span>
+            <span class="stats-v2__train-meter"><i></i></span>
+          </span>
+          <span class="stats-v2__train-impact">
+            <strong>${fmtPct(rate, 0)}</strong>
+            <small>touchés · ${fmtInt(impacted)}/${fmtInt(total)}</small>
+          </span>
+          <span class="stats-v2__train-stats">
+            <span class="stats-v2__chip" style="--chip-color:var(--sv2-delay)"><strong>${fmtInt(item.delayed)}</strong><small>retards</small></span>
+            <span class="stats-v2__chip" style="--chip-color:var(--sv2-partial)"><strong>${fmtInt(item.partial)}</strong><small>partiels</small></span>
+            <span class="stats-v2__chip" style="--chip-color:var(--sv2-cancel)"><strong>${fmtInt(item.canceled)}</strong><small>suppr.</small></span>
+          </span>
+        </button>
+      `;
+    }).join('');
+  }
+
+  function renderInsights(payload){
+    const cards = payload?.cards || {};
+    const worstDay = cards.worst_day;
+    const worstHour = cards.worst_hour;
+    const topTrain = cards.top_train;
+    const topCause = cards.top_cause;
+    byId('statsV2WorstDay').textContent = worstDay
+      ? `${humanDate(worstDay.date, { year: true })} · ${fmtPct(worstDay.impact_rate)} touchés`
+      : '—';
+    byId('statsV2WorstHour').textContent = worstHour
+      ? `${worstHour.hour}h · ${fmtPct(worstHour.impact_rate)} touchés`
+      : '—';
+    byId('statsV2WorstTrain').textContent = topTrain
+      ? `TER ${topTrain.train_number} · ${fmtInt(topTrain.impacted)} perturbation(s)`
+      : '—';
+    byId('statsV2TopCause').textContent = topCause
+      ? `${String(topCause.cause || 'Non précisée').replace(/\s+/g, ' ').trim()}`
+      : '—';
+  }
+
+  function renderOverview(){
+    if (!currentOverview) return;
+    const current = cardsOf(currentOverview);
+    const ring = byId('statsV2Ring');
+    const color = punctualityColor(current.punctuality);
+    if (ring) {
+      const boundedPunctuality = Math.max(0, Math.min(100, current.punctuality));
+      ring.style.setProperty('--stats-v2-ring', String(boundedPunctuality), 'important');
+      ring.style.setProperty('--stats-v2-ring-color', color, 'important');
+      ring.style.setProperty(
+        'background',
+        `conic-gradient(${color} ${boundedPunctuality}%, rgba(75,116,127,.23) 0)`,
+        'important'
+      );
+      ring.setAttribute('aria-label', `Ponctualité ${fmtPct(current.punctuality)}`);
+    }
+    byId('statsV2Punctuality').textContent = fmtPct(current.punctuality);
+    byId('statsV2PunctualityCopy').textContent =
+      `${fmtInt(current.onTime)} circulation(s) à l’heure sur ${fmtInt(current.total)} observée(s).`;
+
+    byId('statsV2Total').textContent = fmtInt(current.total);
+    byId('statsV2TotalMeta').textContent = `${dateDiffInclusive(currentRange.from, currentRange.to)} jour(s) calendaires`;
+    byId('statsV2Delayed').textContent = fmtInt(current.delayed);
+    byId('statsV2DelayedMeta').textContent = current.total ? fmtPct((current.delayed / current.total) * 100) : '—';
+    byId('statsV2Partial').textContent = fmtInt(current.partial);
+    byId('statsV2PartialMeta').textContent = current.total ? fmtPct((current.partial / current.total) * 100) : '—';
+    byId('statsV2Canceled').textContent = fmtInt(current.canceled);
+    byId('statsV2CanceledMeta').textContent = current.total ? fmtPct((current.canceled / current.total) * 100) : '—';
+
+    setWidth('statsV2StatusOnTime', current.onTime, current.total);
+    setWidth('statsV2StatusDelayed', current.delayed, current.total);
+    setWidth('statsV2StatusPartial', current.partial, current.total);
+    setWidth('statsV2StatusCanceled', current.canceled, current.total);
+    byId('statsV2LegendOnTime').textContent = fmtInt(current.onTime);
+    byId('statsV2LegendDelayed').textContent = fmtInt(current.delayed);
+    byId('statsV2LegendPartial').textContent = fmtInt(current.partial);
+    byId('statsV2LegendCanceled').textContent = fmtInt(current.canceled);
+    byId('statsV2StatusMeta').textContent = `${fmtInt(current.impacted)} circulation(s) perturbée(s)`;
+
+    renderEvolution();
+    renderHourly(currentOverview);
+    renderCauses(currentOverview);
+    renderTopTrains(currentOverview);
+    renderInsights(currentOverview);
+    applyModuleVisibility();
+  }
+
+  async function loadOverview(options = {}){
+    const range = options.range || rangeForPeriod(periodKey);
+    if (!range || range.from > range.to || range.to < DATA_START) {
+      showError('Les statistiques sont disponibles à partir du 1er janvier 2026.');
+      return;
+    }
+    if (dateDiffInclusive(range.from, range.to) > 370) {
+      showError('Choisis une période de 12 mois maximum pour garder un affichage fluide.');
+      return;
+    }
+    currentRange = range;
+    byId('statsV2From').value = range.from;
+    byId('statsV2To').value = range.to;
+    byId('statsV2RangeLabel').textContent = rangeLabel(range);
+    showError('');
+    if (activeAbort) activeAbort.abort();
+    activeAbort = new AbortController();
+    setBusy(true, 'Analyse des circulations…');
+
+    try {
+      currentOverview = await apiJson(overviewPath(range), { signal: activeAbort.signal });
+      renderOverview();
+      setLiveSuccess(currentOverview);
+      showError('');
+    } catch (error) {
+      if (error?.name === 'AbortError') return;
+      const message = error?.code === 401
+        ? 'Connecte-toi pour accéder aux statistiques complètes et à ton tableau personnalisé.'
+        : `Impossible de charger les statistiques : ${error?.message || error}`;
+      showError(message);
+      byId('statsV2LiveText').textContent = 'Données statistiques indisponibles';
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function setPeriod(key, options = {}){
+    periodKey = key;
+    hasUserInteracted = hasUserInteracted || options.user === true;
+    const periodSelect = byId('statsV2PeriodSelect');
+    if (periodSelect && periodSelect.value !== key) periodSelect.value = key;
+    root.querySelectorAll('[data-period]').forEach((button) => {
+      button.classList.toggle('is-active', button.dataset.period === key);
+    });
+    const custom = byId('statsV2CustomRange');
+    if (custom) custom.hidden = key !== 'custom';
+    const automaticRange = rangeForPeriod(key);
+    if (automaticRange && (key !== 'custom' || options.loadCustom)) {
+      setGranularity(granularityForRange(automaticRange));
+    }
+    if (key !== 'custom' || options.loadCustom) loadOverview();
+  }
+
+  function setView(view, options = {}){
+    activeView = ['overview', 'train', 'stop', 'compare'].includes(view) ? view : 'overview';
+    const isTargetView = activeView === 'train' || activeView === 'stop';
+    root.querySelectorAll('[data-view]').forEach((button) => {
+      const active = button.dataset.view === activeView;
+      button.classList.toggle('is-active', active);
+      button.setAttribute('aria-selected', String(active));
+      button.setAttribute('aria-pressed', String(active));
+    });
+    root.querySelectorAll('[data-entry-views]').forEach((card) => {
+      const views = String(card.dataset.entryViews || '').split(/\s+/).filter(Boolean);
+      const active = views.includes(activeView);
+      card.classList.toggle('is-active', active);
+      card.setAttribute('aria-pressed', String(active));
+    });
+    const targetChoices = byId('statsV2TargetChoices');
+    const targetChoice = byId('statsV2TargetChoice');
+    if (targetChoices) targetChoices.hidden = !isTargetView;
+    if (targetChoice) targetChoice.setAttribute('aria-expanded', String(isTargetView));
+    root.querySelectorAll('[data-view-panel]').forEach((panel) => {
+      panel.hidden = panel.dataset.viewPanel !== activeView;
+    });
+    if (activeView === 'train' && options.autoRun !== false) {
+      const value = String(byId('statsV2TrainInput')?.value || settings.favoriteTrain || '').trim();
+      if (value && value !== trainLoaded) runTrain();
+    }
+    if (activeView === 'stop' && options.autoRun !== false) {
+      const value = String(byId('statsV2StopInput')?.value || settings.favoriteStop || '').trim();
+      if (value && value !== stopLoaded) runStop();
+    }
+  }
+
+  function normalizeTrain(value){
+    const match = String(value || '').replace(/\s+/g, '').match(/\d{4,6}/);
+    return match ? match[0] : '';
+  }
+
+  function bucketOf(row){
+    const bucket = String(row?.bucket || row?.status || '').toUpperCase();
+    if (bucket.includes('PARTIAL')) return 'PARTIAL';
+    if (bucket.includes('CANCEL') || bucket.includes('SUPPR') || bucket.includes('ANNUL')) return 'CANCELED';
+    if (bucket.includes('DELAY') || toNumber(row?.value) > 0) return 'DELAYED';
+    if (bucket === 'ON_TIME' || bucket === 'ONTIME' || !bucket) return 'ON_TIME';
+    return 'NO_DATA';
+  }
+
+  function renderTrainWeekdays(rows){
+    const names = ['dimanche','lundi','mardi','mercredi','jeudi','vendredi','samedi'];
+    const stats = names.map((name) => ({ name, total: 0, impacted: 0 }));
+    rows.forEach((row) => {
+      if (!row?.date) return;
+      const item = stats[new Date(`${row.date}T12:00:00Z`).getUTCDay()];
+      const bucket = bucketOf(row);
+      item.total += 1;
+      if (!['ON_TIME', 'NO_DATA'].includes(bucket)) item.impacted += 1;
+    });
+    const usable = stats.filter((item) => item.total > 0).map((item) => ({
+      ...item,
+      rate: (item.impacted / item.total) * 100
+    }));
+    const best = [...usable].sort((a, b) => a.rate - b.rate || b.total - a.total)[0];
+    const worst = [...usable].sort((a, b) => b.rate - a.rate || b.total - a.total)[0];
+    byId('statsV2TrainBestWeekday').textContent = best ? best.name : '—';
+    byId('statsV2TrainWorstWeekday').textContent = worst ? worst.name : '—';
+    byId('statsV2TrainBestWeekdayMeta').textContent = best ? `${fmtPct(best.rate, 0)} perturbés · ${best.total} circulation(s)` : 'Pas assez de données';
+    byId('statsV2TrainWorstWeekdayMeta').textContent = worst ? `${fmtPct(worst.rate, 0)} perturbés · ${worst.total} circulation(s)` : 'Pas assez de données';
+  }
+
+  function renderTrainCalendar(rows){
+    const host = byId('statsV2TrainCalendar');
+    if (!host) return;
+    const rowByDate = new Map(rows.filter((row) => row?.date).map((row) => [row.date, row]));
+    const months = new Map();
+    for (let iso = currentRange.from; iso <= currentRange.to; iso = dateAdd(iso, 1)) {
+      const month = iso.slice(0, 7);
+      if (!months.has(month)) months.set(month, []);
+      months.get(month).push(iso);
+    }
+    host.innerHTML = [...months.entries()].map(([month, days]) => {
+      const label = new Intl.DateTimeFormat('fr-FR', { month: 'long', year: 'numeric', timeZone: 'UTC' })
+        .format(new Date(`${month}-01T12:00:00Z`));
+      const first = new Date(`${days[0]}T12:00:00Z`).getUTCDay();
+      const offset = (first + 6) % 7;
+      const blanks = '<i class="stats-v2__calendar-blank"></i>'.repeat(offset);
+      const cells = days.map((iso) => {
+        const row = rowByDate.get(iso);
+        const bucket = row ? bucketOf(row) : 'NO_DATA';
+        const info = STATUS[bucket] || STATUS.NO_DATA;
+        const detail = row?.value == null ? '' : ` · ${fmtDelay(row.value)}`;
+        const tooltip = `${humanDate(iso, { year: true })} · ${info.label}${detail}`;
+        return `<button class="stats-v2__calendar-day" type="button" style="--day-color:${info.color}" data-tooltip="${escapeHtml(tooltip)}" aria-label="${escapeHtml(tooltip)}"><span>${Number(iso.slice(-2))}</span></button>`;
+      }).join('');
+      return `<section class="stats-v2__calendar-month"><h4>${escapeHtml(label)}</h4><div class="stats-v2__calendar-weekdays"><span>L</span><span>M</span><span>M</span><span>J</span><span>V</span><span>S</span><span>D</span></div><div class="stats-v2__calendar-days">${blanks}${cells}</div></section>`;
+    }).join('');
+  }
+
+  function circulationCause(row){
+    if (!row || typeof row !== 'object') return '';
+    const candidates = [
+      row.cause,
+      row.reason,
+      row.disruption_cause,
+      row.sncf_disruption_cause,
+      row.sncfCause,
+      row.cause_text,
+      row.causeText,
+      row.message,
+      row.description
+    ];
+    if (Array.isArray(row.causes)) candidates.push(...row.causes);
+    if (Array.isArray(row.disruptions)) {
+      row.disruptions.forEach((item) => {
+        if (typeof item === 'string') candidates.push(item);
+        else if (item && typeof item === 'object') {
+          candidates.push(item.cause, item.reason, item.message, item.description);
+        }
+      });
+    }
+    const texts = candidates
+      .flatMap((value) => Array.isArray(value) ? value : [value])
+      .map((value) => {
+        if (typeof value === 'string' || typeof value === 'number') return String(value).trim();
+        if (value && typeof value === 'object') {
+          return String(value.label || value.name || value.text || value.message || '').trim();
+        }
+        return '';
+      })
+      .filter(Boolean)
+      .filter((value) => !/^(?:à l['’]heure|en retard|retard|supprim[ée]|suppression|partiel(?:le)?)$/i.test(value));
+    return [...new Set(texts)][0] || '';
+  }
+
+  function renderTrain(payload, train, stop){
+    const rows = [...(Array.isArray(payload?.series) ? payload.series : [])]
+      .sort((a, b) => String(a.date).localeCompare(String(b.date)));
+    trainLoaded = train;
+    const counts = { ON_TIME: 0, DELAYED: 0, PARTIAL: 0, CANCELED: 0, NO_DATA: 0 };
+    const delayedValues = [];
+    for (const row of rows) {
+      const bucket = bucketOf(row);
+      counts[bucket] += 1;
+      if (bucket === 'DELAYED' && Number.isFinite(Number(row.value))) delayedValues.push(Number(row.value));
+    }
+    const total = rows.length;
+    const punctuality = total ? (counts.ON_TIME / total) * 100 : 0;
+    const avg = delayedValues.length ? delayedValues.reduce((a, b) => a + b, 0) / delayedValues.length : 0;
+    const max = delayedValues.length ? Math.max(...delayedValues) : 0;
+    const calendarMode = dateDiffInclusive(currentRange.from, currentRange.to) > 30;
+
+    byId('statsV2TrainTitle').textContent = `TER ${train} · historique`;
+    byId('statsV2TrainMeta').textContent = `${rangeLabel(currentRange)}${stop ? ` · retard à ${stop}` : ' · retard maximal du parcours'}`;
+    byId('statsV2TrainPunct').textContent = total ? fmtPct(punctuality) : '—';
+    byId('statsV2TrainRuns').textContent = fmtInt(total);
+    byId('statsV2TrainAvg').textContent = delayedValues.length ? fmtDelay(avg) : '0 min';
+    byId('statsV2TrainMax').textContent = delayedValues.length ? fmtDelay(max) : '0 min';
+
+    const canvas = byId('statsV2TrainChart');
+    const calendar = byId('statsV2TrainCalendar');
+    if (canvas) canvas.parentElement.hidden = calendarMode;
+    if (calendar) calendar.hidden = !calendarMode;
+    if (canvas && typeof Chart !== 'undefined') {
+      destroyChart('train');
+      charts.train = new Chart(canvas, {
+        type: 'bar',
+        data: {
+          labels: rows.map((row) => humanDate(row.date)),
+          datasets: [{
+            label: 'Retard',
+            data: rows.map((row) => bucketOf(row) === 'CANCELED' ? null : toNumber(row.value)),
+            backgroundColor: rows.map((row) => STATUS[bucketOf(row)]?.color || COLORS.muted),
+            borderRadius: 4,
+            maxBarThickness: 18
+          }]
+        },
+        options: {
+          ...chartBaseOptions(),
+          plugins: {
+            ...chartBaseOptions().plugins,
+            tooltip: {
+              ...chartBaseOptions().plugins.tooltip,
+              callbacks: {
+                label: (ctx) => {
+                  const row = rows[ctx.dataIndex];
+                  const bucket = bucketOf(row);
+                  if (bucket === 'CANCELED') return 'Supprimé';
+                  if (bucket === 'PARTIAL') return `Suppression partielle · ${fmtDelay(row.value)}`;
+                  return bucket === 'ON_TIME' ? 'À l’heure' : `Retard : ${fmtDelay(row.value)}`;
+                }
+              }
+            }
+          },
+          scales: {
+            x: chartBaseOptions().scales.x,
+            y: {
+              beginAtZero: true,
+              grid: { color: COLORS.grid },
+              ticks: { color: '#729aa4', callback: (value) => `${value} min` }
+            }
+          }
+        }
+      });
+    }
+    if (calendarMode) renderTrainCalendar(rows);
+    renderTrainWeekdays(rows);
+
+    const strip = byId('statsV2TrainRunsStrip');
+    if (strip) {
+      strip.hidden = true;
+      strip.innerHTML = '';
+    }
+
+    const tbody = byId('statsV2TrainTable');
+    if (tbody) {
+      tbody.innerHTML = rows.slice(-60).reverse().map((row) => {
+        const bucket = bucketOf(row);
+        const info = STATUS[bucket] || STATUS.NO_DATA;
+        const value = bucket === 'CANCELED' ? '—' : fmtDelay(toNumber(row.value));
+        const cause = circulationCause(row);
+        return `
+          <tr>
+            <td>${escapeHtml(row.date)}</td>
+            <td><span class="stats-v2__status-label" style="--status-color:${info.color}">${escapeHtml(info.label)}</span></td>
+            <td class="is-num">${value}</td>
+            <td class="stats-v2__table-cause${cause ? '' : ' is-empty'}"${cause ? ` title="${escapeHtml(cause)}"` : ''}>${cause ? escapeHtml(cause) : '—'}</td>
+          </tr>
+        `;
+      }).join('') || '<tr><td colspan="4" class="stats-v2__empty">Aucune circulation trouvée.</td></tr>';
+    }
+
+    const message = byId('statsV2TrainMessage');
+    if (message) {
+      message.hidden = total > 0;
+      message.textContent = total ? '' : `Aucune donnée trouvée pour le TER ${train} sur cette période.`;
+    }
+  }
+
+  async function runTrain(){
+    const train = normalizeTrain(byId('statsV2TrainInput')?.value || settings.favoriteTrain);
+    const stop = String(byId('statsV2TrainStop')?.value || '').trim();
+    const message = byId('statsV2TrainMessage');
+    if (!train) {
+      if (message) {
+        message.hidden = false;
+        message.textContent = 'Entre un numéro de train de 4 à 6 chiffres.';
+      }
+      return;
+    }
+    byId('statsV2TrainInput').value = train;
+    setBusy(true, `Analyse du TER ${train}…`);
+    try {
+      const query = new URLSearchParams({ from: currentRange.from, to: currentRange.to, trainId: train });
+      if (stop) query.set('stop', stop);
+      const payload = await apiJson(`/api/stats/gtfs/train?${query.toString()}`);
+      renderTrain(payload, train, stop);
+      showError('');
+      byId('statsV2LiveText').textContent = `Historique du TER ${train} chargé`;
+    } catch (error) {
+      showError(`Impossible de charger le TER ${train} : ${error?.message || error}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  let compareKind = 'period';
+  let compareScale = 'month';
+
+  function monthRange(value){
+    if (!/^\d{4}-\d{2}$/.test(String(value || ''))) return null;
+    const [year, month] = value.split('-').map(Number);
+    const last = new Date(Date.UTC(year, month, 0)).getUTCDate();
+    const range = { from: `${value}-01`, to: `${value}-${String(last).padStart(2, '0')}` };
+    return range.from < DATA_START ? null : range;
+  }
+
+  function comparisonRange(value, scale){
+    if (scale === 'month') return monthRange(value);
+    if (scale === 'day' && /^\d{4}-\d{2}-\d{2}$/.test(value)) return { from: value, to: value };
+    if (scale === 'week' && /^\d{4}-W\d{2}$/.test(value)) {
+      const [year, week] = value.split('-W').map(Number);
+      const jan4 = new Date(Date.UTC(year, 0, 4, 12));
+      const monday = new Date(jan4);
+      monday.setUTCDate(jan4.getUTCDate() - ((jan4.getUTCDay() || 7) - 1) + ((week - 1) * 7));
+      const sunday = new Date(monday);
+      sunday.setUTCDate(monday.getUTCDate() + 6);
+      const iso = (date) => date.toISOString().slice(0, 10);
+      return { from: iso(monday), to: iso(sunday) };
+    }
+    return null;
+  }
+
+  function recentPeriodOptions(scale){
+    const values = [];
+    const today = new Date();
+    if (scale === 'month') {
+      const formatter = new Intl.DateTimeFormat('fr-FR', { month: 'long', year: 'numeric' });
+      for (let offset = 0; offset < 30; offset += 1) {
+        const date = new Date(today.getFullYear(), today.getMonth() - offset, 1);
+        const value = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+        if (`${value}-01` < DATA_START) break;
+        values.push({
+          value,
+          label: formatter.format(date).replace(/^./, (letter) => letter.toUpperCase())
+        });
+      }
+    } else if (scale === 'week') {
+      const monday = new Date(today);
+      monday.setHours(12, 0, 0, 0);
+      monday.setDate(monday.getDate() - ((monday.getDay() || 7) - 1));
+      const isoWeek = (date) => {
+        const target = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
+        target.setUTCDate(target.getUTCDate() + 4 - (target.getUTCDay() || 7));
+        const yearStart = new Date(Date.UTC(target.getUTCFullYear(), 0, 1));
+        const week = Math.ceil((((target - yearStart) / 86400000) + 1) / 7);
+        return `${target.getUTCFullYear()}-W${String(week).padStart(2, '0')}`;
+      };
+      const shortDate = new Intl.DateTimeFormat('fr-FR', { day: '2-digit', month: 'short' });
+      for (let offset = 0; offset < 60; offset += 1) {
+        const start = new Date(monday);
+        start.setDate(monday.getDate() - (offset * 7));
+        const end = new Date(start);
+        end.setDate(start.getDate() + 6);
+        const startIso = `${start.getFullYear()}-${String(start.getMonth() + 1).padStart(2, '0')}-${String(start.getDate()).padStart(2, '0')}`;
+        if (startIso < DATA_START) break;
+        values.push({ value: isoWeek(start), label: `${isoWeek(start).replace('-W', ' · S')} — ${shortDate.format(start)} au ${shortDate.format(end)}` });
+      }
+    }
+    return values;
+  }
+
+  function renderCompareInputs(){
+    const host = byId('statsV2CompareInputs');
+    if (!host) return;
+    const sameContext = host.dataset.kind === compareKind &&
+      host.dataset.scale === compareScale;
+    const oldValues = sameContext
+      ? [...host.querySelectorAll('[data-compare-value]')].map((input) => input.value)
+      : [];
+    const labels = compareKind === 'period'
+      ? { month: 'Mois', week: 'Semaine', day: 'Jour' }[compareScale]
+      : compareKind === 'train' ? 'Bétaillère' : 'Gare';
+    const periodOptions = compareKind === 'period' && compareScale !== 'day'
+      ? recentPeriodOptions(compareScale).map((option) => `<option value="${option.value}">${escapeHtml(option.label)}</option>`).join('')
+      : '';
+    host.innerHTML = Array.from({ length: 4 }, (_, index) => `
+      <div class="stats-v2__field">
+        <label for="statsV2CompareItem${index}">${labels} ${index + 1}${index > 1 ? ' (facultatif)' : ''}</label>
+        ${compareKind === 'period' && compareScale !== 'day' ? `
+        <select id="statsV2CompareItem${index}" class="stats-v2__input stats-v2__compare-select" data-compare-value>
+          <option value="">Choisir ${compareScale === 'month' ? 'un mois' : 'une semaine'}…</option>
+          ${periodOptions}
+        </select>` : `
+        <input id="statsV2CompareItem${index}" class="stats-v2__input" data-compare-value type="${compareKind === 'period' ? 'date' : 'text'}"
+          ${compareKind === 'train' ? 'list="statsV2TrainListData" inputmode="numeric"' : ''}
+          ${compareKind === 'stop' ? 'list="statsV2StopList"' : ''}
+          ${compareKind === 'period' ? `min="${DATA_START}" max="${dateAdd(luxDateIso(), -1)}"` : ''}
+          placeholder="${compareKind === 'train' ? `Choisir une bétaillère` : compareKind === 'stop' ? `Choisir une gare` : 'Choisir une date'}">`}
+      </div>
+    `).join('');
+    host.dataset.kind = compareKind;
+    host.dataset.scale = compareScale;
+    host.querySelectorAll('[data-compare-value]').forEach((input, index) => {
+      const preferred = compareKind === 'train'
+        ? settings.favoriteTrain
+        : compareKind === 'stop' ? settings.favoriteStop : '';
+      input.value = oldValues[index] || (index === 0 ? preferred : '') || '';
+    });
+  }
+
+  function setCompareScale(scale){
+    compareScale = ['month', 'week', 'day'].includes(scale) ? scale : 'month';
+    root.querySelectorAll('[data-compare-scale]').forEach((button) => {
+      const active = button.dataset.compareScale === compareScale;
+      button.classList.toggle('is-active', active);
+      button.setAttribute('aria-pressed', String(active));
+    });
+    renderCompareInputs();
+    const hint = byId('statsV2ComparePeriodHint');
+    if (hint) hint.textContent = `Choisis de 2 à 4 ${compareScale === 'month' ? 'mois complets' : compareScale === 'week' ? 'semaines complètes' : 'jours'}.`;
+    byId('statsV2CompareResults').hidden = true;
+  }
+
+  function comparisonSummary(payload, kind){
+    if (kind === 'period') {
+      const cards = cardsOf(payload);
+      return {
+        total: cards.total,
+        impacted: cards.impacted,
+        delayed: cards.delayed,
+        partial: cards.partial,
+        canceled: cards.canceled,
+        punctuality: cards.total ? (cards.onTime / cards.total) * 100 : 0
+      };
+    }
+    const rows = Array.isArray(payload?.series) ? payload.series : [];
+    if (kind === 'train') {
+      const total = rows.length;
+      const impacted = rows.filter((row) => !['ON_TIME', 'NO_DATA'].includes(bucketOf(row))).length;
+      return {
+        total, impacted,
+        delayed: rows.filter((row) => bucketOf(row) === 'DELAYED').length,
+        partial: rows.filter((row) => bucketOf(row) === 'PARTIAL').length,
+        canceled: rows.filter((row) => bucketOf(row) === 'CANCELED').length,
+        punctuality: total ? ((total - impacted) / total) * 100 : 0
+      };
+    }
+    const totals = rows.reduce((acc, row) => {
+      acc.total += toNumber(row.trains);
+      acc.impacted += toNumber(row.not_on_time);
+      acc.delayed += toNumber(row.delayed);
+      acc.partial += toNumber(row.partial);
+      acc.canceled += toNumber(row.canceled);
+      return acc;
+    }, { total: 0, impacted: 0, delayed: 0, partial: 0, canceled: 0 });
+    totals.punctuality = totals.total ? ((totals.total - totals.impacted) / totals.total) * 100 : 0;
+    return totals;
+  }
+
+  function setCompareKind(kind){
+    compareKind = ['period', 'train', 'stop'].includes(kind) ? kind : 'period';
+    root.querySelectorAll('[data-compare-kind]').forEach((button) => {
+      const active = button.dataset.compareKind === compareKind;
+      button.classList.toggle('is-active', active);
+      button.setAttribute('aria-pressed', String(active));
+    });
+    const hint = byId('statsV2ComparePeriodHint');
+    byId('statsV2CompareScale').hidden = compareKind !== 'period';
+    renderCompareInputs();
+    if (compareKind === 'period') {
+      hint.textContent = `Choisis de 2 à 4 ${compareScale === 'month' ? 'mois complets' : compareScale === 'week' ? 'semaines complètes' : 'jours'}.`;
+    } else {
+      if (compareKind === 'train') {
+        hint.textContent = `Compare de 2 à 4 bétaillères sur ${rangeLabel(currentRange)}.`;
+      } else {
+        hint.textContent = `Compare de 2 à 4 gares sur ${rangeLabel(currentRange)}.`;
+      }
+    }
+    byId('statsV2CompareResults').hidden = true;
+  }
+
+  async function runCompare(){
+    const inputs = [...byId('statsV2CompareInputs').querySelectorAll('[data-compare-value]')]
+      .map((input) => String(input.value || '').trim()).filter(Boolean);
+    const message = byId('statsV2CompareMessage');
+    const showCompareMessage = (text) => {
+      message.hidden = !text;
+      message.textContent = text || '';
+    };
+    if (inputs.length < 2 || inputs.length > 4) return showCompareMessage('Choisis entre 2 et 4 éléments à comparer.');
+    if (new Set(inputs.map((value) => value.toLowerCase())).size !== inputs.length) return showCompareMessage('Chaque choix doit être différent.');
+    let ranges = inputs.map(() => currentRange);
+    let names = [...inputs];
+    let paths = [];
+    if (compareKind === 'period') {
+      ranges = inputs.map((value) => comparisonRange(value, compareScale));
+      if (ranges.some((range) => !range)) return showCompareMessage('Une période sélectionnée est invalide.');
+      if (ranges.some((range) => range.from < DATA_START)) {
+        return showCompareMessage('Les statistiques commencent le 1er janvier 2026.');
+      }
+      names = ranges.map((range) => rangeLabel(range));
+      paths = ranges.map(overviewPath);
+    } else if (compareKind === 'train') {
+      const trains = inputs.map(normalizeTrain);
+      if (trains.some((train) => !train)) return showCompareMessage('Vérifie les numéros des bétaillères.');
+      names = trains.map((train) => `TER ${train}`);
+      paths = trains.map((train) => `/api/stats/gtfs/train?${new URLSearchParams({ from: currentRange.from, to: currentRange.to, trainId: train })}`);
+    } else {
+      paths = inputs.map((stop) => `/api/stats/gtfs/stop?${new URLSearchParams({ from: currentRange.from, to: currentRange.to, stop })}`);
+    }
+    showCompareMessage('');
+    setBusy(true, 'Comparaison en cours…');
+    try {
+      const payloads = await Promise.all(paths.map((path) => apiJson(path)));
+      const summaries = payloads.map((payload) => comparisonSummary(payload, compareKind));
+      byId('statsV2CompareCards').innerHTML = summaries.map((item, index) => `
+        <article class="stats-v2__compare-card">
+          <span>${escapeHtml(names[index])}</span>
+          <strong>${item.total ? fmtPct(item.punctuality) : '—'}</strong>
+          <small>${fmtInt(item.impacted)} touchés / ${fmtInt(item.total)}</small>
+          <div class="stats-v2__compare-incidents">
+            <em style="--incident:var(--sv2-delay)"><b>${fmtInt(item.delayed)}</b> retards</em>
+            <em style="--incident:var(--sv2-partial)"><b>${fmtInt(item.partial)}</b> partiels</em>
+            <em style="--incident:var(--sv2-cancel)"><b>${fmtInt(item.canceled)}</b> suppr.</em>
+          </div>
+        </article>`).join('');
+      const best = summaries.reduce((winner, item, index) => item.punctuality > summaries[winner].punctuality ? index : winner, 0);
+      byId('statsV2CompareWinner').textContent = `Meilleure ponctualité : ${names[best]} · ${fmtPct(summaries[best].punctuality)}`;
+      byId('statsV2CompareMeta').textContent = compareKind === 'period' ? `${inputs.length} périodes comparées` : rangeLabel(currentRange);
+      byId('statsV2CompareResults').hidden = false;
+      const canvas = byId('statsV2CompareChart');
+      if (canvas && typeof Chart !== 'undefined') {
+        destroyChart('compare');
+        charts.compare = new Chart(canvas, {
+          type: 'bar',
+          data: {
+            labels: names,
+            datasets: [{
+              label: 'Ponctualité',
+              data: summaries.map((item) => item.punctuality),
+              backgroundColor: summaries.map((item) => punctualityColor(item.punctuality)),
+              borderRadius: 7,
+              maxBarThickness: 82
+            }]
+          },
+          options: chartBaseOptions()
+        });
+      }
+    } catch (error) {
+      showCompareMessage(`Comparaison indisponible : ${error?.message || error}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function renderStop(payload, stop){
+    const rows = [...(Array.isArray(payload?.series) ? payload.series : [])]
+      .sort((a, b) => String(a.date).localeCompare(String(b.date)));
+    stopLoaded = stop;
+    const totals = rows.reduce((acc, row) => {
+      acc.trains += toNumber(row.trains);
+      acc.delayed += toNumber(row.delayed);
+      acc.canceled += toNumber(row.canceled);
+      acc.partial += toNumber(row.partial);
+      acc.notOnTime += toNumber(row.not_on_time);
+      return acc;
+    }, { trains: 0, delayed: 0, canceled: 0, partial: 0, notOnTime: 0 });
+    const punctuality = totals.trains ? ((totals.trains - totals.notOnTime) / totals.trains) * 100 : 0;
+    byId('statsV2StopTitle').textContent = `${stop} · fiabilité`;
+    byId('statsV2StopMeta').textContent = rangeLabel(currentRange);
+    byId('statsV2StopPunct').textContent = totals.trains ? fmtPct(punctuality) : '—';
+    byId('statsV2StopRuns').textContent = fmtInt(totals.trains);
+    byId('statsV2StopDelayed').textContent = fmtInt(totals.delayed);
+    byId('statsV2StopCanceled').textContent = `${fmtInt(totals.canceled)} / ${fmtInt(totals.partial)}`;
+    const canvas = byId('statsV2StopChart');
+    if (canvas && typeof Chart !== 'undefined') {
+      destroyChart('stop');
+      const values = rows.map((row) => Math.max(0, 100 - toNumber(row.pct_not_on_time)));
+      destroyChart('stop');
+      charts.stop = new Chart(canvas, {
+        type: 'line',
+        data: {
+          labels: rows.map((row) => humanDate(row.date)),
+          datasets: [{
+            label: 'Ponctualité',
+            data: values.map((value) => Number(value.toFixed(1))),
+            borderColor: COLORS.cyan,
+            backgroundColor: 'rgba(94,231,242,.10)',
+            pointBackgroundColor: values.map(punctualityColor),
+            pointBorderColor: values.map(punctualityColor),
+            pointRadius: rows.length > 40 ? 1.5 : 3,
+            borderWidth: 2.2,
+            fill: true,
+            tension: .25
+          }]
+        },
+        options: chartBaseOptions()
+      });
+    }
+
+    const tbody = byId('statsV2StopTable');
+    if (tbody) {
+      tbody.innerHTML = rows.slice(-60).reverse().map((row) => {
+        const pct = Math.max(0, 100 - toNumber(row.pct_not_on_time));
+        return `
+          <tr>
+            <td>${escapeHtml(row.date)}</td>
+            <td class="is-num">${fmtInt(row.trains)}</td>
+            <td class="is-num" style="color:${COLORS.delay}">${fmtInt(row.delayed)}</td>
+            <td class="is-num" style="color:${COLORS.cancel}">${fmtInt(toNumber(row.canceled) + toNumber(row.partial))}</td>
+            <td class="is-num" style="color:${punctualityColor(pct)}">${fmtPct(pct)}</td>
+          </tr>
+        `;
+      }).join('') || '<tr><td colspan="5" class="stats-v2__empty">Aucune donnée trouvée.</td></tr>';
+    }
+
+    const message = byId('statsV2StopMessage');
+    if (message) {
+      message.hidden = totals.trains > 0;
+      message.textContent = totals.trains ? '' : `Aucune circulation trouvée à ${stop} sur cette période.`;
+    }
+  }
+
+  async function runStop(){
+    const stop = String(byId('statsV2StopInput')?.value || settings.favoriteStop || '').trim();
+    const message = byId('statsV2StopMessage');
+    if (!stop) {
+      if (message) {
+        message.hidden = false;
+        message.textContent = 'Choisis une gare à analyser.';
+      }
+      return;
+    }
+    byId('statsV2StopInput').value = stop;
+    setBusy(true, `Analyse de ${stop}…`);
+    try {
+      const query = new URLSearchParams({ from: currentRange.from, to: currentRange.to, stop });
+      const payload = await apiJson(`/api/stats/gtfs/stop?${query.toString()}`);
+      renderStop(payload, stop);
+      showError('');
+      byId('statsV2LiveText').textContent = `Statistiques de ${stop} chargées`;
+    } catch (error) {
+      showError(`Impossible de charger ${stop} : ${error?.message || error}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function applyModuleVisibility(){
+    const hourly = byId('statsV2HourlyCard');
+    const causes = byId('statsV2CausesCard');
+    const ranking = byId('statsV2RankingCard');
+    if (hourly) hourly.hidden = !settings.showHourly;
+    if (causes) causes.hidden = !settings.showCauses;
+    if (ranking) ranking.hidden = !settings.showRanking;
+    root.classList.toggle('is-compact', Boolean(settings.compact));
+  }
+
+  function applySettingsToForm(options = {}){
+    const force = options.force === true;
+    const setDefault = (id, value) => {
+      const field = byId(id);
+      if (field && (force || !field.value)) field.value = value || '';
+    };
+    setDefault('statsV2TrainInput', settings.favoriteTrain || FALLBACK_TRAIN);
+    setDefault('statsV2TrainStop', settings.favoriteStop || FALLBACK_STOP);
+    setDefault('statsV2StopInput', settings.favoriteStop || FALLBACK_STOP);
+    if (compareKind === 'train' || compareKind === 'stop') renderCompareInputs();
+  }
+
+  function hydrateFromAccount(prefs, options = {}){
+    if (window.lbIsAuthed !== true || !prefs || typeof prefs !== 'object') return;
+    settings = {
+      ...settings,
+      favoriteTrain: normalizeTrain(
+        prefs.favoriteMorningTrain || prefs.favoriteEveningTrain || FALLBACK_TRAIN
+      ) || FALLBACK_TRAIN,
+      favoriteStop: String(
+        prefs.favoriteFromStation || prefs.favoriteToStation || FALLBACK_STOP
+      ).trim() || FALLBACK_STOP
+    };
+    if (!hasTargetInteracted && options.applyDefaults !== false) {
+      applySettingsToForm({ force: true });
+    }
+  }
+
+  function updateAuthUI(isAuthed = window.lbIsAuthed === true){
+    if (!isAuthed && !hasTargetInteracted) {
+      settings = {
+        ...settings,
+        favoriteTrain: FALLBACK_TRAIN,
+        favoriteStop: FALLBACK_STOP
+      };
+      applySettingsToForm({ force: true });
+    }
+  }
+
+  function setGranularity(value, options = {}){
+    granularity = ['day', 'week', 'month'].includes(value) ? value : 'week';
+    hasUserInteracted = hasUserInteracted || options.user === true;
+    root.querySelectorAll('[data-granularity]').forEach((button) => {
+      const active = button.dataset.granularity === granularity;
+      button.classList.toggle('is-active', active);
+      button.setAttribute('aria-pressed', String(active));
+    });
+    if (currentOverview) renderEvolution();
+  }
+
+  // Compatibilité avec les widgets Favoris et la fiche train déjà présents.
+  const rawCache = new Map();
+  function statusFlags(raw, extra = {}){
+    const value = String(raw || '').trim().toUpperCase();
+    const partial = value.includes('PARTIAL') || (value.includes('PART') && value.includes('SUPPR')) ||
+      Boolean(extra.partial || extra.partial_canceled || extra.partial_cancelled || extra.partial_cancellation);
+    const canceled = !partial && (
+      value.includes('CANCEL') || value.includes('SUPPR') || value.includes('ANNUL') ||
+      Boolean(extra.cancelled || extra.canceled || extra.supprime || extra.suppressed)
+    );
+    return { partial, canceled, delayed: value.includes('DELAY') };
+  }
+  function maxDelay(stops){
+    return Math.max(0, ...Object.values(stops || {}).map((value) => toNumber(value)));
+  }
+  async function getRawRange(from, to){
+    const key = `${from}|${to}`;
+    if (rawCache.has(key)) return rawCache.get(key);
+    const query = `from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`;
+    let payload;
+    try {
+      payload = await apiJson(`/api/stats/gtfs/rawrange?${query}`);
+    } catch (_) {
+      payload = await apiJson(`/stats/gtfs/rawrange?${query}`);
+    }
+    const days = Array.isArray(payload) ? payload : (payload?.days || payload?.series || []);
+    rawCache.set(key, days);
+    return days;
+  }
+  function computeTrainSeriesFromRawDays(days, from, to, trainId, stop){
+    const series = [];
+    for (const day of days || []) {
+      if (!day?.date || day.date < from || day.date > to) continue;
+      const train = day.trains?.[trainId];
+      if (!train) continue;
+      const flags = statusFlags(train.status, train);
+      const value = stop && Object.prototype.hasOwnProperty.call(train.stops || {}, stop)
+        ? toNumber(train.stops[stop])
+        : maxDelay(train.stops);
+      const bucket = flags.partial ? 'PARTIAL' : flags.canceled ? 'CANCELED' :
+        (flags.delayed || value > 0) ? 'DELAYED' : 'ON_TIME';
+      series.push({
+        date: day.date,
+        status: String(train.status || ''),
+        bucket,
+        value: flags.canceled ? null : value,
+        partial: flags.partial
+      });
+    }
+    return { from, to, days: series.length, series };
+  }
+  window.__lbStats = {
+    ...(window.__lbStats || {}),
+    getLastDaysRange(days = 10){
+      const to = dateAdd(luxDateIso(), -1);
+      return { from: dateAdd(to, -(Math.max(1, days) - 1)), to };
+    },
+    getRawRange,
+    computeTrainSeriesFromRawDays,
+    colorForPunctuality: punctualityColor,
+    openTrain(train){
+      byId('statsV2TrainInput').value = normalizeTrain(train);
+      setView('train', { autoRun: false });
+      return runTrain();
+    },
+    openStop(stop){
+      byId('statsV2StopInput').value = String(stop || '').trim();
+      setView('stop', { autoRun: false });
+      return runStop();
+    }
+  };
+
+  root.querySelectorAll('[data-period]').forEach((button) => {
+    button.addEventListener('click', () => setPeriod(button.dataset.period, { user: true }));
+  });
+  byId('statsV2PeriodSelect')?.addEventListener('change', (event) => {
+    setPeriod(event.target.value, { user: true });
+  });
+  root.querySelectorAll('[data-view]').forEach((button) => {
+    button.addEventListener('click', () => setView(button.dataset.view));
+  });
+  byId('statsV2TargetChoice')?.addEventListener('click', () => {
+    setView(activeView === 'stop' ? 'stop' : 'train');
+  });
+  const closeStatsInfo = () => {
+    root.querySelectorAll('.stats-v2__entry-item.is-info-open').forEach((item) => {
+      item.classList.remove('is-info-open');
+      item.querySelector('[data-stats-info]')?.setAttribute('aria-expanded', 'false');
+    });
+  };
+  root.querySelectorAll('[data-stats-info]').forEach((button) => {
+    button.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      const item = button.closest('.stats-v2__entry-item');
+      const shouldOpen = !item?.classList.contains('is-info-open');
+      closeStatsInfo();
+      if (item && shouldOpen) {
+        item.classList.add('is-info-open');
+        button.setAttribute('aria-expanded', 'true');
+      }
+    });
+  });
+  document.addEventListener('click', closeStatsInfo);
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape') closeStatsInfo();
+  });
+  root.querySelectorAll('[data-compare-kind]').forEach((button) => {
+    button.addEventListener('click', () => setCompareKind(button.dataset.compareKind));
+  });
+  root.querySelectorAll('[data-compare-scale]').forEach((button) => {
+    button.addEventListener('click', () => setCompareScale(button.dataset.compareScale));
+  });
+  byId('statsV2CompareRun')?.addEventListener('click', runCompare);
+  root.querySelectorAll('[data-granularity]').forEach((button) => {
+    button.addEventListener('click', () => setGranularity(button.dataset.granularity, { user: true }));
+  });
+  const evolutionToggle = byId('statsV2EvolutionToggle');
+  const evolutionSummary = byId('statsV2EvolutionSummary');
+  const evolutionDetail = byId('statsV2EvolutionDetail');
+  function setEvolutionDetail(open, { render = true } = {}){
+    if (!evolutionToggle || !evolutionSummary || !evolutionDetail) return;
+    const isOpen = Boolean(open);
+    evolutionSummary.hidden = !isOpen;
+    evolutionDetail.hidden = !isOpen;
+    evolutionToggle.closest('.stats-v2__punct-evolution')?.classList.toggle('is-open', isOpen);
+    evolutionToggle.innerHTML = isOpen ? 'Masquer&nbsp;−' : 'Détails&nbsp;+';
+    evolutionToggle.setAttribute('aria-expanded', String(isOpen));
+    evolutionToggle.setAttribute(
+      'aria-label',
+      isOpen
+        ? 'Masquer le graphique détaillé de ponctualité'
+        : 'Afficher le graphique détaillé de ponctualité'
+    );
+    if (!isOpen) {
+      destroyChart('evolutionMini');
+      destroyChart('evolution');
+    }
+    if (render) renderEvolution();
+    if (isOpen) {
+      window.setTimeout(() => {
+        try { charts.evolution?.resize?.(); } catch (_) {}
+      }, 80);
+    }
+  }
+  /* La vue complète ne s'affiche que sur demande, même après restauration de la page. */
+  setEvolutionDetail(false, { render: false });
+  evolutionToggle?.addEventListener('click', () => {
+    setEvolutionDetail(evolutionToggle.getAttribute('aria-expanded') !== 'true');
+  });
+  byId('statsV2ApplyRange')?.addEventListener('click', () => setPeriod('custom', { user: true, loadCustom: true }));
+  byId('statsV2TrainRun')?.addEventListener('click', runTrain);
+  byId('statsV2StopRun')?.addEventListener('click', runStop);
+  ['statsV2TrainInput', 'statsV2TrainStop', 'statsV2StopInput'].forEach((id) => {
+    byId(id)?.addEventListener('input', () => { hasTargetInteracted = true; });
+  });
+  byId('statsV2CompareInputs')?.addEventListener('input', () => {
+    hasTargetInteracted = true;
+  });
+  byId('statsV2TrainInput')?.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') runTrain();
+  });
+  byId('statsV2StopInput')?.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') runStop();
+  });
+  byId('statsV2TrainList')?.addEventListener('click', (event) => {
+    const row = event.target.closest('[data-stats-train]');
+    if (!row) return;
+    hasTargetInteracted = true;
+    byId('statsV2TrainInput').value = row.dataset.statsTrain;
+    setView('train', { autoRun: false });
+    runTrain();
+  });
+
+  document.addEventListener('lb:auth-state', (event) => {
+    const isAuthed = event.detail?.isAuthed === true;
+    updateAuthUI(isAuthed);
+    if (isAuthed && window.lbPrefsCache) {
+      hydrateFromAccount(window.lbPrefsCache, { applyDefaults: !hasTargetInteracted });
+    }
+  });
+  document.addEventListener('lb:prefs-updated', (event) => {
+    if (event.detail?.source === 'stats-v2') return;
+    hydrateFromAccount(event.detail?.prefs || window.lbPrefsCache, { applyDefaults: !hasTargetInteracted });
+  });
+  const resizeStatsCharts = () => {
+    window.setTimeout(() => {
+      Object.values(charts).forEach((chart) => {
+        try { chart?.resize?.(); } catch (_) {}
+      });
+    }, 80);
+  };
+  window.addEventListener('hashchange', () => {
+    if (location.hash === '#stats') resizeStatsCharts();
+  });
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden && location.hash === '#stats') resizeStatsCharts();
+  });
+
+  const latestDataDate = dateAdd(luxDateIso(), -1);
+  ['statsV2From', 'statsV2To'].forEach((id) => {
+    const input = byId(id);
+    if (input) {
+      input.min = DATA_START;
+      input.max = latestDataDate;
+    }
+  });
+  applySettingsToForm({ force: true });
+  applyModuleVisibility();
+  updateAuthUI();
+  setGranularity(granularity);
+  setCompareKind('period');
+  setView('overview', { autoRun: false });
+  setPeriod('30d');
+  if (window.lbIsAuthed === true && window.lbPrefsCache) {
+    hydrateFromAccount(window.lbPrefsCache, { applyDefaults: true });
+  }
+});
+</script>
+
+<script>
+const betaModal = document.getElementById("betaModal");
+const betaAcknowledge = document.getElementById("betaAcknowledge");
+const BETA_NOTICE_KEY = "betaNoticeAcknowledged";
+
+// Masquer la pop-up si elle a déjà été validée
+if (localStorage.getItem(BETA_NOTICE_KEY) === "1") {
+  betaModal.style.display = "none";
+}
+
+// Bouton de confirmation
+betaAcknowledge.addEventListener("click", () => {
+  localStorage.setItem(BETA_NOTICE_KEY, "1");
+  betaModal.style.display = "none";
+});
+
+// Accessibilité : fermer avec Échap
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && betaModal.style.display !== "none") {
+    betaAcknowledge.click();
+  }
+});
+</script>
+
+  <script>
+/* ===== METEO – Bloc unique iOS-safe (remplace tout l'ancien bloc) =====
+
+/* ---- Etat global météo ---- */
+window.__WX__ = window.__WX__ || { timer: null, runId: 0, abort: null, firstRun: true };
+function __wxSetTimer(id){ window.__WX__.timer = id; window.wxTimer = id; } // alias compat historique
+
+/* ---- COORDS connues + cache GTFS ---- */
+const GARE_COORDS = {
+  "Luxembourg":        { lat: 49.598, lon: 6.134 },
+  "Bettembourg":       { lat: 49.518, lon: 6.105 },
+  "Howald":            { lat: 49.579, lon: 6.132 },
+  "Metz":              { lat: 49.119, lon: 6.176 },
+  "Thionville":        { lat: 49.360, lon: 6.170 },
+  "Hagondange":        { lat: 49.257, lon: 6.168 },
+  "Uckange":           { lat: 49.302, lon: 6.155 },
+  "Hettange-Grande":   { lat: 49.403, lon: 6.152 },
+  "Woippy":            { lat: 49.152, lon: 6.165 },
+  "Maizières-lès-Metz":{ lat: 49.222, lon: 6.165 },
+  "Pagny-sur-Moselle": { lat: 48.984, lon: 6.026 },
+  "Pont-à-Mousson":    { lat: 48.907, lon: 6.063 },
+  "Nancy":             { lat: 48.692, lon: 6.184 }
+};
+// --- WX station name canonicalization (accents / hyphens / case) ---
+function __wxCanon(s){
+  try{
+    return String(s||'').trim()
+      .toLowerCase()
+      .normalize('NFD').replace(/[\u0300-\u036f]/g,'')   // remove accents
+      .replace(/[’']/g,'')
+      .replace(/\bsaint\b/g,'st')
+      .replace(/[^a-z0-9]+/g,''); // remove spaces, hyphens, punctuation
+  }catch(e){
+    return String(s||'').trim().toLowerCase();
+  }
+}
+const __WX_CANON_MAP = (function(){
+  const m = new Map();
+  try{
+    Object.keys(GARE_COORDS||{}).forEach(k=>{
+      m.set(__wxCanon(k), k);
+    });
+  }catch(e){}
+  return m;
+})();
+function __wxResolveKey(name){
+  if(!name) return null;
+  const raw = String(name).trim();
+  if(GARE_COORDS[raw]) return raw;
+  const ck = __wxCanon(raw);
+  if(__WX_CANON_MAP.has(ck)) return __WX_CANON_MAP.get(ck);
+  // a few common variants
+  const variants = [
+    ck.replace('grande','grande'), // noop but placeholder
+    ck.replace('lesmetz','lesmetz'),
+  ];
+  for(const v of variants){
+    if(__WX_CANON_MAP.has(v)) return __WX_CANON_MAP.get(v);
+  }
+  return null;
+}
+
+const WX_COORDS_CACHE = new Map();
+
+/* ---- Helpers ---- */
+function __isSelectedDateToday(){
+  try{
+    const v = document.getElementById('trainDate')?.value || '';
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(v)) return true;
+    const fmt = new Intl.DateTimeFormat('en-CA', {
+      timeZone:'Europe/Luxembourg', year:'numeric', month:'2-digit', day:'2-digit'
+    });
+    const p = Object.fromEntries(fmt.formatToParts(new Date()).map(x => [x.type, x.value]));
+    return v === `${p.year}-${p.month}-${p.day}`;
+  }catch{ return true; }
+}
+
+/* ---- Annuler proprement la météo en cours (à appeler avant toute régénération) ---- */
+function cancelWeatherFetch(){
+  window.__WX__.runId++;                                  // invalide les rendus en vol
+  try { window.__WX__.abort?.abort(); } catch{}           // abort fetch courant
+  window.__WX__.abort = null;
+  if (window.__WX__.timer){ clearInterval(window.__WX__.timer); __wxSetTimer(null); } // coupe timer
+}
+
+/* ---- Résolution coords : manuel -> cache -> GTFS ---- */
+async function resolveCoordsByName(name){
+  if (!name) return null;
+  if (GARE_COORDS[name]) return GARE_COORDS[name];
+  if (WX_COORDS_CACHE.has(name)) return WX_COORDS_CACHE.get(name);
+
+ if (typeof getIdsForName !== 'function') return null;
+
+  try {
+    if (!Array.isArray(GTFS?.stops)) {
+      if (GTFS_LOADING_PROMISE) {
+        try { await GTFS_LOADING_PROMISE; } catch { return null; }
+      } else {
+        return null; // n'amorce pas un chargement lourd juste pour la météo
+      }
+    }
+
+    if (!Array.isArray(GTFS?.stops)) return null;
+    if (typeof buildStationGroups === 'function') buildStationGroups();
+    if (!GTFS.idToStop) return null;
+
+    const ids = getIdsForName(name);
+    if (!ids || !ids.size) return null;
+
+    let sumLat = 0, sumLon = 0, n = 0;
+    ids.forEach(id => {
+      const st = GTFS.idToStop?.get(id);
+      const la = parseFloat(st?.stop_lat);
+      const lo = parseFloat(st?.stop_lon);
+      if (Number.isFinite(la) && Number.isFinite(lo)) { sumLat += la; sumLon += lo; n++; }
+    });
+    if (!n) return null;
+
+    const c = { lat: +(sumLat/n).toFixed(5), lon: +(sumLon/n).toFixed(5) };
+    WX_COORDS_CACHE.set(name, c);
+    GARE_COORDS[name] = c; // hydrate pour appels suivants synchro
+    return c;
+  } catch { return null; }
+}
+
+/* ---- Lien Windy ---- */
+function buildWeatherLinkByName(name, zoom = 10){
+  const c = GARE_COORDS[name] || WX_COORDS_CACHE.get(name);
+  if (!c) return null;
+  const lat = Number(c.lat).toFixed(3);
+  const lon = Number(c.lon).toFixed(3);
+  return `https://www.windy.com/${lat}/${lon}?temp,${lat},${lon},${zoom},d:picker`;
+}
+
+/* ---- WMO -> icône + libellé ---- */
+function wmoToIcon(code, isDay = true){
+  if (code === 0) return { ico: isDay ? "☀️" : "🌙", label: "Ciel clair" };
+  if (code === 1) return { ico: isDay ? "🌤️" : "☁️", label: "Peu nuageux" };
+  if (code === 2) return { ico: "⛅", label: "Partiellement nuageux" };
+  if (code === 3) return { ico: "☁️", label: "Couvert" };
+  if ([45,48].includes(code)) return { ico: "🌫️", label: "Brouillard" };
+  if ([51,53,55].includes(code)) return { ico: "🌦️", label: "Bruine" };
+  if ([56,57].includes(code)) return { ico: "🌧️", label: "Bruine verglaçante" };
+  if ([61,63].includes(code)) return { ico: "🌧️", label: "Pluie" };
+  if (code === 65) return { ico: "🌧️", label: "Pluie forte" };
+  if ([66,67].includes(code)) return { ico: "🌧️", label: "Pluie verglaçante" };
+  if ([71,73].includes(code)) return { ico: "🌨️", label: "Neige" };
+  if (code === 75) return { ico: "❄️", label: "Neige forte" };
+  if (code === 77) return { ico: "🌨️", label: "Grains de neige" };
+  if ([80,81].includes(code)) return { ico: "🌦️", label: "Averses" };
+  if (code === 82) return { ico: "🌧️", label: "Averses fortes" };
+  if (code === 85) return { ico: "🌨️", label: "Averses de neige" };
+  if (code === 86) return { ico: "❄️", label: "Averses de neige fortes" };
+  if (code === 95) return { ico: "⛈️", label: "Orage" };
+  if ([96,99].includes(code)) return { ico: "⛈️", label: "Orage (grêle)" };
+  return { ico: "❔", label: `Code ${code}` };
+}
+
+/* ---- Fetch Open-Meteo en chunks (iOS=4, autres=8) ---- */
+async function __fetchOpenMeteoChunk(coordsSlice, opt = {}){
+  const { signal, timeoutMs = 7000 } = opt || {};
+  if (!coordsSlice.length) return new Map();
+
+  const latList = coordsSlice.map(c => c.lat).join(',');
+  const lonList = coordsSlice.map(c => c.lon).join(',');
+  const qs = new URLSearchParams({
+    latitude: latList,
+    longitude: lonList,
+    current: 'temperature_2m,weather_code,is_day',
+    timezone: 'Europe/Luxembourg'
+  }).toString();
+
+  const ctrl = new AbortController();
+  const relay = () => ctrl.abort();
+  if (signal){
+    if (signal.aborted) ctrl.abort();
+    else signal.addEventListener('abort', relay, { once:true });
+  }
+  const to = setTimeout(()=>ctrl.abort(), timeoutMs);
+
+  try {
+    const res = await fetch('https://api.open-meteo.com/v1/forecast?'+qs, { signal: ctrl.signal, cache:'no-store' });
+    const ct = (res.headers.get('content-type') || '').toLowerCase();
+    const json = ct.includes('application/json') ? await res.json() : JSON.parse(await res.text());
+
+    let list;
+    if (Array.isArray(json)) list = json;                  // improbable mais safe
+    else if (Array.isArray(json?.results)) list = json.results;
+    else if (json && json.current) list = [json];
+    else list = [];
+
+    const out = new Map();
+    for (let i=0; i<coordsSlice.length; i++){
+      const name = coordsSlice[i].name;
+      const curr = (list[i] && list[i].current) || {};
+      out.set(name, {
+        temp: (typeof curr.temperature_2m === 'number') ? curr.temperature_2m : null,
+        code: (typeof curr.weather_code === 'number') ? curr.weather_code : null,
+        isDay: !!curr.is_day,
+        time: curr.time || null
+      });
+    }
+    return out;
+  } catch(e){
+    console.warn('[WX] chunk fail:', e?.message || e);
+    return new Map();
+  } finally {
+    clearTimeout(to);
+  }
+}
+
+/* ---- API: fetchWeatherForStations(names[, {signal, timeoutMs}]) ---- */
+async function fetchWeatherForStations(stationNames, opt = {}){
+  const { signal, timeoutMs = 7000 } = opt || {};
+  const seen = new Set();
+  const coords = [];
+  for (const name of stationNames || []) {
+    if (!name || seen.has(name)) continue;
+    seen.add(name);
+    const key = __wxResolveKey(name) || name;
+    const c = GARE_COORDS[key] || WX_COORDS_CACHE.get(key) || await resolveCoordsByName(key);
+    // keep display name as chosen, but cache under key
+    if(c && !WX_COORDS_CACHE.get(key) && !GARE_COORDS[key]) { try{ WX_COORDS_CACHE.set(key, c); }catch(e){} }
+    if (c && Number.isFinite(+c.lat) && Number.isFinite(+c.lon)) {
+      coords.push({ name, lat:+c.lat, lon:+c.lon });
+    }
+  }
+  if (!coords.length) return new Map();
+
+  const CHUNK = window.__IS_IOS__ ? 4 : 8;
+  const merged = new Map();
+
+  for (let i=0; i<coords.length; i += CHUNK){
+    const slice = coords.slice(i, i+CHUNK);
+    const part = await __fetchOpenMeteoChunk(slice, { signal, timeoutMs });
+    part.forEach((v,k) => merged.set(k, v));
+    // petite respiration iOS
+    if (window.__IS_IOS__) await new Promise(r => setTimeout(r, 0));
+  }
+  return merged;
+}
+
+/* ---- Met à jour les pastilles météo dans le tableau ---- */
+async function updateWeatherBadges(){
+  const myRun = ++window.__WX__.runId; // single-flight id
+  try{
+    const table = document.querySelector('#trainInfo table');
+    if (!table) return;
+
+    const rows = Array.from(table.querySelectorAll('tr[data-gare]'));
+    if (!rows.length) return;
+
+    if (!__isSelectedDateToday()){
+      rows.forEach(r => { const wx=r.querySelector('.wx'); if(wx){ wx.textContent=''; wx.removeAttribute('title'); } });
+      return;
+    }
+
+    const names = [...new Set(rows.map(r => r.dataset.gare).filter(Boolean))];
+
+    // Résoudre coord manquantes (via GTFS) si besoin
+    const missing = names.filter(n => !(GARE_COORDS[n]) && !(WX_COORDS_CACHE.get(n)));
+    if (missing.length) await Promise.all(missing.map(n => resolveCoordsByName(n).catch(()=>null)));
+
+    // Abort l'ancien fetch et crée un nouveau contrôleur partagé
+    try { window.__WX__.abort?.abort(); } catch{}
+    window.__WX__.abort = new AbortController();
+
+    const data = await fetchWeatherForStations(names, { signal: window.__WX__.abort.signal });
+
+    // Si une autre MAJ a commencé entre-temps, on ignore ce rendu
+    if (myRun !== window.__WX__.runId) return;
+
+    rows.forEach(r => {
+      const name = r.dataset.gare;
+      const wx = r.querySelector('.wx'); if (!wx) return;
+
+      const d = data.get(name);
+      if (!d || d.code == null) { wx.textContent=''; wx.removeAttribute('title'); return; }
+
+      const meta = wmoToIcon(d.code, !!d.isDay);
+      const t = (typeof d.temp === 'number') ? Math.round(d.temp)+'°' : '';
+      const url = buildWeatherLinkByName(name);
+
+      if (url) {
+        wx.innerHTML = `<a class="wx-link" href="${url}" target="_blank" rel="noopener" title="${meta.label}${t?' • '+t:''}">
+          <span class="wx-ico">${meta.ico}</span><span class="wx-t">${t}</span>
+        </a>`;
+      } else {
+        wx.textContent = `${meta.ico}${t ? ' ' + t : ''}`;
+        wx.title = `${meta.label}${t ? ' • ' + t : ''}`;
+      }
+    });
+  } catch(e){
+    console.warn('[weather] soft error', e);
+  }
+}
+
+/* ---- Auto-refresh (timer unique + visibilité) ---- */
+function startWeatherAutorefresh(intervalMs = 5 * 60 * 1000){
+  if (window.__WX__.timer){ clearInterval(window.__WX__.timer); __wxSetTimer(null); }
+  if (!__isSelectedDateToday()) return;
+
+  // 1er tir immédiat
+  updateWeatherBadges();
+
+  const arm = () => {
+    if (window.__WX__.timer){ clearInterval(window.__WX__.timer); __wxSetTimer(null); }
+    if (document.hidden) return;
+    __wxSetTimer(setInterval(() => {
+      if (!document.hidden) updateWeatherBadges();
+    }, intervalMs));
+  };
+  arm();
+
+  document.removeEventListener('visibilitychange', startWeatherAutorefresh.__vcHandler || (()=>{}));
+  startWeatherAutorefresh.__vcHandler = () => arm();
+  document.addEventListener('visibilitychange', startWeatherAutorefresh.__vcHandler, { passive:true });
+}
+
+/* ---- Warmup iOS sur quelques gares, puis passe complète ---- */
+async function __wxWarmupFewStations(){
+  try{
+    const rows = Array.from(document.querySelectorAll('#trainInfo tr[data-gare]'));
+    const first = rows.slice(0, 6).map(r => r.dataset.gare).filter(Boolean);
+    if (!first.length) return;
+    const data = await fetchWeatherForStations(first);
+    rows.forEach(r => {
+      const name = r.dataset.gare;
+      if (!first.includes(name)) return;
+      const wx = r.querySelector('.wx'); if (!wx) return;
+      const d = data.get(name);
+      if (!d || d.code == null) { wx.textContent=''; wx.removeAttribute('title'); return; }
+      const meta = wmoToIcon(d.code, !!d.isDay);
+      const t = (typeof d.temp === 'number') ? Math.round(d.temp)+'°' : '';
+      const url = buildWeatherLinkByName(name);
+      if (url) {
+        wx.innerHTML = `<a class="wx-link" href="${url}" target="_blank" rel="noopener" title="${meta.label}${t?' • '+t:''}">
+          <span class="wx-ico">${meta.ico}</span><span class="wx-t">${t}</span>
+        </a>`;
+      } else {
+        wx.textContent = `${meta.ico}${t ? ' ' + t : ''}`;
+        wx.title = `${meta.label}${t ? ' • ' + t : ''}`;
+      }
+    });
+  }catch(e){ console.warn('[WX warmup]', e?.message || e); }
+}
+
+/* ---- Déclenchement météo après stabilisation du tableau ---- */
+function scheduleWeatherAfterTableSettled(){
+  const tbody = document.querySelector('#trainInfo table tbody');
+  if (!tbody) return;
+
+  // coupe toute requête en vol (regen)
+  cancelWeatherFetch();
+
+  let idleTimer = null;
+
+  const runFull = () => {
+    const period = window.__IS_IOS__ ? 10 * 60 * 1000 : 5 * 60 * 1000;
+    updateWeatherBadges().then(() => startWeatherAutorefresh(period));
+  };
+
+  const kick = () => {
+    if (idleTimer) { clearTimeout(idleTimer); idleTimer = null; }
+    if (window.__IS_IOS__ && window.__WX__.firstRun) {
+      window.__WX__.firstRun = false;
+      __wxWarmupFewStations();
+      setTimeout(runFull, 500); // laisse iOS respirer
+    } else {
+      runFull();
+    }
+  };
+
+  const obs = new MutationObserver(() => {
+    if (idleTimer) clearTimeout(idleTimer);
+    idleTimer = setTimeout(() => { try{obs.disconnect();}catch{} kick(); }, 700);
+  });
+
+  obs.observe(tbody, { childList: true, subtree: true });
+
+  // si déjà stable, déclenche vite
+  idleTimer = setTimeout(() => { try{obs.disconnect();}catch{} kick(); }, 700);
+
+  // kill-switch sécurité
+  setTimeout(() => { try{obs.disconnect();}catch{} }, 4000);
+}
+
+// --- Auth La Bétaillère ---
+(() => {
+  const LB_API = "https://vps.labetaillere.fr/api";
+  let lbMode = "login";
+  let lbPrefsCache = null;
+  let lbPrefsAppliedOnce = false;
+
+  const $ = (id) => document.getElementById(id);
+  const msg = (t, isErr = false) => {
+    const node = $("lbAuthMsg");
+    if (!node) return;
+    node.textContent = t;
+    node.style.color = isErr ? "#ffaaaa" : "#aab6c8";
+  };
+
+  const api = async (path, opts = {}) => {
+    const cleanPath = String(path || '');
+    const candidates = [LB_API + cleanPath, '/api' + cleanPath];
+    let lastErr = null;
+    for (const url of candidates) {
+      try {
+        const res = await fetch(url, {
+          ...opts,
+          headers: { "Content-Type": "application/json", ...(opts.headers || {}) },
+          credentials: "include"
+        });
+        const text = await res.text();
+        let data;
+        try { data = JSON.parse(text); } catch { data = { raw: text }; }
+        if (!res.ok) throw (data?.error || `HTTP ${res.status}`);
+        return data;
+      } catch (err) {
+        lastErr = err;
+        console.warn('[AUTH API] tentative échouée', url, err?.message || err);
+      }
+    }
+    throw (lastErr?.message || lastErr || 'Failed to fetch');
+  };
+
+  const LB_COMMENTS_API = `${LB_API}/comments`;
+  const commentApiCandidates = (path = '') => {
+    const normalized = String(path || '').startsWith('/') ? String(path || '') : `/${String(path || '')}`;
+    const rel = `/api/comments${normalized === '/' ? '' : normalized}`;
+    const abs = `${LB_COMMENTS_API}${normalized === '/' ? '' : normalized}`;
+    return location.hostname.endsWith('labetaillere.fr') ? [abs, rel] : [abs, rel];
+  };
+
+  async function fetchCommentsApi(path = '', options = {}){
+    const candidates = commentApiCandidates(path);
+    let lastError = null;
+    for (const url of candidates){
+      try{
+        const res = await fetch(url, { credentials: 'include', ...options });
+        if (res.ok) return res;
+        lastError = new Error(`HTTP ${res.status}`);
+      }catch(err){
+        lastError = err;
+      }
+    }
+    throw lastError || new Error('Impossible de joindre l’API commentaires');
+  }
+  window.fetchCommentsApi = fetchCommentsApi;
+  let lbCommentState = { wall: [], trains: {} };
+  window.lbCommentState = lbCommentState;
+  let lbCurrentDetailTrain = '';
+  let lbCommentsPoller = null;
+  let currentUser = null;
+  window.currentUser = null;
+  const lbGamificationState = { profile: null, ranking: [], myRank: null, me: null, lastFetchAt: 0, inflight: null };
+  const LB_GRADE_LEVELS = [
+    { name: 'Porc en déroute', min: -20, image: 'Porc en déroute.png' },
+    { name: 'Mouton égaré', min: 0, image: 'Mouton égaré.png' },
+    { name: 'Poulette du quai', min: 20, image: 'Poulet du Quai.png' },
+    { name: 'Porc entassé du couloir', min: 40, image: 'Porc entassé du couloir.png' },
+    { name: 'Bélier du sas', min: 80, image: 'Bélier du sas.png' },
+    { name: 'Architecte Chèvre de la galère', min: 120, image: 'Architecte Chèvre de la galère.png' },
+    { name: 'Ministre dindon du chaos ferroviaire', min: 180, image: 'Ministre dindon du chaos ferroviaire.png' },
+    { name: 'Golden Vache', min: 250, image: 'Golden Vache.png' }
+  ];
+  let lbProfileCache = null;
+  let lbRankingCache = null;
+  let lbCurrentMe = null;
+  window.lbProfileCache = null;
+  window.lbRankingCache = null;
+  window.lbCurrentMe = null;
+  let lbPseudoTooltip = null;
+  let lbPseudoTooltipAnchor = null;
+
+  const safePseudo = () => String(lbPrefsCache?.pseudo || '').trim().slice(0,24);
+  const isCommentingAllowed = () => window.lbIsAuthed === true;
+  const normalizeGradeKey = (v) => String(v || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
+  function resolveGradeMeta(gradeLabel, points){
+    const key = normalizeGradeKey(gradeLabel);
+    let idx = LB_GRADE_LEVELS.findIndex((it)=> normalizeGradeKey(it.name) === key);
+    if (idx < 0) idx = LB_GRADE_LEVELS.reduce((best, it, i)=> (points >= it.min ? i : best), 0);
+    const current = LB_GRADE_LEVELS[Math.max(0, idx)] || LB_GRADE_LEVELS[0];
+    const next = LB_GRADE_LEVELS[idx + 1] || null;
+    return { current, next };
+  }
+  function renderGradeHelpList(){
+    const listEl = $("lbGradeHelpList");
+    if (!listEl) return;
+    const rows = [...LB_GRADE_LEVELS].sort((a,b)=> Number(b.min) - Number(a.min));
+    listEl.innerHTML = rows.map((it)=>{
+      const threshold = Number(it.min);
+      const label = Number.isFinite(threshold)
+        ? (threshold < 0 ? '< 0 meuh' : `${threshold}+ meuh`)
+        : '—';
+      return `<li><span>${escapeHtml(it.name)}</span><span class="v">${escapeHtml(label)}</span></li>`;
+    }).join('');
+  }
+  function bindGradeHelpToggle(){
+    const btn = $("lbGradeHelpBtn");
+    const pop = $("lbGradeHelpPop");
+    if (!btn || !pop || btn.dataset.bound === '1') return;
+    btn.dataset.bound = '1';
+    const close = ()=>{ pop.hidden = true; btn.setAttribute('aria-expanded', 'false'); };
+    const open = ()=>{ pop.hidden = false; btn.setAttribute('aria-expanded', 'true'); };
+    btn.addEventListener('click', (e)=>{
+      e.stopPropagation();
+      if (pop.hidden) open();
+      else close();
+    });
+    document.addEventListener('click', (e)=>{
+      if (pop.hidden) return;
+      if (e.target === btn || pop.contains(e.target)) return;
+      close();
+    });
+  }
+  function replayGradeAppear(imgEl){
+    if (!imgEl) return;
+    imgEl.classList.remove('lb-grade-appear');
+    void imgEl.offsetWidth;
+    imgEl.classList.add('lb-grade-appear');
+  }
+  function renderPrefsGradeCard(grade, points){
+    renderGradeHelpList();
+    bindGradeHelpToggle();
+    const safePoints = Number(points || 0) || 0;
+    const { current, next } = resolveGradeMeta(grade, safePoints);
+    const span = next ? Math.max(1, (next.min - current.min)) : 1;
+    const progress = next ? Math.min(100, Math.max(0, ((safePoints - current.min) / span) * 100)) : 100;
+    const nextText = next
+      ? `Prochain niveau : ${next.name} · ${Math.max(0, next.min - safePoints)} meuh restants`
+      : 'Niveau max atteint 🏆';
+    const imagePath = `./${encodeURIComponent(current?.image || 'Mouton égaré.png')}`;
+    const cards = [
+      {
+        card: $("lbPrefsGradeCard"),
+        nameEl: $("lbGradeName"),
+        pointsEl: $("lbGradePoints"),
+        imageEl: $("lbGradeImage"),
+        fillEl: $("lbGradeProgressFill"),
+        nextEl: $("lbGradeNext")
+      },
+      {
+        card: $("lbProfileGradeCard"),
+        nameEl: $("lbProfileGradeName"),
+        pointsEl: $("lbProfileGradePoints"),
+        imageEl: $("lbProfileGradeImage"),
+        fillEl: $("lbProfileGradeProgressFill"),
+        nextEl: $("lbProfileGradeNext")
+      }
+    ];
+    cards.forEach((ctx)=>{
+      if (!ctx.card) return;
+      if (ctx.nameEl) ctx.nameEl.textContent = current?.name || String(grade || 'Mouton égaré');
+      if (ctx.pointsEl) ctx.pointsEl.textContent = `${safePoints} meuh`;
+      if (ctx.imageEl){
+        ctx.imageEl.src = imagePath;
+        ctx.imageEl.alt = `Grade ${current?.name || 'Mouton égaré'}`;
+        if (ctx.imageEl.id === "lbProfileGradeImage"){
+          const authModal = $("lbAuthModal");
+          const modalOpen = authModal && authModal.getAttribute("aria-hidden") === "false";
+          const allowAppear = ctx.imageEl.dataset.allowAppear === "1";
+          if (modalOpen && allowAppear) replayGradeAppear(ctx.imageEl);
+          else ctx.imageEl.classList.remove('lb-grade-appear');
+        } else {
+          replayGradeAppear(ctx.imageEl);
+        }
+      }
+      if (ctx.fillEl) ctx.fillEl.style.width = `${progress.toFixed(1)}%`;
+      if (ctx.nextEl) ctx.nextEl.textContent = nextText;
+      ctx.card.style.display = window.lbIsAuthed ? "grid" : "none";
+    });
+  }
+
+  const renderPseudoValue = (it) => String(it?.displayPseudo || it?.pseudo || 'Voyageur').trim().slice(0, 24) || 'Voyageur';
+  const renderGradeValue = (it) => String(it?.authorGrade || it?.grade || 'Mouton égaré').trim() || 'Mouton égaré';
+  const renderPointsValue = (it) => Number(it?.authorPoints ?? it?.points ?? 0) || 0;
+  const normalizeIdentityLite = (value) => String(value || '').trim().toLowerCase().replace(/[^a-z0-9]+/g,'');
+
+  function closePseudoTooltip(){
+    if (lbPseudoTooltip) lbPseudoTooltip.remove();
+    lbPseudoTooltip = null;
+    lbPseudoTooltipAnchor = null;
+  }
+
+  function openPseudoTooltip(anchor){
+    if (!anchor) return;
+    const pseudo = anchor.getAttribute('data-pseudo') || 'Voyageur';
+    const grade = anchor.getAttribute('data-grade') || 'Mouton égaré';
+    const points = Number(anchor.getAttribute('data-points') || 0) || 0;
+    if (lbPseudoTooltipAnchor === anchor && lbPseudoTooltip){
+      closePseudoTooltip();
+      return;
+    }
+    closePseudoTooltip();
+    const tip = document.createElement('div');
+    tip.className = 'lb-pseudo-tooltip';
+    tip.innerHTML = `<strong>${escapeHtml(pseudo)}</strong><div>${escapeHtml(grade)}</div><div>${escapeHtml(String(points))} meuh</div>`;
+    document.body.appendChild(tip);
+    const rect = anchor.getBoundingClientRect();
+    const margin = 8;
+    const maxLeft = Math.max(margin, window.innerWidth - tip.offsetWidth - margin);
+    const left = Math.min(maxLeft, Math.max(margin, rect.left));
+    const top = Math.min(window.innerHeight - tip.offsetHeight - margin, rect.bottom + 6);
+    tip.style.left = `${left}px`;
+    tip.style.top = `${Math.max(margin, top)}px`;
+    lbPseudoTooltip = tip;
+    lbPseudoTooltipAnchor = anchor;
+  }
+
+  function buildPseudoTriggerHtml(item){
+    return `<span class="lb-pseudo-trigger" data-lb-pseudo-trigger data-pseudo="${escapeHtml(renderPseudoValue(item))}" data-grade="${escapeHtml(renderGradeValue(item))}" data-points="${escapeHtml(String(renderPointsValue(item)))}">${escapeHtml(renderPseudoValue(item))}</span>`;
+  }
+  window.buildPseudoTriggerHtml = buildPseudoTriggerHtml;
+
+  window.lbParseTimestamp = window.lbParseTimestamp || function(value){
+    const raw = value == null ? Date.now() : value;
+
+    if (typeof raw === 'number' && Number.isFinite(raw)) {
+      return raw < 1e12 ? raw * 1000 : raw;
+    }
+
+    if (typeof raw === 'string') {
+      const trimmed = raw.trim();
+      if (!trimmed) return Date.now();
+
+      if (/^\d+$/.test(trimmed)) {
+        const numeric = Number(trimmed);
+        if (Number.isFinite(numeric)) return numeric < 1e12 ? numeric * 1000 : numeric;
+      }
+
+      if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(trimmed)) {
+        const utcLike = new Date(trimmed.replace(' ', 'T') + 'Z');
+        if (Number.isFinite(utcLike.getTime())) return utcLike.getTime();
+      }
+
+      const parsed = new Date(trimmed);
+      if (Number.isFinite(parsed.getTime())) return parsed.getTime();
+    }
+
+    const parsed = new Date(raw);
+    return Number.isFinite(parsed.getTime()) ? parsed.getTime() : Date.now();
+  };
+
+  function normalizeCommentItem(raw){
+    if (!raw || typeof raw !== 'object') return null;
+    const createdAt = raw.created_at || raw.createdAt || raw.ts || raw.timestamp || Date.now();
+    const createdTs = window.lbParseTimestamp(createdAt);
+    return {
+      id: raw.id || `${createdTs}_${Math.random().toString(36).slice(2,8)}`,
+      pseudo: String(raw.pseudo || raw.username || raw.user_pseudo || raw.display_pseudo || 'Voyageur').trim().slice(0, 24),
+      displayPseudo: String(raw.display_pseudo || raw.pseudo || raw.username || raw.user_pseudo || 'Voyageur').trim().slice(0, 24),
+      authorGrade: String(raw.author_grade || raw.grade || '').trim(),
+      authorPoints: Number(raw.author_points || raw.points || 0),
+      text: String(raw.message || raw.text || '').trim().slice(0, 180),
+      trainNumber: String(raw.train_number || raw.trainNumber || '').trim(),
+	  accountId: String(raw.account_id || raw.accountId || raw.user_id || '').trim(),
+      ts: createdTs
+    };
+  }
+
+
+  function lbRenderWallMessageHtml(rawText){
+    const src = String(rawText || '');
+    const escaped = escapeHtml(src);
+    return escaped.replace(
+      /&lt;span class=&quot;(lb-red|lb-orange)&quot;&gt;([\s\S]*?)&lt;\/span&gt;/g,
+      function(_, cls, inner){
+        return '<span class="' + cls + '">' + inner + '</span>';
+      }
+    );
+  }
+  window.lbRenderWallMessageHtml = lbRenderWallMessageHtml;
+
+  function wallNormalizeKey(value){
+    return String(value || '').replace(/\D+/g, '').trim();
+  }
+  window.wallNormalizeKey = wallNormalizeKey;
+  const wallHiddenRulesStorageKey = 'lb_wall_hidden_rules_v1';
+
+  function loadHiddenWallRules(){
+    try{
+      const raw = JSON.parse(localStorage.getItem(wallHiddenRulesStorageKey) || '[]');
+      return Array.isArray(raw) ? raw : [];
+    }catch(_){
+      return [];
+    }
+  }
+
+  function saveHiddenWallRules(list){
+    try{ localStorage.setItem(wallHiddenRulesStorageKey, JSON.stringify(Array.isArray(list) ? list.slice(-500) : [])); }catch(_){}
+  }
+
+  function rememberHiddenWallRuleFromSignal(signal){
+    const trainKey = wallNormalizeKey(signal?.trainNumber || signal?.train || '');
+    const type = String(signal?.signalType || '').toLowerCase();
+    const delayMin = Number(signal?.delayMin || 0);
+    if (!trainKey) return;
+    if (type !== 'suppression' && type !== 'retard') return;
+    if (type === 'retard' && delayMin < 15) return;
+    const rules = loadHiddenWallRules();
+    rules.push({ trainKey, type, delayMin: type === 'retard' ? delayMin : 0, ts: Date.now() });
+    saveHiddenWallRules(rules);
+  }
+
+  function detectWallTrainNumber(item){
+    if (!item) return '';
+    const direct = wallNormalizeKey(item.trainNumber || item.train_number || '');
+    if (direct) return direct;
+    const text = String(item.text || item.message || '');
+    const match = text.match(/(?:#?TER|#?RE|#?RB|#?IC|train\s*)?\s*(\d{3,6})/i);
+    return match ? wallNormalizeKey(match[1]) : '';
+  }
+
+  function shouldHideWallCommentByAutomod(item, trainNumber){
+    const trainKey = wallNormalizeKey(trainNumber || detectWallTrainNumber(item));
+    if (!trainKey) return false;
+	const rawText = String(item?.text || item?.message || '');
+    const plainText = rawText.replace(/<[^>]*>/g, ' ').toLowerCase();
+    const looksLikeSuppression = /supprim/.test(plainText);
+    const delayMatch = plainText.match(/(?:retard|\+)\s*([0-9]{1,3})/i);
+    const mentionedDelay = delayMatch ? Number(delayMatch[1]) : null;
+    const looksLikeDelay = Number.isFinite(mentionedDelay) && mentionedDelay > 0;
+	const hiddenByRule = loadHiddenWallRules().some((r)=>{
+      if (wallNormalizeKey(r?.trainKey) !== trainKey) return false;
+      const type = String(r?.type || '').toLowerCase();
+      if (type === 'suppression') return looksLikeSuppression;
+      if (type === 'retard') return looksLikeDelay && Number(mentionedDelay || 0) >= Number(r?.delayMin || 0);
+      return false;
+    });
+    if (hiddenByRule) return true;
+
+    if ((looksLikeSuppression || looksLikeDelay) && typeof getSignalsForTrain === 'function'){
+      const activeSignals = getSignalsForTrain(trainKey);
+      if (!Array.isArray(activeSignals) || !activeSignals.length) return true;
+      if (looksLikeSuppression){
+        const hasSuppressionChip = activeSignals.some((s)=> String(s?.signalType || '').toLowerCase() === 'suppression');
+        if (!hasSuppressionChip) return true;
+      }
+      if (looksLikeDelay){
+        const hasDelayChip = activeSignals.some((s)=>{
+          if (String(s?.signalType || '').toLowerCase() !== 'retard') return false;
+          const d = Number(s?.delayMin || 0);
+          return d > 0 && (!Number.isFinite(mentionedDelay) || d >= mentionedDelay);
+        });
+        if (!hasDelayChip) return true;
+      }
+    }
+
+    if (typeof shouldHideLiveCommentByAutomoderation === 'function'){
+      return !!shouldHideLiveCommentByAutomoderation(item, trainKey);
+    }
+    return false;
+  }
+  window.shouldHideWallCommentByAutomod = shouldHideWallCommentByAutomod;
+
+  const fmtHour = (ts) => {
+    try{
+      const raw = ts == null ? Date.now() : ts;
+      const parsed = (typeof raw === 'string' && /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(raw))
+        ? new Date(raw.replace(' ', 'T') + 'Z')
+        : new Date(raw);
+      if (!Number.isFinite(parsed.getTime())) return '--:--';
+      const parisParts = (dateObj)=>{
+        const parts = new Intl.DateTimeFormat('fr-FR', {
+          timeZone: 'Europe/Paris',
+          year: 'numeric',
+          month: '2-digit',
+          day: '2-digit'
+        }).formatToParts(dateObj);
+        const get = (type)=> parts.find((p)=> p.type === type)?.value || '';
+        return { year: Number(get('year')), month: Number(get('month')), day: Number(get('day')) };
+      };
+      const commentDate = parisParts(parsed);
+      const nowDate = parisParts(new Date());
+      const commentStamp = Date.UTC(commentDate.year, commentDate.month - 1, commentDate.day);
+      const nowStamp = Date.UTC(nowDate.year, nowDate.month - 1, nowDate.day);
+      const dayDiff = Math.round((nowStamp - commentStamp) / 86400000);
+      if (dayDiff === 0){
+        return parsed.toLocaleTimeString('fr-FR', { hour:'2-digit', minute:'2-digit', timeZone:'Europe/Paris' });
+      }
+      if (dayDiff === 1) return 'hier';
+      return parsed.toLocaleDateString('fr-FR', { day:'2-digit', month:'2-digit', year:'2-digit', timeZone:'Europe/Paris' });
+    }catch(e){ return '--:--'; }
+  };
+
+  function renderMessages(messages){
+    const feed = $('homeLiveWallFeed');
+    const form = $('homeLiveWallForm');
+    const input = $('homeLiveWallInput');
+    const submitBtn = form?.querySelector('button[type="submit"], button:not([type]), .auth-button');
+    const cta = $('homeLiveWallCta');
+    if (!feed || !form || !input) return;
+
+    const wallSource = Array.isArray(messages) ? messages : lbCommentState.wall;
+    const wallAll = Array.isArray(wallSource) ? wallSource : [];
+    const wall = wallAll
+      .filter((it)=>{
+        const trainKey = wallNormalizeKey(it?.trainNumber || detectWallTrainNumber(it));
+        if (!trainKey) return true;
+        return !shouldHideWallCommentByAutomod(it, trainKey);
+      })
+      .slice(0, 50);
+
+    if (!wall.length) {
+      feed.innerHTML = '<div class="live-wall-empty">Aucun commentaire pour le moment.</div>';
+    } else {
+      feed.innerHTML = wall.map((it) => `
+        <div class="live-wall-item live-wall-item--home live-wall-item--compact">
+          <div class="live-wall-item-text"><strong>${buildPseudoTriggerHtml(it)}</strong><span class="live-wall-inline-meta">${escapeHtml(fmtHour(it.ts))}</span> : ${lbRenderWallMessageHtml(it.text || '')}${currentUser?.role === 'admin' && it.id ? `<span class="fav-comments-row"><span class="fav-comment-btn" role="button" tabindex="0" data-comment-delete="${escapeHtml(String(it.id))}" aria-label="Supprimer le commentaire" title="Supprimer le commentaire">❌</span></span>` : ''}</div>
+        </div>
+      `).join('');
+      feed.scrollTop = 0;
+    }
+
+    form.hidden = false;
+    const can = isCommentingAllowed();
+    input.disabled = !can;
+    if (submitBtn) submitBtn.disabled = !can;
+    input.placeholder = can ? 'Partager une info rapide' : 'Connectez-vous pour commenter';
+    cta.hidden = can;
+    if (!can) cta.textContent = 'Connectez-vous pour commenter en direct.';
+    else cta.textContent = '';
+  }
+
+  window.renderMessages = renderMessages;
+  window.renderHomeLiveWall = renderMessages;
+
+  function renderTrainComments(trainNumber){
+    const listEl = $('trainDetailCommentsList');
+    const countEl = $('trainDetailCommentsCount');
+    const form = $('trainDetailCommentsForm');
+    const input = $('trainDetailCommentsInput');
+    if (!listEl || !countEl || !form || !input) return;
+    const train = String(trainNumber || lbCurrentDetailTrain || '').trim();
+    const comments = (Array.isArray(lbCommentState.wall) ? lbCommentState.wall : [])
+      .filter((it) => !train || !it.trainNumber || it.trainNumber === train)
+	  .filter((it)=>{
+        const trainKey = wallNormalizeKey(it?.trainNumber || train || detectWallTrainNumber(it));
+        if (!trainKey) return true;
+        return !shouldHideWallCommentByAutomod(it, trainKey);
+      })
+      .slice(0, 30);
+
+    countEl.textContent = String(comments.length);
+    listEl.innerHTML = comments.length
+      ? comments.map((it)=>`<div class="train-comments-item"><div class="live-wall-meta"><strong>${buildPseudoTriggerHtml(it)}</strong><span>${fmtHour(it.ts)}</span></div><div>${lbRenderWallMessageHtml(it.text || '')}</div></div>`).join('')
+      : '<div class="live-wall-empty">Pas encore de commentaire sur ce train.</div>';
+
+    form.hidden = true;
+    input.disabled = true;
+    input.placeholder = 'Commentaires train bientôt synchronisés';
+  }
+
+  function renderCommentsUI(){
+    renderMessages();
+    renderTrainComments(lbCurrentDetailTrain);
+  }
+
+  async function checkAuth(){
+    let isAuthed = false;
+	currentUser = null;
+    window.currentUser = null;
+    try{
+      const data = await api('/me', { method: 'GET' });
+      currentUser = data?.user || null;
+      window.currentUser = currentUser;
+      isAuthed = !!currentUser;
+    }catch(_err){
+      isAuthed = false;
+	  currentUser = null;
+      window.currentUser = null;
+    }
+    window.lbIsAuthed = isAuthed;
+
+    if (isAuthed) {
+      try {
+        const data = await api('/prefs', { method: 'GET' });
+        lbPrefsCache = data?.prefs || lbPrefsCache || {};
+        window.lbPrefsCache = lbPrefsCache;
+      } catch(_err){}
+    }
+
+    renderCommentsUI();
+    refreshGamificationUI({ force: true }).catch(()=>{});
+    return isAuthed;
+  }
+
+  async function loadMessages(){
+    try{
+      const res = await fetchCommentsApi('?scope=wall');
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      const list = Array.isArray(data) ? data : (Array.isArray(data?.comments) ? data.comments : []);
+      lbCommentState.wall = list
+        .map(normalizeCommentItem)
+        .filter(Boolean)
+        .sort((a, b) => Number(b?.ts || 0) - Number(a?.ts || 0))
+        .slice(0, 50);
+      window.lbCommentState = lbCommentState;
+      renderCommentsUI();
+      return lbCommentState.wall;
+    }catch(err){
+      console.warn('Impossible de charger les commentaires', err);
+      if (!Array.isArray(lbCommentState.wall)) lbCommentState.wall = [];
+      window.lbCommentState = lbCommentState;
+      renderCommentsUI();
+      return lbCommentState.wall;
+    }
+  }
+
+  async function sendMessage(text){
+    const message = String(text || '').trim().slice(0, 180);
+    if (!message) throw new Error('Commentaire vide');
+    if (!isCommentingAllowed()) throw new Error('Connexion requise');
+
+    const res = await fetchCommentsApi('', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message, scope: 'wall' })
+    });
+
+    let data = null;
+    try { data = await res.json(); } catch(_err) {}
+    if (!res.ok) throw new Error(data?.error || `HTTP ${res.status}`);
+
+    await loadMessages();
+    return data;
+  }
+
+  async function deleteComment(id){
+    const commentId = String(id || '').trim();
+    if (!commentId) throw new Error('Commentaire introuvable');
+    if (currentUser?.role !== 'admin') throw new Error('Action réservée aux admins');
+
+    const res = await fetch(`https://vps.labetaillere.fr/api/comments/${encodeURIComponent(commentId)}`, {
+      method: 'DELETE',
+      credentials: 'include'
+    });
+
+    let data = null;
+    try { data = await res.json(); } catch(_err) {}
+    if (!res.ok) throw new Error(data?.error || `HTTP ${res.status}`);
+
+    await loadMessages();
+    return data;
+  }
+
+  window.checkAuth = checkAuth;
+  window.loadMessages = loadMessages;
+  window.sendMessage = sendMessage;
+  window.deleteComment = deleteComment;
+
+  function bindCommentForms(){
+    const homeForm = $('homeLiveWallForm');
+    const homeInput = $('homeLiveWallInput');
+    if (homeForm && !homeForm.dataset.bound){
+      homeForm.dataset.bound = '1';
+      homeForm.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        try{
+          await sendMessage(homeInput?.value || '');
+          if (homeInput) homeInput.value = '';
+          renderCommentsUI();
+        }catch(err){
+          alert(err?.message || "Impossible d'ajouter le commentaire.");
+        }
+      });
+    }
+
+	const feed = $('homeLiveWallFeed');
+    if (feed && !feed.dataset.deleteBound){
+      feed.dataset.deleteBound = '1';
+      feed.addEventListener('click', async (e) => {
+        const btn = e.target.closest('[data-comment-delete]');
+        if (!btn) return;
+        try{
+          await deleteComment(btn.getAttribute('data-comment-delete'));
+        }catch(err){
+          alert(err?.message || "Impossible de supprimer le commentaire.");
+        }
+      });
+      feed.addEventListener('keydown', async (e) => {
+        const btn = e.target.closest('[data-comment-delete]');
+        if (!btn || (e.key !== 'Enter' && e.key !== ' ')) return;
+        e.preventDefault();
+        try{
+          await deleteComment(btn.getAttribute('data-comment-delete'));
+        }catch(err){
+          alert(err?.message || "Impossible de supprimer le commentaire.");
+        }
+      });
+    }
+
+    const trainForm = $('trainDetailCommentsForm');
+    const trainInput = $('trainDetailCommentsInput');
+    if (trainForm && !trainForm.dataset.bound){
+      trainForm.dataset.bound = '1';
+      trainForm.hidden = true;
+      if (trainInput) {
+        trainInput.disabled = true;
+        trainInput.placeholder = 'Commentaires train bientôt synchronisés';
+      }
+    }
+  }
+
+  function bindPseudoTooltipEvents(){
+    if (document.body.dataset.lbPseudoBound) return;
+    document.body.dataset.lbPseudoBound = '1';
+    document.addEventListener('mouseover', (e)=>{
+      const trigger = e.target.closest('[data-lb-pseudo-trigger]');
+      if (!trigger) return;
+      if (window.matchMedia('(hover: hover)').matches) openPseudoTooltip(trigger);
+    });
+    document.addEventListener('mouseout', (e)=>{
+      if (!window.matchMedia('(hover: hover)').matches) return;
+      const leaving = e.target.closest?.('[data-lb-pseudo-trigger]');
+      if (!leaving) return;
+      const related = e.relatedTarget?.closest?.('[data-lb-pseudo-trigger]');
+      if (related === leaving) return;
+      closePseudoTooltip();
+    });
+    document.addEventListener('click', (e)=>{
+      const trigger = e.target.closest('[data-lb-pseudo-trigger]');
+      if (trigger){
+        if (window.matchMedia('(hover: none)').matches || 'ontouchstart' in window){
+          e.preventDefault();
+          openPseudoTooltip(trigger);
+        }
+        return;
+      }
+      if (lbPseudoTooltip && !e.target.closest('.lb-pseudo-tooltip')) closePseudoTooltip();
+    });
+    window.addEventListener('scroll', closePseudoTooltip, { passive: true });
+    window.addEventListener('resize', closePseudoTooltip, { passive: true });
+  }
+
+  function startCommentsPolling(){
+    if (lbCommentsPoller) clearInterval(lbCommentsPoller);
+    lbCommentsPoller = setInterval(loadMessages, 5000);
+  }
+
+  window.lbComments = {
+    setCurrentTrain(trainNumber){
+      lbCurrentDetailTrain = String(trainNumber || '').trim();
+      renderTrainComments(lbCurrentDetailTrain);
+    },
+    refresh(){ loadMessages(); },
+    count(trainNumber){
+      const train = String(trainNumber || '').trim();
+      return (Array.isArray(lbCommentState.wall) ? lbCommentState.wall : [])
+        .filter((it) => !train || it.trainNumber === train)
+        .filter((it)=>{
+          const trainKey = wallNormalizeKey(it?.trainNumber || train || detectWallTrainNumber(it));
+          if (!trainKey) return true;
+          return !shouldHideWallCommentByAutomod(it, trainKey);
+        }).length;
+    }
+  };
+
+  bindCommentForms();
+  bindPseudoTooltipEvents();
+  renderCommentsUI();
+  checkAuth().finally(loadMessages);
+  startCommentsPolling();
+  const openModal = () => {
+    const modal = $("lbAuthModal");
+    if (!modal) return;
+    modal.style.display = "flex";
+    modal.setAttribute("aria-hidden", "false");
+	const profileGradeImg = $("lbProfileGradeImage");
+    if (profileGradeImg){
+      profileGradeImg.dataset.allowAppear = "0";
+      profileGradeImg.classList.remove('lb-grade-appear');
+    }
+    if (window.__lbProfileGradeAppearTimer){
+      clearTimeout(window.__lbProfileGradeAppearTimer);
+      window.__lbProfileGradeAppearTimer = null;
+    }
+    window.__lbProfileGradeAppearTimer = setTimeout(() => {
+      const img = $("lbProfileGradeImage");
+      if (!img) return;
+      img.dataset.allowAppear = "1";
+      replayGradeAppear(img);
+    }, 500);
+  };
+
+  const closeModal = () => {
+    const modal = $("lbAuthModal");
+    if (!modal) return;
+	const profileGradeImg = $("lbProfileGradeImage");
+    if (profileGradeImg){
+      profileGradeImg.dataset.allowAppear = "0";
+      profileGradeImg.classList.remove('lb-grade-appear');
+    }
+    if (window.__lbProfileGradeAppearTimer){
+      clearTimeout(window.__lbProfileGradeAppearTimer);
+      window.__lbProfileGradeAppearTimer = null;
+    }
+    modal.style.display = "none";
+    modal.setAttribute("aria-hidden", "true");
+  };
+
+  const setMode = (mode) => {
+    lbMode = mode;
+    const submitBtn = $("lbBtnSubmit");
+    const rgpdWrap = $("lbRgpdWrap");
+    const rgpdInput = $("lbRgpd");
+    const forgotWrap = $("lbForgotWrap");
+    const switchLabel = $("lbAuthSwitchLabel");
+    const switchBtn = $("lbAuthSwitchBtn");
+    if (!submitBtn || !rgpdWrap || !rgpdInput) return;
+
+    submitBtn.textContent = "Se connecter";
+    rgpdWrap.style.display = "none";
+    rgpdInput.required = false;
+    if (forgotWrap) forgotWrap.style.display = "block";
+    if (switchLabel) switchLabel.textContent = "Pas de compte ?";
+    if (switchBtn) switchBtn.textContent = "Créer un compte";
+  };
+
+  function updateHomeWelcomeLine(){
+    try{
+      const line = document.getElementById('homeWelcomeLine');
+      if (!line) return;
+      const pseudoFromPrefs = String(window.lbPrefsCache?.pseudo || '').trim();
+      const pseudoFromUser = String(window.currentUser?.pseudo || window.currentUser?.username || '').trim();
+      const pseudo = pseudoFromPrefs || pseudoFromUser;
+      line.textContent = pseudo
+        ? `Bienvenue ${pseudo} dans la bétaillère`
+        : 'Bienvenue dans la bétaillère';
+    }catch(_){}
+  }
+
+  const applyPreferences = (prefs, options = {}) => {
+    if (!prefs) return;
+    applyCustomRapidPresets(prefs);
+    lbPrefsCache = prefs;
+    window.lbPrefsCache = lbPrefsCache;
+    try {
+      document.dispatchEvent(new CustomEvent("lb:prefs-updated", {
+        detail: { prefs: lbPrefsCache }
+      }));
+    } catch (_) {}
+
+    // Remplir les champs favoris dans la modale Préférences
+    const pseudoInput = $("lbPseudo");
+    const favAM = $("lbFavMorning");
+    const favPM = $("lbFavEvening");
+    if (pseudoInput) pseudoInput.value = (prefs.pseudo || "").trim();
+    if (favAM) favAM.value = prefs.favoriteMorningTrain || "";
+    if (favPM) favPM.value = prefs.favoriteEveningTrain || "";
+    updateHomeWelcomeLine();
+    // Gare favorite (départ/arrivée) -> utilisée comme valeur par défaut dans l'onglet Affluence
+    const favFrom = $("lbFavFromStation");
+    const favTo   = $("lbFavToStation");
+    if (favFrom) favFrom.value = prefs.favoriteFromStation || "";
+    if (favTo)   favTo.value   = prefs.favoriteToStation || "";
+    window.__lbPreferredAffStation = (prefs.favoriteFromStation || "").trim();
+    window.__lbPreferredAffTo = (prefs.favoriteToStation || "").trim();
+
+
+    // Météo: source unique = gares favorites (départ/arrivée)
+    try{
+      const p = window.lbPrefsCache || {};
+      const from = (p.favoriteFromStation || '').trim();
+      const to   = (p.favoriteToStation   || '').trim();
+      const inpFrom = document.getElementById('lbWxFromStation');
+      const inpTo   = document.getElementById('lbWxToStation');
+      if (inpFrom) inpFrom.value = from;
+      if (inpTo)   inpTo.value   = to;
+    }catch(e){}
+    try{
+      const wx = getUserWxPrefsOrDefault();
+      updateHomeWeather(wx.from, wx.to).catch(()=>{});
+    }catch(e){}
+    try{ window.lbComments?.refresh(); }catch(e){}
+
+    // Rafraîchir le widget favoris
+    try { if (typeof window.updateFavoriteWidgetFromPrefs === "function") window.updateFavoriteWidgetFromPrefs(); } catch(e) {}
+
+    if (!options.auto) return;
+  };
+
+  const loadPreferences = async () => {
+    try {
+      const data = await api("/prefs");
+      const prefs = data?.prefs || {};
+      applyPreferences(prefs, { auto: true });
+    } catch (err) {
+      console.warn("Impossible de charger les préférences", err);
+    }
+  };
+
+  // Source unique pour l'étoile de la fiche train : les deux favoris du
+  // compte, également affichés dans « Mes préférences ».
+  window.lbSaveFavoriteTrains = async ({ morning = "", evening = "" } = {}) => {
+    if (window.lbIsAuthed !== true) {
+      throw new Error("Connecte-toi pour enregistrer tes bétaillères favorites.");
+    }
+    const normalizeFavorite = (value) => {
+      const match = String(value || "").replace(/\s+/g, "").match(/\d{4,6}/);
+      return match ? match[0] : "";
+    };
+    let remotePrefs = {};
+    try {
+      const current = await api("/prefs", { method: "GET" });
+      remotePrefs = current?.prefs || {};
+    } catch (_) {
+      remotePrefs = window.lbPrefsCache || lbPrefsCache || {};
+    }
+    const merged = {
+      ...remotePrefs,
+      favoriteMorningTrain: normalizeFavorite(morning),
+      favoriteEveningTrain: normalizeFavorite(evening)
+    };
+    await api("/prefs", {
+      method: "POST",
+      body: JSON.stringify({ prefs: merged })
+    });
+    applyPreferences(merged, { auto: false });
+    return merged;
+  };
+
+  function normalizeRankingList(raw){
+    const list = Array.isArray(raw) ? raw : (Array.isArray(raw?.ranking) ? raw.ranking : (Array.isArray(raw?.items) ? raw.items : []));
+    return list.map((it, idx)=>({
+      rank: Number(it?.rank || it?.position || (idx + 1)),
+      pseudo: String(it?.display_pseudo || it?.pseudo || it?.username || 'Voyageur').trim().slice(0, 24),
+      grade: String(it?.grade || it?.author_grade || 'Mouton égaré').trim(),
+      points: Number(it?.points || it?.author_points || 0) || 0,
+	  userId: Number(it?.user_id || it?.id || 0) || null,
+      me: !!(it?.me || it?.is_me || it?.self)
+    })).filter((it)=> it.rank > 0).sort((a,b)=> a.rank - b.rank);
+  }
+
+  function rankMedalSrc(rank){
+    const safeRank = Number(rank || 0) || 0;
+    if (safeRank === 1) return 'https://raw.githubusercontent.com/TekMaTe-lux/Assistant-train/main/MedailleOR.png';
+    if (safeRank === 2) return 'https://raw.githubusercontent.com/TekMaTe-lux/Assistant-train/main/MedailleARGENT.png';
+    if (safeRank === 3) return 'https://raw.githubusercontent.com/TekMaTe-lux/Assistant-train/main/MedailleBRONZE.png';
+    if (safeRank === 4) return 'https://raw.githubusercontent.com/TekMaTe-lux/Assistant-train/main/MedailleCHOCO.png';
+    return '';
+  }
+
+  function rankDisplayHtml(rank, options = {}){
+    const safeRank = Number(rank || 0) || 0;
+    const medalSrc = rankMedalSrc(safeRank);
+    if (medalSrc){
+      const extraClass = options.profile ? ' lb-rank-medal--profile' : '';
+      return `<span class="lb-rank-medal${extraClass}" aria-label="Rang ${safeRank}" title="Rang ${safeRank}"><img src="${medalSrc}" alt="Médaille rang ${safeRank}" loading="lazy" decoding="async"></span>`;
+    }
+    if (safeRank > 0){
+      return options.profile
+        ? `<span class="lb-profile-rank-number" aria-label="Rang ${safeRank}" title="Rang ${safeRank}">#${safeRank}</span>`
+        : `#${safeRank}`;
+    }
+    return '—';
+  }
+
+  function renderGamificationUI(){
+    const host = $("lbProfileTroupeau");
+    const rankingHostInline = $("lbProfileRankingInline");
+    const podium = $("lbRankingPodium");
+    const listEl = $("lbRankingList");
+    const podiumInline = $("lbRankingPodiumInline");
+    const listElInline = $("lbRankingListInline");
+    const filter = $("lbRankingFilter");
+    const filterInline = $("lbRankingFilterInline");
+    if (filterInline && filter && !filterInline.dataset.lbMirrorBound){
+      filterInline.dataset.lbMirrorBound = '1';
+      filterInline.addEventListener('change', ()=>{
+        if (filter) filter.value = filterInline.value || 'top10';
+        renderGamificationUI();
+      });
+    }
+    if (filter && filterInline && filter.value !== filterInline.value){
+      filterInline.value = filter.value || 'top10';
+    }
+    const canShowProfile = window.lbIsAuthed === true;
+    if (host) host.style.display = canShowProfile ? "grid" : "none";
+    if (rankingHostInline) rankingHostInline.style.display = "none";
+    const p = lbGamificationState.profile || {};
+    const ranking = Array.isArray(lbGamificationState.ranking) ? lbGamificationState.ranking : [];
+    const pseudo = String(p.display_pseudo || p.pseudo || safePseudo() || currentUser?.pseudo || 'Voyageur').trim();
+    const grade = String(p.grade || 'Mouton égaré').trim();
+    const points = Number(p.points || 0) || 0;
+    const myRank = Number(lbGamificationState.myRank || p.rank || 0) || null;
+    if ($("lbProfilePseudo")) $("lbProfilePseudo").textContent = pseudo || "—";
+    if ($("lbProfilePseudoDisplay")) $("lbProfilePseudoDisplay").textContent = pseudo || "—";
+    if ($("lbProfileGrade")) $("lbProfileGrade").textContent = grade || "—";
+    if ($("lbProfilePoints")) $("lbProfilePoints").textContent = `${points} meuh`;
+    const profileRankHtml = rankDisplayHtml(myRank, { profile: true });
+    if ($("lbProfileRank")) $("lbProfileRank").innerHTML = profileRankHtml;
+    if ($("lbProfileRankInline")) $("lbProfileRankInline").innerHTML = profileRankHtml;
+    if ($("lbProfileRankBadgeText")) $("lbProfileRankBadgeText").innerHTML = profileRankHtml;
+    renderPrefsGradeCard(grade, points);
+
+    const top3 = ranking.slice(0, 3);
+    const podiumSlots = [2,1,3].map((rankNum)=>{
+      const item = top3.find((it)=> it.rank === rankNum);
+      if (!item){
+        return `<div class="lb-ranking-podium-item pos-${rankNum}">
+          <div class="podium-caption">
+            <div class="pseudo">—</div>
+            <div class="meta">0 meuh</div>
+          </div>
+        </div>`;
+      }
+      return `<div class="lb-ranking-podium-item pos-${rankNum}">
+        <div class="podium-caption">
+          <div class="pseudo">${escapeHtml(item.pseudo)}</div>
+          <div class="meta">${escapeHtml(String(item.points))} meuh</div>
+        </div>
+      </div>`;
+    }).join('');
+    const podiumHtml = `<div class="lb-ranking-podium-visual">
+      ${podiumSlots}
+      <img class="lb-ranking-podium-art" src="https://raw.githubusercontent.com/TekMaTe-lux/Assistant-train/main/Podium.png" alt="Podium du classement">
+    </div>`;
+    if (podium) podium.innerHTML = podiumHtml;
+    if (podiumInline) podiumInline.innerHTML = podiumHtml;
+
+    const mode = (filterInline?.value || filter?.value || 'top10');
+    if (filter) filter.value = mode;
+    if (filterInline) filterInline.value = mode;
+    let rows = ranking;
+    if (mode === 'top3') rows = ranking.slice(0, 3);
+    else if (mode === 'top10') rows = ranking.slice(0, 10);
+    else if (mode === 'top50') rows = ranking.slice(0, 50);
+    else if (mode === 'around'){
+      const aroundRank = myRank || Number(lbGamificationState?.me?.rank || 0) || ranking.find((it)=> it.me)?.rank || null;
+      if (aroundRank){
+        rows = ranking.filter((it)=> Math.abs(it.rank - aroundRank) <= 2).slice(0, 7);
+      } else {
+        rows = ranking.slice(0, 10);
+      }
+    }
+    const listHtml = rows.length
+      ? rows.map((it)=> `<div class="lb-ranking-row${(myRank && it.rank === myRank) ? ' me' : ''}"><span class="lb-rank-cell">${rankDisplayHtml(it.rank)}</span><span title="${escapeHtml(it.grade)}">${escapeHtml(it.pseudo)}</span><span>${escapeHtml(String(it.points))} 🐮</span></div>`).join('')
+      : '<div class="live-wall-empty">Classement indisponible.</div>';
+    if (listEl) listEl.innerHTML = listHtml;
+    if (listElInline) listElInline.innerHTML = listHtml;
+  }
+
+  function resetGamificationUI(){
+    lbGamificationState.profile = null;
+    lbGamificationState.ranking = [];
+    lbGamificationState.myRank = null;
+    lbGamificationState.me = null;
+    lbGamificationState.lastFetchAt = 0;
+    lbGamificationState.inflight = null;
+    lbProfileCache = null;
+    lbRankingCache = null;
+    lbCurrentMe = null;
+    window.lbProfileCache = null;
+    window.lbRankingCache = null;
+    window.lbCurrentMe = null;
+    const host = $("lbProfileTroupeau");
+    if (host) host.style.display = "none";
+    if ($("lbProfilePseudo")) $("lbProfilePseudo").textContent = "—";
+    if ($("lbProfilePseudoDisplay")) $("lbProfilePseudoDisplay").textContent = "—";
+    if ($("lbProfileGrade")) $("lbProfileGrade").textContent = "—";
+    if ($("lbProfilePoints")) $("lbProfilePoints").textContent = "0 meuh";
+    if ($("lbProfileRank")) $("lbProfileRank").textContent = "—";
+    if ($("lbProfileRankInline")) $("lbProfileRankInline").textContent = "—";
+    renderPrefsGradeCard('Mouton égaré', 0);
+    if ($("lbProfileRankingInline")) $("lbProfileRankingInline").style.display = "none";
+    if ($("lbRankingPodium")) $("lbRankingPodium").innerHTML = '';
+    if ($("lbRankingPodiumInline")) $("lbRankingPodiumInline").innerHTML = '';
+    if ($("lbRankingList")) $("lbRankingList").innerHTML = '<div class="live-wall-empty">Classement indisponible.</div>';
+    if ($("lbRankingListInline")) $("lbRankingListInline").innerHTML = '<div class="live-wall-empty">Classement indisponible.</div>';
+  }
+
+  async function refreshGamificationUI(options = {}){
+    const force = !!options.force;
+    const ttl = 15000;
+    const now = Date.now();
+    if (!force && lbGamificationState.inflight) return lbGamificationState.inflight;
+    if (!force && lbGamificationState.lastFetchAt && (now - lbGamificationState.lastFetchAt) < ttl){
+      renderGamificationUI();
+      return;
+    }
+    lbGamificationState.inflight = (async ()=>{
+      try{
+        const [profileData, rankingData] = await Promise.all([
+          window.lbIsAuthed ? api('/me/profile', { method:'GET', cache: 'no-store' }).catch(()=> ({})) : Promise.resolve({}),
+          api('/ranking', { method:'GET', cache: 'no-store' }).catch(()=> ({}))
+        ]);
+        console.log("PROFILE_FRESH", profileData);
+        console.log("RANKING_FRESH", rankingData);
+        console.log("RANKING_ME_FRESH", rankingData?.me);
+        const profile = profileData?.profile || profileData?.me || profileData || {};
+        const ranking = normalizeRankingList(rankingData);
+        const profileRank = Number(profile?.rank || 0) || null;
+        const mePayload = rankingData?.me || null;
+        const meUserId = Number(mePayload?.user_id || 0) || null;
+        const detectedRank = ranking.find((it)=>
+          it.me
+          || (meUserId && Number(it.userId || 0) === meUserId)
+          || normalizeIdentityLite(it.pseudo) === normalizeIdentityLite(profile?.display_pseudo || profile?.pseudo || safePseudo())
+        )?.rank || null;
+        lbGamificationState.profile = window.lbIsAuthed ? profile : null;
+        lbGamificationState.ranking = ranking;
+        lbGamificationState.me = mePayload;
+        lbGamificationState.myRank = profileRank || detectedRank || null;
+        lbGamificationState.lastFetchAt = Date.now();
+		lbProfileCache = lbGamificationState.profile;
+        lbRankingCache = lbGamificationState.ranking;
+        lbCurrentMe = lbGamificationState.me;
+        window.lbProfileCache = lbProfileCache;
+        window.lbRankingCache = lbRankingCache;
+        window.lbCurrentMe = lbCurrentMe;
+      }catch(err){
+        console.warn('GAMIFICATION_REFRESH_ERROR', err);
+      }
+      renderGamificationUI();
+    })();
+    try{ await lbGamificationState.inflight; } finally { lbGamificationState.inflight = null; }
+  }
+  window.refreshGamificationUI = refreshGamificationUI;
+
+  if ('serviceWorker' in navigator){
+    navigator.serviceWorker.getRegistration().then((reg)=>{
+      if (reg) console.log('SW_REG_ACTIVE', reg.scope);
+      else console.log('SW_REG_NONE');
+    }).catch(()=>{});
+  }
+
+  // ===== (UI) Ajuste automatiquement l'échelle des schémas de rame dans les favoris (mobile) =====
+  function lbFitFavSchemas(){
+    try{
+      const wraps = document.querySelectorAll('.fav-aff-schema');
+      wraps.forEach(w=>{
+        const train = w.querySelector('.affls-rame, .affls-train');
+        if(!train) return;
+        const isCompact = w.classList.contains('fav-aff-schema--compact');
+        const baseScale = isCompact ? 0.84 : 0.80; // compact: UM3 un peu plus réduit pour éviter la coupe à gauche
+        // reset
+        train.style.transform = `scale(${baseScale})`;
+		train.style.transformOrigin = 'right center';
+        w.classList.add('is-fit');
+        // mesurer
+        const cw = w.clientWidth || 0;
+        const tw = train.scrollWidth || train.getBoundingClientRect().width || 0;
+        let s = baseScale;
+        if(cw>0 && tw>0 && tw>cw){
+          s = isCompact
+            ? Math.max(0.40, Math.min(baseScale, (cw / tw) * baseScale))
+            : Math.max(0.48, Math.min(baseScale, (cw / tw) * baseScale));
+        }
+        train.style.transform = `scale(${s.toFixed(3)})`;
+      });
+    }catch(e){}
+  }
+  window.lbFitFavSchemas = lbFitFavSchemas;
+  window.addEventListener('resize', ()=>{ try{ lbFitFavSchemas(); }catch(e){} });
+
+  // ===== Widget Favoris Matin/Soir =====
+
+
+
+
+  // --- Fiabilité des favoris : mêmes données et mêmes calculs que la fiche train ---
+  // Source directe, sans dépendre de l'ouverture du module STATS.
+  const FAV_QUICK_STATS_CACHE = new Map();
+  async function getFavQuickStatsData(trainId){
+    if (!trainId) return null;
+
+    const today = new Date().toLocaleDateString('en-CA', { timeZone:'Europe/Luxembourg' });
+    const toDate = new Date(`${today}T12:00:00Z`);
+    toDate.setUTCDate(toDate.getUTCDate() - 1);
+    const to = toDate.toISOString().slice(0, 10);
+    const fromDate = new Date(toDate.getTime() - (29 * 86400000));
+    const from = fromDate.toISOString().slice(0, 10);
     const key = `${trainId}|${from}|${to}|profile-v2`;
     if (FAV_QUICK_STATS_CACHE.has(key)) return FAV_QUICK_STATS_CACHE.get(key);
 
