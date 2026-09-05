@@ -23,6 +23,11 @@
     '&':'&amp;', '<':'&lt;', '>':'&gt;', "'":'&#39;', '"':'&quot;'
   }[char]));
 
+  const normalizeStop = (value) => String(value || '')
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .replace(/,?\s*gare(?:\s+centrale)?\b.*$/i, '')
+    .replace(/\s+/g, ' ').trim().toLowerCase();
+
   function trainNumberFromData(train){
     return normalizeTrain(
       train?.numberDigits || train?.numberKey || train?.numberRaw || train?.number || train?.headsign || train?.id
@@ -42,6 +47,7 @@
       delayMin:delayMin > 0 ? Math.round(delayMin) : null,
       delayReports:Math.max(0, Math.round(Number(item.delayReports) || 0)),
       lastReportAt:Number(item.lastReportAt || 0),
+      travelerStops:item.travelerStops && typeof item.travelerStops === 'object' ? item.travelerStops : {},
       isCurrentUserAboard:!!item.isCurrentUserAboard
     };
   }
@@ -167,6 +173,27 @@
         <button type="button" data-lb-map-community-presence="${esc(number)}">${item?.isCurrentUserAboard ? 'À bord ✓' : 'Je suis à bord'}</button>
         <button type="button" data-lb-map-community-signal="${esc(number)}">⚠ Signaler</button>
       </div>`;
+    renderTravelerStopDelays(number);
+  }
+
+  function renderTravelerStopDelays(trainNumber = currentTripNumber()){
+    const stops = document.getElementById('trip-stops');
+    if (!stops) return;
+    stops.querySelectorAll('.lb-stop-traveler-delay-right').forEach((label) => label.remove());
+    const item = communityForTrain(trainNumber);
+    const travelerStops = item?.travelerStops || {};
+    if (!travelerLayerEnabled || !Object.keys(travelerStops).length) return;
+    stops.querySelectorAll(':scope > .trip-stop').forEach((row) => {
+      const stopKey = normalizeStop(row.querySelector('.stop-name')?.textContent);
+      const report = stopKey ? travelerStops[stopKey] : null;
+      const delay = Math.round(Number(report?.delayMin) || 0);
+      if (!(delay > 0)) return;
+      const label = document.createElement('div');
+      label.className = 'lb-stop-traveler-delay-right';
+      label.textContent = `(🐮 +${delay} min)`;
+      label.title = `${Math.max(1, Math.round(Number(report?.reports) || 1))} signalement(s) de La Voix du Bétail à ${report?.station || row.querySelector('.stop-name')?.textContent || 'cet arrêt'}`;
+      row.appendChild(label);
+    });
   }
 
   function installControlsToggle(){
@@ -203,6 +230,8 @@
       .lb-map-trip-community-actions{display:flex;gap:5px;align-items:center}
       .lb-map-trip-community-actions button{min-height:30px;padding:5px 7px;border:1px solid rgba(0,234,255,.3);border-radius:8px;background:rgba(5,31,51,.95);color:#eefcff;font-size:9px;font-weight:800;cursor:pointer;white-space:nowrap}
       .lb-map-trip-community-actions button:hover,.lb-map-trip-community-actions button:focus-visible{border-color:#8ef8ff;color:#fff}
+      .trip-stop .lb-stop-traveler-delay-right{position:absolute;z-index:2;right:8px;bottom:1px;color:#75eefa;font-size:8px;font-weight:850;line-height:1;white-space:nowrap;text-align:right;text-shadow:0 0 5px rgba(0,234,255,.18)}
+      .trip-stop:has(.lb-stop-traveler-delay-right){padding-bottom:11px!important}
       @media(max-width:520px){.lb-map-trip-community{gap:4px;padding:5px}.lb-map-trip-community-actions button{padding:5px 6px}.lb-map-trip-community-title{font-size:8px}.lb-map-trip-community-summary strong{font-size:10px}}
     `;
     document.head.appendChild(style);
