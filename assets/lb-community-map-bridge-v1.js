@@ -15,6 +15,7 @@
   const SNAPSHOT_INTERVAL_MS = 8000;
   const GPS_TIMEOUT_MS = 12000;
   let lastSnapshotSignature = '';
+  let gpsResultTimer = 0;
 
   const normalizeTrain = (value) => {
     const matches = String(value || '').match(/\d{3,6}/g);
@@ -121,6 +122,11 @@
       }
       button.disabled = true;
       button.classList.add('is-loading');
+      window.clearTimeout(gpsResultTimer);
+      gpsResultTimer = window.setTimeout(() => {
+        finishGpsButton();
+        showSignalFeedback('Le calcul cartographique ne répond pas. Choisissez le retard manuellement.');
+      }, GPS_TIMEOUT_MS + 5000);
       requestGpsPosition(frame.contentWindow, train);
     });
     delayWrap.appendChild(button);
@@ -183,6 +189,7 @@
       return;
     }
     if (data.type === 'lb:community:gps-delay-result') {
+      window.clearTimeout(gpsResultTimer);
       finishGpsButton();
       if (!train) return;
       if (data.ok === false) {
@@ -201,6 +208,7 @@
       return;
     }
     if (data.type === 'lb:community:gps-error') {
+      window.clearTimeout(gpsResultTimer);
       finishGpsButton();
       showSignalFeedback(String(data.message || 'Estimation GPS indisponible.'));
     }
