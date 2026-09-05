@@ -16,9 +16,19 @@ function block(source, start, end) {
   return source.slice(from, to);
 }
 
-test('the map bridge does not observe or poll the entire page', () => {
-  assert.doesNotMatch(bridge, /new MutationObserver/);
+test('the map bridge never observes or polls the entire page', () => {
+  assert.match(bridge, /document\.getElementById\('lbLiveTrainCards'\)/);
+  assert.match(bridge, /liveCardsObserver\.observe\(root, \{ childList:true, subtree:true \}\)/);
+  assert.doesNotMatch(bridge, /observe\(document\.body/);
   assert.doesNotMatch(bridge, /setInterval\(/);
+});
+
+test('LIVE traveler decoration stays idempotent and compact', () => {
+  assert.match(bridge, /const desired = \[official, userAlert, passenger\]\.filter\(Boolean\)/);
+  assert.match(bridge, /const sameOrder = desired\.length === current\.length/);
+  assert.match(bridge, /passenger\.hidden = !\(count > 0\)/);
+  assert.match(bridge, /userAlert\.textContent = `\+\$\{Number\(delayMatch\[1\]\)\} min\*`/);
+  assert.match(bridge, /lb-live-chip--community-delay/);
 });
 
 test('anonymous visitors can receive snapshots but cannot contribute', () => {
