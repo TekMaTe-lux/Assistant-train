@@ -205,7 +205,8 @@
     const style = document.createElement('style');
     style.id = 'lb-community-map-bridge-v1-style';
     style.textContent = `
-      #lbSignalDelayWrap{display:flex;flex-wrap:wrap;gap:7px;align-items:stretch}
+      #lbSignalDelayWrap{display:none;flex-wrap:wrap;gap:7px;align-items:stretch}
+      #lbSignalDelayWrap.is-visible{display:flex}
       #lbSignalDelayWrap>select{flex:1 1 150px;min-width:0}
       .lb-signal-gps-estimate{flex:0 1 auto;min-height:40px;padding:8px 11px;border-radius:10px;border:1px solid rgba(0,234,255,.42);background:rgba(4,25,43,.92);color:#eafcff;font:inherit;font-size:12px;font-weight:800;cursor:pointer;white-space:nowrap}
       .lb-signal-gps-estimate:hover,.lb-signal-gps-estimate:focus-visible{border-color:#8ef8ff;box-shadow:0 0 0 2px rgba(0,234,255,.12)}

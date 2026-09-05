@@ -23,7 +23,7 @@ import sys
 
 path = Path(sys.argv[1])
 text = path.read_text(encoding="utf-8")
-marker = '<script id="lb-community-traveler-v1" src="./assets/lb-community-traveler-v1.js?v=20260905-2"></script>'
+marker = '<script id="lb-community-traveler-v1" src="./assets/lb-community-traveler-v1.js?v=20260905-3"></script>'
 import re
 text = re.sub(
     r'<script id="lb-community-traveler-v1" src="\./assets/lb-community-traveler-v1\.js\?v=[^"]+"></script>',

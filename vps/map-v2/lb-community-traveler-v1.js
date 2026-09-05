@@ -134,10 +134,27 @@
         delay.textContent = `(🐮 +${item.delayMin})`;
         delay.title = `Retard annoncé par les voyageurs : +${item.delayMin} min`;
         marker.appendChild(delay);
+        positionTravelerDelay(marker, delay);
       }
     });
     renderTripCommunityBlock();
     markerRefreshRunning = false;
+  }
+
+  function positionTravelerDelay(marker, delay){
+    const official = marker.querySelector('.train-delay-badge');
+    const glyph = marker.querySelector('.cow-glyph');
+    const anchor = official || glyph;
+    if (!anchor) return;
+    if (official){
+      // Même colonne que le retard officiel, juste en dessous.
+      delay.style.left = `${official.offsetLeft}px`;
+      delay.style.top = `${official.offsetTop + official.offsetHeight + 1}px`;
+    }else{
+      // En l'absence de retard officiel, immédiatement à droite de la flèche.
+      delay.style.left = `${glyph.offsetLeft + glyph.offsetWidth + 2}px`;
+      delay.style.top = `${glyph.offsetTop + Math.max(0, Math.round((glyph.offsetHeight - delay.offsetHeight) / 2))}px`;
+    }
   }
 
   function scheduleMarkerRefresh(){
@@ -257,7 +274,7 @@
     style.textContent = `
       .cow-marker{position:relative!important}
       .lb-map-traveler-presence{position:absolute;z-index:7;right:calc(100% + 2px);top:50%;transform:translateY(-50%);display:inline-flex;align-items:center;justify-content:center;min-height:12px;padding:1px 3px;border:0;border-radius:3px;background:rgba(3,18,31,.84);color:#dffcff;font-size:7.5px;font-weight:850;line-height:1;white-space:nowrap;box-shadow:0 1px 3px rgba(0,0,0,.3);pointer-events:none}
-      .lb-map-traveler-delay{display:inline-flex;align-items:center;justify-content:center;min-height:12px;margin-left:2px;padding:0 2px;border:0;background:transparent;color:#75eefa;font-size:7.5px;font-weight:850;line-height:1;white-space:nowrap;text-shadow:none;pointer-events:none}
+      .lb-map-traveler-delay{position:absolute;z-index:7;display:inline-flex;align-items:center;justify-content:center;min-height:12px;margin:0;padding:0 2px;border:0;background:rgba(3,18,31,.78);border-radius:3px;color:#75eefa;font-size:7.5px;font-weight:850;line-height:1;white-space:nowrap;text-shadow:none;pointer-events:none}
       html.ber-arrow-z-far .lb-map-traveler-presence,html.ber-arrow-z-wide .lb-map-traveler-presence,html.ber-arrow-z-far .lb-map-traveler-delay,html.ber-arrow-z-wide .lb-map-traveler-delay,html.lb-travelers-layer-off .lb-map-traveler-presence,html.lb-travelers-layer-off .lb-map-traveler-delay{display:none!important}
       .cow-marker.train-selected .lb-map-traveler-presence,.cow-marker.ber-focus-current .lb-map-traveler-presence,.cow-marker.train-selected .lb-map-traveler-delay,.cow-marker.ber-focus-current .lb-map-traveler-delay{display:inline-flex!important}
       .lb-map-trip-community{display:flex;align-items:stretch;gap:6px;padding:6px;border:1px solid rgba(0,234,255,.22);border-radius:10px;background:rgba(4,24,40,.74)}
