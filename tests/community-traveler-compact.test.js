@@ -22,9 +22,23 @@ test('connected actions stay on the right', () => {
 });
 
 test('traveler delay uses dedicated purple styling', () => {
+  assert.match(compact, /91,54,132/);
   assert.match(compact, /183,140,255/);
-  assert.match(compact, /#f1e8ff/);
   assert.match(compact, /lb-map-traveler-delay-community/);
+});
+
+test('traveler map badge matches the official compact delay badge size', () => {
+  assert.match(compact, /height:10px!important;min-height:10px!important/);
+  assert.match(compact, /font-size:6\.25px!important/);
+  assert.match(compact, /@media\(max-width:720px\)/);
+  assert.match(compact, /height:9px!important;min-height:9px!important/);
+  assert.match(compact, /font-size:5\.75px!important/);
+});
+
+test('traveler map badge is aligned immediately below the official SNCF badge', () => {
+  assert.match(compact, /const official = marker\.querySelector\('\.train-delay-badge'\)/);
+  assert.match(compact, /badge\.style\.left = `\$\{official\.offsetLeft\}px`/);
+  assert.match(compact, /badge\.style\.top = `\$\{official\.offsetTop \+ official\.offsetHeight \+ 1\}px`/);
 });
 
 test('a station delay propagates forward until another station report replaces it', () => {
@@ -52,7 +66,7 @@ test('compact layer reuses travelerStops and avoids permanent observers or polli
 
 test('VPS installer loads the refreshed compact layer after the existing traveler layer', () => {
   const v1 = installer.indexOf('lb-community-traveler-v1.js?v=20260905-5');
-  const v2 = installer.indexOf('lb-community-traveler-compact-v2.js?v=20260905-3');
+  const v2 = installer.indexOf('lb-community-traveler-compact-v2.js?v=20260905-4');
   assert.ok(v1 >= 0, 'V1 marker missing');
   assert.ok(v2 > v1, 'compact V2 must be installed after V1');
   assert.match(installer, /__LB_COMMUNITY_TRAVELER_COMPACT_V2__/);
