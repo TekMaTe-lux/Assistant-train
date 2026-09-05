@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="fr" data-lb-v4-live="1">
 <head>
-  <script id="lb-home-major-alert-script" src="./assets/home-major-alerts.js?v=20260905-1"></script>
+  <script id="lb-home-major-alert-script" src="./assets/home-major-alerts.js?v=20260905-2"></script>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content" />
   <title>La Bétaillère</title>
@@ -24212,7 +24212,7 @@ async function loadAffluenceDate(dateStr){
     const ensureTrain = (trainNumber)=>{
       const key = normalizeKey(trainNumber);
       if (!key) return null;
-      if (!trains[key]) trains[key] = { presenceCount:0, travelerDelayMin:null, delayReports:0, lastReportAt:0, isCurrentUserAboard:false };
+      if (!trains[key]) trains[key] = { presenceCount:0, travelerDelayMin:null, delayReports:0, lastReportAt:0, travelerStops:{}, isCurrentUserAboard:false };
       return trains[key];
     };
 
@@ -24234,6 +24234,11 @@ async function loadAffluenceDate(dateStr){
     });
 
     const delaysByTrain = new Map();
+    const delaysByStop = new Map();
+    const normalizeStopKey = (value)=> String(value || '')
+      .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+      .replace(/,?\s*gare(?:\s+centrale)?\b.*$/i, '')
+      .replace(/\s+/g, ' ').trim().toLowerCase();
     (Array.isArray(COMMUNITY.signals) ? COMMUNITY.signals : []).forEach((signal)=>{
       const ts = Number(signal?.ts || 0);
       const delay = Number(signal?.delayMin || 0);
@@ -24244,6 +24249,13 @@ async function loadAffluenceDate(dateStr){
       if (!key) return;
       if (!delaysByTrain.has(key)) delaysByTrain.set(key, []);
       delaysByTrain.get(key).push({ delay:Math.round(delay), ts });
+      const station = String(signal?.station || '').trim();
+      const stopKey = normalizeStopKey(station);
+      if (stopKey){
+        const scopedKey = `${key}|${stopKey}`;
+        if (!delaysByStop.has(scopedKey)) delaysByStop.set(scopedKey, { trainKey:key, stopKey, station, reports:[] });
+        delaysByStop.get(scopedKey).reports.push({ delay:Math.round(delay), ts });
+      }
     });
     delaysByTrain.forEach((reports, key)=>{
       const entry = ensureTrain(key);
@@ -24255,6 +24267,18 @@ async function loadAffluenceDate(dateStr){
         : Math.round((values[middle - 1] + values[middle]) / 2);
       entry.delayReports = values.length;
       entry.lastReportAt = Math.max(...reports.map((item)=> item.ts));
+    });
+    delaysByStop.forEach((group)=>{
+      const entry = ensureTrain(group.trainKey);
+      if (!entry) return;
+      const values = group.reports.map((item)=> item.delay).sort((a,b)=> a-b);
+      const middle = Math.floor(values.length / 2);
+      entry.travelerStops[group.stopKey] = {
+        station:group.station,
+        delayMin:values.length % 2 ? values[middle] : Math.round((values[middle - 1] + values[middle]) / 2),
+        reports:values.length,
+        lastReportAt:Math.max(...group.reports.map((item)=> item.ts))
+      };
     });
 
     Object.keys(trains).forEach((key)=>{
