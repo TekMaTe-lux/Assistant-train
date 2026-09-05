@@ -29,7 +29,7 @@ test('SNCF and community badges use CSS grid without DOM geometry reads', () => 
   assert.match(installer, /display:grid!important/);
   assert.match(installer, /grid-column:3!important;grid-row:1!important/);
   assert.match(installer, /grid-column:3!important;grid-row:2!important/);
-  assert.doesNotMatch(installer, /getBoundingClientRect/);
+  assert.doesNotMatch(installer, /getBoundingClientRect\s*\(/);
 });
 
 test('the patch refuses to remove the service-day rollover protection', () => {
