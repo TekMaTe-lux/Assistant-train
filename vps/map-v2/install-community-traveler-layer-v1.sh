@@ -23,13 +23,19 @@ import sys
 
 path = Path(sys.argv[1])
 text = path.read_text(encoding="utf-8")
-marker = '<script id="lb-community-traveler-v1" src="./assets/lb-community-traveler-v1.js?v=20260905-1"></script>'
+marker = '<script id="lb-community-traveler-v1" src="./assets/lb-community-traveler-v1.js?v=20260905-2"></script>'
+import re
+text = re.sub(
+    r'<script id="lb-community-traveler-v1" src="\./assets/lb-community-traveler-v1\.js\?v=[^"]+"></script>',
+    marker,
+    text,
+)
 if marker not in text:
     closing = text.lower().rfind("</body>")
     if closing < 0:
         raise SystemExit("ERREUR: balise </body> absente du core")
     text = text[:closing] + marker + "\n" + text[closing:]
-    path.write_text(text, encoding="utf-8")
+path.write_text(text, encoding="utf-8")
 PY
 
 grep -q 'id="lb-community-traveler-v1"' "$CORE" || { echo "ERREUR: module non raccordé" >&2; exit 4; }
