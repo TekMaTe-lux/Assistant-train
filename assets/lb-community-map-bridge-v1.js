@@ -56,6 +56,9 @@
             travelerDelayMin:12,
             delayReports:2,
             lastReportAt:Date.now(),
+            travelerStops:{
+              uckange:{ station:'Uckange', delayMin:12, reports:2, lastReportAt:Date.now() }
+            },
             isCurrentUserAboard:demoAboard
           }
         }
