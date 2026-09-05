@@ -261,6 +261,10 @@
     }
   }, true);
 
+  window.addEventListener('lb:community-presence-changed', () => {
+    window.setTimeout(() => broadcastSnapshot(true), 0);
+  });
+
   const start = () => {
     installStyle();
     ensureGpsButton();
