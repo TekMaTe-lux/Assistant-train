@@ -228,3 +228,122 @@
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start, { once:true });
   else start();
 })();
+
+(function installTrainDetailCommunityStyle(){
+  if (window.__LB_TRAIN_DETAIL_COMMUNITY_V1__) return;
+  window.__LB_TRAIN_DETAIL_COMMUNITY_V1__ = true;
+
+  const ROOT_ID = 'lbTrainDetailStops';
+  let detailObserver = null;
+  let decorateQueued = false;
+
+  const compactText = (value) => String(value || '').replace(/\s+/g, ' ').trim();
+
+  function decorateDetail(){
+    decorateQueued = false;
+    const root = document.getElementById(ROOT_ID);
+    if (!root) return;
+
+    root.querySelectorAll('.lb-train-stop-signals .lb-stop-chip--retard').forEach((chip) => {
+      if (chip.getAttribute('title') === 'Donnée officielle SNCF') return;
+
+      const raw = compactText(chip.textContent);
+      const match = raw.match(/Retard\s*\+\s*(\d+)\s*min(?:\s*(?:·|-)\s*depuis\s+(.+))?/i);
+      if (!match) return;
+
+      const delayMin = Math.max(0, Number(match[1]) || 0);
+      if (!delayMin) return;
+      const source = compactText(match[2]);
+
+      chip.classList.add('lb-stop-chip--community-delay');
+      chip.textContent = `+${delayMin} min*`;
+      chip.title = 'Retard signalé par la communauté (* = Voix du Bétail)';
+      chip.setAttribute('aria-label', `Retard communautaire de ${delayMin} minutes`);
+
+      const signalWrap = chip.closest('.lb-stop-chip-wrap');
+      if (signalWrap) signalWrap.classList.add('lb-community-detail-source-stop');
+
+      if (!source) return;
+      let group = chip.closest('.lb-community-detail-propagated');
+      if (!group) {
+        group = document.createElement('span');
+        group.className = 'lb-community-detail-propagated';
+        chip.replaceWith(group);
+        group.appendChild(chip);
+      }
+      let sourceLabel = group.querySelector('.lb-community-detail-source');
+      if (!sourceLabel) {
+        sourceLabel = document.createElement('span');
+        sourceLabel.className = 'lb-community-detail-source';
+        group.appendChild(sourceLabel);
+      }
+      sourceLabel.textContent = `depuis ${source}`;
+    });
+  }
+
+  function scheduleDecorate(){
+    if (decorateQueued) return;
+    decorateQueued = true;
+    window.requestAnimationFrame(decorateDetail);
+  }
+
+  function installStyle(){
+    if (document.getElementById('lb-community-train-detail-style')) return;
+    const style = document.createElement('style');
+    style.id = 'lb-community-train-detail-style';
+    style.textContent = `
+      #lbTrainDetailModal #lbTrainDetailStops .lb-stop-chip--community-delay{
+        box-sizing:border-box!important;display:inline-flex!important;align-items:center!important;justify-content:center!important;
+        width:auto!important;min-width:0!important;min-height:20px!important;height:20px!important;padding:0 7px!important;
+        border:1px solid rgba(183,140,255,.52)!important;border-radius:999px!important;
+        background:rgba(77,43,113,.72)!important;color:#f1e8ff!important;
+        font-weight:900!important;line-height:1!important;box-shadow:none!important;white-space:nowrap!important;
+      }
+      #lbTrainDetailModal #lbTrainDetailStops .lb-stop-chip--community-delay::before{display:none!important;content:none!important}
+      #lbTrainDetailModal #lbTrainDetailStops .lb-community-detail-propagated{
+        display:inline-flex!important;align-items:center!important;gap:5px!important;flex-wrap:wrap!important;max-width:100%!important;
+      }
+      #lbTrainDetailModal #lbTrainDetailStops .lb-community-detail-source{
+        color:#bbaece!important;font-size:.68rem!important;font-weight:700!important;line-height:1.1!important;white-space:nowrap!important;
+      }
+      #lbTrainDetailModal #lbTrainDetailStops .lb-community-detail-source-stop{
+        display:inline-flex!important;align-items:center!important;gap:3px!important;flex-wrap:wrap!important;
+      }
+      #lbTrainDetailModal #lbTrainDetailStops .lb-community-detail-source-stop .lb-signal-vote{
+        display:inline-flex!important;align-items:center!important;gap:1px!important;padding:0 1px!important;background:transparent!important;border:0!important;
+      }
+      #lbTrainDetailModal #lbTrainDetailStops .lb-community-detail-source-stop .lb-signal-vote-btn{
+        width:17px!important;min-width:17px!important;height:17px!important;min-height:17px!important;padding:0!important;
+        border:0!important;border-radius:50%!important;background:rgba(8,27,38,.62)!important;font-size:9px!important;line-height:17px!important;box-shadow:none!important;
+      }
+      #lbTrainDetailModal #lbTrainDetailStops .lb-community-detail-source-stop .lb-signal-vote-count{
+        min-width:9px!important;color:#9fb4bc!important;font-size:.55rem!important;font-weight:800!important;text-align:center!important;
+      }
+      @media(max-width:620px){
+        #lbTrainDetailModal #lbTrainDetailStops .lb-stop-chip--community-delay{height:18px!important;min-height:18px!important;padding:0 6px!important}
+        #lbTrainDetailModal #lbTrainDetailStops .lb-community-detail-source{font-size:.62rem!important}
+      }
+    `;
+    document.head.appendChild(style);
+  }
+
+  function bindObserver(){
+    const root = document.getElementById(ROOT_ID);
+    if (!root || detailObserver) return;
+    detailObserver = new MutationObserver(scheduleDecorate);
+    detailObserver.observe(root, { childList:true, subtree:true });
+    scheduleDecorate();
+  }
+
+  const start = () => {
+    installStyle();
+    bindObserver();
+    scheduleDecorate();
+  };
+
+  window.addEventListener('lb:community-data-changed', scheduleDecorate);
+  window.addEventListener('lb:community-presence-changed', scheduleDecorate);
+
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start, { once:true });
+  else start();
+})();
