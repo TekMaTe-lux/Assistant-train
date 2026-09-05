@@ -20,6 +20,8 @@
   let lastSnapshotSignature = '';
   let gpsResultTimer = 0;
   let demoAboard = false;
+  const boundFrames = new WeakSet();
+  let frameObserver = null;
 
   function normalizeDemoTrain(value){
     const matches = String(value || '').match(/\d{3,6}/g);
@@ -79,6 +81,28 @@
     if (!force && !targetWindow && signature === lastSnapshotSignature) return;
     lastSnapshotSignature = signature;
     postToMaps({ type:'lb:community:snapshot', ...snapshot }, targetWindow);
+  }
+
+  function bindMapFrames(){
+    mapFrames().forEach((frame) => {
+      if (boundFrames.has(frame)) return;
+      boundFrames.add(frame);
+      frame.addEventListener('load', () => {
+        window.setTimeout(() => broadcastSnapshot(true, frame.contentWindow), 120);
+        window.setTimeout(() => broadcastSnapshot(true, frame.contentWindow), 700);
+      });
+    });
+  }
+
+  function refreshMapAfterReturn(){
+    if ((window.location.hash || '').toLowerCase() !== '#carte') return;
+    bindMapFrames();
+    // Le moteur cartographique peut redessiner ses marqueurs juste après que
+    // la page Carte redevient visible. Plusieurs envois courts garantissent
+    // que la couche voyageurs est réappliquée après ce redessin.
+    [0, 120, 450, 1100].forEach((delay) => {
+      window.setTimeout(() => broadcastSnapshot(true), delay);
+    });
   }
 
   function gpsErrorMessage(error){
@@ -265,13 +289,19 @@
     window.setTimeout(() => broadcastSnapshot(true), 0);
   });
 
+  window.addEventListener('hashchange', refreshMapAfterReturn);
+  window.addEventListener('pageshow', refreshMapAfterReturn);
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) refreshMapAfterReturn();
+  });
+
   const start = () => {
     installStyle();
     ensureGpsButton();
     updateGpsButtonVisibility();
-    mapFrames().forEach((frame) => frame.addEventListener('load', () => {
-      window.setTimeout(() => broadcastSnapshot(true, frame.contentWindow), 500);
-    }));
+    bindMapFrames();
+    frameObserver = new MutationObserver(() => bindMapFrames());
+    frameObserver.observe(document.documentElement, { childList:true, subtree:true });
     window.setTimeout(() => broadcastSnapshot(true), 1200);
     window.setInterval(() => broadcastSnapshot(false), SNAPSHOT_INTERVAL_MS);
     if (DEMO_MODE) console.info(`[Voix du Bétail / carte] mode démonstration actif pour le train ${DEMO_TRAIN}`);

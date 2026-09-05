@@ -8,6 +8,8 @@
   const PREF_KEY = 'lb_map_traveler_layer_v1';
   const snapshot = { generatedAt:0, trains:{} };
   let travelerLayerEnabled = true;
+  let markerRefreshQueued = false;
+  let markerRefreshRunning = false;
 
   try {
     const saved = localStorage.getItem(PREF_KEY);
@@ -112,6 +114,7 @@
   }
 
   function refreshMarkerBadges(){
+    markerRefreshRunning = true;
     document.querySelectorAll('.cow-marker').forEach((marker) => {
       marker.querySelectorAll('.lb-map-traveler-badge,.lb-map-traveler-presence,.lb-map-traveler-delay').forEach((badge) => badge.remove());
       if (!travelerLayerEnabled) return;
@@ -134,6 +137,31 @@
       }
     });
     renderTripCommunityBlock();
+    markerRefreshRunning = false;
+  }
+
+  function scheduleMarkerRefresh(){
+    if (markerRefreshRunning || markerRefreshQueued) return;
+    markerRefreshQueued = true;
+    requestAnimationFrame(() => {
+      markerRefreshQueued = false;
+      refreshMarkerBadges();
+    });
+  }
+
+  function installMarkerObserver(){
+    const mapRoot = document.getElementById('map') || document.body;
+    if (!mapRoot || mapRoot.__lbTravelerMarkerObserver) return;
+    const observer = new MutationObserver((mutations) => {
+      const trainMarkerChanged = mutations.some((mutation) =>
+        Array.from(mutation.addedNodes || []).some((node) =>
+          node?.nodeType === 1 && (node.matches?.('.cow-marker') || node.querySelector?.('.cow-marker'))
+        )
+      );
+      if (trainMarkerChanged) scheduleMarkerRefresh();
+    });
+    observer.observe(mapRoot, { childList:true, subtree:true });
+    mapRoot.__lbTravelerMarkerObserver = observer;
   }
 
   function currentTripNumber(){
@@ -403,6 +431,7 @@
     installStyle();
     installControlsToggle();
     installFunctionHooks();
+    installMarkerObserver();
     refreshMarkerBadges();
     postToSite({ type:'lb:community:request' });
   }
