@@ -8,6 +8,7 @@
   const PREF_KEY = 'lb_map_traveler_layer_v1';
   const snapshot = { generatedAt:0, trains:{} };
   let travelerLayerEnabled = true;
+  let communityCanContribute = false;
   let markerRefreshQueued = false;
   let markerRefreshRunning = false;
 
@@ -85,6 +86,7 @@
       const wrapped = function(train){
         const icon = originalIconForTrain(train);
         if (icon?.options) icon.options.html = appendBadge(icon.options.html, train);
+        queueMicrotask(scheduleMarkerRefresh);
         return icon;
       };
       wrapped.__lbTravelerWrapped = true;
@@ -166,21 +168,6 @@
     });
   }
 
-  function installMarkerObserver(){
-    const mapRoot = document.getElementById('map') || document.body;
-    if (!mapRoot || mapRoot.__lbTravelerMarkerObserver) return;
-    const observer = new MutationObserver((mutations) => {
-      const trainMarkerChanged = mutations.some((mutation) =>
-        Array.from(mutation.addedNodes || []).some((node) =>
-          node?.nodeType === 1 && (node.matches?.('.cow-marker') || node.querySelector?.('.cow-marker'))
-        )
-      );
-      if (trainMarkerChanged) scheduleMarkerRefresh();
-    });
-    observer.observe(mapRoot, { childList:true, subtree:true });
-    mapRoot.__lbTravelerMarkerObserver = observer;
-  }
-
   function currentTripNumber(){
     try {
       const train = typeof activeTripId !== 'undefined' && activeTripId
@@ -224,8 +211,8 @@
         <strong>${esc(label || 'Aucun signalement')}</strong>
       </button>
       <div class="lb-map-trip-community-actions">
-        <button type="button" data-lb-map-community-presence="${esc(number)}">${item?.isCurrentUserAboard ? 'À bord ✓' : 'Je suis à bord'}</button>
-        <button type="button" data-lb-map-community-signal="${esc(number)}">⚠ Signaler</button>
+        <button type="button" data-lb-map-community-presence="${esc(number)}">${communityCanContribute ? (item?.isCurrentUserAboard ? 'À bord ✓' : 'Je suis à bord') : 'Se connecter'}</button>
+        <button type="button" data-lb-map-community-signal="${esc(number)}">${communityCanContribute ? '⚠ Signaler' : 'Connexion requise'}</button>
       </div>`;
     renderTravelerStopDelays(number);
   }
@@ -410,6 +397,7 @@
     if (data.type === 'lb:community:snapshot') {
       snapshot.generatedAt = Number(data.generatedAt || Date.now());
       snapshot.trains = data.trains && typeof data.trains === 'object' ? data.trains : {};
+      communityCanContribute = data.canContribute === true;
       refreshMarkerBadges();
       return;
     }
@@ -448,7 +436,6 @@
     installStyle();
     installControlsToggle();
     installFunctionHooks();
-    installMarkerObserver();
     refreshMarkerBadges();
     postToSite({ type:'lb:community:request' });
   }

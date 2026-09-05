@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="fr" data-lb-v4-live="1">
 <head>
-  <script id="lb-home-major-alert-script" src="./assets/home-major-alerts.js?v=20260905-5"></script>
+  <script id="lb-home-major-alert-script" src="./assets/home-major-alerts.js?v=20260905-6"></script>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content" />
   <title>La Bétaillère</title>
@@ -21815,6 +21815,8 @@ async function loadAffluenceDate(dateStr){
     signalOptionsHydrationPromise: null,
     localSignals: []
   };
+  let presenceMutationInFlight = false;
+  let confirmedPresenceGrace = null;
 
   // LIVE: base horaires publique pré-générée sur le VPS.
   // Objectif: 1 seul fetch pour tous les trains au lieu de /api/train-static train par train.
@@ -22151,6 +22153,7 @@ async function loadAffluenceDate(dateStr){
   }
 
   async function loadSignals(){
+    const previousSignature = JSON.stringify((COMMUNITY.signals || []).map((item)=>[item.id,item.ts,item.upvotes,item.downvotes]));
     try{
       const res = await window.fetchCommentsApi('?scope=signals');
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -22168,6 +22171,8 @@ async function loadAffluenceDate(dateStr){
       COMMUNITY.signals = Array.isArray(COMMUNITY.signals) ? COMMUNITY.signals : [];
     }
     refreshCommunityViews();
+    const nextSignature = JSON.stringify((COMMUNITY.signals || []).map((item)=>[item.id,item.ts,item.upvotes,item.downvotes]));
+    if (nextSignature !== previousSignature) window.dispatchEvent(new CustomEvent('lb:community-data-changed'));
     return COMMUNITY.signals;
   }
 
@@ -22190,22 +22195,31 @@ async function loadAffluenceDate(dateStr){
   }
 
   async function loadPresences(){
+    const previousSignature = JSON.stringify((COMMUNITY.presences || []).map((item)=>[item.id,item.trainNumber,item.accountId,item.ts]));
     try{
       const res = await window.fetchCommentsApi(`?scope=presence&_=${Date.now()}`, { cache:'no-store' });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       const list = Array.isArray(data) ? data : (Array.isArray(data?.comments) ? data.comments : []);
-      COMMUNITY.presences = list.map(normalizePresenceItem).filter(Boolean).sort((a,b)=> Number(b.ts||0) - Number(a.ts||0)).slice(0, 500);
-      if (!isPresenceOptedInToday()){
-        const mine = getMyPresenceToday();
-        if (mine) await clearMyPresence();
+      let nextPresences = list.map(normalizePresenceItem).filter(Boolean).sort((a,b)=> Number(b.ts||0) - Number(a.ts||0)).slice(0, 500);
+      if (confirmedPresenceGrace && confirmedPresenceGrace.expiresAt > Date.now()){
+        const confirmed = confirmedPresenceGrace.item;
+        const found = nextPresences.some((item)=> String(item.id) === String(confirmed.id)
+          || (normalizeIdentity(item.accountId) === normalizeIdentity(confirmed.accountId)
+            && normalizeKey(item.trainNumber) === normalizeKey(confirmed.trainNumber)));
+        if (found) confirmedPresenceGrace = null;
+        else nextPresences.unshift(confirmed);
+      }else{
+        confirmedPresenceGrace = null;
       }
+      COMMUNITY.presences = nextPresences;
     }catch(err){
       console.warn('Impossible de charger les présences voyageurs', err);
       COMMUNITY.presences = Array.isArray(COMMUNITY.presences) ? COMMUNITY.presences : [];
     }
     refreshCommunityViews();
-    window.dispatchEvent(new CustomEvent('lb:community-presence-changed'));
+    const nextSignature = JSON.stringify((COMMUNITY.presences || []).map((item)=>[item.id,item.trainNumber,item.accountId,item.ts]));
+    if (nextSignature !== previousSignature) window.dispatchEvent(new CustomEvent('lb:community-presence-changed'));
     return COMMUNITY.presences;
   }
 
@@ -22494,7 +22508,14 @@ async function loadAffluenceDate(dateStr){
     if (userId) return `uid:${userId}`;
     const pseudo = String(window.currentUser?.pseudo || window.currentUser?.username || window.lbPrefsCache?.pseudo || '').trim().toLowerCase();
     if (pseudo) return `pseudo:${pseudo}`;
-    return `local:${getLocalAccountId()}`;
+    return '';
+  }
+
+  function requireCommunityAuthentication(){
+    if (window.lbIsAuthed === true) return true;
+    document.getElementById('lbBtnOpenAuth')?.click();
+    if (typeof window.lbToast === 'function') window.lbToast('Connectez-vous pour participer à la Voix du Bétail.');
+    return false;
   }
 
   function normalizeIdentity(value){
@@ -23374,6 +23395,7 @@ async function loadAffluenceDate(dateStr){
   }
 
   function openSignalForTrain(trainNumber){
+    if (!requireCommunityAuthentication()) return;
     COMMUNITY.selectedTrain = normalizeKey(trainNumber || COMMUNITY.selectedTrain);
     resetSignalEditMode();
     resetSignalDraft();
@@ -23668,6 +23690,7 @@ async function loadAffluenceDate(dateStr){
   }
 
   async function publishSignal(){
+    if (!requireCommunityAuthentication()) return;
     const trainSelect = $id('lbSignalTrainSelect');
     const stationSelect = $id('lbSignalStationSelect');
     const feedback = $id('lbSignalFeedback');
@@ -23763,33 +23786,23 @@ async function loadAffluenceDate(dateStr){
   async function publishPresence(trainNumber){
     const key = normalizeKey(trainNumber);
     if (!key) return;
-    setPresenceOptInToday(true);
-    const existingPresences = getMyPresencesToday();
-    const alreadyInTargetTrain = existingPresences.some((it)=> normalizeKey(it.trainNumber) === key);
-    if (alreadyInTargetTrain){
-      await clearMyPresence();
-      return;
-    }
-    await clearMyPresence({ keepOptIn: true });
-    const accountId = getCurrentPresenceIdentity();
-    const payload = { message: `[PRESENCE] TER ${key} — ${toIsoDay()}`, scope:'presence', train_number:key, account_id: accountId };
-    const optimistic = normalizePresenceItem({
-      id:`pending-presence-${Date.now()}`,
-      created_at:new Date().toISOString(),
-      train_number:key,
-      pseudo:window.currentUser?.pseudo || window.currentUser?.username || window.lbPrefsCache?.pseudo || 'Voyageur',
-      account_id:accountId
-    });
-    if (optimistic){
-      const mineIdentity = normalizeIdentity(accountId);
-      COMMUNITY.presences = (Array.isArray(COMMUNITY.presences) ? COMMUNITY.presences : [])
-        .filter((item)=> normalizeIdentity(item?.accountId || item?.pseudo || item?.id) !== mineIdentity);
-      COMMUNITY.presences.unshift(optimistic);
-      refreshCommunityViews();
-      refreshLiveModal();
-      window.dispatchEvent(new CustomEvent('lb:community-presence-changed'));
-    }
+    if (!requireCommunityAuthentication() || presenceMutationInFlight) return;
+    presenceMutationInFlight = true;
     try{
+      setPresenceOptInToday(true);
+      const existingPresences = getMyPresencesToday();
+      const alreadyInTargetTrain = existingPresences.some((it)=> normalizeKey(it.trainNumber) === key);
+      if (alreadyInTargetTrain){
+        const cleared = await clearMyPresence();
+        if (!cleared) throw new Error('Impossible de retirer la présence actuelle. Réessayez.');
+        confirmedPresenceGrace = null;
+        return;
+      }
+      const cleared = await clearMyPresence({ keepOptIn: true });
+      if (!cleared) throw new Error('Impossible de changer de train. Réessayez.');
+      const accountId = getCurrentPresenceIdentity();
+      if (!accountId) throw new Error('Identité du compte indisponible. Rechargez la page.');
+      const payload = { message: `[PRESENCE] TER ${key} — ${toIsoDay()}`, scope:'presence', train_number:key, account_id: accountId };
       const res = await window.fetchCommentsApi('', {
         method:'POST',
         headers:{ 'Content-Type':'application/json' },
@@ -23798,23 +23811,35 @@ async function loadAffluenceDate(dateStr){
       let data = null;
       try { data = await res.json(); } catch(_){ }
       if (!res.ok) throw new Error(data?.error || `HTTP ${res.status}`);
-      await loadPresences();
-      if (!hasCurrentUserPresence(key) && optimistic){
-        const confirmed = normalizePresenceItem(data?.comment || data) || optimistic;
+      const confirmed = normalizePresenceItem(data?.comment || data) || normalizePresenceItem({
+        id:`confirmed-presence-${Date.now()}`,
+        created_at:new Date().toISOString(),
+        train_number:key,
+        pseudo:window.currentUser?.pseudo || window.currentUser?.username || window.lbPrefsCache?.pseudo || 'Voyageur',
+        account_id:accountId
+      });
+      if (confirmed){
+        confirmedPresenceGrace = { item:confirmed, expiresAt:Date.now() + 30000 };
+        COMMUNITY.presences = (Array.isArray(COMMUNITY.presences) ? COMMUNITY.presences : [])
+          .filter((item)=> normalizeIdentity(item.accountId) !== normalizeIdentity(accountId));
         COMMUNITY.presences.unshift(confirmed);
+        refreshCommunityViews();
+        refreshLiveModal();
+        window.dispatchEvent(new CustomEvent('lb:community-presence-changed'));
       }
+      await loadPresences();
       refreshCommunityViews();
       refreshLiveModal();
       window.dispatchEvent(new CustomEvent('lb:community-presence-changed'));
     }catch(err){
       console.error('PRESENCE_POST_ERROR', err);
-      COMMUNITY.presences = (Array.isArray(COMMUNITY.presences) ? COMMUNITY.presences : [])
-        .filter((item)=> String(item?.id || '') !== String(optimistic?.id || ''));
       setPresenceOptInToday(false);
       refreshCommunityViews();
       refreshLiveModal();
       window.dispatchEvent(new CustomEvent('lb:community-presence-changed'));
       if (typeof window.lbToast === 'function') window.lbToast(`Présence non enregistrée : ${err?.message || 'API indisponible'}`);
+    }finally{
+      presenceMutationInFlight = false;
     }
   }
 
@@ -23822,19 +23847,20 @@ async function loadAffluenceDate(dateStr){
     const keepOptIn = !!options.keepOptIn;
     if (!keepOptIn) setPresenceOptInToday(false);
     const mineList = getMyPresencesToday();
-    if (!mineList.length) return;
+    if (!mineList.length) return true;
     try{
       for (const mine of mineList){
         if (!mine.id) continue;
         const deleteRes = await fetchCommentsApi(`/${encodeURIComponent(String(mine.id))}`, { method:'DELETE' });
         if (!deleteRes.ok) throw new Error(`HTTP ${deleteRes.status}`);
       }
-    }catch(_){ return; }
+    }catch(_){ return false; }
     const mineIds = new Set(mineList.map((it)=> String(it.id)));
     COMMUNITY.presences = (Array.isArray(COMMUNITY.presences) ? COMMUNITY.presences : []).filter((it)=> !mineIds.has(String(it.id)));
     refreshCommunityViews();
     refreshLiveModal();
     window.dispatchEvent(new CustomEvent('lb:community-presence-changed'));
+    return true;
   }
 
   async function deleteOwnSignal(signalId){
@@ -24040,7 +24066,14 @@ async function loadAffluenceDate(dateStr){
     const openLiveBtn = e.target.closest('#lbOpenLiveModal');
     if (openLiveBtn){ e.preventDefault(); openCommunityModal('lbLiveModal'); return; }
     const openSignalBtn = e.target.closest('#lbOpenSignalModal');
-    if (openSignalBtn){ e.preventDefault(); resetSignalEditMode(); resetSignalDraft(); openCommunityModal('lbSignalModal'); return; }
+    if (openSignalBtn){
+      e.preventDefault();
+      if (!requireCommunityAuthentication()) return;
+      resetSignalEditMode();
+      resetSignalDraft();
+      openCommunityModal('lbSignalModal');
+      return;
+    }
     const closeBtn = e.target.closest('[data-lb-community-close]');
     if (closeBtn){ e.preventDefault(); closeCommunityModal(closeBtn.getAttribute('data-lb-community-close')); return; }
     const viewTrainBtn = e.target.closest('[data-lb-view-train]');
@@ -24229,9 +24262,9 @@ async function loadAffluenceDate(dateStr){
     }, 1000);
   });
   setInterval(()=>{
-    loadSignals();
-    loadPresences();
-  }, 8000);
+    if (document.hidden) return;
+    Promise.allSettled([loadSignals(), loadPresences()]);
+  }, 20000);
 
   function buildCommunityMapSnapshot(){
     const now = Date.now();

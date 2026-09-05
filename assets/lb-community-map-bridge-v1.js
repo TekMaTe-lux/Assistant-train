@@ -12,7 +12,6 @@
   window.__LB_COMMUNITY_MAP_BRIDGE_V1__ = true;
 
   const MAP_SELECTOR = '#carte iframe';
-  const SNAPSHOT_INTERVAL_MS = 8000;
   const GPS_TIMEOUT_MS = 12000;
   const params = new URLSearchParams(window.location.search);
   const DEMO_MODE = params.get('lbCommunityDemo') === '1';
@@ -21,7 +20,13 @@
   let gpsResultTimer = 0;
   let demoAboard = false;
   const boundFrames = new WeakSet();
-  let frameObserver = null;
+
+  const canContribute = () => DEMO_MODE || window.lbIsAuthed === true;
+
+  function requestAuthentication(){
+    document.getElementById('lbBtnOpenAuth')?.click();
+    if (typeof window.lbToast === 'function') window.lbToast('Connectez-vous pour participer à la Voix du Bétail.');
+  }
 
   function normalizeDemoTrain(value){
     const matches = String(value || '').match(/\d{3,6}/g);
@@ -52,6 +57,7 @@
         presenceTtlMs:4 * 60 * 60 * 1000,
         signalTtlMs:45 * 60 * 1000,
         demo:true,
+        canContribute:true,
         trains:{
           [DEMO_TRAIN]:{
             presenceCount:demoAboard ? 4 : 3,
@@ -67,7 +73,8 @@
       };
     }
     try {
-      return window.lbCommunityLive?.getMapSnapshot?.() || null;
+      const value = window.lbCommunityLive?.getMapSnapshot?.() || null;
+      return value ? { ...value, canContribute:canContribute() } : null;
     } catch(error) {
       console.warn('[Voix du Bétail / carte] instantané indisponible', error?.message || error);
       return null;
@@ -100,7 +107,7 @@
     // Le moteur cartographique peut redessiner ses marqueurs juste après que
     // la page Carte redevient visible. Plusieurs envois courts garantissent
     // que la couche voyageurs est réappliquée après ce redessin.
-    [0, 120, 450, 1100].forEach((delay) => {
+    [0, 450].forEach((delay) => {
       window.setTimeout(() => broadcastSnapshot(true), delay);
     });
   }
@@ -229,6 +236,7 @@
       return;
     }
     if (data.type === 'lb:community:open-signal') {
+      if (!canContribute()) { requestAuthentication(); return; }
       if (train) window.lbCommunityLive?.openSignal?.(train);
       return;
     }
@@ -238,12 +246,14 @@
         broadcastSnapshot(true);
         return;
       }
+      if (!canContribute()) { requestAuthentication(); broadcastSnapshot(true); return; }
       if (train) Promise.resolve(window.lbCommunityLive?.togglePresence?.(train)).finally(() => {
         window.setTimeout(() => broadcastSnapshot(true), 250);
       });
       return;
     }
     if (data.type === 'lb:community:gps-position-request') {
+      if (!canContribute()) { requestAuthentication(); return; }
       requestGpsPosition(event.source, train);
       return;
     }
@@ -289,6 +299,12 @@
   window.addEventListener('lb:community-presence-changed', () => {
     window.setTimeout(() => broadcastSnapshot(true), 0);
   });
+  window.addEventListener('lb:community-data-changed', () => {
+    window.setTimeout(() => broadcastSnapshot(false), 0);
+  });
+  document.addEventListener('lb:auth-state', () => {
+    window.setTimeout(() => broadcastSnapshot(true), 0);
+  });
 
   window.addEventListener('hashchange', refreshMapAfterReturn);
   window.addEventListener('pageshow', refreshMapAfterReturn);
@@ -301,10 +317,7 @@
     ensureGpsButton();
     updateGpsButtonVisibility();
     bindMapFrames();
-    frameObserver = new MutationObserver(() => bindMapFrames());
-    frameObserver.observe(document.documentElement, { childList:true, subtree:true });
     window.setTimeout(() => broadcastSnapshot(true), 1200);
-    window.setInterval(() => broadcastSnapshot(false), SNAPSHOT_INTERVAL_MS);
     if (DEMO_MODE) console.info(`[Voix du Bétail / carte] mode démonstration actif pour le train ${DEMO_TRAIN}`);
   };
 
