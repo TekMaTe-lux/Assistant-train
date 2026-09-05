@@ -22,6 +22,9 @@
   // La logique de signalement voyageur reste séparée et n'est pas modifiée ci-dessous.
   load('./assets/signal-stations-fix.js?v=20260902-1', 'lb-signal-stations-fix');
 
+  // Pont léger carte <-> Voix du Bétail + estimation GPS à la demande.
+  load('./assets/lb-community-map-bridge-v1.js?v=20260905-1', 'lb-community-map-bridge-v1');
+
   const CANONICAL_SNAPSHOT_URL = 'https://vps.labetaillere.fr/map-v2/v4-preview/data/snapshot.json';
   const CANONICAL_REFRESH_MS = 15000;
   let canonicalSnapshot = null;
