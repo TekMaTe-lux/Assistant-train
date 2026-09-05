@@ -3,9 +3,11 @@
 (function installSignalStationsFix(){
   const TRAIN_SELECT_ID = 'lbSignalTrainSelect';
   const STATION_SELECT_ID = 'lbSignalStationSelect';
+  const MODAL_ID = 'lbSignalModal';
   const routeCache = new Map();
   const inFlight = new Map();
-  let observer = null;
+  let modalObserver = null;
+  let stationObserver = null;
   let applying = false;
   let refreshTimer = 0;
 
@@ -25,6 +27,8 @@
     return `${y}-${m}-${d}`;
   };
 
+  const cacheKeyFor = (trainKey) => `${todayIso()}|${trainKey}`;
+
   const uniqueNames = (values) => {
     const seen = new Set();
     const out = [];
@@ -42,6 +46,8 @@
     .map((option) => String(option.value || '').trim())
     .filter(Boolean);
 
+  const cachedStops = (trainKey) => routeCache.get(cacheKeyFor(trainKey)) || null;
+
   const applyStops = (trainKey, names) => {
     const trainSelect = document.getElementById(TRAIN_SELECT_ID);
     const stationSelect = document.getElementById(STATION_SELECT_ID);
@@ -50,7 +56,7 @@
 
     const stops = uniqueNames(names);
     const existing = currentNames(stationSelect);
-    // Ne jamais dégrader une liste déjà plus complète.
+    // Ne jamais remplacer une liste plus riche par une liste plus pauvre.
     if (stops.length < 2 || stops.length < existing.length) return false;
     const same = stops.length === existing.length
       && stops.every((name, index) => stationKey(name) === stationKey(existing[index]));
@@ -76,7 +82,6 @@
         if (match) stationSelect.value = match;
       }
       stationSelect.dataset.lbFullRouteTrain = trainKey;
-      stationSelect.removeAttribute('aria-busy');
       return true;
     } finally {
       applying = false;
@@ -100,13 +105,14 @@
   };
 
   async function fetchOfficialStops(trainKey) {
-    if (routeCache.has(trainKey)) return routeCache.get(trainKey);
-    if (inFlight.has(trainKey)) return inFlight.get(trainKey);
+    const key = cacheKeyFor(trainKey);
+    if (routeCache.has(key)) return routeCache.get(key);
+    if (inFlight.has(key)) return inFlight.get(key);
 
     const promise = (async () => {
       let names = [];
 
-      // Source prioritaire : le même parcours officiel que la fiche train.
+      // 1) Parcours officiel déjà utilisé par la fiche train.
       if (typeof window.lbGetOfficialServicePattern === 'function') {
         try {
           const official = await window.lbGetOfficialServicePattern(trainKey, todayIso());
@@ -116,29 +122,28 @@
         }
       }
 
-      // Secours léger : détail statique du train, sans stop_times.txt côté navigateur.
-      if (names.length < 3) {
-        try {
-          const apiDate = todayIso().replace(/-/g, '');
-          const url = `https://vps.labetaillere.fr/api/train-static?date=${encodeURIComponent(apiDate)}&train=${encodeURIComponent(trainKey)}`;
-          const response = await fetch(url, { cache: 'no-cache' });
-          if (response.ok) {
-            const data = await response.json();
-            const trip = chooseLongestTrip(data?.stop_times || data?.stops || []);
-            const apiNames = rowsToNames(trip);
-            if (apiNames.length > names.length) names = apiNames;
-          }
-        } catch (error) {
-          console.warn('[SIGNAL stations] détail statique indisponible', error?.message || error);
+      // 2) Détail statique léger du train. On le compare systématiquement au
+      // parcours officiel et on conserve la liste la plus complète.
+      try {
+        const url = `https://vps.labetaillere.fr/api/train-static?date=${encodeURIComponent(todayIso())}&train=${encodeURIComponent(trainKey)}`;
+        const response = await fetch(url, { cache: 'no-store' });
+        if (response.ok) {
+          const data = await response.json();
+          const trip = chooseLongestTrip(data?.stop_times || data?.stops || []);
+          const apiNames = rowsToNames(trip);
+          if (apiNames.length > names.length) names = apiNames;
         }
+      } catch (error) {
+        console.warn('[SIGNAL stations] détail statique indisponible', error?.message || error);
       }
 
-      // Ne met en cache que les parcours réellement plus riches que le simple OD.
-      if (names.length > 2) routeCache.set(trainKey, names);
+      // Deux arrêts peuvent être légitimes pour certains trains ; on garde donc
+      // toute liste officielle non vide, sans jamais inventer d'arrêt.
+      if (names.length >= 2) routeCache.set(key, names);
       return names;
-    })().finally(() => inFlight.delete(trainKey));
+    })().finally(() => inFlight.delete(key));
 
-    inFlight.set(trainKey, promise);
+    inFlight.set(key, promise);
     return promise;
   }
 
@@ -149,11 +154,16 @@
     const trainKey = normalizeTrain(trainSelect.value);
     if (!trainKey) return;
 
-    const cached = routeCache.get(trainKey);
+    stationSelect.setAttribute('aria-busy', 'true');
+    const cached = cachedStops(trainKey);
     if (cached?.length) applyStops(trainKey, cached);
 
-    const names = await fetchOfficialStops(trainKey);
-    if (names.length) applyStops(trainKey, names);
+    try {
+      const names = await fetchOfficialStops(trainKey);
+      if (names.length) applyStops(trainKey, names);
+    } finally {
+      if (normalizeTrain(trainSelect.value) === trainKey) stationSelect.removeAttribute('aria-busy');
+    }
   }
 
   const scheduleRefresh = (delay = 0) => {
@@ -164,46 +174,57 @@
   document.addEventListener('change', (event) => {
     if (event.target?.id !== TRAIN_SELECT_ID) return;
     scheduleRefresh(0);
-    // Le code historique hydrate aussi le select de façon asynchrone :
-    // une deuxième passe empêche son fallback origine/destination de reprendre la main.
-    window.setTimeout(() => scheduleRefresh(0), 450);
-    window.setTimeout(() => scheduleRefresh(0), 1400);
+    // Le code historique hydrate lui aussi la liste : les passes courtes
+    // garantissent que le parcours complet reste prioritaire après son retour.
+    window.setTimeout(() => scheduleRefresh(0), 350);
+    window.setTimeout(() => scheduleRefresh(0), 1100);
   }, true);
 
   document.addEventListener('click', (event) => {
     if (event.target?.closest?.('#lbOpenSignalModal,[data-lb-signal-train]')) {
       window.setTimeout(() => scheduleRefresh(0), 0);
-      window.setTimeout(() => scheduleRefresh(0), 500);
+      window.setTimeout(() => scheduleRefresh(0), 450);
     }
   }, true);
 
-  const startObserver = () => {
-    if (observer || !document.body) return;
-    observer = new MutationObserver((mutations) => {
-      if (applying) return;
-      const stationSelect = document.getElementById(STATION_SELECT_ID);
-      const trainSelect = document.getElementById(TRAIN_SELECT_ID);
-      if (!stationSelect || !trainSelect) return;
-      const trainKey = normalizeTrain(trainSelect.value);
-      const cached = routeCache.get(trainKey);
-      if (!trainKey || !cached?.length) return;
-      const existing = currentNames(stationSelect);
-      if (existing.length >= cached.length) return;
-      const touchedStationSelect = mutations.some((mutation) =>
-        mutation.target === stationSelect || stationSelect.contains(mutation.target)
-      );
-      if (touchedStationSelect) applyStops(trainKey, cached);
-    });
-    observer.observe(document.body, { subtree: true, childList: true });
+  function startTargetedObservers(){
+    const modal = document.getElementById(MODAL_ID);
+    const stationSelect = document.getElementById(STATION_SELECT_ID);
+
+    // Important pour la carte : openSignalForTrain() ouvre le modal par JS,
+    // sans clic DOM ni événement change. Observer uniquement CE modal permet
+    // de déclencher l'hydratation au bon moment sans observer toute la page.
+    if (modal && !modalObserver) {
+      modalObserver = new MutationObserver(() => {
+        const open = modal.classList.contains('is-open') || modal.getAttribute('aria-hidden') === 'false';
+        if (!open) return;
+        scheduleRefresh(0);
+        window.setTimeout(() => scheduleRefresh(0), 450);
+      });
+      modalObserver.observe(modal, { attributes:true, attributeFilter:['class', 'aria-hidden'] });
+    }
+
+    // Protection ciblée : si le code historique remet seulement origine/
+    // destination après notre chargement, on réapplique le parcours complet.
+    if (stationSelect && !stationObserver) {
+      stationObserver = new MutationObserver(() => {
+        if (applying) return;
+        const trainSelect = document.getElementById(TRAIN_SELECT_ID);
+        const trainKey = normalizeTrain(trainSelect?.value);
+        const cached = trainKey ? cachedStops(trainKey) : null;
+        if (!trainKey || !cached?.length) return;
+        if (currentNames(stationSelect).length >= cached.length) return;
+        applyStops(trainKey, cached);
+      });
+      stationObserver.observe(stationSelect, { childList:true });
+    }
+  }
+
+  const start = () => {
+    startTargetedObservers();
+    scheduleRefresh(0);
   };
 
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', () => {
-      startObserver();
-      scheduleRefresh(0);
-    }, { once: true });
-  } else {
-    startObserver();
-    scheduleRefresh(0);
-  }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start, { once:true });
+  else start();
 })();
