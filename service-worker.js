@@ -1,4 +1,4 @@
-const CACHE_VERSION = 'v39';
+const CACHE_VERSION = 'v40';
 const APP_CACHE = `lbetaillere-app-${CACHE_VERSION}`;
 const STATIC_CACHE = `lbetaillere-static-${CACHE_VERSION}`;
 const CACHE_PREFIX = 'lbetaillere-';
@@ -147,6 +147,13 @@ function isUiStyle(url) {
   );
 }
 
+function isCriticalCommunityAsset(url) {
+  return (
+    url.pathname.endsWith('/assets/home-major-alerts.js') ||
+    url.pathname.endsWith('/assets/lb-community-map-bridge-v1.js')
+  );
+}
+
 function isCacheableExternal(url) {
   return [
     'cdn.jsdelivr.net',
@@ -169,6 +176,14 @@ self.addEventListener('fetch', (event) => {
   }
 
   if (isDynamicData(url)) {
+    return;
+  }
+
+  // Les scripts communautaires doivent toujours privilégier la dernière
+  // version réseau : un ancien pont Carte <-> Voix du Bétail ne doit jamais
+  // survivre à une correction et réinjecter un état de présence obsolète.
+  if (sameOrigin && isCriticalCommunityAsset(url)) {
+    event.respondWith(uiStyleNetworkFirst(request));
     return;
   }
 
