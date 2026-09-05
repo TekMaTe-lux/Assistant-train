@@ -14,8 +14,17 @@
   const MAP_SELECTOR = '#carte iframe';
   const SNAPSHOT_INTERVAL_MS = 8000;
   const GPS_TIMEOUT_MS = 12000;
+  const params = new URLSearchParams(window.location.search);
+  const DEMO_MODE = params.get('lbCommunityDemo') === '1';
+  const DEMO_TRAIN = normalizeDemoTrain(params.get('lbCommunityTrain')) || '88733';
   let lastSnapshotSignature = '';
   let gpsResultTimer = 0;
+  let demoAboard = false;
+
+  function normalizeDemoTrain(value){
+    const matches = String(value || '').match(/\d{3,6}/g);
+    return matches?.length ? matches[matches.length - 1].replace(/^0+(?=\d)/, '') : '';
+  }
 
   const normalizeTrain = (value) => {
     const matches = String(value || '').match(/\d{3,6}/g);
@@ -35,6 +44,23 @@
   }
 
   function currentSnapshot(){
+    if (DEMO_MODE) {
+      return {
+        generatedAt:Date.now(),
+        presenceTtlMs:4 * 60 * 60 * 1000,
+        signalTtlMs:45 * 60 * 1000,
+        demo:true,
+        trains:{
+          [DEMO_TRAIN]:{
+            presenceCount:demoAboard ? 4 : 3,
+            travelerDelayMin:12,
+            delayReports:2,
+            lastReportAt:Date.now(),
+            isCurrentUserAboard:demoAboard
+          }
+        }
+      };
+    }
     try {
       return window.lbCommunityLive?.getMapSnapshot?.() || null;
     } catch(error) {
@@ -179,6 +205,11 @@
       return;
     }
     if (data.type === 'lb:community:toggle-presence') {
+      if (DEMO_MODE) {
+        demoAboard = !demoAboard;
+        broadcastSnapshot(true);
+        return;
+      }
       if (train) Promise.resolve(window.lbCommunityLive?.togglePresence?.(train)).finally(() => {
         window.setTimeout(() => broadcastSnapshot(true), 250);
       });
@@ -215,6 +246,12 @@
   });
 
   document.addEventListener('click', (event) => {
+    if (DEMO_MODE && event.target?.closest?.('#lbSignalSubmit')) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      showSignalFeedback('Test réussi ✅ Aucun signalement envoyé en production.');
+      return;
+    }
     if (event.target?.closest?.('.lb-signal-type,[data-lb-signal-train],#lbOpenSignalModal')) {
       window.setTimeout(updateGpsButtonVisibility, 0);
       window.setTimeout(updateGpsButtonVisibility, 300);
@@ -230,6 +267,7 @@
     }));
     window.setTimeout(() => broadcastSnapshot(true), 1200);
     window.setInterval(() => broadcastSnapshot(false), SNAPSHOT_INTERVAL_MS);
+    if (DEMO_MODE) console.info(`[Voix du Bétail / carte] mode démonstration actif pour le train ${DEMO_TRAIN}`);
   };
 
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start, { once:true });
