@@ -11,6 +11,94 @@
   const qa = (selector, root = document) => Array.from(root.querySelectorAll(selector));
   const clean = (value) => String(value || '').replace(/\s+/g, ' ').trim();
 
+
+  const NEXT_SERVICE_STYLE_ID = 'lb-home-fav-next-service-style-v2';
+
+  function ensureNextServiceStyle() {
+    if (document.getElementById(NEXT_SERVICE_STYLE_ID)) return;
+    const style = document.createElement('style');
+    style.id = NEXT_SERVICE_STYLE_ID;
+    style.textContent = `
+html[data-lb-v4-live="1"] body.lb-v3 #home #homeFavSlot .home-fav-time .lb-home-fav-next-service {
+  display: block !important;
+  width: 100% !important;
+  min-width: 0 !important;
+  min-height: 0 !important;
+  margin: 3px 0 0 !important;
+  padding: 0 !important;
+  overflow: hidden !important;
+  color: rgba(213, 242, 248, .82) !important;
+  font-family: var(--lb-font-body, "Rajdhani", system-ui, sans-serif) !important;
+  font-size: .72rem !important;
+  font-weight: 600 !important;
+  line-height: 1 !important;
+  letter-spacing: .01em !important;
+  text-align: center !important;
+  text-overflow: ellipsis !important;
+  text-shadow: none !important;
+  text-transform: none !important;
+  white-space: nowrap !important;
+}
+@media (max-width: 720px), (hover: none) and (pointer: coarse) and (max-width: 900px) {
+  html[data-lb-v4-live="1"] body.lb-v3 #home #homeFavSlot .home-fav-time .lb-home-fav-next-service {
+    margin-top: 2px !important;
+    font-size: clamp(.52rem, 2.3vw, .60rem) !important;
+  }
+}`;
+    document.head.append(style);
+  }
+
+  function todayServiceLabel() {
+    try {
+      const label = new Intl.DateTimeFormat('fr-FR', {
+        timeZone: 'Europe/Paris',
+        day: 'numeric',
+        month: 'short'
+      }).format(new Date()).replace(/\.$/, '');
+      return `Aujourd’hui · ${label}`;
+    } catch (_) {
+      return 'Aujourd’hui';
+    }
+  }
+
+  function readNextService(card) {
+    const key = clean(card?.getAttribute('data-fav-k')).toUpperCase();
+    if (!key) return '';
+
+    const meta = document.getElementById(`favMeta${key}`);
+    const explicit = clean(q('.fav-next-service', meta)?.textContent);
+    if (explicit) return explicit;
+
+    const sourceState = clean(document.getElementById(`favState${key}`)?.textContent).toUpperCase();
+    if (
+      !sourceState.includes('PROCHAIN') &&
+      (sourceState.includes('A VENIR') || sourceState.includes('AVENIR'))
+    ) {
+      return todayServiceLabel();
+    }
+    return '';
+  }
+
+  function improveNextService(card) {
+    const host = q('.home-fav-time', card);
+    if (!host) return;
+
+    const text = readNextService(card);
+    let line = q('.lb-home-fav-next-service', host);
+
+    if (!text) {
+      if (line) line.remove();
+      return;
+    }
+
+    if (!line) {
+      line = document.createElement('span');
+      line.className = 'lb-home-fav-next-service';
+      host.append(line);
+    }
+    if (line.textContent !== text) line.textContent = text;
+  }
+
   function clock(value) {
     const match = clean(value).match(/\b(\d{1,2}):(\d{2})\b/);
     if (!match) return null;
@@ -149,7 +237,9 @@
   }
 
   function improveCard(card) {
+    ensureNextServiceStyle();
     improveTimes(card);
+    improveNextService(card);
     improveRoute(card);
   }
 
@@ -180,6 +270,11 @@
     enhanceSlot(slot);
     const observer = new MutationObserver(() => schedule(slot));
     observer.observe(slot, { childList: true, subtree: true, characterData: true });
+
+    const favSource = document.getElementById('favTrainsWidget');
+    if (favSource) {
+      observer.observe(favSource, { childList: true, subtree: true, characterData: true });
+    }
     return true;
   }
 
