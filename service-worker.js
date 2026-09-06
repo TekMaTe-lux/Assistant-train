@@ -1,4 +1,4 @@
-const CACHE_VERSION = 'v41';
+const CACHE_VERSION = 'v42';
 const APP_CACHE = `lbetaillere-app-${CACHE_VERSION}`;
 const STATIC_CACHE = `lbetaillere-static-${CACHE_VERSION}`;
 const CACHE_PREFIX = 'lbetaillere-';
@@ -151,6 +151,7 @@ function isCriticalCommunityAsset(url) {
   return (
     url.pathname.endsWith('/assets/home-major-alerts.js') ||
     url.pathname.endsWith('/assets/lb-community-map-bridge-v1.js') ||
+    url.pathname.endsWith('/assets/lb-home-favorites-delay-v1.js') ||
     url.pathname.endsWith('/assets/signal-stations-fix.js')
   );
 }
