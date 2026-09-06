@@ -5,7 +5,9 @@ ROOT="/opt/labetaillere-map-v2-src"
 ENGINE="/opt/lb-rail-engine-v1"
 SERVICE="lb-rail-engine-v1.service"
 PROD_SERVICE="labetaillere-map-v2.service"
-PORT="3120"
+# 3120 appartient déjà à labetaillere-data-v4.service sur le VPS.
+# Le moteur V1 utilise donc 3121 par défaut, tout en restant surchargeable explicitement.
+PORT="${LB_RAIL_ENGINE_PORT:-3121}"
 STAMP="$(date +%Y%m%d-%H%M%S)"
 BACKUP="/opt/lb-rail-engine-v1-backups/$STAMP"
 
@@ -127,6 +129,5 @@ if [[ "$PROD_BEFORE" != "$PROD_AFTER" ]]; then
 fi
 
 echo
-echo=""
 echo "OK: LB Rail Engine v1 installé en parallèle sur 127.0.0.1:${PORT}"
 echo "Aucune route nginx ajoutée. Aucun fichier map-v2/public modifié. Aucun redémarrage de $PROD_SERVICE."
