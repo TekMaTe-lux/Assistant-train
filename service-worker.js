@@ -1,4 +1,4 @@
-const CACHE_VERSION = 'v42';
+const CACHE_VERSION = 'v43';
 const APP_CACHE = `lbetaillere-app-${CACHE_VERSION}`;
 const STATIC_CACHE = `lbetaillere-static-${CACHE_VERSION}`;
 const CACHE_PREFIX = 'lbetaillere-';
@@ -6,6 +6,7 @@ const CACHE_PREFIX = 'lbetaillere-';
 const APP_SHELL = [
   './',
   './index.html',
+  './carte.html',
   './manifest.webmanifest',
   './config/territory.nancy-metz-lux.js?v=5',
   './assets/lb-app-shell-v3.js?v=7',
@@ -99,6 +100,30 @@ async function navigationNetworkFirst(request) {
   }
 }
 
+// LB_MAP_BRIDGE_FAST_CACHE_V1
+// La rubrique #carte conserve historiquement un ancien query-string. On sert
+// donc la petite passerelle carte.html depuis le cache APP frais installé avec
+// le SW courant, sans attendre jusqu'à 5,5 s la navigation réseau. Le réseau
+// est rafraîchi en arrière-plan pour la visite suivante.
+async function mapNavigationFast(request) {
+  const cache = await caches.open(APP_CACHE);
+  const cached = await cache.match('./carte.html', { ignoreSearch: true });
+  const refresh = fetch(request, { cache: 'no-store' })
+    .then(async (response) => {
+      if (response?.ok) {
+        await cache.put('./carte.html', response.clone()).catch(() => {});
+      }
+      return response;
+    })
+    .catch(() => null);
+
+  if (cached) {
+    refresh.catch(() => {});
+    return cached;
+  }
+  return (await refresh) || Response.error();
+}
+
 async function staleWhileRevalidate(request, cacheName = STATIC_CACHE) {
   const cache = await caches.open(cacheName);
   const cached = await cache.match(request, { ignoreSearch: false });
@@ -173,7 +198,11 @@ self.addEventListener('fetch', (event) => {
   const sameOrigin = url.origin === self.location.origin;
 
   if (request.mode === 'navigate') {
-    event.respondWith(navigationNetworkFirst(request));
+    if (sameOrigin && url.pathname.endsWith('/carte.html')) {
+      event.respondWith(mapNavigationFast(request));
+    } else {
+      event.respondWith(navigationNetworkFirst(request));
+    }
     return;
   }
 
