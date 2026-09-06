@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="color-scheme" content="dark">
+  <meta name="theme-color" content="#020611">
+  <title>Carte La Bétaillère — lecture mobile</title>
+  <link rel="preconnect" href="https://vps.labetaillere.fr" crossorigin>
+  <link rel="preconnect" href="https://unpkg.com" crossorigin>
+  <link rel="preconnect" href="https://tile.openstreetmap.org" crossorigin>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+  <style>
+    :root{color-scheme:dark;--bg:#020611;--panel:rgba(2,10,24,.94);--cyan:#00eaff;--text:#ecfbff;--muted:#8ca8c5;--orange:#ffad32}
+    *{box-sizing:border-box}html,body,#map{width:100%;height:100%;margin:0}html,body{overflow:hidden;background:var(--bg)}
+    body{font-family:Rajdhani,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:var(--text)}
+    #map{position:absolute;inset:0;background:#06101c}.leaflet-container{background:#06101c}
+    .topbar{position:fixed;z-index:1000;top:6px;left:6px;right:6px;display:flex;align-items:center;gap:7px;min-height:34px;padding:5px 8px;border:1px solid rgba(0,234,255,.28);border-radius:10px;background:var(--panel);box-shadow:0 7px 22px rgba(0,0,0,.32);pointer-events:none}
+    .brand{font:900 10px/1 Rajdhani,system-ui,sans-serif;letter-spacing:.04em;white-space:nowrap}.dot{width:6px;height:6px;border-radius:50%;background:var(--cyan);box-shadow:0 0 8px rgba(0,234,255,.75)}
+    .status{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted);font:750 9px/1 Rajdhani,system-ui,sans-serif}
+    .train-icon{background:transparent!important;border:0!important}.train-label{display:inline-flex;align-items:center;gap:2px;transform:translate(-50%,-50%);white-space:nowrap;will-change:transform}
+    .train-label .num{display:inline-flex;align-items:center;min-height:15px;padding:1px 4px;border:1px solid currentColor;border-radius:4px;background:rgba(2,10,22,.94);font:900 8.5px/1 Rajdhani,system-ui,sans-serif;box-shadow:0 2px 4px rgba(0,0,0,.28)}
+    .train-label .delay{display:inline-flex;align-items:center;min-height:14px;padding:1px 3px;border-radius:4px;background:rgba(73,42,0,.96);color:var(--orange);font:900 7.5px/1 Rajdhani,system-ui,sans-serif}
+    .train-label.ter{color:#42b8ff}.train-label.tgv{color:#dfb3ff}.train-label.cfl{color:#ff8abc}.train-label.other{color:#d8f7ff}
+    .leaflet-control-zoom{border:1px solid rgba(0,234,255,.22)!important;border-radius:8px!important;overflow:hidden!important;box-shadow:none!important}.leaflet-control-zoom a{background:rgba(2,10,24,.94)!important;color:#eaffff!important;border-color:rgba(0,234,255,.13)!important}
+    .leaflet-control-attribution{font-size:8px!important;background:rgba(2,10,24,.72)!important;color:#9bb7cc!important}.leaflet-control-attribution a{color:#b7eaff!important}
+    .leaflet-popup-content-wrapper,.leaflet-popup-tip{background:rgba(2,10,24,.97);color:#ecfbff}.leaflet-popup-content{margin:8px 10px;font:800 10px/1.3 Rajdhani,system-ui,sans-serif}.pop-delay{color:var(--orange)}
+    @media(max-width:430px){.topbar{top:5px;left:5px;right:5px}.brand{font-size:9px}.status{font-size:8.5px}.train-label .num{font-size:8px;padding-inline:3px}.train-label .delay{font-size:7px}}
+    @media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+  </style>
+</head>
+<body>
+  <div id="map" aria-label="Carte des trains en lecture seule"></div>
+  <div class="topbar" aria-live="polite"><span>🐄</span><span class="brand">CARTE LIVE</span><span class="dot" aria-hidden="true"></span><span class="status" id="status">Chargement…</span></div>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script>
+  (()=>{
+    'use strict';
+    const API='https://vps.labetaillere.fr';
+    const CACHE_KEY='lb-map-mobile-readonly-v1';
+    const REFRESH_OK=15000;
+    const REFRESH_MAX=60000;
+    const SILLON_BOUNDS=L.latLngBounds([[48.45,5.70],[49.65,6.35]]);
+    const statusEl=document.getElementById('status');
+    const entries=new Map();
+    let latest=[];
+    let mode='label';
+    let controller=null;
+    let timer=null;
+    let failures=0;
+
+    const map=L.map('map',{
+      preferCanvas:true,zoomControl:false,attributionControl:false,
+      fadeAnimation:false,zoomAnimation:false,markerZoomAnimation:false
+    });
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{
+      maxZoom:18,updateWhenIdle:true,updateWhenZooming:false,keepBuffer:1,detectRetina:false
+    }).addTo(map);
+    L.control.zoom({position:'bottomleft'}).addTo(map);
+    L.control.attribution({position:'bottomright',prefix:false}).addTo(map).addAttribution('© OpenStreetMap');
+    map.fitBounds(SILLON_BOUNDS,{padding:[8,8]});
+
+    const esc=v=>String(v??'').replace(/[&<>'"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));
+    const delayMin=t=>Math.round(Number(t?.delaySeconds||0)/60);
+    const category=t=>['ter','tgv','cfl'].includes(String(t?.category||'').toLowerCase())?String(t.category).toLowerCase():'other';
+    const color=t=>category(t)==='cfl'?'#e83e8c':category(t)==='tgv'?'#7457e8':category(t)==='ter'?'#00a9c7':'#bfeeff';
+    const renderMode=()=>map.getZoom()<7.5?'dot':'label';
+    const bbox=()=>{const b=map.getBounds();return [b.getWest(),b.getSouth(),b.getEast(),b.getNorth()].map(v=>v.toFixed(5)).join(',')};
+    const keyOf=t=>String(t?.tripId||t?.id||`${t?.category||'train'}:${t?.number||t?.label||''}`);
+
+    function labelIcon(train){
+      const d=delayMin(train),cat=category(train),label=esc(train.label||train.number||'Train');
+      const delay=d?`<span class="delay">${d>0?'+':''}${d}</span>`:'';
+      return L.divIcon({className:'train-icon',html:`<span class="train-label ${cat}"><span class="num">${label}</span>${delay}</span>`,iconSize:[1,1],iconAnchor:[0,0]});
+    }
+
+    function popupHtml(train){
+      const d=delayMin(train),label=esc(train.label||train.number||'Train'),cat=esc(String(train.category||'Train').toUpperCase());
+      return `<strong>${cat} ${label}</strong>${d?`<br><span class="pop-delay">Retard ${d>0?'+':''}${d} min</span>`:'<br>À l’heure / retard non signalé'}`;
+    }
+
+    function makeMarker(train,currentMode){
+      const lat=Number(train.lat),lon=Number(train.lon);
+      const marker=currentMode==='dot'
+        ? L.circleMarker([lat,lon],{radius:3.4,color:color(train),weight:1.4,fillColor:color(train),fillOpacity:.88,opacity:.98,bubblingMouseEvents:false})
+        : L.marker([lat,lon],{icon:labelIcon(train),keyboard:false,bubblingMouseEvents:false});
+      marker.bindPopup(popupHtml(train),{closeButton:false,autoPan:false});
+      return marker;
+    }
+
+    function signature(train,currentMode){return `${currentMode}|${category(train)}|${train.label||train.number||''}|${delayMin(train)}`}
+
+    function render(trains,{cached=false,elapsed=null}={}){
+      latest=Array.isArray(trains)?trains:[];
+      const nextMode=renderMode();
+      if(nextMode!==mode){for(const e of entries.values())map.removeLayer(e.marker);entries.clear();mode=nextMode}
+      const seen=new Set();
+      let shown=0;
+      for(const train of latest){
+        const lat=Number(train?.lat),lon=Number(train?.lon),id=keyOf(train);
+        if(!id||!Number.isFinite(lat)||!Number.isFinite(lon))continue;
+        shown++;
+        seen.add(id);
+        const sig=signature(train,mode);
+        let e=entries.get(id);
+        if(!e||e.sig!==sig){
+          if(e?.marker)map.removeLayer(e.marker);
+          const marker=makeMarker(train,mode).addTo(map);
+          e={marker,sig};entries.set(id,e);
+        }else{
+          e.marker.setLatLng([lat,lon]);
+          e.marker.setPopupContent(popupHtml(train));
+        }
+      }
+      for(const [id,e] of entries){if(!seen.has(id)){map.removeLayer(e.marker);entries.delete(id)}}
+      const perf=elapsed==null?'':` · ${Math.round(elapsed)} ms`;
+      statusEl.textContent=`${shown} trains${cached?' · cache':''}${perf}`;
+    }
+
+    function loadCache(){
+      try{
+        const raw=sessionStorage.getItem(CACHE_KEY);if(!raw)return;
+        const cached=JSON.parse(raw);
+        if(!cached||Date.now()-cached.savedAt>180000||!Array.isArray(cached.trains))return;
+        render(cached.trains,{cached:true});
+      }catch(_){ }
+    }
+    function saveCache(trains){try{sessionStorage.setItem(CACHE_KEY,JSON.stringify({savedAt:Date.now(),trains}))}catch(_){ }}
+
+    function schedule(ms){clearTimeout(timer);if(!document.hidden)timer=setTimeout(refresh,ms)}
+
+    async function refresh(){
+      if(document.hidden)return;
+      if(controller)controller.abort();
+      controller=new AbortController();
+      const started=performance.now();
+      try{
+        const response=await fetch(`${API}/api/map-v2/trains?bbox=${bbox()}`,{
+          signal:controller.signal,cache:'no-store',headers:{Accept:'application/json'}
+        });
+        if(!response.ok)throw new Error(`${response.status} ${response.statusText}`);
+        const data=await response.json();
+        const trains=Array.isArray(data?.trains)?data.trains:[];
+        failures=0;
+        render(trains,{elapsed:performance.now()-started});
+        saveCache(trains);
+        schedule(REFRESH_OK);
+      }catch(error){
+        if(error?.name==='AbortError')return;
+        failures=Math.min(failures+1,3);
+        statusEl.textContent='Données momentanément indisponibles · nouvel essai…';
+        schedule(Math.min(REFRESH_MAX,REFRESH_OK*(2**failures)));
+      }
+    }
+
+    map.on('moveend',()=>schedule(220));
+    map.on('zoomend',()=>render(latest));
+    document.addEventListener('visibilitychange',()=>{
+      if(document.hidden){clearTimeout(timer);controller?.abort();return}
+      refresh();
+    });
+
+    loadCache();
+    refresh();
+    try{window.parent?.postMessage({type:'lb:mobile-map-ready'},'*')}catch(_){ }
+  })();
+  </script>
+</body>
+</html>
