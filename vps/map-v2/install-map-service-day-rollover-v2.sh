@@ -147,10 +147,15 @@ s = s[:old_now_start] + """function nowSecLocal(){
 anchor = '''  function lbHydrateMapFromEntries(targetMap, entries, mapName){'''
 helper = r'''  // LB_SERVICE_DAY_ROLLOVER_V2
   function lbServiceDayDiff(fromDate, toDate){
+    const cacheKey = `${fromDate}|${toDate}`;
+    if (lbServiceDayOffsetCache.has(cacheKey)) return lbServiceDayOffsetCache.get(cacheKey);
     const from = Date.parse(String(fromDate) + 'T12:00:00Z');
     const to = Date.parse(String(toDate) + 'T12:00:00Z');
-    return Number.isFinite(from) && Number.isFinite(to) ? Math.round((to-from)/86400000) : 0;
+    const value = Number.isFinite(from) && Number.isFinite(to) ? Math.round((to-from)/86400000) : 0;
+    lbServiceDayOffsetCache.set(cacheKey, value);
+    return value;
   }
+  const lbServiceDayOffsetCache = new Map();
   function lbNowForServiceDate(civilNowSec, serviceDate){
     return civilNowSec + lbServiceDayDiff(serviceDate, lbCarteTodayIso()) * 86400;
   }
