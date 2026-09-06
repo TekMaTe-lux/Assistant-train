@@ -1,13 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT="/opt/labetaillere-map-v2-src"
-SOURCE="$ROOT/vps/home/build_train_static_today.py"
 TARGET="/opt/gtfs/build_train_static_today.py"
 BACKUP="$TARGET.bak.$(date +%Y%m%d-%H%M%S)"
+SOURCE="$(mktemp /tmp/build_train_static_today.XXXXXX.py)"
+trap 'rm -f "$SOURCE"' EXIT
 
-test -f "$SOURCE"
 test -f "$TARGET"
+curl -fsSL \
+  "https://raw.githubusercontent.com/TekMaTe-lux/Assistant-train/main/vps/home/build_train_static_today.py?$(date +%s)" \
+  -o "$SOURCE"
 python3 -m py_compile "$SOURCE"
 cp -a "$TARGET" "$BACKUP"
 install -m 755 "$SOURCE" "$TARGET"
