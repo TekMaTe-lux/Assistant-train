@@ -7,15 +7,9 @@
   <title>Carte La Bétaillère — LIVE</title>
   <link rel="preconnect" href="https://vps.labetaillere.fr" crossorigin>
   <link rel="dns-prefetch" href="//vps.labetaillere.fr">
-  <link rel="preconnect" href="https://unpkg.com" crossorigin>
-  <link rel="preconnect" href="https://tile.openstreetmap.org" crossorigin>
   <style>
     html,body{width:100%;height:100%;margin:0;overflow:hidden;background:#020611}
-    .lbMapFrame{position:fixed;inset:0;display:block;width:100%;height:100%;border:0;background:#020611;transition:opacity .16s ease}
-    #mapFast{z-index:1;opacity:1}
-    #mapFull{z-index:2;opacity:0;pointer-events:none}
-    body.lb-full-ready #mapFull{opacity:1;pointer-events:auto}
-    body.lb-full-ready #mapFast{opacity:0;pointer-events:none}
+    #mapV2{display:block;width:100%;height:100%;border:0;background:#020611}
     #lbMapBack{
       position:fixed;z-index:20;top:10px;left:10px;display:inline-flex;align-items:center;gap:7px;
       min-height:36px;padding:7px 11px;border:1px solid rgba(49,231,242,.42);border-radius:10px;
@@ -29,109 +23,41 @@
 </head>
 <body>
 <button id="lbMapBack" type="button" hidden aria-label="Retour à la carte">← Retour à la carte</button>
-<iframe id="mapFast" class="lbMapFrame" title="Carte La Bétaillère — affichage rapide" allow="geolocation" loading="eager"></iframe>
-<iframe id="mapFull" class="lbMapFrame" title="Carte La Bétaillère — mode complet" allow="geolocation"></iframe>
+<iframe
+  id="mapV2"
+  src="https://vps.labetaillere.fr/map-v2/carte-preview.html?v=20260906-direct-restore-v1"
+  title="Carte La Bétaillère"
+  allow="geolocation"
+></iframe>
 <script>
 (()=>{
   'use strict';
-  const fast=document.getElementById('mapFast');
-  const full=document.getElementById('mapFull');
+  const frame=document.getElementById('mapV2');
   const back=document.getElementById('lbMapBack');
-  const FULL_MAP_URL='https://vps.labetaillere.fr/map-v2/carte-preview.html?full=1&v=20260906-performance-v4';
-  const FAST_MAP_URL='https://vps.labetaillere.fr/map-v2/carte-mobile-readonly.html?v=20260906-first-paint-v1';
+  const MAP_URL='https://vps.labetaillere.fr/map-v2/carte-preview.html?v=20260906-direct-restore-v1';
   const LUX_URL='https://vps.labetaillere.fr/map-v2/tests/luxembourg-user-preview-v5-private-maplike-trainclick.html';
-  const narrow=matchMedia('(max-width: 920px)').matches;
-  const coarse=matchMedia('(pointer: coarse)').matches;
-  const touch=navigator.maxTouchPoints>0;
-  const MOBILE=narrow&&(coarse||touch);
   let view='map';
-  let fastReady=false;
-  let fullStarted=false;
-  let fullLoadTimer=null;
-  let startTimer=null;
-
-  function showFast(){
-    document.body.classList.remove('lb-full-ready');
-  }
-
-  function promoteFull(){
-    if(MOBILE||view!=='map'||!fullStarted)return;
-    document.body.classList.add('lb-full-ready');
-    // Le bootstrap léger ne doit pas continuer à rafraîchir derrière la carte complète.
-    setTimeout(()=>{
-      if(document.body.classList.contains('lb-full-ready')&&fast.src!=='about:blank') fast.src='about:blank';
-    },350);
-  }
-
-  function armPromotion(){
-    clearTimeout(fullLoadTimer);
-    // load ne garantit pas que tous les fetch asynchrones du gros core sont terminés.
-    // On laisse donc le premier affichage rapide visible pendant l'hydratation finale.
-    fullLoadTimer=setTimeout(promoteFull,2200);
-  }
-
-  function startFull(){
-    if(MOBILE||fullStarted||view!=='map')return;
-    fullStarted=true;
-    full.src=FULL_MAP_URL;
-  }
-
-  function ensureFast(){
-    if(fast.src==='about:blank'||!fast.getAttribute('src')) fast.src=FAST_MAP_URL;
-  }
 
   function showMap(){
-    if(view==='map')return;
+    if(view==='map') return;
     view='map';
     back.hidden=true;
-    showFast();
-    ensureFast();
-    fullStarted=false;
-    full.src='about:blank';
-    if(!MOBILE){
-      clearTimeout(startTimer);
-      startTimer=setTimeout(startFull,350);
-    }
+    frame.title='Carte La Bétaillère';
+    frame.src=MAP_URL;
   }
 
   function showLuxDynamic(){
-    if(MOBILE||view==='lux')return;
+    if(view==='lux') return;
     view='lux';
-    clearTimeout(fullLoadTimer);
-    clearTimeout(startTimer);
     back.hidden=false;
-    document.body.classList.add('lb-full-ready');
-    fullStarted=true;
-    full.title='Gare dynamique de Luxembourg';
-    full.src=LUX_URL;
+    frame.title='Gare dynamique de Luxembourg';
+    frame.src=LUX_URL;
   }
 
   back.addEventListener('click',showMap);
-  full.addEventListener('load',()=>{
-    if(view==='map'&&fullStarted) armPromotion();
-  });
-
-  // Toujours afficher d'abord la vue API légère : premiers trains sans attendre les 5 Mo GTFS.
-  fast.src=FAST_MAP_URL;
-  if(!MOBILE){
-    // Si le message ready est retardé/bloqué, on lance quand même l'hydratation complète rapidement.
-    startTimer=setTimeout(startFull,900);
-  }
 
   window.addEventListener('message',event=>{
-    if(event.source===fast.contentWindow){
-      if(event.data?.type==='lb:mobile-map-ready'){
-        fastReady=true;
-        if(!MOBILE){
-          clearTimeout(startTimer);
-          startTimer=setTimeout(startFull,120);
-        }
-        return;
-      }
-      if(window.parent!==window) window.parent.postMessage(event.data,'*');
-      return;
-    }
-    if(event.source===full.contentWindow){
+    if(event.source===frame.contentWindow){
       if(event.data?.type==='lb:open-lux-dynamic'){
         showLuxDynamic();
         return;
@@ -139,9 +65,8 @@
       if(window.parent!==window) window.parent.postMessage(event.data,'*');
       return;
     }
-    if(window.parent!==window&&event.source===window.parent){
-      const target=document.body.classList.contains('lb-full-ready')?full:fast;
-      target.contentWindow?.postMessage(event.data,'*');
+    if(window.parent!==window && event.source===window.parent){
+      frame.contentWindow?.postMessage(event.data,'*');
     }
   });
 })();
