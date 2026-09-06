@@ -76,8 +76,14 @@ db=sqlite3.connect(f'file:{p}?mode=ro', uri=True)
 print('integrity:', db.execute('PRAGMA integrity_check').fetchone()[0])
 print('trips:', db.execute('SELECT source,mode,COUNT(*) FROM trips GROUP BY source,mode ORDER BY source,mode').fetchall())
 print('days:', db.execute('SELECT MIN(service_date),MAX(service_date),COUNT(DISTINCT service_date) FROM day_trips').fetchone())
-print('20260906:', db.execute("SELECT source,mode,COUNT(*) FROM day_trips dt JOIN trips t ON t.source=dt.source AND t.trip_id=dt.trip_id WHERE service_date='20260906' GROUP BY source,mode ORDER BY source,mode").fetchall())
-print('20260907:', db.execute("SELECT source,mode,COUNT(*) FROM day_trips dt JOIN trips t ON t.source=dt.source AND t.trip_id=dt.trip_id WHERE service_date='20260907' GROUP BY source,mode ORDER BY source,mode").fetchall())
+q="""SELECT t.source,t.mode,COUNT(*)
+FROM day_trips dt
+JOIN trips t ON t.source=dt.source AND t.trip_id=dt.trip_id
+WHERE dt.service_date=?
+GROUP BY t.source,t.mode
+ORDER BY t.source,t.mode"""
+print('20260906:', db.execute(q, ('20260906',)).fetchall())
+print('20260907:', db.execute(q, ('20260907',)).fetchall())
 PY
 
 echo "=== SYSTEMD ISOLE ==="
