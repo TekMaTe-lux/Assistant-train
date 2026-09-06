@@ -140,9 +140,15 @@ def main(now=None):
         for train, row in by_date.get(compact, {}).items():
             if train in next_trains:
                 continue
-            clean = {key: value for key, value in row.items() if key not in {"service_id", "_rank"}}
-            clean["service_date"] = compact
-            next_trains[train] = clean
+            # Le navigateur n'a besoin que du résumé pour une circulation future.
+            # Ne pas recopier trip_id/route_id/train économise plusieurs Mo.
+            next_trains[train] = {
+                "service_date": compact,
+                "origin": row["origin"],
+                "destination": row["destination"],
+                "departure": row["departure"],
+                "arrival": row["arrival"],
+            }
 
     data = {
         "generated_at": now.isoformat(),
