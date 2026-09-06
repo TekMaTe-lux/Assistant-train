@@ -16339,8 +16339,9 @@ function getGtfsDelayForStop(trainNumber, stopName){
 
     if (card) card.classList.remove('is-canceled', 'is-delayed');
     try { title.dataset.trainId = String(trainId || ''); } catch(_) {}
+    const serviceDate = String(payload?.serviceDate || luxYmdToday());
     title.innerHTML = trainId
-      ? `<span class="fav-train-wrap"><button type="button" class="fav-train-profile-link" data-train="${escapeHtml(trainId)}" aria-label="Ouvrir la fiche du train ${escapeHtml(trainId)}"><span class="fav-train-num">TER ${escapeHtml(trainId)}</span></button></span>`
+      ? `<span class="fav-train-wrap"><button type="button" class="fav-train-profile-link" data-train="${escapeHtml(trainId)}" data-service-date="${escapeHtml(serviceDate)}" aria-label="Ouvrir la fiche du train ${escapeHtml(trainId)}"><span class="fav-train-num">TER ${escapeHtml(trainId)}</span></button></span>`
       : '<span class="fav-train-wrap"><span class="fav-train-num">TER —</span></span>';
 	if (badgeEl) badgeEl.innerHTML = '';
     meta.innerHTML = '';
@@ -16388,20 +16389,23 @@ function getGtfsDelayForStop(trainNumber, stopName){
     const depTxt = (plannedDepMin != null) ? minToClock(plannedDepMin) : '—';
     const arrTxt = (plannedArrMin != null) ? minToClock(plannedArrMin) : '—';
 
-    const rtStatus = inferRealtimeStatusFromDisruptions(payload);
+    const isFutureService = Boolean(payload?.nextServiceDate && payload.nextServiceDate !== luxYmdToday());
+    const rtStatus = isFutureService ? null : inferRealtimeStatusFromDisruptions(payload);
     const causeText = (payload?.causeText || '').trim();
 
-    const maxDelay = computeMaxDelayMin(payload, trainId);
+    const maxDelay = isFutureService ? null : computeMaxDelayMin(payload, trainId);
     const effectiveDepMin = (amendedDepMin != null) ? amendedDepMin : plannedDepMin;
     const effectiveArrLast = (amendedArrMin != null) ? amendedArrMin : plannedArrMin;
 
-    let widgetState = st.state;
-    if (effectiveDepMin != null && effectiveArrLast != null && st.now != null) {
+    let widgetState = isFutureService ? 'before' : st.state;
+    if (!isFutureService && effectiveDepMin != null && effectiveArrLast != null && st.now != null) {
       if (st.now < effectiveDepMin) widgetState = 'before';
       else if (st.now >= effectiveDepMin && st.now <= effectiveArrLast) widgetState = 'running';
       else if (st.now > effectiveArrLast) widgetState = 'after';
     }
-	const stateBadge = buildWidgetStateBadge(widgetState);
+	const stateBadge = isFutureService
+      ? '<span class="fav-state-badge fav-state-before">PROCHAIN</span>'
+      : buildWidgetStateBadge(widgetState);
     const typeBadge = (window.buildFavTrainTypeBadge ? window.buildFavTrainTypeBadge(trainId) : '');
 	if (badgeEl) badgeEl.innerHTML = `${typeBadge}${stateBadge}`;
 
@@ -16462,6 +16466,7 @@ function getGtfsDelayForStop(trainNumber, stopName){
     meta.innerHTML = `
       <div class="fav-primary-route">${escapeHtml(origin)} → ${escapeHtml(dest)}</div>
       <div class="fav-primary-times">${timesHtml}</div>
+      ${isFutureService ? `<div class="fav-next-service">Prochain : ${escapeHtml(payload.nextServiceLabel || payload.nextServiceDate)}</div>` : ''}
       ${isPartialAny ? `<div class="fav-mini-alert">Suppression partielle</div>` : ''}
     `;
 
@@ -16487,9 +16492,9 @@ function getGtfsDelayForStop(trainNumber, stopName){
       </div>
     `;
 
-    const nextTrainHtml = buildNextTrainInfo(widgetState, st);
+    const nextTrainHtml = isFutureService ? '' : buildNextTrainInfo(widgetState, st);
 	const stopsHtml = (widgetState === 'running') ? buildFavStopsDetails(payload, trainId, st.now) : '';
-    const affInfo = (typeof window.getAffluenceTrainInfo === 'function') ? window.getAffluenceTrainInfo(trainId, (kind==='AM' ? (window.__lbPreferredAffStation||'') : (window.__lbPreferredAffTo||''))) : null;
+    const affInfo = (!isFutureService && typeof window.getAffluenceTrainInfo === 'function') ? window.getAffluenceTrainInfo(trainId, (kind==='AM' ? (window.__lbPreferredAffStation||'') : (window.__lbPreferredAffTo||''))) : null;
         const affHtml = affInfo ? (()=> {
 	      const depName = affInfo.depStop?.station || affInfo.depStop?.name || '';
 	      const depTime = affInfo.depStop?.hhmm || affInfo.depStop?.time || '';
@@ -16572,7 +16577,8 @@ if (statsEl){
       const trainId = String(button.dataset.train || '').match(/\d{5,6}/)?.[0] || '';
       if (!trainId || typeof window.lbOpenTrainProfile !== 'function') return;
       button.disabled = true;
-      Promise.resolve(window.lbOpenTrainProfile(trainId, luxYmdToday(), { origin:'favorites' }))
+      const serviceDate = String(button.dataset.serviceDate || luxYmdToday());
+      Promise.resolve(window.lbOpenTrainProfile(trainId, serviceDate, { origin:'favorites' }))
         .catch((error) => console.error('[Favoris] fiche train indisponible', error))
         .finally(() => { button.disabled = false; });
     }, true);
@@ -16592,8 +16598,6 @@ if (statsEl){
     }, true);
   }
 
-
-
   const fetchTrainToday = async (selectionKey) => {
     const ymd = luxYmdToday();
     if (!/^\d{5,6}$/.test(String(selectionKey))) return { error: 'Format invalide' };
@@ -16610,10 +16614,16 @@ if (statsEl){
       console.warn('[Favoris SNCF] Erreur fetch:', e?.message || e);
       return { error: 'Erreur API' };
     }
-    if (!response?.ok) return { error: 'Non prévu (ou API KO)' };
+    if (!response?.ok) {
+      await loadTrainStaticToday();
+      return getTrainStaticNextPayload(String(selectionKey)) || { error:'Aucune circulation prévue prochainement' };
+    }
 
     const train = response?.data?.vehicle_journeys?.[0];
-    if (!train) return { error: 'Non prévu' };
+    if (!train) {
+      await loadTrainStaticToday();
+      return getTrainStaticNextPayload(String(selectionKey)) || { error:'Aucune circulation prévue prochainement' };
+    }
     // Extraire une cause lisible si dispo (perturbations temps réel)
     const disruptions = response?.data?.disruptions || [];
     const causes = [];
@@ -21822,6 +21832,7 @@ async function loadAffluenceDate(dateStr){
   // Objectif: 1 seul fetch pour tous les trains au lieu de /api/train-static train par train.
   const LB_TRAIN_STATIC_TODAY_URL = 'https://vps.labetaillere.fr/gtfs/train_static_today.json';
   let LB_TRAIN_STATIC_TODAY = {};
+  let LB_TRAIN_STATIC_NEXT = {};
   let LB_TRAIN_STATIC_TODAY_DATE = '';
   let LB_TRAIN_STATIC_TODAY_PROMISE = null;
 
@@ -22572,6 +22583,7 @@ async function loadAffluenceDate(dateStr){
       })
       .then((data)=>{
         LB_TRAIN_STATIC_TODAY = (data && typeof data === 'object' && data.trains && typeof data.trains === 'object') ? data.trains : {};
+        LB_TRAIN_STATIC_NEXT = (data && typeof data === 'object' && data.next_trains && typeof data.next_trains === 'object') ? data.next_trains : {};
         LB_TRAIN_STATIC_TODAY_DATE = String(data?.date || today);
         console.log('[LIVE static today] chargé', Object.keys(LB_TRAIN_STATIC_TODAY).length, 'trains');
         return LB_TRAIN_STATIC_TODAY;
@@ -22579,6 +22591,7 @@ async function loadAffluenceDate(dateStr){
       .catch((err)=>{
         console.warn('[LIVE static today] indisponible', err?.message || err);
         LB_TRAIN_STATIC_TODAY = {};
+        LB_TRAIN_STATIC_NEXT = {};
         LB_TRAIN_STATIC_TODAY_DATE = '';
         return LB_TRAIN_STATIC_TODAY;
       })
@@ -22629,6 +22642,40 @@ async function loadAffluenceDate(dateStr){
       destination,
       summaryOnly: !hasFullStops,
       source: 'train_static_today'
+    };
+  }
+
+  function getTrainStaticNextPayload(trainNumber){
+    const key = normalizeKey(trainNumber);
+    const row = key && LB_TRAIN_STATIC_NEXT && typeof LB_TRAIN_STATIC_NEXT === 'object'
+      ? LB_TRAIN_STATIC_NEXT[key]
+      : null;
+    if (!row || typeof row !== 'object') return null;
+    const rawDate = String(row.service_date || '').replace(/\D/g, '');
+    if (rawDate.length !== 8) return null;
+    const serviceDate = `${rawDate.slice(0,4)}-${rawDate.slice(4,6)}-${rawDate.slice(6,8)}`;
+    const origin = String(row.origin || '').trim();
+    const destination = String(row.destination || '').trim();
+    if (!origin || !destination) return null;
+    const departure = formatGtfsHHMM(row.departure || row.departure_time || '');
+    const arrival = formatGtfsHHMM(row.arrival || row.arrival_time || '');
+    const stopTimes = [
+      { stop_point:{ id:'', name:origin }, departure_time:departure, base_departure_time:departure },
+      { stop_point:{ id:'', name:destination }, arrival_time:arrival, base_arrival_time:arrival }
+    ];
+    const dateValue = new Date(`${serviceDate}T12:00:00Z`);
+    const nextServiceLabel = new Intl.DateTimeFormat('fr-FR', {
+      timeZone:'Europe/Luxembourg', weekday:'long', day:'numeric', month:'long'
+    }).format(dateValue);
+    return {
+      train:{ id:key, stop_times:stopTimes },
+      source:'GTFS_NEXT_SERVICE_CACHE',
+      serviceDate,
+      nextServiceDate:serviceDate,
+      nextServiceLabel,
+      disruptions:[],
+      impacted:{},
+      causeText:''
     };
   }
 
