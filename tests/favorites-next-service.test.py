@@ -63,6 +63,9 @@ with tempfile.TemporaryDirectory() as temp:
 source = (ROOT / "index.html").read_text(encoding="utf-8")
 assert "LB_TRAIN_STATIC_NEXT" in source
 assert "getTrainStaticNextPayload" in source
+assert "window.lbLoadTrainStaticToday = loadTrainStaticToday" in source
+assert "window.lbGetTrainStaticNextPayload = getTrainStaticNextPayload" in source
+assert "await window.lbLoadTrainStaticToday?.()" in source
 assert "data-service-date" in source
 assert "FAV_NEXT_SERVICE_CACHE" not in source
 assert "fetchNextFavoriteService" not in source
