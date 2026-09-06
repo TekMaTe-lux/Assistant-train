@@ -6,8 +6,13 @@ Compares normalized logical content, not physical schema:
 - stops
 - trips
 - stop_times
-- service_days
+- service_days actually referenced by included rail/tram_train trips
 - active trips by service date (V1 day_trips vs V2 derived join)
+
+Important: V1 materializes service_days for every GTFS service_id, including services
+used only by excluded bus/coach routes. V2 intentionally stores only services used by
+included trips. Those unused calendar rows are reported diagnostically but are not a
+parity failure because they can never produce a train in the engine.
 
 The script streams ordered rows, so memory use stays small even for >1M rows.
 It never writes to either database.
@@ -88,6 +93,30 @@ def main() -> int:
         return 4
     print()
 
+    # Diagnostic only: V1 contains calendar rows for GTFS services that belong only
+    # to excluded route types (notably buses). V2 deliberately drops those services.
+    raw_sd_v1 = scalar(d1, "SELECT COUNT(*) FROM service_days")
+    raw_sd_v2 = scalar(d2, "SELECT COUNT(*) FROM service_days")
+    used_sd_v1 = scalar(d1, """
+        SELECT COUNT(*)
+        FROM service_days sd
+        WHERE EXISTS (
+          SELECT 1 FROM trips t
+          WHERE t.source=sd.source AND t.service_id=sd.service_id
+        )
+    """)
+    used_sd_v2 = scalar(d2, """
+        SELECT COUNT(*)
+        FROM service_days sd
+        WHERE EXISTS (
+          SELECT 1 FROM trips t WHERE t.service_pk=sd.service_pk
+        )
+    """)
+    print("service_days bruts V1/V2:", raw_sd_v1, raw_sd_v2)
+    print("service_days utiles V1/V2:", used_sd_v1, used_sd_v2)
+    print("service_days V1 inutiles au moteur:", raw_sd_v1 - used_sd_v1)
+    print()
+
     checks = [
         (
             "routes",
@@ -130,12 +159,20 @@ def main() -> int:
             100_000,
         ),
         (
-            "service_days",
-            """SELECT source,service_date,service_id
-                 FROM service_days ORDER BY source,service_date,service_id""",
+            "service_days_utiles",
+            """SELECT sd.source,sd.service_date,sd.service_id
+                 FROM service_days sd
+                 WHERE EXISTS (
+                   SELECT 1 FROM trips t
+                   WHERE t.source=sd.source AND t.service_id=sd.service_id
+                 )
+                 ORDER BY sd.source,sd.service_date,sd.service_id""",
             """SELECT s.source,printf('%08d',sd.service_date),s.service_id
                  FROM service_days sd
                  JOIN services s ON s.service_pk=sd.service_pk
+                 WHERE EXISTS (
+                   SELECT 1 FROM trips t WHERE t.service_pk=sd.service_pk
+                 )
                  ORDER BY s.source,sd.service_date,s.service_id""",
             100_000,
         ),
