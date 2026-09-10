@@ -35,6 +35,6 @@
   }
 
   load('./assets/lb-community-map-bridge-core-v1.js?v=20260905-6', 'lb-community-map-bridge-core-v1', () => {
-    load('./assets/lb-community-map-votes-v1.js?v=20260910-1', 'lb-community-map-votes-v1');
+    load('./assets/lb-community-map-votes-v2.js?v=20260910-1', 'lb-community-map-votes-v2');
   });
 })();
