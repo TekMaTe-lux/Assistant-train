@@ -67,7 +67,10 @@
     const report = delay > 0 ? latestDelayReport(item) : null;
     const station = String(report?.station || '').trim();
 
-    if (!(delay > 0) || !station) return;
+    if (!(delay > 0) || !station) {
+      sourceLine.classList.remove('lb-community-source-line--votes');
+      return;
+    }
 
     const vote = report?.vote && typeof report.vote === 'object' ? report.vote : null;
     const signalId = String(vote?.signalId || '').trim();

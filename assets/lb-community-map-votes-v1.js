@@ -31,9 +31,10 @@
     .replace(/\s+/g, ' ').trim().toLowerCase();
 
   const parseTs = (raw) => {
-    const direct = Number(raw?.ts || raw?.timestamp || 0);
+    const value = raw?.created_at || raw?.createdAt || raw?.ts || raw?.timestamp || raw?.date || '';
+    const direct = Number(value);
     if (Number.isFinite(direct) && direct > 0) return direct;
-    const parsed = Date.parse(raw?.created_at || raw?.createdAt || raw?.date || '');
+    const parsed = Date.parse(value);
     return Number.isFinite(parsed) ? parsed : 0;
   };
 
@@ -50,10 +51,13 @@
   function normalizeSignal(raw){
     if (!raw || typeof raw !== 'object') return null;
     const id = String(raw.id || '').trim();
-    const trainNumber = normalizeTrain(raw.train_number || raw.trainNumber || raw.train || '');
-    const station = String(raw.station || raw.stop_name || raw.stopName || '').trim();
-    const signalType = String(raw.signal_type || raw.signalType || '').trim().toLowerCase();
-    const delayMin = Math.round(Number(raw.delay_min ?? raw.delayMin ?? 0) || 0);
+    const message = String(raw.message || raw.text || '').trim();
+    const parsed = message.match(/^\[(RETARD|SUPPRESSION|INFORMATION|A L'HEURE|A-L'HEURE|A LHEURE)\]\s*(?:#?([A-Z]{2,5})\s*)?(\d{3,6})?\s*(?:\[([^\]]+)\])?\s*[—\-:]?\s*(.*)$/i);
+    const trainNumber = normalizeTrain(raw.train_number || raw.trainNumber || raw.train || parsed?.[3] || '');
+    const station = String(raw.station || raw.stop_name || raw.stopName || parsed?.[4] || '').trim();
+    const signalType = String(raw.signal_type || raw.signalType || parsed?.[1] || '').trim().toLowerCase().replace(/\s+/g, '-');
+    const parsedDelay = Number(String(parsed?.[5] || message).match(/\+\s*(\d{1,3})\s*min/i)?.[1] || 0);
+    const delayMin = Math.round(Number(raw.delay_min ?? raw.delayMin ?? parsedDelay ?? 0) || 0);
     const upvotes = Math.max(0, Math.round(Number(raw.upvotes || 0) || 0));
     const downvotes = Math.max(0, Math.round(Number(raw.downvotes || 0) || 0));
     const myVote = Math.max(-1, Math.min(1, Math.round(Number(raw.my_vote ?? raw.myVote ?? 0) || 0)));
