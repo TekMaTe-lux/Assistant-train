@@ -54,11 +54,12 @@ import sys
 
 path = Path(sys.argv[1])
 text = path.read_text(encoding='utf-8')
-marker = '<script id="lb-community-traveler-vote-v1" src="./assets/lb-community-traveler-vote-v1.js?v=20260910-2"></script>'
+marker = '<script id="lb-community-traveler-vote-v1" src="./assets/lb-community-traveler-vote-v1.js?v=20260910-3"></script>'
 
-# Idempotent : retire toute ancienne occurrence de cette couche uniquement.
+# Idempotent et auto-réparant : retire l'ancienne balise même si son src avait
+# perdu le "1" (lb-community-traveler-vote-v.js), puis réinjecte l'URL exacte.
 text = re.sub(
-    r'\s*<script id="lb-community-traveler-vote-v1" src="\./assets/lb-community-traveler-vote-v1\.js\?v=[^"]+"></script>',
+    r'\s*<script id="lb-community-traveler-vote-v1" src="\./assets/lb-community-traveler-vote-v(?:1)?\.js\?v=[^"]+"></script>',
     '',
     text,
 )
@@ -80,21 +81,27 @@ path.write_text(text, encoding='utf-8')
 PY
 
 echo "[4/5] Vérifications…"
-grep -q 'id="lb-community-traveler-vote-v1"' "$CORE" || {
-  echo "ERREUR: module de vote non raccordé au core" >&2
+EXPECTED='src="./assets/lb-community-traveler-vote-v1.js?v=20260910-3"'
+grep -Fq "$EXPECTED" "$CORE" || {
+  echo "ERREUR: src exact du module de vote absent du core" >&2
   cp -a "$BACKUP_DIR/carte-core-preview.html" "$CORE"
   exit 5
 }
+if grep -Fq 'lb-community-traveler-vote-v.js' "$CORE"; then
+  echo "ERREUR: ancienne URL fautive lb-community-traveler-vote-v.js encore présente" >&2
+  cp -a "$BACKUP_DIR/carte-core-preview.html" "$CORE"
+  exit 6
+fi
 grep -q '__LB_COMMUNITY_TRAVELER_VOTE_V1__' "$TARGET_JS" || {
   echo "ERREUR: module installé invalide" >&2
   cp -a "$BACKUP_DIR/carte-core-preview.html" "$CORE"
-  exit 6
+  exit 7
 }
 COUNT="$(grep -c 'id="lb-community-traveler-vote-v1"' "$CORE" || true)"
 [[ "$COUNT" = "1" ]] || {
   echo "ERREUR: $COUNT occurrences du module dans le core" >&2
   cp -a "$BACKUP_DIR/carte-core-preview.html" "$CORE"
-  exit 7
+  exit 8
 }
 
 echo "[5/5] Redémarrage contrôlé…"
@@ -104,10 +111,10 @@ if systemctl list-unit-files 2>/dev/null | grep -q '^labetaillere-map-v2\.servic
     echo "ERREUR: service map-v2 inactif après redémarrage — rollback automatique" >&2
     cp -a "$BACKUP_DIR/carte-core-preview.html" "$CORE"
     systemctl restart labetaillere-map-v2.service || true
-    exit 8
+    exit 9
   fi
 else
-  echo "Service labetaillere-map-v2.service non détecté : aucun redémarrage effectué."
+  echo "Service labetaillere-map-v2.service non détecté : aucun redémarrage nécessaire pour ces fichiers statiques."
 fi
 
 echo
@@ -115,4 +122,4 @@ echo "OK — votes de retard voyageurs installés sur la carte."
 echo "Sauvegarde : $BACKUP_DIR"
 echo "Core        : $(sha256sum "$CORE" | awk '{print $1}')"
 echo "Module vote : $(sha256sum "$TARGET_JS" | awk '{print $1}')"
-echo "Rollback    : cp '$BACKUP_DIR/carte-core-preview.html' '$CORE' && systemctl restart labetaillere-map-v2.service"
+echo "Rollback    : cp '$BACKUP_DIR/carte-core-preview.html' '$CORE'"
