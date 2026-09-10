@@ -98,7 +98,10 @@
       .filter((signal) => signal.trainNumber === trainKey && signal.stopKey === stopKey)
       .sort((a,b) => Number(b.ts || 0) - Number(a.ts || 0));
     if (!candidates.length) return null;
-    return candidates.find((signal) => signal.delayMin === wantedDelay) || candidates[0];
+    // Le retard affiché par la carte peut être une médiane de plusieurs retours.
+    // On ne propose un vote que si ce retard correspond réellement à un
+    // signalement individuel : jamais de pouce qui voterait pour une autre valeur.
+    return candidates.find((signal) => signal.delayMin === wantedDelay) || null;
   }
 
   function enrichedSnapshot(){
