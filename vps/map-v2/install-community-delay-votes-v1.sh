@@ -9,7 +9,9 @@ TARGET_JS="$ASSET_DIR/lb-community-traveler-vote-v1.js"
 SOURCE_URL="${LB_VOTE_SOURCE_URL:-https://raw.githubusercontent.com/TekMaTe-lux/Assistant-train/main/vps/map-v2/lb-community-traveler-vote-v1.js}"
 STAMP="$(date +%Y%m%d-%H%M%S-%N)"
 BACKUP_DIR="$ROOT/map-v2/backups/community-delay-votes-v1-$STAMP"
-TMP_JS="$(mktemp)"
+# Node 20 refuse `node --check` sur un fichier temporaire sans extension dans
+# certains environnements ESM. On force donc une vraie extension .js.
+TMP_JS="$(mktemp --suffix=.js)"
 
 cleanup(){ rm -f "$TMP_JS"; }
 trap cleanup EXIT
