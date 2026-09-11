@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import hashlib
 import os
 from pathlib import Path
@@ -14,9 +15,9 @@ from datetime import datetime, timezone
 
 MARK = "LB_COMMUNITY_SIGNAL_DIALOG_COW_EXACT_V10"
 ROOT_DEFAULT = "/opt/labetaillere-map-v2-src"
-ASSET_NAME = "lb-community-cow-modal-v9.webp"
-ASSET_URL = "https://raw.githubusercontent.com/TekMaTe-lux/Assistant-train/main/vps/map-v2/" + ASSET_NAME
-ASSET_SHA256 = "e1f17a4b2c505223b638f9cac83fdc821eb9e58fbc9e179b05f84a7515c0d1c6"
+ASSET_NAME = "lb-community-cow-modal-v10.webp"
+ASSET_B64_URL = "https://raw.githubusercontent.com/TekMaTe-lux/Assistant-train/main/vps/map-v2/lb-community-cow-modal-v10-small.webp.b64"
+ASSET_SHA256 = "ccafa1d631854274143323d563b5f717c2789703f1894728927e44ab10fd1db1"
 VERSION = "20260911-cow-exact-v10"
 
 
@@ -46,12 +47,16 @@ def sha256(data: bytes) -> str:
 
 
 def download_asset() -> bytes:
-    req = urllib.request.Request(ASSET_URL + "?v=" + VERSION, headers={"User-Agent":"LaBetaillere-VPS"})
+    req = urllib.request.Request(ASSET_B64_URL + "?v=" + VERSION, headers={"User-Agent":"LaBetaillere-VPS"})
     with urllib.request.urlopen(req, timeout=30) as r:
-        data = r.read()
+        payload = r.read().strip()
+    try:
+        data = base64.b64decode(payload, validate=True)
+    except Exception as exc:
+        raise RuntimeError("asset vache: payload base64 invalide") from exc
     if sha256(data) != ASSET_SHA256:
         raise RuntimeError("asset vache téléchargé mais SHA256 inattendu")
-    if len(data) < 50000:
+    if len(data) < 30000:
         raise RuntimeError(f"asset vache anormalement petit: {len(data)} octets")
     if not (data[:4] == b"RIFF" and data[8:12] == b"WEBP"):
         raise RuntimeError("asset vache invalide: WEBP attendu")
@@ -75,9 +80,6 @@ def node_check(text: str) -> None:
 
 
 def strip_unwanted_header_text(text: str) -> tuple[str, int]:
-    """Retire seulement le bloc titre/sous-titre ajouté au-dessus du contenu.
-    La ligne contenant la croix est conservée.
-    """
     pat = re.compile(
         r'\s*<div\s+class="lb-signal-dialog-head-main">\s*'
         r'(?:<div\s+class="lb-signal-dialog-kicker">.*?</div>\s*)?'
