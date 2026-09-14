@@ -1,16 +1,16 @@
 'use strict';
 
 (() => {
-  const BADGE_ID = 'lbHomeCommunityBadge';
-  const GRADE_IMAGES = [
-    { min: -20, name: 'Porc en déroute', image: 'Porc en déroute.png' },
-    { min: 0, name: 'Mouton égaré', image: 'Mouton égaré.png' },
-    { min: 20, name: 'Poulette du quai', image: 'Poulet du Quai.png' },
-    { min: 40, name: 'Porc entassé du couloir', image: 'Porc entassé du couloir.png' },
-    { min: 80, name: 'Bélier du sas', image: 'Bélier du sas.png' },
-    { min: 120, name: 'Architecte Chèvre de la galère', image: 'Architecte Chèvre de la galère.png' },
-    { min: 180, name: 'Ministre dindon du chaos ferroviaire', image: 'Ministre dindon du chaos ferroviaire.png' },
-    { min: 250, name: 'Golden Vache', image: 'Golden Vache.png' }
+  const IDENTITY_ID = 'lbHomeCommunityBadge';
+  const GRADE_LEVELS = [
+    { min: -20, name: 'Porc en déroute' },
+    { min: 0, name: 'Mouton égaré' },
+    { min: 20, name: 'Poulette du quai' },
+    { min: 40, name: 'Porc entassé du couloir' },
+    { min: 80, name: 'Bélier du sas' },
+    { min: 120, name: 'Architecte Chèvre de la galère' },
+    { min: 180, name: 'Ministre dindon du chaos ferroviaire' },
+    { min: 250, name: 'Golden Vache' }
   ];
 
   const normalize = (value) => String(value || '')
@@ -23,10 +23,13 @@
   function resolveGrade(profile, points) {
     const requested = normalize(profile?.grade);
     if (requested) {
-      const exact = GRADE_IMAGES.find((item) => normalize(item.name) === requested);
-      if (exact) return exact;
+      const exact = GRADE_LEVELS.find((item) => normalize(item.name) === requested);
+      if (exact) return exact.name;
     }
-    return GRADE_IMAGES.reduce((best, item) => points >= item.min ? item : best, GRADE_IMAGES[0]);
+    return GRADE_LEVELS.reduce(
+      (best, item) => points >= item.min ? item : best,
+      GRADE_LEVELS[0]
+    ).name;
   }
 
   function getUserSnapshot() {
@@ -34,76 +37,76 @@
     const prefs = window.lbPrefsCache || {};
     const user = window.currentUser || {};
     const authed = window.lbIsAuthed === true;
-    const pseudo = String(profile.display_pseudo || profile.pseudo || prefs.pseudo || user.pseudo || user.username || '').trim();
+    const pseudo = String(
+      profile.display_pseudo || profile.pseudo || prefs.pseudo || user.pseudo || user.username || ''
+    ).trim();
     const points = Number(profile.points || 0) || 0;
-    const grade = resolveGrade(profile, points);
-    return { authed, pseudo, points, grade };
+    return { authed, pseudo, grade: resolveGrade(profile, points) };
   }
 
-  function ensureBadge() {
-    const actions = document.querySelector('#home .live-wall-card--home .live-wall-head-actions');
+  function ensureIdentity() {
+    const head = document.querySelector('#home .live-wall-card--home .live-wall-head');
+    const actions = head?.querySelector('.live-wall-head-actions');
     const faq = document.getElementById('faqBtn');
-    if (!actions || !faq) return null;
+    if (!head || !actions || !faq) return null;
 
-    let badge = document.getElementById(BADGE_ID);
-    if (!badge) {
-      badge = document.createElement('button');
-      badge.id = BADGE_ID;
-      badge.type = 'button';
-      badge.className = 'lb-home-community-badge';
-      badge.setAttribute('aria-label', 'Ouvrir mon profil troupeau');
-      badge.innerHTML = `
-        <span class="lb-home-community-badge__avatar" aria-hidden="true"><img alt="" loading="lazy" decoding="async"></span>
-        <span class="lb-home-community-badge__copy">
-          <span class="lb-home-community-badge__pseudo"></span>
-          <span class="lb-home-community-badge__meta"></span>
-        </span>`;
-      badge.addEventListener('click', () => {
+    let identity = document.getElementById(IDENTITY_ID);
+    if (!identity) {
+      identity = document.createElement('button');
+      identity.id = IDENTITY_ID;
+      identity.type = 'button';
+      identity.className = 'lb-home-community-identity';
+      identity.setAttribute('aria-label', 'Ouvrir mon profil troupeau');
+      identity.addEventListener('click', () => {
         const openAccount = document.getElementById('lbBtnOpenAuth') || document.getElementById('bottomAccountBtn');
         openAccount?.click?.();
       });
-      actions.insertBefore(badge, faq);
-    } else if (badge.nextElementSibling !== faq) {
-      actions.insertBefore(badge, faq);
     }
-    return badge;
+
+    if (identity.dataset.lbIdentityVersion !== '2') {
+      identity.dataset.lbIdentityVersion = '2';
+      identity.className = 'lb-home-community-identity';
+      identity.innerHTML = `
+        <span class="lb-home-community-identity__pseudo"></span>
+        <span class="lb-home-community-identity__sep" aria-hidden="true">·</span>
+        <span class="lb-home-community-identity__grade"></span>`;
+    }
+
+    if (identity.parentElement !== head || identity.nextElementSibling !== actions) {
+      head.insertBefore(identity, actions);
+    }
+    return identity;
   }
 
-  function syncBadge() {
-    const badge = ensureBadge();
-    if (!badge) return;
+  function syncIdentity() {
+    const identity = ensureIdentity();
+    if (!identity) return;
 
-    const { authed, pseudo, points, grade } = getUserSnapshot();
+    const { authed, pseudo, grade } = getUserSnapshot();
     if (!authed || !pseudo) {
-      badge.classList.remove('is-visible');
-      badge.hidden = true;
+      identity.classList.remove('is-visible');
+      identity.hidden = true;
       return;
     }
 
-    const image = badge.querySelector('.lb-home-community-badge__avatar img');
-    const pseudoEl = badge.querySelector('.lb-home-community-badge__pseudo');
-    const metaEl = badge.querySelector('.lb-home-community-badge__meta');
-
-    if (image) {
-      image.src = `./${encodeURIComponent(grade.image)}`;
-      image.alt = grade.name;
-    }
+    const pseudoEl = identity.querySelector('.lb-home-community-identity__pseudo');
+    const gradeEl = identity.querySelector('.lb-home-community-identity__grade');
     if (pseudoEl) pseudoEl.textContent = pseudo;
-    if (metaEl) metaEl.textContent = `★ ${points.toLocaleString('fr-FR')} meuh`;
+    if (gradeEl) gradeEl.textContent = grade;
 
-    badge.title = `${pseudo} · ${grade.name} · ${points.toLocaleString('fr-FR')} meuh`;
-    badge.hidden = false;
-    badge.classList.add('is-visible');
+    identity.title = `${pseudo} · ${grade}`;
+    identity.hidden = false;
+    identity.classList.add('is-visible');
   }
 
   function init() {
-    syncBadge();
-    [350, 1000, 2500, 6000].forEach((delay) => setTimeout(syncBadge, delay));
-    document.addEventListener('lb:prefs-updated', syncBadge);
-    document.addEventListener('visibilitychange', () => { if (!document.hidden) syncBadge(); });
-    window.addEventListener('focus', syncBadge, { passive: true });
+    syncIdentity();
+    [250, 800, 1800, 4000].forEach((delay) => setTimeout(syncIdentity, delay));
+    document.addEventListener('lb:prefs-updated', syncIdentity);
+    document.addEventListener('visibilitychange', () => { if (!document.hidden) syncIdentity(); });
+    window.addEventListener('focus', syncIdentity, { passive: true });
     setInterval(() => {
-      if (!document.hidden && window.lbIsAuthed === true) syncBadge();
+      if (!document.hidden && window.lbIsAuthed === true) syncIdentity();
     }, 15000);
   }
 
