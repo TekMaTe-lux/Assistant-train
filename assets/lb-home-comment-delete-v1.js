@@ -44,14 +44,20 @@
     button.setAttribute('title', mod ? 'Supprimer (modérateur)' : 'Supprimer mon message');
   }
 
-  function makeButton(item) {
-    const button = document.createElement('button');
-    button.type = 'button';
-    button.className = 'lb-chat-delete';
+  function makeDeleteControl(item) {
+    const wrap = document.createElement('span');
+    wrap.className = 'fav-comments-row';
+
+    const button = document.createElement('span');
+    button.className = 'fav-comment-btn';
+    button.setAttribute('role', 'button');
+    button.setAttribute('tabindex', '0');
     button.setAttribute(BTN_ATTR, String(item.id));
     setButtonLabels(button);
-    button.innerHTML = '<span aria-hidden="true">×</span>';
-    return button;
+    button.textContent = '❌';
+
+    wrap.appendChild(button);
+    return wrap;
   }
 
   function decorateFeed(feed) {
@@ -60,30 +66,22 @@
     try {
       const items = visibleWallItems();
       const rows = Array.from(feed.querySelectorAll('.live-wall-item--home'));
+
       rows.forEach((row, index) => {
-        row.querySelectorAll('[data-comment-delete]').forEach((node) => node.remove());
-        row.querySelectorAll('.fav-comments-row').forEach((node) => { if (!node.textContent.trim()) node.remove(); });
+        row.querySelectorAll(`[${BTN_ATTR}], [data-comment-delete]`).forEach((node) => {
+          const wrap = node.closest('.fav-comments-row');
+          if (wrap) wrap.remove();
+          else node.remove();
+        });
 
         const item = items[index];
-        const existing = row.querySelector(`.lb-chat-delete[${BTN_ATTR}]`);
-        if (!item || !canDelete(item)) {
-          existing?.remove();
-          row.removeAttribute('data-lb-comment-id');
-          return;
-        }
+        row.removeAttribute('data-lb-comment-id');
+        if (!item || !canDelete(item)) return;
 
-        const id = String(item.id);
-        row.dataset.lbCommentId = id;
-        const meta = row.querySelector('.lb-chat-row-meta');
-        const target = meta || row.querySelector('.live-wall-item-text') || row;
-
-        if (existing) {
-          if (existing.getAttribute(BTN_ATTR) !== id) existing.setAttribute(BTN_ATTR, id);
-          setButtonLabels(existing);
-          if (existing.parentElement !== target) target.appendChild(existing);
-        } else {
-          target.appendChild(makeButton(item));
-        }
+        row.dataset.lbCommentId = String(item.id);
+        const target = row.querySelector('.lb-chat-row-message') || row.querySelector('.live-wall-item-text') || row;
+        target.appendChild(document.createTextNode(' '));
+        target.appendChild(makeDeleteControl(item));
       });
     } finally {
       decorating = false;
@@ -99,7 +97,7 @@
   async function deleteMessage(id, button) {
     if (busy || !id) return;
     busy = true;
-    if (button) button.disabled = true;
+    if (button) button.setAttribute('aria-disabled', 'true');
     try {
       const response = await fetch(`https://vps.labetaillere.fr/api/comments/${encodeURIComponent(id)}`, {
         method: 'DELETE',
@@ -112,10 +110,16 @@
       setTimeout(decorateAll, 0);
     } catch (error) {
       alert(error?.message || 'Impossible de supprimer ce message.');
-      if (button) button.disabled = false;
+      if (button) button.removeAttribute('aria-disabled');
     } finally {
       busy = false;
     }
+  }
+
+  function requestDelete(button) {
+    if (!button || button.getAttribute('aria-disabled') === 'true') return;
+    if (!confirm('Supprimer ce message ?')) return;
+    deleteMessage(button.getAttribute(BTN_ATTR), button);
   }
 
   function bindDelete() {
@@ -125,8 +129,16 @@
       event.preventDefault();
       event.stopPropagation();
       event.stopImmediatePropagation();
-      if (!confirm('Supprimer ce message ?')) return;
-      deleteMessage(button.getAttribute(BTN_ATTR), button);
+      requestDelete(button);
+    }, true);
+
+    document.addEventListener('keydown', (event) => {
+      if (event.key !== 'Enter' && event.key !== ' ') return;
+      const button = event.target.closest?.(`[${BTN_ATTR}]`);
+      if (!button) return;
+      event.preventDefault();
+      event.stopPropagation();
+      requestDelete(button);
     }, true);
   }
 
