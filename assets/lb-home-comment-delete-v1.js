@@ -80,7 +80,6 @@
 
         row.dataset.lbCommentId = String(item.id);
         const target = row.querySelector('.lb-chat-row-message') || row.querySelector('.live-wall-item-text') || row;
-        target.appendChild(document.createTextNode(' '));
         target.appendChild(makeDeleteControl(item));
       });
     } finally {
