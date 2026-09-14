@@ -127,10 +127,9 @@
   function ensureChatEnhancement() {
     ensureStyle('lb-home-community-chat-v1-css', './assets/lb-home-community-chat-v1.css?v=1');
     ensureStyle('lb-home-community-collapsed-v2-css', './assets/lb-home-community-collapsed-v2.css?v=3');
-    ensureStyle('lb-home-comment-delete-v1-css', './assets/lb-home-comment-delete-v1.css?v=1');
     ensureScript('lb-home-community-chat-v1-js', './assets/lb-home-community-chat-v1.js?v=1');
     ensureScript('lb-home-community-collapsed-v2-js', './assets/lb-home-community-collapsed-v2.js?v=4');
-    ensureScript('lb-home-comment-delete-v1-js', './assets/lb-home-comment-delete-v1.js?v=3');
+    ensureScript('lb-home-comment-delete-v1-js', './assets/lb-home-comment-delete-v1.js?v=4');
   }
 
   function init() {
