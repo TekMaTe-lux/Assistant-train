@@ -51,33 +51,33 @@
     if (!head || !actions || !faq) return null;
 
     let identity = document.getElementById(IDENTITY_ID);
+    if (identity && identity.tagName !== 'DIV') {
+      const replacement = document.createElement('div');
+      replacement.id = IDENTITY_ID;
+      identity.replaceWith(replacement);
+      identity = replacement;
+    }
     if (!identity) {
-      identity = document.createElement('button');
+      identity = document.createElement('div');
       identity.id = IDENTITY_ID;
-      identity.type = 'button';
-      identity.className = 'lb-home-community-identity';
-      identity.setAttribute('aria-label', 'Ouvrir mon profil troupeau');
-      identity.addEventListener('click', () => {
-        const openAccount = document.getElementById('lbBtnOpenAuth') || document.getElementById('bottomAccountBtn');
-        openAccount?.click?.();
-      });
     }
 
-    if (identity.dataset.lbIdentityVersion !== '2') {
-      identity.dataset.lbIdentityVersion = '2';
+    if (identity.dataset.lbIdentityVersion !== '3') {
+      identity.dataset.lbIdentityVersion = '3';
       identity.className = 'lb-home-community-identity';
+      identity.setAttribute('aria-label', 'Profil communautaire');
       identity.innerHTML = `
         <span class="lb-home-community-identity__pseudo"></span>
         <span class="lb-home-community-identity__sep" aria-hidden="true">·</span>
         <span class="lb-home-community-identity__grade"></span>`;
     }
 
-    /* Neutralise les dimensions génériques des boutons sans toucher aux autres contrôles. */
     identity.style.setProperty('height', 'auto', 'important');
     identity.style.setProperty('min-height', '0', 'important');
     identity.style.setProperty('padding-top', '4px', 'important');
     identity.style.setProperty('padding-bottom', '4px', 'important');
     identity.style.setProperty('box-sizing', 'border-box', 'important');
+    identity.style.setProperty('cursor', 'default', 'important');
 
     if (identity.parentElement !== head || identity.nextElementSibling !== actions) {
       head.insertBefore(identity, actions);
