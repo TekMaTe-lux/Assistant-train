@@ -17,11 +17,19 @@
     const feed = document.getElementById(FEED_ID);
     if (!feed) return false;
     const px = `${targetHeight()}px`;
-    feed.style.setProperty('height', px, 'important');
-    feed.style.setProperty('min-height', px, 'important');
-    feed.style.setProperty('max-height', px, 'important');
-    feed.style.setProperty('overflow-y', 'auto', 'important');
-    feed.style.setProperty('overflow-x', 'hidden', 'important');
+    const wanted = [
+      ['height', px],
+      ['min-height', px],
+      ['max-height', px],
+      ['overflow-y', 'auto'],
+      ['overflow-x', 'hidden']
+    ];
+    for (const [name, value] of wanted) {
+      if (feed.style.getPropertyValue(name) !== value || feed.style.getPropertyPriority(name) !== 'important') {
+        feed.style.setProperty(name, value, 'important');
+      }
+    }
+    document.documentElement.dataset.lbVoiceCollapsedV2 = '1';
     return true;
   }
 
@@ -30,7 +38,12 @@
     if (!feed) return false;
     observer?.disconnect();
     observer = new MutationObserver(() => queueMicrotask(applyFeedHeight));
-    observer.observe(feed, { childList: true, subtree: true });
+    observer.observe(feed, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: ['style']
+    });
     return true;
   }
 
@@ -41,7 +54,7 @@
 
   function init() {
     sync();
-    [150, 500, 1200, 2500, 5000].forEach((delay) => setTimeout(applyFeedHeight, delay));
+    [100, 300, 700, 1500, 3000, 6000].forEach((delay) => setTimeout(applyFeedHeight, delay));
     window.addEventListener('resize', applyFeedHeight, { passive: true });
     window.visualViewport?.addEventListener('resize', applyFeedHeight, { passive: true });
     mobileQuery.addEventListener?.('change', applyFeedHeight);
