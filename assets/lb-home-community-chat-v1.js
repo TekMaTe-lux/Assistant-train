@@ -21,7 +21,10 @@
     if (!feed) return;
 
     feed.querySelectorAll('.live-wall-item--home').forEach((item) => {
-      if (item.dataset.lbChatRow === '1') return;
+      if (item.dataset.lbChatRow === '1') {
+        item.classList.add('lb-chat-row');
+        return;
+      }
       const source = item.querySelector('.live-wall-item-text');
       if (!source) return;
 
@@ -35,6 +38,7 @@
       const timeText = timeNode?.textContent?.trim() || '';
 
       item.dataset.lbChatRow = '1';
+      item.classList.add('lb-chat-row');
       item.innerHTML = `
         <span class="lb-chat-avatar-slot" aria-hidden="true"></span>
         <div class="lb-chat-row-body">
