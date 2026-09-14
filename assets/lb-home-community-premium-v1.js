@@ -106,35 +106,31 @@
     identity.classList.add('is-visible');
   }
 
+  function ensureStyle(id, href) {
+    if (document.getElementById(id)) return;
+    const link = document.createElement('link');
+    link.id = id;
+    link.rel = 'stylesheet';
+    link.href = href;
+    (document.head || document.documentElement).appendChild(link);
+  }
+
+  function ensureScript(id, src) {
+    if (document.getElementById(id)) return;
+    const script = document.createElement('script');
+    script.id = id;
+    script.src = src;
+    script.async = false;
+    (document.head || document.documentElement).appendChild(script);
+  }
+
   function ensureChatEnhancement() {
-    if (!document.getElementById('lb-home-community-chat-v1-css')) {
-      const link = document.createElement('link');
-      link.id = 'lb-home-community-chat-v1-css';
-      link.rel = 'stylesheet';
-      link.href = './assets/lb-home-community-chat-v1.css?v=1';
-      (document.head || document.documentElement).appendChild(link);
-    }
-    if (!document.getElementById('lb-home-community-collapsed-v2-css')) {
-      const link = document.createElement('link');
-      link.id = 'lb-home-community-collapsed-v2-css';
-      link.rel = 'stylesheet';
-      link.href = './assets/lb-home-community-collapsed-v2.css?v=3';
-      (document.head || document.documentElement).appendChild(link);
-    }
-    if (!document.getElementById('lb-home-community-chat-v1-js')) {
-      const script = document.createElement('script');
-      script.id = 'lb-home-community-chat-v1-js';
-      script.src = './assets/lb-home-community-chat-v1.js?v=1';
-      script.async = false;
-      (document.head || document.documentElement).appendChild(script);
-    }
-    if (!document.getElementById('lb-home-community-collapsed-v2-js')) {
-      const script = document.createElement('script');
-      script.id = 'lb-home-community-collapsed-v2-js';
-      script.src = './assets/lb-home-community-collapsed-v2.js?v=4';
-      script.async = false;
-      (document.head || document.documentElement).appendChild(script);
-    }
+    ensureStyle('lb-home-community-chat-v1-css', './assets/lb-home-community-chat-v1.css?v=1');
+    ensureStyle('lb-home-community-collapsed-v2-css', './assets/lb-home-community-collapsed-v2.css?v=3');
+    ensureStyle('lb-home-comment-delete-v1-css', './assets/lb-home-comment-delete-v1.css?v=1');
+    ensureScript('lb-home-community-chat-v1-js', './assets/lb-home-community-chat-v1.js?v=1');
+    ensureScript('lb-home-community-collapsed-v2-js', './assets/lb-home-community-collapsed-v2.js?v=4');
+    ensureScript('lb-home-comment-delete-v1-js', './assets/lb-home-comment-delete-v1.js?v=1');
   }
 
   function init() {
