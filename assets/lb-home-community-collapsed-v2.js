@@ -8,7 +8,7 @@
   function targetHeight() {
     if (mobileQuery.matches) {
       const vh = Math.round(window.visualViewport?.height || window.innerHeight || 0);
-      return vh && vh < 760 ? 128 : 140;
+      return vh && vh < 620 ? 128 : 144;
     }
     return 176;
   }
