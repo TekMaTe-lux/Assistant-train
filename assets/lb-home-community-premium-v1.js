@@ -131,7 +131,7 @@
     if (!document.getElementById('lb-home-community-collapsed-v2-js')) {
       const script = document.createElement('script');
       script.id = 'lb-home-community-collapsed-v2-js';
-      script.src = './assets/lb-home-community-collapsed-v2.js?v=3';
+      script.src = './assets/lb-home-community-collapsed-v2.js?v=4';
       script.async = false;
       (document.head || document.documentElement).appendChild(script);
     }
