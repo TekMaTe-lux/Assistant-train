@@ -54,7 +54,8 @@
     const items = visibleWallItems();
     const rows = Array.from(feed.querySelectorAll('.live-wall-item--home'));
     rows.forEach((row, index) => {
-      row.querySelectorAll(`.lb-chat-delete[${BTN_ATTR}]`).forEach((node) => node.remove());
+      row.querySelectorAll(`.lb-chat-delete[${BTN_ATTR}], [data-comment-delete]`).forEach((node) => node.remove());
+      row.querySelectorAll('.fav-comments-row').forEach((node) => { if (!node.textContent.trim()) node.remove(); });
       const item = items[index];
       if (!item || !canDelete(item)) return;
       row.dataset.lbCommentId = String(item.id);
