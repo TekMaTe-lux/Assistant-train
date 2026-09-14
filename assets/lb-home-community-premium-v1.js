@@ -106,8 +106,26 @@
     identity.classList.add('is-visible');
   }
 
+  function ensureChatEnhancement() {
+    if (!document.getElementById('lb-home-community-chat-v1-css')) {
+      const link = document.createElement('link');
+      link.id = 'lb-home-community-chat-v1-css';
+      link.rel = 'stylesheet';
+      link.href = './assets/lb-home-community-chat-v1.css?v=1';
+      (document.head || document.documentElement).appendChild(link);
+    }
+    if (!document.getElementById('lb-home-community-chat-v1-js')) {
+      const script = document.createElement('script');
+      script.id = 'lb-home-community-chat-v1-js';
+      script.src = './assets/lb-home-community-chat-v1.js?v=1';
+      script.async = false;
+      (document.head || document.documentElement).appendChild(script);
+    }
+  }
+
   function init() {
     syncIdentity();
+    ensureChatEnhancement();
     [250, 800, 1800, 4000].forEach((delay) => setTimeout(syncIdentity, delay));
     document.addEventListener('lb:prefs-updated', syncIdentity);
     document.addEventListener('visibilitychange', () => { if (!document.hidden) syncIdentity(); });
