@@ -72,6 +72,13 @@
         <span class="lb-home-community-identity__grade"></span>`;
     }
 
+    /* Neutralise les dimensions génériques des boutons sans toucher aux autres contrôles. */
+    identity.style.setProperty('height', 'auto', 'important');
+    identity.style.setProperty('min-height', '0', 'important');
+    identity.style.setProperty('padding-top', '4px', 'important');
+    identity.style.setProperty('padding-bottom', '4px', 'important');
+    identity.style.setProperty('box-sizing', 'border-box', 'important');
+
     if (identity.parentElement !== head || identity.nextElementSibling !== actions) {
       head.insertBefore(identity, actions);
     }
