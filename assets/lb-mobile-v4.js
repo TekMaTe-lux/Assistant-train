@@ -452,3 +452,13 @@
     init();
   }
 })();
+
+/* Accueil : couche UI premium de La Voix du Bétail, indépendante du moteur métier. */
+(() => {
+  if (document.getElementById('lb-home-community-premium-v1')) return;
+  const script = document.createElement('script');
+  script.id = 'lb-home-community-premium-v1';
+  script.src = './assets/lb-home-community-premium-v1.js?v=1';
+  script.async = false;
+  (document.head || document.documentElement).appendChild(script);
+})();
