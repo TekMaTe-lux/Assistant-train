@@ -1,4 +1,4 @@
-const CACHE_VERSION = 'v49';
+const CACHE_VERSION = 'v50';
 const APP_CACHE = `lbetaillere-app-${CACHE_VERSION}`;
 const STATIC_CACHE = `lbetaillere-static-${CACHE_VERSION}`;
 const CACHE_PREFIX = 'lbetaillere-';
@@ -151,6 +151,7 @@ function isUiStyle(url) {
     url.pathname.endsWith('/assets/lb-mobile-v4.css') ||
     url.pathname.endsWith('/assets/lb-home-favorites-pro.css') ||
     url.pathname.endsWith('/assets/lb-home-mobile-layout-v2.css') ||
+    url.pathname.endsWith('/assets/lb-status-harmony-v1.css') ||
     url.pathname.endsWith('/assets/lb-v4-live-preview.css')
   );
 }
