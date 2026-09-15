@@ -137,13 +137,13 @@ function installMoorailHeaderBrand(){
     style.id = 'lb-moorail-header-style';
     style.textContent = `
       body.lb-v3 .top-bar__moorail {
-        width: clamp(122px, 10vw, 154px);
+        width: clamp(112px, 8vw, 138px);
         height: 58px;
         flex: 0 0 auto;
         display: grid;
         place-items: center;
-        margin-left: 2px;
-        padding: 1px 3px;
+        margin-left: 3px;
+        padding: 0;
         border-radius: 13px;
         text-decoration: none;
         opacity: .98;
@@ -155,11 +155,11 @@ function installMoorailHeaderBrand(){
         background: rgba(49,231,242,.055);
         filter: drop-shadow(0 0 8px rgba(49,231,242,.28));
       }
-      body.lb-v3 .top-bar__moorail svg {
+      body.lb-v3 .top-bar__moorail img {
         display: block;
         width: 100%;
         height: 100%;
-        overflow: visible;
+        object-fit: contain;
       }
       @media (max-width: 1120px) {
         body.lb-v3 .top-bar__moorail { display: none !important; }
@@ -177,40 +177,12 @@ function installMoorailHeaderBrand(){
   link.href = '#carte';
   link.setAttribute('aria-label', 'Ouvrir Moorail, la carte ferroviaire de La Bétaillère');
   link.setAttribute('title', 'Moorail — la carte ferroviaire de La Bétaillère');
-  link.innerHTML = `
-    <svg viewBox="0 0 300 168" role="img" aria-hidden="true" focusable="false">
-      <defs>
-        <linearGradient id="lbMoorailCyan" x1="0" y1="0" x2="1" y2="1">
-          <stop offset="0" stop-color="#38f5ff"/>
-          <stop offset="1" stop-color="#02a9ff"/>
-        </linearGradient>
-        <linearGradient id="lbMoorailBlue" x1="0" y1="0" x2="1" y2="1">
-          <stop offset="0" stop-color="#00ddeb"/>
-          <stop offset="1" stop-color="#176cff"/>
-        </linearGradient>
-        <filter id="lbMoorailGlow" x="-25%" y="-35%" width="150%" height="180%">
-          <feGaussianBlur stdDeviation="2.2" result="blur"/>
-          <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
-        </filter>
-      </defs>
-      <g fill="none" stroke-linecap="round" stroke-linejoin="round" filter="url(#lbMoorailGlow)">
-        <path d="M12 69 H51 Q68 69 68 52 V19 Q68 11 76 18 L150 70 L224 18 Q232 11 232 19 V69 Q232 69 249 69 H288" stroke="#f8feff" stroke-width="8"/>
-        <path d="M12 80 H65 Q82 80 82 63 V31 Q82 23 90 31 L150 77 L210 31 Q218 23 218 31 V80 Q218 80 235 80 H288" stroke="url(#lbMoorailCyan)" stroke-width="8"/>
-        <path d="M12 91 H80 Q96 91 96 75 V45 L150 84 L204 45 V75 Q204 91 220 91 H288" stroke="url(#lbMoorailBlue)" stroke-width="8"/>
-      </g>
-      <g stroke="#f8feff" stroke-width="5">
-        <circle cx="45" cy="69" r="7" fill="#f8feff"/>
-        <circle cx="96" cy="80" r="7" fill="#06131f"/>
-        <circle cx="150" cy="70" r="7" fill="#06131f"/>
-        <circle cx="232" cy="23" r="7" fill="#06131f"/>
-      </g>
-      <text x="150" y="130" text-anchor="middle" fill="#f7fdff" font-family="Orbitron,Segoe UI,sans-serif" font-size="34" font-weight="600" letter-spacing="4">MOORAIL</text>
-      <g fill="#dffbff" font-family="Rajdhani,Segoe UI,sans-serif" font-size="10" font-weight="700" letter-spacing="3">
-        <path d="M20 149 H63" stroke="#20dff0" stroke-width="2"/>
-        <text x="150" y="153" text-anchor="middle">BY LA BÉTAILLÈRE</text>
-        <path d="M237 149 H280" stroke="#20dff0" stroke-width="2"/>
-      </g>
-    </svg>`;
+
+  const image = document.createElement('img');
+  image.src = './assets/moorail-by-la-betaillere.png';
+  image.alt = 'Moorail by La Bétaillère';
+  image.decoding = 'async';
+  link.appendChild(image);
 
   actions.appendChild(link);
 }
