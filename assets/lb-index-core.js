@@ -12095,7 +12095,10 @@ function scheduleWeatherAfterTableSettled(){
   }
 
   function buildPseudoTriggerHtml(item){
-    return `<span class="lb-pseudo-trigger" data-lb-pseudo-trigger data-pseudo="${escapeHtml(renderPseudoValue(item))}" data-grade="${escapeHtml(renderGradeValue(item))}" data-points="${escapeHtml(String(renderPointsValue(item)))}">${escapeHtml(renderPseudoValue(item))}</span>`;
+    const points = renderPointsValue(item);
+    const grade = renderGradeValue(item);
+    const gradeIndex = Math.max(0, LB_GRADE_LEVELS.indexOf(resolveGradeMeta(grade, points).current));
+    return `<span class="lb-pseudo-trigger lb-pseudo-grade lb-pseudo-grade-${gradeIndex}" data-lb-pseudo-trigger data-pseudo="${escapeHtml(renderPseudoValue(item))}" data-grade="${escapeHtml(grade)}" data-points="${escapeHtml(String(points))}">${escapeHtml(renderPseudoValue(item))}</span>`;
   }
   window.buildPseudoTriggerHtml = buildPseudoTriggerHtml;
 
@@ -13888,7 +13891,11 @@ function getGtfsDelayForStop(trainNumber, stopName){
 	  if (badgeEl) badgeEl.innerHTML = `${typeBadge}${buildWidgetStateBadge(canceledState)} <span class="fav-cancel-badge">✖ SUPPRIMÉ</span>`;
       meta.innerHTML = `
         <div class="fav-primary-route">${escapeHtml(origin)} → ${escapeHtml(dest)}</div>
-        <div class="fav-primary-times">${escapeHtml(depTxt)} — ${escapeHtml(arrTxt)}</div>
+        <div class="fav-primary-times fav-primary-times--canceled">
+          <span class="fav-time-part is-canceled"><span class="fav-time fav-time-planned is-strike deleted">${escapeHtml(depTxt)}</span></span>
+          <span class="fav-time-separator">→</span>
+          <span class="fav-time-part is-canceled"><span class="fav-time fav-time-planned is-strike deleted">${escapeHtml(arrTxt)}</span></span>
+        </div>
       `;
       if (causeText && causeEl){
         causeEl.style.display = '';
@@ -16057,10 +16064,12 @@ function lbRenderHomeFavPreview(){
     const routeTo = routeMatch ? routeMatch[2].trim() : '';
 
     const readTimePart = (partEl) => {
-      if (!partEl) return { planned: '—', live: null };
+      if (!partEl) return { planned: '—', live: null, canceled: false };
       const planned = (partEl.querySelector('.fav-time-planned')?.textContent || '').trim() || '—';
       const live = (partEl.querySelector('.fav-time-rt.delay')?.textContent || '').trim() || null;
-      return { planned, live };
+      const canceled = partEl.classList.contains('is-canceled')
+        || !!partEl.querySelector('.fav-time.deleted, .fav-time-rt.deleted-label');
+      return { planned, live, canceled };
     };
     const timeParts = Array.from(metaEl?.querySelectorAll('.fav-primary-times .fav-time-part') || []);
     const depPart = readTimePart(timeParts[0]);
@@ -16074,8 +16083,10 @@ function lbRenderHomeFavPreview(){
       routeTo,
       plannedDep: depPart.planned,
       liveDep: depPart.live,
+      canceledDep: depPart.canceled,
       plannedArr: arrPart.planned,
       liveArr: arrPart.live,
+      canceledArr: arrPart.canceled,
       trainNumber
     };
   };
@@ -16119,13 +16130,17 @@ function lbRenderHomeFavPreview(){
       const routeFrom = compactStationLabel(structuredMeta.routeFrom || '');
       const routeTo = compactStationLabel(structuredMeta.routeTo || '');
       const route = (routeFrom && routeTo) ? `${routeFrom} → ${routeTo}` : (routeFrom || routeTo || '—');
-      const renderTimePart = (planned, live) => {
+      const canceledService = /SUPPRIM/i.test(structuredMeta.state || '');
+      const renderTimePart = (planned, live, canceled) => {
+        if (canceled || canceledService) {
+          return `<span class="home-fav-time-part is-canceled"><span class="home-fav-time-planned is-strike">${planned || '—'}</span></span>`;
+        }
         if (live && live !== planned) {
           return `<span class="home-fav-time-part is-delayed"><span class="home-fav-time-planned is-strike">${planned}</span><span class="home-fav-time-live">${live}</span></span>`;
         }
         return `<span class="home-fav-time-part"><span class="home-fav-time-planned">${planned || '—'}</span></span>`;
       };
-      const timeHtml = `${renderTimePart(structuredMeta.plannedDep || '—', structuredMeta.liveDep)} <span class="home-fav-time-sep">→</span> ${renderTimePart(structuredMeta.plannedArr || '—', structuredMeta.liveArr)}`;
+      const timeHtml = `${renderTimePart(structuredMeta.plannedDep || '—', structuredMeta.liveDep, structuredMeta.canceledDep)} <span class="home-fav-time-sep">→</span> ${renderTimePart(structuredMeta.plannedArr || '—', structuredMeta.liveArr, structuredMeta.canceledArr)}`;
       return { route, timeHtml };
     }
 

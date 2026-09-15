@@ -413,7 +413,10 @@
 	        var renderWallHtml = (typeof window.lbRenderWallMessageHtml === 'function')
 	          ? window.lbRenderWallMessageHtml
 	          : function(v){ return escapeHtml(String(v || '')); };
-	        return '<div class="live-wall-item live-wall-item--home live-wall-item--compact"><div class="live-wall-item-text"><strong>' + escapeHtml(it.pseudo || 'Voyageur') + '</strong><span class="live-wall-inline-meta">' + escapeHtml(fmtParisHour(it.ts)) + '</span> : ' + renderWallHtml(it.text || '') + '</div>' + deleteBtn + '</div>';
+	        var pseudoHtml = (typeof window.buildPseudoTriggerHtml === 'function')
+	          ? window.buildPseudoTriggerHtml(it)
+	          : '<strong>' + escapeHtml(it.pseudo || 'Voyageur') + '</strong>';
+	        return '<div class="live-wall-item live-wall-item--home live-wall-item--compact"><div class="live-wall-item-text">' + pseudoHtml + '<span class="live-wall-inline-meta">' + escapeHtml(fmtParisHour(it.ts)) + '</span> : ' + renderWallHtml(it.text || '') + '</div>' + deleteBtn + '</div>';
 	      }).join('');
 	      feed.scrollTop = 0;
 	    }
