@@ -44,6 +44,21 @@ html[data-lb-v4-live="1"] body.lb-v3 #home #homeFavSlot .home-fav-time .lb-home-
     margin-top: 2px !important;
     font-size: clamp(.52rem, 2.3vw, .60rem) !important;
   }
+
+html[data-lb-v4-live="1"] body.lb-v3 #home #homeFavSlot .home-fav-row.is-cancelled .fav-state-cancelled {
+  border-color: rgba(255, 102, 114, .72) !important;
+  background: linear-gradient(180deg, rgba(84, 18, 28, .88), rgba(48, 10, 18, .92)) !important;
+  color: #ff9aa3 !important;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.05), 0 0 10px rgba(255,102,114,.10) !important;
+}
+html[data-lb-v4-live="1"] body.lb-v3 #home #homeFavSlot .home-fav-row.is-cancelled .home-fav-time {
+  color: #ff9aa3 !important;
+}
+html[data-lb-v4-live="1"] body.lb-v3 #home #homeFavSlot .home-fav-row.is-cancelled :is(.home-fav-time-clock, .home-fav-time-planned) {
+  color: #ff9aa3 !important;
+  text-decoration: line-through !important;
+  text-decoration-thickness: 1px !important;
+  text-decoration-color: rgba(255, 154, 163, .72) !important;
 }`;
     document.head.append(style);
   }
@@ -77,6 +92,60 @@ html[data-lb-v4-live="1"] body.lb-v3 #home #homeFavSlot .home-fav-time .lb-home-
       return todayServiceLabel();
     }
     return '';
+  }
+
+  function readCancellationInfo(card) {
+    const key = clean(card?.getAttribute('data-fav-k')).toUpperCase();
+    if (!key) return null;
+
+    const sourceState = clean(document.getElementById(`favState${key}`)?.textContent).toUpperCase();
+    const sourceCard = document.getElementById(`favCard${key}`);
+    const canceled = /(?:CANCEL|SUPPR|ANNUL|NO[_ -]?SERVICE)/i.test(sourceState) ||
+      !!sourceCard?.classList?.contains('is-canceled');
+    if (!canceled) return null;
+
+    const meta = document.getElementById(`favMeta${key}`);
+    const rawTimes = clean(q('.fav-primary-times', meta)?.textContent);
+    const times = Array.from(rawTimes.matchAll(/\b([01]?\d|2[0-3])[:h]([0-5]\d)\b/g))
+      .map((match) => `${String(match[1]).padStart(2, '0')}:${match[2]}`);
+
+    return {
+      departure: times[0] || null,
+      arrival: times.length >= 2 ? times[times.length - 1] : null
+    };
+  }
+
+  function improveCancellation(card) {
+    const info = readCancellationInfo(card);
+    if (!info) return;
+
+    if (!card.classList.contains('is-cancelled')) card.classList.add('is-cancelled');
+
+    const badgeHost = q('.home-fav-badge', card);
+    let stateBadge = q('.fav-state-badge', badgeHost);
+    if (!stateBadge && badgeHost) {
+      stateBadge = document.createElement('span');
+      badgeHost.append(stateBadge);
+    }
+    if (stateBadge) {
+      if (stateBadge.className !== 'fav-state-badge fav-state-cancelled') {
+        stateBadge.className = 'fav-state-badge fav-state-cancelled';
+      }
+      if (stateBadge.textContent !== '✕ SUPPRIMÉ') stateBadge.textContent = '✕ SUPPRIMÉ';
+    }
+
+    const host = q('.home-fav-time', card);
+    if (!host || !info.departure || !info.arrival) return;
+    const signature = `${info.departure}|${info.arrival}`;
+    if (host.dataset.lbCancelTimes === signature) return;
+
+    host.dataset.lbCancelTimes = signature;
+    delete host.dataset.lbDelaySignature;
+    host.innerHTML = `
+      <span class="home-fav-time-part"><span class="home-fav-time-planned">${info.departure}</span></span>
+      <span class="home-fav-time-sep">→</span>
+      <span class="home-fav-time-part"><span class="home-fav-time-planned">${info.arrival}</span></span>
+    `;
   }
 
   function improveNextService(card) {
@@ -238,6 +307,7 @@ html[data-lb-v4-live="1"] body.lb-v3 #home #homeFavSlot .home-fav-time .lb-home-
 
   function improveCard(card) {
     ensureNextServiceStyle();
+    improveCancellation(card);
     improveTimes(card);
     improveNextService(card);
     improveRoute(card);
