@@ -1,4 +1,4 @@
-const CACHE_VERSION = 'v45';
+const CACHE_VERSION = 'v46';
 const APP_CACHE = `lbetaillere-app-${CACHE_VERSION}`;
 const STATIC_CACHE = `lbetaillere-static-${CACHE_VERSION}`;
 const CACHE_PREFIX = 'lbetaillere-';
@@ -9,9 +9,9 @@ const APP_SHELL = [
   './manifest.webmanifest',
   './config/territory.nancy-metz-lux.js?v=5',
   './assets/lb-app-shell-v3.js?v=7',
-  './assets/lb-legacy.css?v=4',
-  './assets/lb-design-system-v3.css?v=9',
-  './assets/lb-mobile-v4.css?v=13',
+  './assets/lb-legacy.css?v=5',
+  './assets/lb-design-system-v3.css?v=10',
+  './assets/lb-mobile-v4.css?v=14',
   './assets/lb-v4-live-preview.css?v=20260831-3',
   './assets/lb-mobile-v4.js?v=6',
   './assets/lb-traffic-details-v1.css?v=4',
