@@ -107,7 +107,7 @@ window.LB_TERRITORY_CONFIG = Object.freeze({
     const stylesheet = document.createElement('link');
     stylesheet.id = 'lbHomeFavDelayStyles';
     stylesheet.rel = 'stylesheet';
-    stylesheet.href = './assets/lb-home-favorites-delay-v1.css?v=20260901-1';
+    stylesheet.href = './assets/lb-home-favorites-delay-v1.css?v=20260915-2';
     document.head.append(stylesheet);
   }
 
