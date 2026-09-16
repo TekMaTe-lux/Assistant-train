@@ -1,4 +1,4 @@
-const CACHE_VERSION = 'v54';
+const CACHE_VERSION = 'v55';
 const APP_CACHE = `lbetaillere-app-${CACHE_VERSION}`;
 const STATIC_CACHE = `lbetaillere-static-${CACHE_VERSION}`;
 const DATA_CACHE = `lbetaillere-data-${CACHE_VERSION}`;
@@ -148,8 +148,11 @@ function isOfflineAuthApi(url) {
 }
 
 function transitPolicy(url) {
-  if (url.hostname !== 'vps.labetaillere.fr') return null;
   const path = url.pathname;
+  if (url.hostname === 'raw.githubusercontent.com' && path === '/TekMaTe-lux/Assistant-train/main/Compotrains.json') {
+    return { label: 'compositions', maxAgeMs: 24 * 60 * 60 * 1000 };
+  }
+  if (url.hostname !== 'vps.labetaillere.fr') return null;
   if (path === '/sncf/hub') return { label: 'SNCF', maxAgeMs: 6 * 60 * 60 * 1000 };
   if (path === '/api/train-static') return { label: 'horaires', maxAgeMs: 30 * 24 * 60 * 60 * 1000 };
   if (path === '/gtfs/train_static_today.json') return { label: 'horaires du jour', maxAgeMs: 36 * 60 * 60 * 1000 };
@@ -164,29 +167,48 @@ function isSafeTransitData(url) {
   return !!transitPolicy(url);
 }
 
-function responseHeadersForCache(response, cachedAt, source) {
-  const headers = new Headers();
-  response.headers.forEach((value, key) => {
-    if (!['content-encoding', 'content-length', 'transfer-encoding'].includes(key.toLowerCase())) headers.set(key, value);
-  });
-  headers.set('x-lb-cached-at', String(cachedAt));
-  headers.set('x-lb-data-source', source);
-  return headers;
+function transitMetaKey(key) {
+  const url = new URL(String(key));
+  url.searchParams.set('__lbmeta', '1');
+  return url.href;
 }
 
-async function cloneTransitResponse(response, cachedAt, source) {
-  const body = await response.clone().arrayBuffer();
-  return new Response(body, {
-    status: response.status,
-    statusText: response.statusText,
-    headers: responseHeadersForCache(response, cachedAt, source)
-  });
+async function writeTransitCache(cache, key, response, cachedAt) {
+  await Promise.all([
+    cache.put(key, response.clone()),
+    cache.put(transitMetaKey(key), new Response(JSON.stringify({ cachedAt }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' }
+    }))
+  ]);
+}
+
+async function readTransitCachedAt(cache, key, cached) {
+  try {
+    const meta = await cache.match(transitMetaKey(key));
+    if (meta) {
+      const data = await meta.json();
+      const value = Number(data?.cachedAt || 0);
+      if (value > 0) return value;
+    }
+  } catch (_) {}
+  return Number(cached?.headers?.get?.('x-lb-cached-at') || 0);
+}
+
+async function deleteTransitPair(cache, requestOrUrl) {
+  const key = typeof requestOrUrl === 'string' ? requestOrUrl : requestOrUrl.url;
+  await Promise.all([cache.delete(key), cache.delete(transitMetaKey(key))]);
 }
 
 async function trimTransitCache(cache, keep = 180) {
-  const keys = await cache.keys();
-  if (keys.length <= keep) return;
-  await Promise.all(keys.slice(0, keys.length - keep).map((key) => cache.delete(key)));
+  const keys = (await cache.keys()).filter((request) => !new URL(request.url).searchParams.has('__lbmeta'));
+  const daily = keys.filter((request) => new URL(request.url).pathname === '/gtfs/train_static_today.json');
+  if (daily.length > 2) {
+    await Promise.all(daily.slice(0, daily.length - 2).map((request) => deleteTransitPair(cache, request)));
+  }
+  const remaining = (await cache.keys()).filter((request) => !new URL(request.url).searchParams.has('__lbmeta'));
+  if (remaining.length <= keep) return;
+  await Promise.all(remaining.slice(0, remaining.length - keep).map((request) => deleteTransitPair(cache, request)));
 }
 
 async function transitResponseUsable(url, response) {
@@ -213,10 +235,10 @@ async function notifyTransitState(policy, source, cachedAt = null) {
 async function transitFallback(cache, key, policy) {
   const cached = await cache.match(key);
   if (!cached) return null;
-  const cachedAt = Number(cached.headers.get('x-lb-cached-at') || 0);
+  const cachedAt = await readTransitCachedAt(cache, key, cached);
   if (!cachedAt || (Date.now() - cachedAt) > policy.maxAgeMs) return null;
   await notifyTransitState(policy, 'cache', cachedAt);
-  return cloneTransitResponse(cached, cachedAt, 'cache');
+  return cached;
 }
 
 async function transitNetworkFirst(request) {
@@ -230,9 +252,8 @@ async function transitNetworkFirst(request) {
     const usable = await transitResponseUsable(url, response);
     if (usable) {
       const cachedAt = Date.now();
-      const stamped = await cloneTransitResponse(response, cachedAt, 'network');
-      await cache.put(key, stamped.clone());
-      trimTransitCache(cache).catch(() => {});
+      await writeTransitCache(cache, key, response, cachedAt);
+      await trimTransitCache(cache).catch(() => {});
       notifyTransitState(policy, 'network', cachedAt).catch(() => {});
       return response;
     }
