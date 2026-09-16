@@ -7471,7 +7471,7 @@ const LB_COMPO_EARLY_PROMISE = loadCompoData({ forceFresh: false, background: tr
 const LB_BG_REFRESH_STATE = { timer: null, inFlight: false };
 
 async function refreshLiveDataInBackground({ forceFresh = false } = {}){
-  if (!navigator.onLine) return;
+  if (!navigator.onLine || document.hidden) return;
   if (LB_BG_REFRESH_STATE.inFlight) return;
   LB_BG_REFRESH_STATE.inFlight = true;
   try {
@@ -7488,8 +7488,9 @@ async function refreshLiveDataInBackground({ forceFresh = false } = {}){
 
 function scheduleBackgroundRefresh(immediate = false){
   if (LB_BG_REFRESH_STATE.timer) clearTimeout(LB_BG_REFRESH_STATE.timer);
-  const hidden = document.visibilityState === 'hidden';
-  const delay = immediate ? 1500 : (hidden ? 4 * 60 * 1000 : 75 * 1000);
+  LB_BG_REFRESH_STATE.timer = null;
+  if (document.hidden || !navigator.onLine) return;
+  const delay = immediate ? 1500 : 75 * 1000;
   LB_BG_REFRESH_STATE.timer = setTimeout(async () => {
     await refreshLiveDataInBackground({ forceFresh: false });
     scheduleBackgroundRefresh(false);
@@ -7515,8 +7516,11 @@ window.addEventListener('load', () => {
   });
 });
 
-window.addEventListener('online', () => scheduleBackgroundRefresh(true));
-document.addEventListener('visibilitychange', () => scheduleBackgroundRefresh(true));
+window.addEventListener('online', () => scheduleBackgroundRefresh(true), { passive:true });
+window.addEventListener('offline', () => scheduleBackgroundRefresh(false), { passive:true });
+document.addEventListener('visibilitychange', () => {
+  scheduleBackgroundRefresh(!document.hidden);
+}, { passive:true });
 
 // GTFS lourd désactivé au démarrage : ne pas lancer ensureGTFSLoaded() automatiquement.
 // Le chargement statique complet reste possible uniquement à la demande (ex: LIVE ouvert).
@@ -11932,6 +11936,7 @@ function scheduleWeatherAfterTableSettled(){
   window.lbCommentState = lbCommentState;
   let lbCurrentDetailTrain = '';
   let lbCommentsPoller = null;
+  let lbCommentsLoadPromise = null;
   let currentUser = null;
   window.currentUser = null;
   const lbGamificationState = { profile: null, ranking: [], myRank: null, me: null, lastFetchAt: 0, inflight: null };
@@ -12376,26 +12381,30 @@ function scheduleWeatherAfterTableSettled(){
   }
 
   async function loadMessages(){
-    try{
-      const res = await fetchCommentsApi('?scope=wall');
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = await res.json();
-      const list = Array.isArray(data) ? data : (Array.isArray(data?.comments) ? data.comments : []);
-      lbCommentState.wall = list
-        .map(normalizeCommentItem)
-        .filter(Boolean)
-        .sort((a, b) => Number(b?.ts || 0) - Number(a?.ts || 0))
-        .slice(0, 50);
-      window.lbCommentState = lbCommentState;
-      renderCommentsUI();
-      return lbCommentState.wall;
-    }catch(err){
-      console.warn('Impossible de charger les commentaires', err);
-      if (!Array.isArray(lbCommentState.wall)) lbCommentState.wall = [];
-      window.lbCommentState = lbCommentState;
-      renderCommentsUI();
-      return lbCommentState.wall;
-    }
+    if (lbCommentsLoadPromise) return lbCommentsLoadPromise;
+    lbCommentsLoadPromise = (async () => {
+      try{
+        const res = await fetchCommentsApi('?scope=wall');
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        const list = Array.isArray(data) ? data : (Array.isArray(data?.comments) ? data.comments : []);
+        lbCommentState.wall = list
+          .map(normalizeCommentItem)
+          .filter(Boolean)
+          .sort((a, b) => Number(b?.ts || 0) - Number(a?.ts || 0))
+          .slice(0, 50);
+        window.lbCommentState = lbCommentState;
+        renderCommentsUI();
+        return lbCommentState.wall;
+      }catch(err){
+        console.warn('Impossible de charger les commentaires', err);
+        if (!Array.isArray(lbCommentState.wall)) lbCommentState.wall = [];
+        window.lbCommentState = lbCommentState;
+        renderCommentsUI();
+        return lbCommentState.wall;
+      }
+    })().finally(() => { lbCommentsLoadPromise = null; });
+    return lbCommentsLoadPromise;
   }
 
   async function sendMessage(text){
@@ -12524,10 +12533,30 @@ function scheduleWeatherAfterTableSettled(){
     window.addEventListener('resize', closePseudoTooltip, { passive: true });
   }
 
-  function startCommentsPolling(){
-    if (lbCommentsPoller) clearInterval(lbCommentsPoller);
-    lbCommentsPoller = setInterval(loadMessages, 5000);
+  function stopCommentsPolling(){
+    if (lbCommentsPoller) clearTimeout(lbCommentsPoller);
+    lbCommentsPoller = null;
   }
+
+  function scheduleCommentsPolling(delayMs = 15000){
+    stopCommentsPolling();
+    if (document.hidden || !navigator.onLine) return;
+    lbCommentsPoller = setTimeout(async () => {
+      await loadMessages();
+      scheduleCommentsPolling(15000);
+    }, Math.max(1000, Number(delayMs) || 15000));
+  }
+
+  function startCommentsPolling(){
+    scheduleCommentsPolling(15000);
+  }
+
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) stopCommentsPolling();
+    else loadMessages().finally(() => scheduleCommentsPolling(15000));
+  }, { passive:true });
+  window.addEventListener('online', () => loadMessages().finally(() => scheduleCommentsPolling(15000)), { passive:true });
+  window.addEventListener('offline', stopCommentsPolling, { passive:true });
 
   window.lbComments = {
     setCurrentTrain(trainNumber){
@@ -14189,8 +14218,13 @@ if (statsEl){
 
     try{ if (typeof lbRenderHomeFavPreview==='function') lbRenderHomeFavPreview(); }catch(e){}
 
-    if (!favWidgetTimer) {
+    if (!favAM && !favPM && favWidgetTimer) {
+      clearInterval(favWidgetTimer);
+      favWidgetTimer = null;
+    }
+    if ((favAM || favPM) && !favWidgetTimer) {
       favWidgetTimer = setInterval(() => {
+        if (document.hidden || !navigator.onLine) return;
         window.updateFavoriteWidgetFromPrefs().catch(() => {});
       }, 60 * 1000);
     }
@@ -15207,13 +15241,15 @@ if (statsEl){
 
   let tRetards = null;
   let tVoies = null;
+  let retardsInFlight = false;
+  let voiesInFlight = false;
 
   function hasTrainTable(){
     return !!document.querySelector('#trainInfo table');
   }
 
   function canLiveBase(){
-    if (document.hidden) return false;
+    if (document.hidden || !navigator.onLine) return false;
     return true;
   }
 
@@ -15388,8 +15424,9 @@ if (statsEl){
   }
 
   async function tickRetards(){
+    if (retardsInFlight || !canLiveRetards()) return;
+    retardsInFlight = true;
     try {
-      if (!canLiveRetards()) return;
       if (typeof loadGtfsRetards === 'function') {
         // Force un fetch live à intervalle court, sans attendre un refresh manuel.
         await loadGtfsRetards({ forceFresh: true, useCachedFirst: false });
@@ -15406,12 +15443,15 @@ if (statsEl){
       } catch(_){}
 
       scheduleLiveApply();
-    } catch(e){}
+    } catch(e){} finally {
+      retardsInFlight = false;
+    }
   }
 
   async function tickVoies(){
+    if (voiesInFlight || !canLiveVoies()) return;
+    voiesInFlight = true;
     try {
-      if (!canLiveVoies()) return;
       if (typeof loadVoiesByTrain !== 'function') return;
 
       const prevSig = window.__voiesSig || null;
@@ -15439,7 +15479,9 @@ if (statsEl){
       if (typeof window.updateFavoriteWidgetFromPrefs === 'function') {
         window.updateFavoriteWidgetFromPrefs().catch(() => {});
       }
-    } catch(e){}
+    } catch(e){} finally {
+      voiesInFlight = false;
+    }
   }
 
   function start(){
@@ -15487,12 +15529,19 @@ if (statsEl){
 
   document.addEventListener('visibilitychange', () => {
     if (document.hidden) stop();
-    else {
+    else if (navigator.onLine) {
       start();
       tickRetards().catch(()=>{});
       tickVoies().catch(()=>{});
     }
   });
+  window.addEventListener('offline', stop, { passive:true });
+  window.addEventListener('online', () => {
+    if (document.hidden) return;
+    start();
+    tickRetards().catch(()=>{});
+    tickVoies().catch(()=>{});
+  }, { passive:true });
 })();
 
 // Navigation: scroll "app" /* ===== Home dashboard (météo + BER) ===== */
@@ -16372,7 +16421,10 @@ async function initHomePublicBlocks(){
 // Lance au chargement + rafraîchit périodiquement la météo (soft)
 document.addEventListener('DOMContentLoaded', () => {
   initHomePublicBlocks();
-  setInterval(() => { initHomePublicBlocks(); }, 5*60*1000);
+  setInterval(() => {
+    if (document.hidden || !navigator.onLine) return;
+    initHomePublicBlocks();
+  }, 5*60*1000);
 });
 
 
