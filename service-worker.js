@@ -1,7 +1,8 @@
-const CACHE_VERSION = 'v53';
+const CACHE_VERSION = 'v54';
 const APP_CACHE = `lbetaillere-app-${CACHE_VERSION}`;
 const STATIC_CACHE = `lbetaillere-static-${CACHE_VERSION}`;
 const DATA_CACHE = `lbetaillere-data-${CACHE_VERSION}`;
+const TRANSIT_CACHE = 'lbetaillere-transit-v1';
 const CACHE_PREFIX = 'lbetaillere-';
 const OUTBOX_DB = 'lbetaillere-offline-v1';
 const OUTBOX_STORE = 'outbox';
@@ -68,7 +69,7 @@ self.addEventListener('activate', (event) => {
         Promise.all(
           keys
             .filter((key) => key.startsWith(CACHE_PREFIX))
-            .filter((key) => ![APP_CACHE, STATIC_CACHE, DATA_CACHE].includes(key))
+            .filter((key) => ![APP_CACHE, STATIC_CACHE, DATA_CACHE, TRANSIT_CACHE].includes(key))
             .map((key) => caches.delete(key))
         )
       )
@@ -129,6 +130,8 @@ async function staleWhileRevalidate(request, cacheName = STATIC_CACHE) {
 function canonicalDataKey(request) {
   const url = new URL(request.url);
   url.searchParams.delete('_');
+  url.searchParams.delete('t');
+  url.searchParams.delete('client');
   return url.href;
 }
 
@@ -142,6 +145,103 @@ function isCommunityItemApi(url) {
 
 function isOfflineAuthApi(url) {
   return url.hostname === 'vps.labetaillere.fr' && (url.pathname === '/api/me' || url.pathname === '/api/prefs');
+}
+
+function transitPolicy(url) {
+  if (url.hostname !== 'vps.labetaillere.fr') return null;
+  const path = url.pathname;
+  if (path === '/sncf/hub') return { label: 'SNCF', maxAgeMs: 6 * 60 * 60 * 1000 };
+  if (path === '/api/train-static') return { label: 'horaires', maxAgeMs: 30 * 24 * 60 * 60 * 1000 };
+  if (path === '/gtfs/train_static_today.json') return { label: 'horaires du jour', maxAgeMs: 36 * 60 * 60 * 1000 };
+  if (/^\/gtfs\/retards[^/]*\.json$/i.test(path)) return { label: 'temps réel', maxAgeMs: 30 * 60 * 1000 };
+  if (path === '/gtfs/voies_by_train.json') return { label: 'voies', maxAgeMs: 2 * 60 * 60 * 1000 };
+  if (path === '/gtfs/Compotrains.json') return { label: 'compositions', maxAgeMs: 24 * 60 * 60 * 1000 };
+  if (path === '/hafas/departureBoard') return { label: 'CFL', maxAgeMs: 30 * 60 * 1000 };
+  return null;
+}
+
+function isSafeTransitData(url) {
+  return !!transitPolicy(url);
+}
+
+function responseHeadersForCache(response, cachedAt, source) {
+  const headers = new Headers();
+  response.headers.forEach((value, key) => {
+    if (!['content-encoding', 'content-length', 'transfer-encoding'].includes(key.toLowerCase())) headers.set(key, value);
+  });
+  headers.set('x-lb-cached-at', String(cachedAt));
+  headers.set('x-lb-data-source', source);
+  return headers;
+}
+
+async function cloneTransitResponse(response, cachedAt, source) {
+  const body = await response.clone().arrayBuffer();
+  return new Response(body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers: responseHeadersForCache(response, cachedAt, source)
+  });
+}
+
+async function trimTransitCache(cache, keep = 180) {
+  const keys = await cache.keys();
+  if (keys.length <= keep) return;
+  await Promise.all(keys.slice(0, keys.length - keep).map((key) => cache.delete(key)));
+}
+
+async function transitResponseUsable(url, response) {
+  if (!response?.ok) return false;
+  if (url.pathname !== '/sncf/hub') return true;
+  try {
+    const data = await response.clone().json();
+    return Object.values(data?.trains || {}).some((item) => item?.ok && item?.data);
+  } catch (_) {
+    return false;
+  }
+}
+
+async function notifyTransitState(policy, source, cachedAt = null) {
+  const windows = await clients.matchAll({ type: 'window', includeUncontrolled: true });
+  windows.forEach((client) => client.postMessage({
+    type: 'LB_DATA_STATE',
+    label: policy?.label || 'données',
+    source,
+    cachedAt: cachedAt ? Number(cachedAt) : null
+  }));
+}
+
+async function transitFallback(cache, key, policy) {
+  const cached = await cache.match(key);
+  if (!cached) return null;
+  const cachedAt = Number(cached.headers.get('x-lb-cached-at') || 0);
+  if (!cachedAt || (Date.now() - cachedAt) > policy.maxAgeMs) return null;
+  await notifyTransitState(policy, 'cache', cachedAt);
+  return cloneTransitResponse(cached, cachedAt, 'cache');
+}
+
+async function transitNetworkFirst(request) {
+  const url = new URL(request.url);
+  const policy = transitPolicy(url);
+  if (!policy) return fetch(request);
+  const cache = await caches.open(TRANSIT_CACHE);
+  const key = canonicalDataKey(request);
+  try {
+    const response = await fetchWithTimeout(request, 2200);
+    const usable = await transitResponseUsable(url, response);
+    if (usable) {
+      const cachedAt = Date.now();
+      const stamped = await cloneTransitResponse(response, cachedAt, 'network');
+      await cache.put(key, stamped.clone());
+      trimTransitCache(cache).catch(() => {});
+      notifyTransitState(policy, 'network', cachedAt).catch(() => {});
+      return response;
+    }
+    const fallback = await transitFallback(cache, key, policy);
+    if (fallback && (response.status >= 500 || [408, 429].includes(response.status) || response.ok)) return fallback;
+    return response;
+  } catch (_) {
+    return (await transitFallback(cache, key, policy)) || Response.error();
+  }
 }
 
 function jsonResponse(data, status = 200) {
@@ -447,6 +547,11 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
+  if (isSafeTransitData(url)) {
+    event.respondWith(transitNetworkFirst(request));
+    return;
+  }
+
   if (isDynamicData(url)) return;
 
   if (sameOrigin && isCriticalCommunityAsset(url)) {
@@ -472,7 +577,7 @@ self.addEventListener('message', (event) => {
     self.skipWaiting();
   }
   if (event.data?.type === 'CLEAR_RUNTIME_CACHE') {
-    event.waitUntil(Promise.all([caches.delete(STATIC_CACHE), caches.delete(DATA_CACHE)]));
+    event.waitUntil(Promise.all([caches.delete(STATIC_CACHE), caches.delete(DATA_CACHE), caches.delete(TRANSIT_CACHE)]));
   }
   if (event.data?.type === 'LB_FLUSH_OUTBOX') {
     event.waitUntil(flushOutbox().catch(() => {}));
