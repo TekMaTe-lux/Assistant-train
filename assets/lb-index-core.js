@@ -12834,7 +12834,7 @@ function scheduleWeatherAfterTableSettled(){
     }).join('');
     const podiumHtml = `<div class="lb-ranking-podium-visual">
       ${podiumSlots}
-      <img class="lb-ranking-podium-art" src="https://raw.githubusercontent.com/TekMaTe-lux/Assistant-train/main/Podium.png" alt="Podium du classement">
+      <img class="lb-ranking-podium-art" loading="lazy" decoding="async" src="https://raw.githubusercontent.com/TekMaTe-lux/Assistant-train/main/Podium.png" alt="Podium du classement">
     </div>`;
     if (podium) podium.innerHTML = podiumHtml;
     if (podiumInline) podiumInline.innerHTML = podiumHtml;
@@ -17269,7 +17269,11 @@ async function loadAffluenceDate(dateStr){
       });
       mo.observe(obsHost,{childList:true,subtree:true});
     }
-    setTimeout(refresh,300);
+    setTimeout(()=>{
+      const d=$('trainDate')?.value;
+      const daySel=$('affDaySel');
+      if(d && daySel && daySel.value!==d) refresh();
+    },300);
   }
 
   document.addEventListener('DOMContentLoaded', ()=>{
