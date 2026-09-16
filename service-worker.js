@@ -1,4 +1,4 @@
-const CACHE_VERSION = 'v56';
+const CACHE_VERSION = 'v57';
 const APP_CACHE = `lbetaillere-app-${CACHE_VERSION}`;
 const STATIC_CACHE = `lbetaillere-static-${CACHE_VERSION}`;
 const DATA_CACHE = `lbetaillere-data-${CACHE_VERSION}`;
@@ -116,7 +116,15 @@ async function navigationNetworkFirst(request) {
 async function staleWhileRevalidate(request, cacheName = STATIC_CACHE) {
   const cache = await caches.open(cacheName);
   const cached = await cache.match(request, { ignoreSearch: false });
-  const refresh = fetch(request)
+  let shellCached = null;
+  if (!cached && cacheName === STATIC_CACHE) {
+    try {
+      const shell = await caches.open(APP_CACHE);
+      shellCached = await shell.match(request, { ignoreSearch: false });
+    } catch (_) {}
+  }
+  const sameOrigin = new URL(request.url).origin === self.location.origin;
+  const refresh = fetch(request, sameOrigin ? { cache: 'no-cache' } : undefined)
     .then((response) => {
       if (response?.ok || response?.type === 'opaque') {
         cache.put(request, response.clone()).catch(() => {});
@@ -124,7 +132,7 @@ async function staleWhileRevalidate(request, cacheName = STATIC_CACHE) {
       return response;
     })
     .catch(() => null);
-  return cached || (await refresh) || Response.error();
+  return cached || shellCached || (await refresh) || Response.error();
 }
 
 function canonicalDataKey(request) {
