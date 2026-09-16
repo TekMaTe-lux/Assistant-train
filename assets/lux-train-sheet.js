@@ -318,7 +318,7 @@
   }
 
   function openSncf(payload){
-    const raw = String(payload?.trainNumber || '').match(/\d{5,6}/);
+    const raw = String(payload?.trainNumber || '').match(/\d{4,6}/);
     if (!raw) return;
     const dateIso = /^\d{4}-\d{2}-\d{2}$/.test(String(payload?.date || ''))
       ? String(payload.date)
