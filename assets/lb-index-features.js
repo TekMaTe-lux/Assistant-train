@@ -2510,18 +2510,44 @@
     window.renderHomeLiveWall = window.renderMessages;
   }
 
+  let communityPollTimer = null;
+  let communityPollPromise = null;
+
+  const stopCommunityPolling = () => {
+    if (communityPollTimer) clearTimeout(communityPollTimer);
+    communityPollTimer = null;
+  };
+
+  const runCommunityPoll = () => {
+    if (document.hidden || !navigator.onLine) return Promise.resolve([]);
+    if (communityPollPromise) return communityPollPromise;
+    communityPollPromise = Promise.allSettled([loadSignals(), loadPresences()])
+      .finally(() => { communityPollPromise = null; });
+    return communityPollPromise;
+  };
+
+  const scheduleCommunityPolling = (delayMs = 20000) => {
+    stopCommunityPolling();
+    if (document.hidden || !navigator.onLine) return;
+    communityPollTimer = setTimeout(async () => {
+      await runCommunityPoll();
+      scheduleCommunityPolling(20000);
+    }, Math.max(1000, Number(delayMs) || 20000));
+  };
+
   window.addEventListener('gtfsrt:loaded', ()=>{ refreshCommunityViews(); });
   window.addEventListener('load', ()=>{
     refreshCommunityViews();
     setTimeout(()=>{
-      loadSignals();
-      loadPresences();
+      runCommunityPoll().finally(() => scheduleCommunityPolling(20000));
     }, 1000);
   });
-  setInterval(()=>{
-    if (document.hidden) return;
-    Promise.allSettled([loadSignals(), loadPresences()]);
-  }, 20000);
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) stopCommunityPolling();
+    else runCommunityPoll().finally(() => scheduleCommunityPolling(20000));
+  }, { passive:true });
+  window.addEventListener('online', () => runCommunityPoll().finally(() => scheduleCommunityPolling(20000)), { passive:true });
+  window.addEventListener('offline', stopCommunityPolling, { passive:true });
 
   function buildCommunityMapSnapshot(){
     const now = Date.now();
@@ -3214,10 +3240,30 @@
     $('lbBtnTestAlerts')?.addEventListener('click', window.lbSendTestPush);
 
     refreshAlertsUi();
-    setInterval(refreshAlertsUi, 2500);
+    if (!window.__lbAlertsUiTimer) {
+      const scheduleAlertsRefresh = () => {
+        clearTimeout(window.__lbAlertsUiTimer);
+        window.__lbAlertsUiTimer = null;
+        if (document.hidden) return;
+        window.__lbAlertsUiTimer = setTimeout(async () => {
+          await refreshAlertsUi();
+          scheduleAlertsRefresh();
+        }, 30000);
+      };
+      window.__lbScheduleAlertsRefresh = scheduleAlertsRefresh;
+      scheduleAlertsRefresh();
+    }
   }
 
   document.addEventListener('DOMContentLoaded', bindAlertsUi);
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) {
+      if (window.__lbAlertsUiTimer) clearTimeout(window.__lbAlertsUiTimer);
+      window.__lbAlertsUiTimer = null;
+      return;
+    }
+    refreshAlertsUi().finally(() => window.__lbScheduleAlertsRefresh?.());
+  }, { passive:true });
   document.addEventListener('click', (e) => {
     if (e.target && (e.target.id === 'bottomAccountBtn' || e.target.id === 'lbBtnSubmit')) {
       setTimeout(refreshAlertsUi, 400);
