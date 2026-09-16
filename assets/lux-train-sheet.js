@@ -330,7 +330,7 @@
     }
     const panel = el('trainDetailPanel');
     if (panel) delete panel.dataset.lbProvider;
-    Promise.resolve(open.call(window, raw[0], dateIso, { origin:'lux-gare' }))
+    Promise.resolve(open.call(window, raw[0], dateIso, { origin:'map' }))
       .catch((error) => console.error('[Gare Luxembourg] fiche SNCF impossible', error));
   }
 
