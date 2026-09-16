@@ -131,6 +131,7 @@ document.addEventListener('DOMContentLoaded', () => {
   let pending = 0;
   let lastPending = 0;
   let successTimer = null;
+  const staleData = new Map();
 
   const ensureBadge = () => {
     let badge = document.getElementById('lbOfflineStatus');
@@ -162,19 +163,43 @@ document.addEventListener('DOMContentLoaded', () => {
     return badge;
   };
 
+  const latestStaleData = () => {
+    const items = Array.from(staleData.entries())
+      .map(([label, cachedAt]) => ({ label, cachedAt:Number(cachedAt || 0) }))
+      .filter((item) => item.cachedAt > 0)
+      .sort((a, b) => b.cachedAt - a.cachedAt);
+    return items[0] || null;
+  };
+
+  const formatCachedAt = (stamp) => {
+    try { return new Date(Number(stamp)).toLocaleTimeString('fr-FR', { hour:'2-digit', minute:'2-digit' }); }
+    catch (_) { return ''; }
+  };
+
   const render = () => {
     if (!document.body) return;
     const badge = ensureBadge();
+    const stale = latestStaleData();
+    const staleTime = stale ? formatCachedAt(stale.cachedAt) : '';
     clearTimeout(successTimer);
     if (!navigator.onLine) {
-      badge.textContent = pending > 0
-        ? `📡 Hors connexion · ${pending} action${pending > 1 ? 's' : ''} en attente d’envoi`
-        : '📡 Hors connexion · les données affichées peuvent dater';
+      if (pending > 0) {
+        badge.textContent = `📡 Hors connexion · ${pending} action${pending > 1 ? 's' : ''} en attente · ${staleTime ? `données de ${staleTime}` : 'envoi automatique au retour du réseau'}`;
+      } else if (stale) {
+        badge.textContent = `📡 Hors connexion · dernières données ${stale.label} : ${staleTime}`;
+      } else {
+        badge.textContent = '📡 Hors connexion · les dernières données disponibles restent consultables';
+      }
       badge.style.display = 'block';
       return;
     }
     if (pending > 0) {
       badge.textContent = `🟠 ${pending} action${pending > 1 ? 's' : ''} en cours de synchronisation`;
+      badge.style.display = 'block';
+      return;
+    }
+    if (stale) {
+      badge.textContent = `🕘 Réseau instable · dernières données ${stale.label} : ${staleTime}`;
       badge.style.display = 'block';
       return;
     }
@@ -195,10 +220,19 @@ document.addEventListener('DOMContentLoaded', () => {
   };
 
   navigator.serviceWorker.addEventListener('message', (event) => {
-    if (event.data?.type !== 'LB_OUTBOX_STATUS') return;
-    lastPending = pending;
-    pending = Math.max(0, Number(event.data.pending || 0));
-    render();
+    const data = event.data || {};
+    if (data.type === 'LB_OUTBOX_STATUS') {
+      lastPending = pending;
+      pending = Math.max(0, Number(data.pending || 0));
+      render();
+      return;
+    }
+    if (data.type === 'LB_DATA_STATE') {
+      const label = String(data.label || 'données');
+      if (data.source === 'cache' && Number(data.cachedAt || 0) > 0) staleData.set(label, Number(data.cachedAt));
+      if (data.source === 'network') staleData.delete(label);
+      render();
+    }
   });
   navigator.serviceWorker.addEventListener('controllerchange', () => setTimeout(() => askWorker(navigator.onLine), 100));
   window.addEventListener('online', () => { render(); askWorker(true); }, { passive:true });
