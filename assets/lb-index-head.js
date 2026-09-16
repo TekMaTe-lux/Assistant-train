@@ -123,3 +123,88 @@ document.addEventListener('DOMContentLoaded', () => {
     }, { passive: true });
   });
 });
+
+// État réseau + boîte d'envoi hors connexion. Visuel uniquement :
+// le service worker reste la source de vérité pour la synchronisation.
+(() => {
+  if (!('serviceWorker' in navigator)) return;
+  let pending = 0;
+  let lastPending = 0;
+  let successTimer = null;
+
+  const ensureBadge = () => {
+    let badge = document.getElementById('lbOfflineStatus');
+    if (badge) return badge;
+    badge = document.createElement('div');
+    badge.id = 'lbOfflineStatus';
+    badge.setAttribute('role', 'status');
+    badge.setAttribute('aria-live', 'polite');
+    Object.assign(badge.style, {
+      position: 'fixed',
+      left: '50%',
+      bottom: 'calc(var(--bottom-bar-height, 84px) + env(safe-area-inset-bottom, 0px) + 10px)',
+      transform: 'translateX(-50%)',
+      zIndex: '2147483000',
+      maxWidth: 'calc(100vw - 28px)',
+      padding: '8px 12px',
+      borderRadius: '999px',
+      border: '1px solid rgba(255,255,255,.22)',
+      background: 'rgba(8,14,24,.94)',
+      color: '#fff',
+      font: '600 12px/1.25 system-ui,-apple-system,Segoe UI,sans-serif',
+      boxShadow: '0 8px 30px rgba(0,0,0,.35)',
+      backdropFilter: 'blur(10px)',
+      pointerEvents: 'none',
+      display: 'none',
+      textAlign: 'center'
+    });
+    document.body.appendChild(badge);
+    return badge;
+  };
+
+  const render = () => {
+    if (!document.body) return;
+    const badge = ensureBadge();
+    clearTimeout(successTimer);
+    if (!navigator.onLine) {
+      badge.textContent = pending > 0
+        ? `📡 Hors connexion · ${pending} action${pending > 1 ? 's' : ''} en attente d’envoi`
+        : '📡 Hors connexion · les données affichées peuvent dater';
+      badge.style.display = 'block';
+      return;
+    }
+    if (pending > 0) {
+      badge.textContent = `🟠 ${pending} action${pending > 1 ? 's' : ''} en cours de synchronisation`;
+      badge.style.display = 'block';
+      return;
+    }
+    if (lastPending > 0) {
+      badge.textContent = '✅ Tout est synchronisé';
+      badge.style.display = 'block';
+      successTimer = setTimeout(() => { badge.style.display = 'none'; }, 2200);
+    } else {
+      badge.style.display = 'none';
+    }
+  };
+
+  const askWorker = (flush = false) => {
+    const worker = navigator.serviceWorker.controller;
+    if (!worker) return;
+    worker.postMessage({ type: 'LB_OUTBOX_STATUS' });
+    if (flush) worker.postMessage({ type: 'LB_FLUSH_OUTBOX' });
+  };
+
+  navigator.serviceWorker.addEventListener('message', (event) => {
+    if (event.data?.type !== 'LB_OUTBOX_STATUS') return;
+    lastPending = pending;
+    pending = Math.max(0, Number(event.data.pending || 0));
+    render();
+  });
+  navigator.serviceWorker.addEventListener('controllerchange', () => setTimeout(() => askWorker(navigator.onLine), 100));
+  window.addEventListener('online', () => { render(); askWorker(true); }, { passive:true });
+  window.addEventListener('offline', render, { passive:true });
+  document.addEventListener('DOMContentLoaded', () => {
+    render();
+    navigator.serviceWorker.ready.then(() => askWorker(navigator.onLine)).catch(() => {});
+  }, { once:true });
+})();
