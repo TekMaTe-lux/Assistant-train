@@ -1,0 +1,67 @@
+name: LB heavy startup once
+on:
+  push:
+    paths:
+      - '.github/workflows/lb-heavy-startup-once.yml'
+permissions:
+  contents: write
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Apply guarded startup patch
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          index = Path('index.html')
+          s = index.read_text()
+          replacements = {
+            '<img id="lbProfileGradeImage" src="./Mouton%20%C3%A9gar%C3%A9.png" alt="Grade du profil">': '<img id="lbProfileGradeImage" loading="lazy" decoding="async" src="./Mouton%20%C3%A9gar%C3%A9.png" alt="Grade du profil">',
+            '<img id="lbGradeImage" src="./Mouton%20%C3%A9gar%C3%A9.png" alt="Grade du profil">': '<img id="lbGradeImage" loading="lazy" decoding="async" src="./Mouton%20%C3%A9gar%C3%A9.png" alt="Grade du profil">',
+            '<script src="./assets/lb-index-core.js?v=2"></script>': '<script src="./assets/lb-index-core.js?v=3"></script>',
+          }
+          for old, new in replacements.items():
+            assert s.count(old) == 1, (old, s.count(old))
+            s = s.replace(old, new)
+          youtube = '<iframe src="https://www.youtube.com/embed/'
+          assert s.count(youtube) == 5, s.count(youtube)
+          s = s.replace(youtube, '<iframe loading="lazy" src="https://www.youtube.com/embed/')
+          index.write_text(s)
+
+          core = Path('assets/lb-index-core.js')
+          s = core.read_text()
+          old = '<img class="lb-ranking-podium-art" src="https://raw.githubusercontent.com/TekMaTe-lux/Assistant-train/main/Podium.png" alt="Podium du classement">'
+          new = '<img class="lb-ranking-podium-art" loading="lazy" decoding="async" src="https://raw.githubusercontent.com/TekMaTe-lux/Assistant-train/main/Podium.png" alt="Podium du classement">'
+          assert s.count(old) == 1, s.count(old)
+          s = s.replace(old, new)
+          old = '    setTimeout(refresh,300);'
+          new = """    setTimeout(()=>{\n      const d=$('trainDate')?.value;\n      const daySel=$('affDaySel');\n      if(d && daySel && daySel.value!==d) refresh();\n    },300);"""
+          assert s.count(old) == 1, s.count(old)
+          s = s.replace(old, new)
+          core.write_text(s)
+
+          sw = Path('service-worker.js')
+          s = sw.read_text()
+          assert s.count("const CACHE_VERSION = 'v57';") == 1
+          assert s.count("'./assets/lb-index-core.js?v=2',") == 1
+          s = s.replace("const CACHE_VERSION = 'v57';", "const CACHE_VERSION = 'v58';", 1)
+          s = s.replace("'./assets/lb-index-core.js?v=2',", "'./assets/lb-index-core.js?v=3',", 1)
+          sw.write_text(s)
+          PY
+          node --check assets/lb-index-core.js
+          node --check service-worker.js
+          git diff --check
+          test "$(grep -o 'iframe loading="lazy" src="https://www.youtube.com/embed/' index.html | wc -l)" -eq 5
+          grep -q 'lb-index-core.js?v=3' index.html
+          grep -q "CACHE_VERSION = 'v58'" service-worker.js
+          git diff -- index.html assets/lb-index-core.js service-worker.js
+          git config user.name 'La Betaillere Bot'
+          git config user.email 'actions@users.noreply.github.com'
+          git add index.html assets/lb-index-core.js service-worker.js
+          git commit -m 'perf: lazy-load heavy hidden media and dedupe affluence startup'
+          git push
