@@ -1,4 +1,4 @@
-const CACHE_VERSION = 'v55';
+const CACHE_VERSION = 'v56';
 const APP_CACHE = `lbetaillere-app-${CACHE_VERSION}`;
 const STATIC_CACHE = `lbetaillere-static-${CACHE_VERSION}`;
 const DATA_CACHE = `lbetaillere-data-${CACHE_VERSION}`;
@@ -139,8 +139,17 @@ function isCommunityApi(url) {
   return url.hostname === 'vps.labetaillere.fr' && url.pathname === '/api/comments';
 }
 
+function pendingCommunityActionId(url) {
+  if (url.hostname !== 'vps.labetaillere.fr') return '';
+  const match = url.pathname.match(/^\/api\/comments\/offline-([A-Za-z0-9-]+)$/);
+  return match ? match[1] : '';
+}
+
 function isCommunityItemApi(url) {
-  return url.hostname === 'vps.labetaillere.fr' && /^\/api\/comments\/\d+$/.test(url.pathname);
+  return url.hostname === 'vps.labetaillere.fr' && (
+    /^\/api\/comments\/\d+$/.test(url.pathname) ||
+    !!pendingCommunityActionId(url)
+  );
 }
 
 function isOfflineAuthApi(url) {
@@ -372,6 +381,13 @@ async function queueCommunityWrite(request) {
 }
 
 async function handleCommunityWrite(request) {
+  const requestUrl = new URL(request.url);
+  const pendingActionId = request.method === 'DELETE' ? pendingCommunityActionId(requestUrl) : '';
+  if (pendingActionId) {
+    await outboxDelete(pendingActionId);
+    await notifyOutboxStatus();
+    return jsonResponse({ ok: true, cancelled: true, pending: false, client_action_id: pendingActionId });
+  }
   const item = await communityWriteDescriptor(request);
   const networkRequest = requestFromOutbox(item);
   try {
@@ -427,7 +443,7 @@ function pendingRecord(item) {
   try { body = JSON.parse(item.body || '{}'); } catch (_) { return null; }
   const scope = String(body.scope || 'wall');
   return {
-    id: null,
+    id: `offline-${item.id}`,
     user_id: null,
     pseudo: 'Vous · en attente',
     display_pseudo: 'Vous · en attente',
