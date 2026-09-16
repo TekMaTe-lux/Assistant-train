@@ -1,0 +1,78 @@
+name: LB PWA v57 once
+
+on:
+  push:
+    paths:
+      - '.github/workflows/lb-pwa-v57-once.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Apply guarded PWA v57 patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('service-worker.js')
+          s = p.read_text()
+          old_version = "const CACHE_VERSION = 'v56';"
+          if s.count(old_version) != 1:
+              raise SystemExit('expected v56 exactly once')
+          s = s.replace(old_version, "const CACHE_VERSION = 'v57';", 1)
+          old = """async function staleWhileRevalidate(request, cacheName = STATIC_CACHE) {
+            const cache = await caches.open(cacheName);
+            const cached = await cache.match(request, { ignoreSearch: false });
+            const refresh = fetch(request)
+              .then((response) => {
+                if (response?.ok || response?.type === 'opaque') {
+                  cache.put(request, response.clone()).catch(() => {});
+                }
+                return response;
+              })
+              .catch(() => null);
+            return cached || (await refresh) || Response.error();
+          }
+          """
+          new = """async function staleWhileRevalidate(request, cacheName = STATIC_CACHE) {
+            const cache = await caches.open(cacheName);
+            const cached = await cache.match(request, { ignoreSearch: false });
+            let shellCached = null;
+            if (!cached && cacheName === STATIC_CACHE) {
+              try {
+                const shell = await caches.open(APP_CACHE);
+                shellCached = await shell.match(request, { ignoreSearch: false });
+              } catch (_) {}
+            }
+            const sameOrigin = new URL(request.url).origin === self.location.origin;
+            const refresh = fetch(request, sameOrigin ? { cache: 'no-cache' } : undefined)
+              .then((response) => {
+                if (response?.ok || response?.type === 'opaque') {
+                  cache.put(request, response.clone()).catch(() => {});
+                }
+                return response;
+              })
+              .catch(() => null);
+            return cached || shellCached || (await refresh) || Response.error();
+          }
+          """
+          if s.count(old) != 1:
+              raise SystemExit('staleWhileRevalidate block mismatch')
+          p.write_text(s.replace(old, new, 1))
+          PY
+          node --check service-worker.js
+          grep -q "CACHE_VERSION = 'v57'" service-worker.js
+          grep -q 'shellCached' service-worker.js
+          grep -q "cache: 'no-cache'" service-worker.js
+          git config user.name 'La Betaillere Bot'
+          git config user.email 'actions@users.noreply.github.com'
+          git add service-worker.js
+          git commit -m 'pwa: bridge app shell cache and revalidate local assets'
+          git push
