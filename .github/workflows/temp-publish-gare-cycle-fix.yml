@@ -1,0 +1,45 @@
+name: Temp publish gare dynamic cycle fix
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/temp-publish-gare-cycle-fix.yml'
+permissions:
+  contents: write
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Bump carte embed and PWA cache
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          index = Path('index.html')
+          text = index.read_text()
+          old = 'carte.html?embed=1&v=20260421-1'
+          new = 'carte.html?embed=1&v=20260917-gare-cycle-v2'
+          if text.count(old) != 1:
+              raise SystemExit(f'index carte ref count={text.count(old)}')
+          index.write_text(text.replace(old, new, 1))
+
+          sw = Path('service-worker.js')
+          s = sw.read_text()
+          oldv = "const CACHE_VERSION = 'v59';"
+          newv = "const CACHE_VERSION = 'v60';"
+          if s.count(oldv) != 1:
+              raise SystemExit(f'sw cache version count={s.count(oldv)}')
+          sw.write_text(s.replace(oldv, newv, 1))
+          PY
+          node --check service-worker.js
+          grep -F 'carte.html?embed=1&v=20260917-gare-cycle-v2' index.html
+          grep -F "const CACHE_VERSION = 'v60';" service-worker.js
+      - name: Commit and remove workflow
+        run: |
+          rm .github/workflows/temp-publish-gare-cycle-fix.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add index.html service-worker.js .github/workflows/temp-publish-gare-cycle-fix.yml
+          git commit -m 'PWA: publish dynamic station cycle fix'
+          git push
