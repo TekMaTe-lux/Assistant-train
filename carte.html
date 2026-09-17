@@ -9,13 +9,9 @@
   <link rel="dns-prefetch" href="//vps.labetaillere.fr">
   <style>
     html,body{width:100%;height:100%;margin:0;overflow:hidden;background:#020611}
-    #mapV2{display:block;width:100%;height:100%;border:0;background:#020611}
-    #lbMapBack{
-      position:fixed;z-index:20;top:10px;left:10px;display:inline-flex;align-items:center;gap:7px;
-      min-height:36px;padding:7px 11px;border:1px solid rgba(49,231,242,.42);border-radius:10px;
-      background:rgba(3,16,25,.94);color:#effcff;font:800 12px/1.1 Rajdhani,system-ui,sans-serif;
-      box-shadow:0 8px 24px rgba(0,0,0,.32);cursor:pointer
-    }
+    .lbViewFrame{position:absolute;inset:0;display:block;width:100%;height:100%;border:0;background:#020611}
+    .lbViewFrame[hidden]{display:none!important}
+    #lbMapBack{position:fixed;z-index:20;top:10px;left:10px;display:inline-flex;align-items:center;gap:7px;min-height:36px;padding:7px 11px;border:1px solid rgba(49,231,242,.42);border-radius:10px;background:rgba(3,16,25,.94);color:#effcff;font:800 12px/1.1 Rajdhani,system-ui,sans-serif;box-shadow:0 8px 24px rgba(0,0,0,.32);cursor:pointer}
     #lbMapBack[hidden]{display:none!important}
     #lbMapBack:hover,#lbMapBack:focus-visible{border-color:#31e7f2;outline:2px solid rgba(49,231,242,.22);outline-offset:2px}
     #lbMapStatus{position:fixed;z-index:15;inset:0;display:grid;place-items:center;background:#020611;color:#effcff}
@@ -30,121 +26,97 @@
 </head>
 <body>
 <button id="lbMapBack" type="button" hidden aria-label="Retour à la carte">← Retour à la carte</button>
-<div id="lbMapStatus" hidden role="status" aria-live="polite">
-  <div class="lbMapStatusCard">
-    <span class="lbMapSpinner" aria-hidden="true"></span>
-    <strong id="lbMapStatusText">Chargement de la gare…</strong>
-    <button id="lbMapRetry" type="button" hidden>Réessayer</button>
-  </div>
-</div>
-<iframe
-  id="mapV2"
-  src="https://vps.labetaillere.fr/map-v2/carte-preview.html?full=1&v=20260914-bus-icon-size-v3"
-  title="Carte La Bétaillère"
-  allow="geolocation"
-></iframe>
+<div id="lbMapStatus" hidden role="status" aria-live="polite"><div class="lbMapStatusCard"><span class="lbMapSpinner" aria-hidden="true"></span><strong id="lbMapStatusText">Chargement…</strong><button id="lbMapRetry" type="button" hidden>Réessayer</button></div></div>
+<iframe id="mapV2" class="lbViewFrame" src="https://vps.labetaillere.fr/map-v2/carte-preview.html?full=1&v=20260914-bus-icon-size-v3" title="Carte La Bétaillère" allow="geolocation"></iframe>
 <script>
 (()=>{
   'use strict';
-  let frame=document.getElementById('mapV2');
   const back=document.getElementById('lbMapBack');
   const status=document.getElementById('lbMapStatus');
   const statusText=document.getElementById('lbMapStatusText');
   const retry=document.getElementById('lbMapRetry');
   const MAP_URL='https://vps.labetaillere.fr/map-v2/carte-preview.html?full=1&v=20260914-bus-icon-size-v3';
   const LUX_URL='https://vps.labetaillere.fr/map-v2/tests/luxembourg-user-preview-v5-private-maplike-trainclick.html';
+  const VPS_ORIGIN='https://vps.labetaillere.fr';
+  let mapFrame=document.getElementById('mapV2');
+  let luxFrame=null;
+  let luxReady=false;
   let view='map';
   let luxOpenSeq=0;
   let luxRetryCount=0;
   let luxRetryTimer=0;
 
-  function setStatus(visible,text='Chargement de la gare…',showRetry=false){
-    status.hidden=!visible;
-    statusText.textContent=text;
-    retry.hidden=!showRetry;
+  function setStatus(visible,text='Chargement…',showRetry=false){status.hidden=!visible;statusText.textContent=text;retry.hidden=!showRetry;}
+  function clearLuxWatch(){if(luxRetryTimer)clearTimeout(luxRetryTimer);luxRetryTimer=0;}
+  function freshLuxUrl(){const u=new URL(LUX_URL);u.searchParams.set('lbopen',`${Date.now()}-${++luxOpenSeq}`);return u.toString();}
+  function sendLuxActive(active){try{luxFrame?.contentWindow?.postMessage({type:'lb:lux-active',active},VPS_ORIGIN);}catch(_){}}
+
+  function ensureMap(){
+    if(mapFrame?.isConnected)return mapFrame;
+    const f=document.createElement('iframe');
+    f.id='mapV2';f.className='lbViewFrame';f.title='Carte La Bétaillère';f.allow='geolocation';f.src=MAP_URL;
+    document.body.appendChild(f);mapFrame=f;return f;
   }
 
-  function clearLuxWatch(){
-    if(luxRetryTimer) clearTimeout(luxRetryTimer);
-    luxRetryTimer=0;
-  }
-
-  function replaceFrame(url,title){
-    const next=document.createElement('iframe');
-    next.id='mapV2';
-    next.title=title;
-    next.allow='geolocation';
-    next.src=url;
-    frame.replaceWith(next);
-    frame=next;
-    return next;
-  }
-
-  function freshLuxUrl(){
-    const url=new URL(LUX_URL);
-    url.searchParams.set('lbopen',`${Date.now()}-${++luxOpenSeq}`);
-    return url.toString();
+  function createLux(force=false){
+    if(luxFrame?.isConnected&&!force)return luxFrame;
+    if(luxFrame?.isConnected)luxFrame.remove();
+    luxReady=false;
+    const f=document.createElement('iframe');
+    f.id='luxV2';f.className='lbViewFrame';f.title='Gare dynamique de Luxembourg';f.allow='geolocation';f.src=freshLuxUrl();
+    document.body.appendChild(f);luxFrame=f;return f;
   }
 
   function armLuxWatch(){
     clearLuxWatch();
     luxRetryTimer=setTimeout(()=>{
-      if(view!=='lux') return;
-      if(luxRetryCount<1){
-        luxRetryCount++;
-        setStatus(true,'Reconnexion à la gare…');
-        replaceFrame(freshLuxUrl(),'Gare dynamique de Luxembourg');
-        armLuxWatch();
-        return;
-      }
+      if(view!=='lux'||luxReady)return;
+      if(luxRetryCount<1){luxRetryCount++;setStatus(true,'Reconnexion à la gare…');createLux(true);armLuxWatch();return;}
       setStatus(true,'La gare met plus de temps que prévu.',true);
-    },3500);
+    },4000);
   }
 
   function showMap(){
-    if(view==='map') return;
-    view='map';
-    clearLuxWatch();
-    setStatus(false);
-    back.hidden=true;
-    replaceFrame(MAP_URL,'Carte La Bétaillère');
+    if(view==='map')return;
+    view='map';clearLuxWatch();setStatus(false);back.hidden=true;
+    if(luxFrame){sendLuxActive(false);luxFrame.hidden=true;}
+    const m=ensureMap();m.hidden=false;
   }
 
   function showLuxDynamic(){
-    if(view==='lux') return;
-    view='lux';
-    luxRetryCount=0;
-    back.hidden=false;
+    if(view==='lux')return;
+    view='lux';back.hidden=false;luxRetryCount=0;
+    if(luxFrame?.isConnected&&luxReady){
+      if(mapFrame)mapFrame.hidden=true;
+      luxFrame.hidden=false;sendLuxActive(true);setStatus(false);return;
+    }
     setStatus(true,'Chargement de la gare…');
-    replaceFrame(freshLuxUrl(),'Gare dynamique de Luxembourg');
-    armLuxWatch();
+    if(mapFrame)mapFrame.hidden=true;
+    const f=createLux(false);f.hidden=false;armLuxWatch();
   }
 
   back.addEventListener('click',showMap);
-  retry.addEventListener('click',()=>{
-    if(view!=='lux') return;
-    luxRetryCount=0;
-    setStatus(true,'Rechargement de la gare…');
-    replaceFrame(freshLuxUrl(),'Gare dynamique de Luxembourg');
-    armLuxWatch();
-  });
+  retry.addEventListener('click',()=>{if(view!=='lux')return;luxRetryCount=0;setStatus(true,'Rechargement de la gare…');createLux(true);armLuxWatch();});
 
   window.addEventListener('message',event=>{
-    if(event.source===frame.contentWindow){
-      if(event.data?.type==='lb:lux-ready' && view==='lux'){
-        clearLuxWatch();
-        setStatus(false);
+    if(luxFrame&&event.source===luxFrame.contentWindow){
+      if(event.data?.type==='lb:lux-ready'){
+        luxReady=true;clearLuxWatch();
+        if(view==='lux'){luxFrame.hidden=false;sendLuxActive(true);setStatus(false);if(mapFrame){mapFrame.remove();mapFrame=null;}}
+        else{luxFrame.hidden=true;sendLuxActive(false);}
         return;
       }
-      if(event.data?.type==='lb:open-lux-dynamic'){
-        showLuxDynamic();
-        return;
-      }
-      if(window.parent!==window) window.parent.postMessage(event.data,'*');
+      if(window.parent!==window)window.parent.postMessage(event.data,'*');
       return;
     }
-    if(window.parent!==window && event.source===window.parent){
-      frame.contentWindow?.postMessage(event.data,'*');
+    if(mapFrame&&event.source===mapFrame.contentWindow){
+      if(event.data?.type==='lb:open-lux-dynamic'){showLuxDynamic();return;}
+      if(window.parent!==window)window.parent.postMessage(event.data,'*');
+      return;
+    }
+    if(window.parent!==window&&event.source===window.parent){
+      const target=view==='lux'?luxFrame:mapFrame;
+      target?.contentWindow?.postMessage(event.data,'*');
     }
   });
 })();
