@@ -5069,15 +5069,17 @@
       const staticPromise = fetchStaticCandidates(number, dateIso);
       const reliabilityPromise = loadReliability(number);
       const affluencePromise = loadAffluence(number, dateIso);
-      const supplementaryPromise = loadSupplementaryData(forceFresh);
+      const supplementaryPromise = loadSupplementaryData(forceFresh)
+        .catch((error) => console.warn('[Fiche Bétaillère] données complémentaires indisponibles', error));
 
+      // Les données secondaires (composition / voies) ne doivent jamais bloquer
+      // l'affichage des horaires, du LIVE et du parcours principal.
       const [liveResult, staticResult, reliabilityResult, affluenceResult] = await Promise.allSettled([
         livePromise,
         staticPromise,
         reliabilityPromise,
-        affluencePromise,
-        supplementaryPromise
-      ]).then((results) => results.slice(0, 4));
+        affluencePromise
+      ]);
 
       if (requestId !== state.requestId) return;
       const liveBundle = liveResult.status === 'fulfilled' ? liveResult.value : null;
@@ -5114,6 +5116,16 @@
       renderAffluence(affluence);
       renderReliability(reliability);
       state.lastBundle = { number, dateIso, rows, effectiveRows, liveBundle, reliability, affluence };
+
+      // Quand les données complémentaires finissent plus tard, enrichir la fiche
+      // en place sans relancer les appels principaux ni rouvrir le panneau.
+      void supplementaryPromise.then(() => {
+        if (requestId !== state.requestId || state.trainNumber !== number || state.dateIso !== dateIso) return;
+        renderHero(number, dateIso, heroRows, liveBundle);
+        renderRoute(number, dateIso, rows, liveBundle);
+        renderComposition(number, affluence);
+      });
+
       setupProfileActions(number, dateIso, !!heroState?.liveActive);
       refreshFavoriteButton();
       void ensureProfileTitle(number);
