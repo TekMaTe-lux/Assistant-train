@@ -1,0 +1,53 @@
+name: Temp fix French train sheet blocking loaders
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/temp-fix-french-sheet-nonblocking.yml'
+permissions:
+  contents: write
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Patch French train sheet loading
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('assets/lb-index-features.js')
+          s=p.read_text()
+          old="""      const supplementaryPromise = loadSupplementaryData(forceFresh);\n\n      const [liveResult, staticResult, reliabilityResult, affluenceResult] = await Promise.allSettled([\n        livePromise,\n        staticPromise,\n        reliabilityPromise,\n        affluencePromise,\n        supplementaryPromise\n      ]).then((results) => results.slice(0, 4));"""
+          new="""      const supplementaryPromise = loadSupplementaryData(forceFresh)\n        .catch((error) => console.warn('[Fiche Bétaillère] données complémentaires indisponibles', error));\n\n      // Les données secondaires (composition / voies) ne doivent jamais bloquer\n      // l'affichage des horaires, du LIVE et du parcours principal.\n      const [liveResult, staticResult, reliabilityResult, affluenceResult] = await Promise.allSettled([\n        livePromise,\n        staticPromise,\n        reliabilityPromise,\n        affluencePromise\n      ]);"""
+          if old not in s:
+              raise SystemExit('expected blocking loader block not found')
+          s=s.replace(old,new,1)
+          old2="""      state.lastBundle = { number, dateIso, rows, effectiveRows, liveBundle, reliability, affluence };\n      setupProfileActions(number, dateIso, !!heroState?.liveActive);"""
+          new2="""      state.lastBundle = { number, dateIso, rows, effectiveRows, liveBundle, reliability, affluence };\n\n      // Quand les données complémentaires finissent plus tard, enrichir la fiche\n      // en place sans relancer les appels principaux ni rouvrir le panneau.\n      void supplementaryPromise.then(() => {\n        if (requestId !== state.requestId || state.trainNumber !== number || state.dateIso !== dateIso) return;\n        renderHero(number, dateIso, heroRows, liveBundle);\n        renderRoute(number, dateIso, rows, liveBundle);\n        renderComposition(number, affluence);\n      });\n\n      setupProfileActions(number, dateIso, !!heroState?.liveActive);"""
+          if old2 not in s:
+              raise SystemExit('expected render block not found')
+          s=s.replace(old2,new2,1)
+          p.write_text(s)
+          PY
+      - name: Validate syntax and targeted tests
+        run: |
+          node --check assets/lb-index-features.js
+          node --test tests/live-partial-cancellation.test.js
+          python3 - <<'PY'
+          from pathlib import Path
+          s=Path('assets/lb-index-features.js').read_text()
+          a=s.index('const supplementaryPromise = loadSupplementaryData(forceFresh)')
+          b=s.index('const liveBundle = liveResult.status', a)
+          block=s[a:b]
+          assert 'supplementaryPromise\n      ])' not in block
+          assert 'renderComposition(number, affluence);' in s[b:]
+          print('FRENCH_SHEET_NONBLOCKING_OK')
+          PY
+      - name: Commit patch and remove temporary workflow
+        run: |
+          rm .github/workflows/temp-fix-french-sheet-nonblocking.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add assets/lb-index-features.js .github/workflows/temp-fix-french-sheet-nonblocking.yml
+          git commit -m 'Fix French train sheet blocking on supplementary data'
+          git push
