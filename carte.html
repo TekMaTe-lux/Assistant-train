@@ -18,11 +18,25 @@
     }
     #lbMapBack[hidden]{display:none!important}
     #lbMapBack:hover,#lbMapBack:focus-visible{border-color:#31e7f2;outline:2px solid rgba(49,231,242,.22);outline-offset:2px}
+    #lbMapStatus{position:fixed;z-index:15;inset:0;display:grid;place-items:center;background:#020611;color:#effcff}
+    #lbMapStatus[hidden]{display:none!important}
+    .lbMapStatusCard{display:flex;align-items:center;gap:10px;max-width:90%;padding:12px 15px;border:1px solid rgba(49,231,242,.28);border-radius:12px;background:rgba(3,16,25,.96);font:800 13px/1.2 Rajdhani,system-ui,sans-serif;box-shadow:0 12px 34px rgba(0,0,0,.4)}
+    .lbMapSpinner{width:16px;height:16px;border:2px solid rgba(94,232,245,.2);border-top-color:#5ee8f5;border-radius:50%;animation:lbSpin .8s linear infinite}
+    #lbMapRetry{border:1px solid rgba(49,231,242,.45);border-radius:8px;background:#0b2635;color:#fff;padding:6px 9px;font:800 12px Rajdhani,system-ui,sans-serif;cursor:pointer}
+    #lbMapRetry[hidden]{display:none!important}
+    @keyframes lbSpin{to{transform:rotate(360deg)}}
     @media(max-width:700px){#lbMapBack{top:7px;left:7px;min-height:34px;padding:6px 9px;font-size:11px}}
   </style>
 </head>
 <body>
 <button id="lbMapBack" type="button" hidden aria-label="Retour à la carte">← Retour à la carte</button>
+<div id="lbMapStatus" hidden role="status" aria-live="polite">
+  <div class="lbMapStatusCard">
+    <span class="lbMapSpinner" aria-hidden="true"></span>
+    <strong id="lbMapStatusText">Chargement de la gare…</strong>
+    <button id="lbMapRetry" type="button" hidden>Réessayer</button>
+  </div>
+</div>
 <iframe
   id="mapV2"
   src="https://vps.labetaillere.fr/map-v2/carte-preview.html?full=1&v=20260914-bus-icon-size-v3"
@@ -34,16 +48,28 @@
   'use strict';
   let frame=document.getElementById('mapV2');
   const back=document.getElementById('lbMapBack');
-  // full=1 contourne uniquement le routeur mobile legacy du wrapper VPS :
-  // PC, navigateur mobile et PWA utilisent désormais la même carte actuelle.
+  const status=document.getElementById('lbMapStatus');
+  const statusText=document.getElementById('lbMapStatusText');
+  const retry=document.getElementById('lbMapRetry');
   const MAP_URL='https://vps.labetaillere.fr/map-v2/carte-preview.html?full=1&v=20260914-bus-icon-size-v3';
   const LUX_URL='https://vps.labetaillere.fr/map-v2/tests/luxembourg-user-preview-v5-private-maplike-trainclick.html';
   let view='map';
   let luxOpenSeq=0;
+  let luxRetryCount=0;
+  let luxRetryTimer=0;
+
+  function setStatus(visible,text='Chargement de la gare…',showRetry=false){
+    status.hidden=!visible;
+    statusText.textContent=text;
+    retry.hidden=!showRetry;
+  }
+
+  function clearLuxWatch(){
+    if(luxRetryTimer) clearTimeout(luxRetryTimer);
+    luxRetryTimer=0;
+  }
 
   function replaceFrame(url,title){
-    // Nouveau browsing context à chaque changement de vue : Chrome/PWA ne peut
-    // pas restaurer un ancien document Luxembourg devenu blanc via son cache/BFCache.
     const next=document.createElement('iframe');
     next.id='mapV2';
     next.title=title;
@@ -60,9 +86,26 @@
     return url.toString();
   }
 
+  function armLuxWatch(){
+    clearLuxWatch();
+    luxRetryTimer=setTimeout(()=>{
+      if(view!=='lux') return;
+      if(luxRetryCount<1){
+        luxRetryCount++;
+        setStatus(true,'Reconnexion à la gare…');
+        replaceFrame(freshLuxUrl(),'Gare dynamique de Luxembourg');
+        armLuxWatch();
+        return;
+      }
+      setStatus(true,'La gare met plus de temps que prévu.',true);
+    },3500);
+  }
+
   function showMap(){
     if(view==='map') return;
     view='map';
+    clearLuxWatch();
+    setStatus(false);
     back.hidden=true;
     replaceFrame(MAP_URL,'Carte La Bétaillère');
   }
@@ -70,14 +113,29 @@
   function showLuxDynamic(){
     if(view==='lux') return;
     view='lux';
+    luxRetryCount=0;
     back.hidden=false;
+    setStatus(true,'Chargement de la gare…');
     replaceFrame(freshLuxUrl(),'Gare dynamique de Luxembourg');
+    armLuxWatch();
   }
 
   back.addEventListener('click',showMap);
+  retry.addEventListener('click',()=>{
+    if(view!=='lux') return;
+    luxRetryCount=0;
+    setStatus(true,'Rechargement de la gare…');
+    replaceFrame(freshLuxUrl(),'Gare dynamique de Luxembourg');
+    armLuxWatch();
+  });
 
   window.addEventListener('message',event=>{
     if(event.source===frame.contentWindow){
+      if(event.data?.type==='lb:lux-ready' && view==='lux'){
+        clearLuxWatch();
+        setStatus(false);
+        return;
+      }
       if(event.data?.type==='lb:open-lux-dynamic'){
         showLuxDynamic();
         return;
