@@ -1,5 +1,3 @@
-[Reading 18324 lines from start (total: 18324 lines, 0 remaining)]
-
 window.__IS_IOS__ = /iPad|iPhone|iPod/.test(navigator.userAgent)
   || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
 
@@ -12158,78 +12156,15 @@ function scheduleWeatherAfterTableSettled(){
 
   function lbRenderWallMessageHtml(rawText){
     const src = String(rawText || '');
-    let html = escapeHtml(src).replace(
+    const escaped = escapeHtml(src);
+    return escaped.replace(
       /&lt;span class=&quot;(lb-red|lb-orange)&quot;&gt;([\s\S]*?)&lt;\/span&gt;/g,
       function(_, cls, inner){
         return '<span class="' + cls + '">' + inner + '</span>';
       }
     );
-    // Les réponses restent de simples messages du mur : @pseudo est seulement
-    // mis en valeur visuellement, sans créer de fil ou de nouvelle donnée métier.
-    html = html.replace(
-      /(^|[^\p{L}\p{N}_])@([\p{L}\p{N}_.-]{2,24})/gu,
-      '$1<span class="lb-wall-mention">@$2</span>'
-    );
-    return html;
   }
   window.lbRenderWallMessageHtml = lbRenderWallMessageHtml;
-
-  function lbCommentOwnedByCurrentUser(item){
-    const me = String(currentUser?.id ?? '').trim();
-    const owner = String(item?.accountId ?? '').trim();
-    return !!me && !!owner && me === owner;
-  }
-  window.lbCommentOwnedByCurrentUser = lbCommentOwnedByCurrentUser;
-
-  function lbBuildCommentActionsHtml(item){
-    const commentId = String(item?.id ?? '').trim();
-    const pseudo = String(item?.displayPseudo || item?.pseudo || 'Voyageur').trim().slice(0, 24);
-    const reply = pseudo
-      ? `<button type="button" class="lb-comment-action lb-comment-reply" data-comment-reply-pseudo="${escapeHtml(pseudo)}" aria-label="Répondre à ${escapeHtml(pseudo)}" title="Répondre à @${escapeHtml(pseudo)}">↩</button>`
-      : '';
-
-    let remove = '';
-    if (commentId && currentUser?.role === 'admin') {
-      // La croix rouge de modération reste exactement disponible pour l'admin.
-      remove = `<span class="fav-comments-row"><span class="fav-comment-btn" role="button" tabindex="0" data-comment-delete="${escapeHtml(commentId)}" aria-label="Supprimer le commentaire" title="Supprimer le commentaire">❌</span></span>`;
-    } else if (commentId && lbCommentOwnedByCurrentUser(item)) {
-      // Pour les autres comptes, seule leur propre publication affiche la corbeille.
-      remove = `<button type="button" class="lb-comment-action lb-comment-own-delete" data-comment-delete="${escapeHtml(commentId)}" data-comment-own-delete="1" aria-label="Supprimer mon message" title="Supprimer mon message">🗑</button>`;
-    }
-
-    return (reply || remove)
-      ? `<span class="lb-comment-actions" aria-label="Actions du message">${reply}${remove}</span>`
-      : '';
-  }
-  window.lbBuildCommentActionsHtml = lbBuildCommentActionsHtml;
-
-  function lbInsertCommentMention(input, pseudo){
-    if (!input) return false;
-    const cleanPseudo = String(pseudo || '').replace(/\s+/g, ' ').trim().slice(0, 24);
-    if (!cleanPseudo) return false;
-    const mention = `@${cleanPseudo}`;
-    const current = String(input.value || '');
-    if (!current.includes(mention)) {
-      input.value = current.trim() ? `${mention} ${current}` : `${mention} `;
-    }
-    input.focus({ preventScroll: true });
-    try {
-      const end = input.value.length;
-      input.setSelectionRange(end, end);
-    } catch(_err){}
-    input.dispatchEvent(new Event('input', { bubbles:true }));
-    return true;
-  }
-  window.lbInsertCommentMention = lbInsertCommentMention;
-
-  function lbReplyToComment(pseudo, input = null){
-    if (window.lbIsAuthed !== true) {
-      document.getElementById('lbBtnOpenAuth')?.click();
-      return false;
-    }
-    return lbInsertCommentMention(input || $('homeLiveWallInput'), pseudo);
-  }
-  window.lbReplyToComment = lbReplyToComment;
 
   function wallNormalizeKey(value){
     return String(value || '').replace(/\D+/g, '').trim();
@@ -12366,7 +12301,7 @@ function scheduleWeatherAfterTableSettled(){
     } else {
       feed.innerHTML = wall.map((it) => `
         <div class="live-wall-item live-wall-item--home live-wall-item--compact">
-          <div class="live-wall-item-text"><strong>${buildPseudoTriggerHtml(it)}</strong><span class="live-wall-inline-meta">${escapeHtml(fmtHour(it.ts))}</span> : ${lbRenderWallMessageHtml(it.text || '')}${lbBuildCommentActionsHtml(it)}</div>
+          <div class="live-wall-item-text"><strong>${buildPseudoTriggerHtml(it)}</strong><span class="live-wall-inline-meta">${escapeHtml(fmtHour(it.ts))}</span> : ${lbRenderWallMessageHtml(it.text || '')}${currentUser?.role === 'admin' && it.id ? `<span class="fav-comments-row"><span class="fav-comment-btn" role="button" tabindex="0" data-comment-delete="${escapeHtml(String(it.id))}" aria-label="Supprimer le commentaire" title="Supprimer le commentaire">❌</span></span>` : ''}</div>
         </div>
       `).join('');
       feed.scrollTop = 0;
@@ -12494,10 +12429,8 @@ function scheduleWeatherAfterTableSettled(){
   async function deleteComment(id){
     const commentId = String(id || '').trim();
     if (!commentId) throw new Error('Commentaire introuvable');
-    if (!currentUser) throw new Error('Connexion requise');
+    if (currentUser?.role !== 'admin') throw new Error('Action réservée aux admins');
 
-    // L'autorisation réelle reste contrôlée par le serveur :
-    // admin OU auteur du commentaire. Aucun droit n'est accordé côté navigateur.
     const res = await fetch(`https://vps.labetaillere.fr/api/comments/${encodeURIComponent(commentId)}`, {
       method: 'DELETE',
       credentials: 'include'
@@ -12537,19 +12470,8 @@ function scheduleWeatherAfterTableSettled(){
     if (feed && !feed.dataset.deleteBound){
       feed.dataset.deleteBound = '1';
       feed.addEventListener('click', async (e) => {
-        const replyBtn = e.target.closest('[data-comment-reply-pseudo]');
-        if (replyBtn) {
-          e.preventDefault();
-          e.stopPropagation();
-          lbReplyToComment(replyBtn.getAttribute('data-comment-reply-pseudo'));
-          return;
-        }
-
         const btn = e.target.closest('[data-comment-delete]');
         if (!btn) return;
-        e.preventDefault();
-        e.stopPropagation();
-        if (btn.hasAttribute('data-comment-own-delete') && !window.confirm('Supprimer votre message ?')) return;
         try{
           await deleteComment(btn.getAttribute('data-comment-delete'));
         }catch(err){
@@ -12558,9 +12480,7 @@ function scheduleWeatherAfterTableSettled(){
       });
       feed.addEventListener('keydown', async (e) => {
         const btn = e.target.closest('[data-comment-delete]');
-        // Les vrais <button> gèrent déjà Entrée/Espace via l'événement click.
-        // Ce handler ne reste nécessaire que pour l'ancienne croix admin en <span>.
-        if (!btn || btn.tagName === 'BUTTON' || (e.key !== 'Enter' && e.key !== ' ')) return;
+        if (!btn || (e.key !== 'Enter' && e.key !== ' ')) return;
         e.preventDefault();
         try{
           await deleteComment(btn.getAttribute('data-comment-delete'));
@@ -18324,5 +18244,3 @@ async function loadAffluenceDate(dateStr){
     openForKey(alertKey, trainNo, fallback);
   });
 })();
-
-[executed on device: vps-73fa43e3 (dd8da704-7554-4245-92a8-8a25751a2ca2)]
