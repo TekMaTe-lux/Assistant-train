@@ -75,7 +75,7 @@ window.LB_TERRITORY_CONFIG = Object.freeze({
     const stylesheet = document.createElement('link');
     stylesheet.id = 'lbTrafficDetailsStyles';
     stylesheet.rel = 'stylesheet';
-    stylesheet.href = './assets/lb-traffic-details-v1.css?v=8';
+    stylesheet.href = './assets/lb-traffic-details-v1.css?v=9';
     document.head.append(stylesheet);
   }
 
