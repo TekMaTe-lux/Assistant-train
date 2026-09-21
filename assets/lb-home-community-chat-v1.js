@@ -1,3 +1,5 @@
+[Reading 264 lines from start (total: 264 lines, 0 remaining)]
+
 'use strict';
 
 (() => {
@@ -172,9 +174,31 @@
   }
 
   async function handleFullFeedClick(event) {
+    const replyButton = event.target.closest('[data-comment-reply-pseudo]');
+    if (replyButton) {
+      event.preventDefault();
+      event.stopPropagation();
+      const pseudo = replyButton.getAttribute('data-comment-reply-pseudo') || '';
+      const input = $('lbVoiceChatFullInput');
+      if (window.lbIsAuthed !== true) {
+        $('lbBtnOpenAuth')?.click();
+        return;
+      }
+      if (typeof window.lbInsertCommentMention === 'function') {
+        window.lbInsertCommentMention(input, pseudo);
+      } else if (input) {
+        const mention = '@' + String(pseudo).trim();
+        input.value = input.value.trim() ? mention + ' ' + input.value : mention + ' ';
+        input.focus({ preventScroll:true });
+      }
+      return;
+    }
+
     const deleteButton = event.target.closest('[data-comment-delete]');
     if (!deleteButton || typeof window.deleteComment !== 'function') return;
     event.preventDefault();
+    event.stopPropagation();
+    if (deleteButton.hasAttribute('data-comment-own-delete') && !window.confirm('Supprimer votre message ?')) return;
     try {
       await window.deleteComment(deleteButton.getAttribute('data-comment-delete'));
       setTimeout(() => {
@@ -240,3 +264,5 @@
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init, { once: true });
   else init();
 })();
+
+[executed on device: vps-73fa43e3 (dd8da704-7554-4245-92a8-8a25751a2ca2)]
