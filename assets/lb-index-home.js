@@ -1,5 +1,3 @@
-[Reading 909 lines from start (total: 909 lines, 0 remaining)]
-
 (function(){
   function luxTodayISO(){
     try{
@@ -408,16 +406,17 @@
 	        catch(_){ return '--:--'; }
 	      };
 	      feed.innerHTML = wall.map(function(it){
+	        var commentId = String(it && it.id != null ? it.id : '').trim();
+	        var deleteBtn = (isAdmin && commentId)
+	          ? '<span class="fav-comments-row"><span class="fav-comment-btn" role="button" tabindex="0" data-comment-delete="' + escapeHtml(commentId) + '" aria-label="Supprimer le commentaire" title="Supprimer le commentaire">❌</span></span>'
+	          : '';
 	        var renderWallHtml = (typeof window.lbRenderWallMessageHtml === 'function')
 	          ? window.lbRenderWallMessageHtml
 	          : function(v){ return escapeHtml(String(v || '')); };
 	        var pseudoHtml = (typeof window.buildPseudoTriggerHtml === 'function')
 	          ? window.buildPseudoTriggerHtml(it)
 	          : '<strong>' + escapeHtml(it.pseudo || 'Voyageur') + '</strong>';
-	        var actionsHtml = (typeof window.lbBuildCommentActionsHtml === 'function')
-	          ? window.lbBuildCommentActionsHtml(it)
-	          : '';
-	        return '<div class="live-wall-item live-wall-item--home live-wall-item--compact"><div class="live-wall-item-text">' + pseudoHtml + '<span class="live-wall-inline-meta">' + escapeHtml(fmtParisHour(it.ts)) + '</span> : ' + renderWallHtml(it.text || '') + actionsHtml + '</div></div>';
+	        return '<div class="live-wall-item live-wall-item--home live-wall-item--compact"><div class="live-wall-item-text">' + pseudoHtml + '<span class="live-wall-inline-meta">' + escapeHtml(fmtParisHour(it.ts)) + '</span> : ' + renderWallHtml(it.text || '') + '</div>' + deleteBtn + '</div>';
 	      }).join('');
 	      feed.scrollTop = 0;
 	    }
@@ -909,5 +908,3 @@
   window.addEventListener('load', install);
   window.addEventListener('gtfsrt:loaded', scheduleRefresh);
 })();
-
-[executed on device: vps-73fa43e3 (dd8da704-7554-4245-92a8-8a25751a2ca2)]
