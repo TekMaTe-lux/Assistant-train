@@ -234,7 +234,7 @@ window.addEventListener('click', (event) => {
           <button class="lb-major-alert-banner__open" id="lbMajorAlertBannerOpen" type="button">
             <strong class="lb-major-alert-banner__eyebrow" id="lbMajorAlertBannerEyebrow">PERTURBATION MAJEURE</strong>
             <span class="lb-major-alert-banner__text" id="lbMajorAlertBannerText"></span>
-            <span class="lb-major-alert-banner__more">Voir le détail</span>
+            <span class="lb-major-alert-banner__more">Plus d’infos</span>
           </button>
           <button class="lb-major-alert-banner__close" id="lbMajorAlertBannerClose" type="button" aria-label="Masquer ce bandeau">×</button>
         </div>`;
