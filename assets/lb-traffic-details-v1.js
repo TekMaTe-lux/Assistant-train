@@ -21,6 +21,10 @@
   let previousFocus = null;
   let activeSegmentKey = '';
 
+  const STATIC_SUMMARY_URL = 'https://vps.labetaillere.fr/api/train-static-summary';
+  const timetableCache = new Map();
+  let timetablePromise = null;
+
   const qs = (selector, root = document) => root.querySelector(selector);
   const qsa = (selector, root = document) => Array.from(root.querySelectorAll(selector));
   const clean = (value) => String(value || '').replace(/\s+/g, ' ').trim();
@@ -114,11 +118,16 @@
       const canceled = isFullyCanceled(status);
       const delayed = !canceled && !partial && maxDelayMin > 0;
       const state = canceled ? 'canceled' : partial ? 'partial' : delayed ? 'delayed' : 'ontime';
+      const routeStops = Object.keys(stops || {}).filter(Boolean);
+      const origin = clean(train.origin || train.from || routeStops[0] || '');
+      const destination = clean(train.destination || train.to || routeStops[routeStops.length - 1] || '');
 
       records.push({
         trainNumber: trainNumberFrom(key, train),
         state,
-        maxDelayMin
+        maxDelayMin,
+        origin,
+        destination
       });
     }
 
@@ -162,6 +171,86 @@
       .replace(/>/g, '&gt;')
       .replace(/"/g, '&quot;')
       .replace(/'/g, '&#039;');
+  }
+
+  function formatClock(value) {
+    const match = String(value || '').match(/(\d{1,2}):(\d{2})/);
+    return match ? `${String(Number(match[1])).padStart(2, '0')}:${match[2]}` : '';
+  }
+
+  function routeHtml(record, schedule = null) {
+    const origin = clean(schedule?.origin || record?.origin || '');
+    const destination = clean(schedule?.destination || record?.destination || '');
+    if (!origin || !destination) return '';
+
+    const departure = formatClock(schedule?.departure);
+    const arrival = formatClock(schedule?.arrival);
+
+    return `
+      <span class="lb-traffic-route-origin">${escapeHtml(origin)}</span>
+      ${departure ? `<time class="lb-traffic-route-time" datetime="${escapeHtml(departure)}">${escapeHtml(departure)}</time>` : ''}
+      <span class="lb-traffic-route-arrow" aria-hidden="true">→</span>
+      <span class="lb-traffic-route-destination">${escapeHtml(destination)}</span>
+      ${arrival ? `<time class="lb-traffic-route-time" datetime="${escapeHtml(arrival)}">${escapeHtml(arrival)}</time>` : ''}
+    `;
+  }
+
+  async function loadTimetableFor(records) {
+    const numbers = (records || [])
+      .map((record) => String(record?.trainNumber || '').replace(/\D/g, ''))
+      .filter((number, index, array) => /^\d{4,6}$/.test(number) && array.indexOf(number) === index);
+
+    const missing = numbers.filter((number) => !timetableCache.has(number));
+    if (!missing.length) return timetableCache;
+
+    const requestNumbers = missing.slice(0, 50);
+    const url = `${STATIC_SUMMARY_URL}?trains=${encodeURIComponent(requestNumbers.join(','))}`;
+
+    try {
+      const response = await fetch(url, { cache: 'no-store' });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const payload = await response.json();
+      Object.entries(payload?.trains || {}).forEach(([number, row]) => {
+        if (!row || typeof row !== 'object') return;
+        timetableCache.set(String(number), {
+          origin: clean(row.origin),
+          destination: clean(row.destination),
+          departure: formatClock(row.departure),
+          arrival: formatClock(row.arrival)
+        });
+      });
+      requestNumbers.forEach((number) => {
+        if (!timetableCache.has(number)) timetableCache.set(number, null);
+      });
+    } catch (_) {
+      // La modale reste immédiatement utilisable avec origine/terminus temps réel.
+    }
+
+    return timetableCache;
+  }
+
+  async function hydrateAffectedRoutes(segmentKey, records) {
+    if (!records?.length) return;
+    if (timetablePromise) {
+      try { await timetablePromise; } catch (_) {}
+    }
+
+    timetablePromise = loadTimetableFor(records);
+    try {
+      await timetablePromise;
+    } finally {
+      timetablePromise = null;
+    }
+
+    if (activeSegmentKey !== segmentKey || !modal?.classList.contains('is-open')) return;
+
+    records.forEach((record) => {
+      const number = String(record?.trainNumber || '');
+      const route = modal.querySelector(`[data-lb-traffic-route="${CSS.escape(number)}"]`);
+      if (!route) return;
+      const html = routeHtml(record, timetableCache.get(number));
+      if (html) route.innerHTML = html;
+    });
   }
 
   /*
@@ -361,6 +450,23 @@
         return;
       }
 
+      const trainButton = event.target.closest('[data-lb-traffic-train]');
+      if (trainButton) {
+        event.preventDefault();
+        event.stopPropagation();
+        const number = clean(trainButton.getAttribute('data-lb-traffic-train'));
+        if (!number) return;
+        closeModal();
+        window.setTimeout(() => {
+          if (typeof window.lbOpenTrainProfile === 'function') {
+            Promise.resolve(window.lbOpenTrainProfile(number)).catch(() => {});
+          } else if (typeof window.lbOpenTrainDetail === 'function') {
+            Promise.resolve(window.lbOpenTrainDetail(number)).catch(() => {});
+          }
+        }, 30);
+        return;
+      }
+
       if (event.target.closest('[data-lb-traffic-live]')) {
         event.preventDefault();
         event.stopPropagation();
@@ -466,10 +572,14 @@
           <div class="lb-traffic-train-list">
             ${affected.map((record) => {
               const state = formatTrainState(record);
-              return `<div class="lb-traffic-train-row">
-                <span class="lb-traffic-train-number">TER ${escapeHtml(record.trainNumber)}</span>
+              const initialRoute = routeHtml(record, timetableCache.get(String(record.trainNumber)));
+              return `<button type="button" class="lb-traffic-train-row" data-lb-traffic-train="${escapeHtml(record.trainNumber)}" aria-label="Ouvrir la fiche du TER ${escapeHtml(record.trainNumber)}">
+                <span class="lb-traffic-train-copy">
+                  <span class="lb-traffic-train-number">TER ${escapeHtml(record.trainNumber)}</span>
+                  ${initialRoute ? `<span class="lb-traffic-train-route" data-lb-traffic-route="${escapeHtml(record.trainNumber)}">${initialRoute}</span>` : ''}
+                </span>
                 <span class="lb-traffic-train-state ${state.className}">${escapeHtml(state.label)}</span>
-              </div>`;
+              </button>`;
             }).join('')}
           </div>
         </section>`
@@ -532,7 +642,10 @@
 
     await refreshSourceIfNeeded();
     if (activeSegmentKey !== segmentKey || !currentModal.classList.contains('is-open')) return;
-    renderDetail(segment, analyzeSegment(getCurrentRaw(), segment), getBadgeState(segment));
+    const stats = analyzeSegment(getCurrentRaw(), segment);
+    renderDetail(segment, stats, getBadgeState(segment));
+    const affected = affectedRecords(stats);
+    if (affected.length) hydrateAffectedRoutes(segmentKey, affected);
   }
 
   function closeModal() {
