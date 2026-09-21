@@ -44,6 +44,234 @@ window.addEventListener('click', (event) => {
   // Sortir la modale de la grille d'accueil : position fixed fiable sur PC, iOS et Android.
   if (modal.parentElement !== document.body) document.body.appendChild(modal);
 
+  // LB_MAJOR_ALERT_BANNER_V1 — vue compacte des mêmes alertes majeures que le badge.
+  // Aucun appel réseau supplémentaire : le bandeau est alimenté par render(items).
+  const BANNER_DISMISS_KEY = 'lb.major-alert-banner.dismissed.v1';
+  let currentBannerSignature = '';
+
+  const ensureBannerUi = () => {
+    let style = document.getElementById('lb-major-alert-banner-style');
+    if (!style) {
+      style = document.createElement('style');
+      style.id = 'lb-major-alert-banner-style';
+      style.textContent = `
+        #lbMajorAlertBanner[hidden] { display: none !important; }
+        #lbMajorAlertBanner {
+          --lb-major-accent: #dc3545;
+          --lb-major-bg: rgba(74, 10, 18, .90);
+          position: fixed;
+          left: 0;
+          right: 0;
+          z-index: 12950;
+          top: var(--lb-major-banner-top, 72px);
+          padding: 0 max(10px, env(safe-area-inset-right)) 0 max(10px, env(safe-area-inset-left));
+          border-bottom: 1px solid color-mix(in srgb, var(--lb-major-accent) 72%, transparent);
+          background:
+            linear-gradient(90deg,
+              color-mix(in srgb, var(--lb-major-bg) 94%, transparent),
+              rgba(7, 20, 28, .84));
+          box-shadow: 0 8px 26px rgba(0,0,0,.24), 0 0 18px color-mix(in srgb, var(--lb-major-accent) 12%, transparent);
+          -webkit-backdrop-filter: blur(14px) saturate(130%);
+          backdrop-filter: blur(14px) saturate(130%);
+        }
+        #lbMajorAlertBanner[data-level="warning"] {
+          --lb-major-accent: #ffc107;
+          --lb-major-bg: rgba(78, 54, 3, .90);
+        }
+        #lbMajorAlertBanner[data-level="delay"] {
+          --lb-major-accent: #fd7e14;
+          --lb-major-bg: rgba(76, 34, 4, .90);
+        }
+        #lbMajorAlertBanner[data-level="info"] {
+          --lb-major-accent: #17a2b8;
+          --lb-major-bg: rgba(5, 47, 57, .90);
+        }
+        .lb-major-alert-banner__inner {
+          min-height: 46px;
+          max-width: 1240px;
+          margin: 0 auto;
+          display: grid;
+          grid-template-columns: auto minmax(0, 1fr) auto;
+          align-items: center;
+          gap: 10px;
+        }
+        .lb-major-alert-banner__icon {
+          display: grid;
+          place-items: center;
+          width: 29px;
+          height: 29px;
+          border: 1px solid color-mix(in srgb, var(--lb-major-accent) 80%, white 10%);
+          border-radius: 8px;
+          color: var(--lb-major-accent);
+          background: color-mix(in srgb, var(--lb-major-accent) 10%, transparent);
+          box-shadow: 0 0 12px color-mix(in srgb, var(--lb-major-accent) 18%, transparent);
+          font-size: 16px;
+          line-height: 1;
+        }
+        .lb-major-alert-banner__open {
+          min-width: 0;
+          border: 0;
+          padding: 7px 0;
+          background: transparent;
+          color: #f7fbfd;
+          text-align: left;
+          cursor: pointer;
+          display: flex;
+          align-items: baseline;
+          gap: 9px;
+        }
+        .lb-major-alert-banner__open:focus-visible,
+        .lb-major-alert-banner__close:focus-visible {
+          outline: 2px solid var(--lb-major-accent);
+          outline-offset: 2px;
+        }
+        .lb-major-alert-banner__eyebrow {
+          flex: 0 0 auto;
+          color: var(--lb-major-accent);
+          font: 900 .70rem/1 "Orbitron", system-ui, sans-serif;
+          letter-spacing: .055em;
+          text-transform: uppercase;
+          white-space: nowrap;
+        }
+        .lb-major-alert-banner__text {
+          min-width: 0;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+          color: #eefbff;
+          font: 700 .88rem/1.2 "Rajdhani", system-ui, sans-serif;
+          letter-spacing: .01em;
+        }
+        .lb-major-alert-banner__more {
+          flex: 0 0 auto;
+          color: #9cefff;
+          font-size: .76rem;
+          font-weight: 800;
+          white-space: nowrap;
+        }
+        .lb-major-alert-banner__close {
+          width: 38px;
+          height: 38px;
+          border: 0;
+          border-radius: 9px;
+          background: transparent;
+          color: #dbe7eb;
+          font-size: 22px;
+          line-height: 1;
+          cursor: pointer;
+          opacity: .82;
+        }
+        .lb-major-alert-banner__close:hover {
+          background: rgba(255,255,255,.08);
+          color: #fff;
+          opacity: 1;
+        }
+        #lbMajorAlertSpacer {
+          height: 0;
+          transition: height .16s ease;
+          pointer-events: none;
+        }
+        body.lb-major-alert-banner-visible #lbMajorAlertSpacer {
+          height: var(--lb-major-banner-height, 46px);
+        }
+        @media (max-width: 700px) {
+          #lbMajorAlertBanner {
+            padding-left: max(7px, env(safe-area-inset-left));
+            padding-right: max(7px, env(safe-area-inset-right));
+          }
+          .lb-major-alert-banner__inner {
+            min-height: 52px;
+            gap: 7px;
+          }
+          .lb-major-alert-banner__icon {
+            width: 27px;
+            height: 27px;
+            border-radius: 7px;
+            font-size: 14px;
+          }
+          .lb-major-alert-banner__open {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) auto;
+            gap: 2px 7px;
+            align-items: center;
+            padding: 6px 0;
+          }
+          .lb-major-alert-banner__eyebrow {
+            grid-column: 1 / -1;
+            font-size: .58rem;
+          }
+          .lb-major-alert-banner__text {
+            font-size: .80rem;
+          }
+          .lb-major-alert-banner__more {
+            font-size: .68rem;
+          }
+          .lb-major-alert-banner__close {
+            width: 36px;
+            height: 42px;
+          }
+          body.lb-major-alert-banner-visible #lbMajorAlertSpacer {
+            height: var(--lb-major-banner-height, 52px);
+          }
+        }
+        @media (prefers-reduced-motion: reduce) {
+          #lbMajorAlertSpacer { transition: none; }
+        }
+      `;
+      document.head.appendChild(style);
+    }
+
+    let banner = document.getElementById('lbMajorAlertBanner');
+    if (!banner) {
+      banner = document.createElement('aside');
+      banner.id = 'lbMajorAlertBanner';
+      banner.hidden = true;
+      banner.setAttribute('role', 'status');
+      banner.setAttribute('aria-live', 'polite');
+      banner.innerHTML = `
+        <div class="lb-major-alert-banner__inner">
+          <span class="lb-major-alert-banner__icon" id="lbMajorAlertBannerIcon" aria-hidden="true">⚠️</span>
+          <button class="lb-major-alert-banner__open" id="lbMajorAlertBannerOpen" type="button">
+            <strong class="lb-major-alert-banner__eyebrow" id="lbMajorAlertBannerEyebrow">PERTURBATION MAJEURE</strong>
+            <span class="lb-major-alert-banner__text" id="lbMajorAlertBannerText"></span>
+            <span class="lb-major-alert-banner__more">Voir le détail</span>
+          </button>
+          <button class="lb-major-alert-banner__close" id="lbMajorAlertBannerClose" type="button" aria-label="Masquer ce bandeau">×</button>
+        </div>`;
+
+      const topBar = document.querySelector('.top-bar');
+      if (topBar?.parentNode) topBar.insertAdjacentElement('afterend', banner);
+      else document.body.prepend(banner);
+    }
+
+    let spacer = document.getElementById('lbMajorAlertSpacer');
+    if (!spacer) {
+      spacer = document.createElement('div');
+      spacer.id = 'lbMajorAlertSpacer';
+      spacer.setAttribute('aria-hidden', 'true');
+      banner.insertAdjacentElement('afterend', spacer);
+    }
+    return banner;
+  };
+
+  const banner = ensureBannerUi();
+  const bannerIcon = document.getElementById('lbMajorAlertBannerIcon');
+  const bannerEyebrow = document.getElementById('lbMajorAlertBannerEyebrow');
+  const bannerText = document.getElementById('lbMajorAlertBannerText');
+  const bannerOpen = document.getElementById('lbMajorAlertBannerOpen');
+  const bannerClose = document.getElementById('lbMajorAlertBannerClose');
+
+  const syncBannerGeometry = () => {
+    const topBar = document.querySelector('.top-bar');
+    const top = topBar ? Math.max(0, Math.round(topBar.getBoundingClientRect().bottom)) : 0;
+    document.documentElement.style.setProperty('--lb-major-banner-top', `${top}px`);
+    if (!banner.hidden) {
+      const height = Math.max(44, Math.round(banner.getBoundingClientRect().height));
+      document.documentElement.style.setProperty('--lb-major-banner-height', `${height}px`);
+    }
+  };
+  window.addEventListener('resize', syncBannerGeometry, { passive: true });
+
   const escapeHtml = (value) => String(value || '').replace(/[&<>"']/g, (char) => ({
     '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;'
   }[char]));
@@ -191,6 +419,57 @@ window.addEventListener('click', (event) => {
     return Array.from(groups.values());
   }
 
+  function routeLabelForBanner(item){
+    const text = item?.text || normalize(
+      item?.situation?.detail || item?.situation?.description || item?.situation?.summary || ''
+    );
+    if (/thionville/.test(text) && /luxembourg/.test(text)) return 'Thionville–Luxembourg';
+    if (/metz/.test(text) && /luxembourg/.test(text)) return 'Metz–Luxembourg';
+    if (/nancy/.test(text) && /metz/.test(text)) return 'Nancy–Metz';
+    return '';
+  }
+
+  function renderBanner(items, strongest){
+    if (!banner) return;
+    if (!Array.isArray(items) || items.length === 0) {
+      banner.hidden = true;
+      currentBannerSignature = '';
+      document.body.classList.remove('lb-major-alert-banner-visible');
+      document.documentElement.style.removeProperty('--lb-major-banner-height');
+      return;
+    }
+
+    const ids = items.map((item) =>
+      item.fingerprint
+      || String(item?.situation?.situation_number || '')
+      || normalize(item?.situation?.summary || item?.situation?.description || '')
+    ).filter(Boolean).sort();
+    currentBannerSignature = ids.join('|');
+
+    let dismissed = '';
+    try { dismissed = sessionStorage.getItem(BANNER_DISMISS_KEY) || ''; } catch (_) {}
+    if (dismissed && dismissed === currentBannerSignature) {
+      banner.hidden = true;
+      document.body.classList.remove('lb-major-alert-banner-visible');
+      document.documentElement.style.removeProperty('--lb-major-banner-height');
+      return;
+    }
+
+    const first = items[0];
+    const severity = first?.severity || strongest || { key:'critical', icon:'⚠️', label:'Perturbation majeure' };
+    const route = routeLabelForBanner(first);
+    const firstLabel = route ? `${severity.label} — ${route}` : severity.label;
+    const suffix = items.length > 1 ? ` + ${items.length - 1} autre${items.length > 2 ? 's' : ''}` : '';
+
+    banner.dataset.level = strongest?.key || severity.key || 'critical';
+    if (bannerIcon) bannerIcon.textContent = strongest?.icon || severity.icon || '⚠️';
+    if (bannerEyebrow) bannerEyebrow.textContent = items.length > 1 ? `${items.length} PERTURBATIONS MAJEURES` : 'PERTURBATION MAJEURE';
+    if (bannerText) bannerText.textContent = `${firstLabel}${suffix}`;
+    banner.hidden = false;
+    document.body.classList.add('lb-major-alert-banner-visible');
+    requestAnimationFrame(syncBannerGeometry);
+  }
+
   function render(items){
     countNode.textContent = String(items.length);
     const labelNode = document.getElementById('homeMajorAlertLabel');
@@ -205,6 +484,7 @@ window.addEventListener('click', (event) => {
     if (strongest?.key) badge.dataset.level = strongest.key;
     else badge.removeAttribute('data-level');
 
+    renderBanner(items, strongest);
     badge.hidden = items.length === 0;
     badge.setAttribute(
       'aria-label',
@@ -268,6 +548,22 @@ window.addEventListener('click', (event) => {
     badge.focus();
   }
 
+  bannerOpen?.addEventListener('click', (event) => {
+    event.preventDefault();
+    openModal();
+  });
+  bannerClose?.addEventListener('click', (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    if (currentBannerSignature) {
+      try { sessionStorage.setItem(BANNER_DISMISS_KEY, currentBannerSignature); } catch (_) {}
+    }
+    banner.hidden = true;
+    document.body.classList.remove('lb-major-alert-banner-visible');
+    document.documentElement.style.removeProperty('--lb-major-banner-height');
+  });
+  syncBannerGeometry();
+
   // L'accueil peut reconstruire ses cartes : délégation nécessaire pour conserver le clic.
   window.addEventListener('click', (event) => {
     const trigger = event.target.closest?.('#homeMajorAlertBadge');
@@ -301,6 +597,7 @@ window.addEventListener('click', (event) => {
     })
     .catch((error) => {
       badge.hidden = true;
+      renderBanner([], null);
       console.warn('[accueil] alertes majeures indisponibles :', error);
     });
 })();
