@@ -1,5 +1,3 @@
-[Reading 464 lines from start (total: 464 lines, 0 remaining)]
-
 /*
  * La Bétaillère — contrôleur mobile v4.
  * Mesures de viewport PWA, clavier mobile et enrichissement léger du tableau.
@@ -460,9 +458,7 @@
   if (document.getElementById('lb-home-community-premium-v1')) return;
   const script = document.createElement('script');
   script.id = 'lb-home-community-premium-v1';
-  script.src = './assets/lb-home-community-premium-v1.js?v=2';
+  script.src = './assets/lb-home-community-premium-v1.js?v=1';
   script.async = false;
   (document.head || document.documentElement).appendChild(script);
 })();
-
-[executed on device: vps-73fa43e3 (dd8da704-7554-4245-92a8-8a25751a2ca2)]
