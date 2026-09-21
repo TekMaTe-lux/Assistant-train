@@ -1,5 +1,3 @@
-[Reading 154 lines from start (total: 154 lines, 0 remaining)]
-
 'use strict';
 
 (() => {
@@ -113,7 +111,7 @@
       const link = document.createElement('link');
       link.id = 'lb-home-community-chat-v1-css';
       link.rel = 'stylesheet';
-      link.href = './assets/lb-home-community-chat-v1.css?v=2';
+      link.href = './assets/lb-home-community-chat-v1.css?v=1';
       (document.head || document.documentElement).appendChild(link);
     }
     if (!document.getElementById('lb-home-community-collapsed-v2-css')) {
@@ -126,7 +124,7 @@
     if (!document.getElementById('lb-home-community-chat-v1-js')) {
       const script = document.createElement('script');
       script.id = 'lb-home-community-chat-v1-js';
-      script.src = './assets/lb-home-community-chat-v1.js?v=2';
+      script.src = './assets/lb-home-community-chat-v1.js?v=1';
       script.async = false;
       (document.head || document.documentElement).appendChild(script);
     }
@@ -154,5 +152,3 @@
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init, { once: true });
   else init();
 })();
-
-[executed on device: vps-73fa43e3 (dd8da704-7554-4245-92a8-8a25751a2ca2)]
