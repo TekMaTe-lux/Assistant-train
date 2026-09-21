@@ -12148,23 +12148,160 @@ function scheduleWeatherAfterTableSettled(){
       authorPoints: Number(raw.author_points || raw.points || 0),
       text: String(raw.message || raw.text || '').trim().slice(0, 180),
       trainNumber: String(raw.train_number || raw.trainNumber || '').trim(),
+      userId: String(raw.user_id || raw.userId || '').trim(),
 	  accountId: String(raw.account_id || raw.accountId || raw.user_id || '').trim(),
       ts: createdTs
     };
   }
 
 
+  function lbMentionToken(pseudo){
+    return String(pseudo || '')
+      .trim()
+      .replace(/^@+/, '')
+      .replace(/\s+/g, '_')
+      .replace(/[^\p{L}\p{N}_.-]+/gu, '')
+      .slice(0, 32);
+  }
+  window.lbMentionToken = lbMentionToken;
+
+  function lbCurrentWallPseudo(){
+    return String(
+      currentUser?.public_pseudo ||
+      currentUser?.publicPseudo ||
+      currentUser?.pseudo ||
+      lbPrefsCache?.public_pseudo ||
+      lbPrefsCache?.pseudo ||
+      ''
+    ).trim();
+  }
+
+  function lbCommentOwnedByCurrentUser(item){
+    const me = String(currentUser?.id ?? '').trim();
+    if (!me) return false;
+    const userId = String(item?.userId ?? '').trim();
+    const accountId = String(item?.accountId ?? '').trim();
+    return userId === me || accountId === me || accountId === 'uid:' + me;
+  }
+  window.lbCommentOwnedByCurrentUser = lbCommentOwnedByCurrentUser;
+
   function lbRenderWallMessageHtml(rawText){
     const src = String(rawText || '');
-    const escaped = escapeHtml(src);
-    return escaped.replace(
+    let html = escapeHtml(src).replace(
       /&lt;span class=&quot;(lb-red|lb-orange)&quot;&gt;([\s\S]*?)&lt;\/span&gt;/g,
       function(_, cls, inner){
         return '<span class="' + cls + '">' + inner + '</span>';
       }
     );
+
+    const meToken = lbMentionToken(lbCurrentWallPseudo()).toLowerCase();
+    html = html.replace(
+      /(^|[^\p{L}\p{N}_])@([\p{L}\p{N}_.-]{2,32})/gu,
+      function(_, before, token){
+        const isMe = meToken && String(token).toLowerCase() === meToken;
+        return before + '<span class="lb-wall-mention' + (isMe ? ' lb-wall-mention--me' : '') + '">@' + token + '</span>';
+      }
+    );
+    return html;
   }
   window.lbRenderWallMessageHtml = lbRenderWallMessageHtml;
+
+  function lbBuildCommentActionsHtml(item){
+    const commentId = String(item?.id ?? '').trim();
+    const pseudo = String(item?.displayPseudo || item?.pseudo || 'Voyageur').trim().slice(0, 24);
+    const token = lbMentionToken(pseudo);
+
+    const reply = token
+      ? `<button type="button" class="lb-comment-action lb-comment-reply" data-comment-reply-pseudo="${escapeHtml(pseudo)}" aria-label="Répondre à ${escapeHtml(pseudo)}" title="Répondre à @${escapeHtml(token)}">↩</button>`
+      : '';
+
+    let remove = '';
+    if (commentId && currentUser?.role === 'admin') {
+      // Modération historique : un seul contrôle rouge pour CelestiaFire/admin.
+      remove = `<span class="fav-comments-row"><span class="fav-comment-btn" role="button" tabindex="0" data-comment-delete="${escapeHtml(commentId)}" aria-label="Supprimer le commentaire" title="Supprimer le commentaire">❌</span></span>`;
+    } else if (commentId && lbCommentOwnedByCurrentUser(item)) {
+      remove = `<button type="button" class="lb-comment-action lb-comment-own-delete" data-comment-delete="${escapeHtml(commentId)}" data-comment-own-delete="1" aria-label="Supprimer mon message" title="Supprimer mon message">🗑</button>`;
+    }
+
+    return (reply || remove)
+      ? `<span class="lb-comment-actions" aria-label="Actions du message">${reply}${remove}</span>`
+      : '';
+  }
+  window.lbBuildCommentActionsHtml = lbBuildCommentActionsHtml;
+
+  function lbInsertCommentMention(input, pseudo){
+    if (!input) return false;
+    const token = lbMentionToken(pseudo);
+    if (!token) return false;
+    const mention = '@' + token;
+    const current = String(input.value || '');
+    const hasMention = current.toLowerCase().includes(mention.toLowerCase());
+    if (!hasMention) {
+      input.value = current.trim() ? mention + ' ' + current : mention + ' ';
+    }
+    input.focus({ preventScroll: true });
+    try {
+      const end = input.value.length;
+      input.setSelectionRange(end, end);
+    } catch(_err){}
+    input.dispatchEvent(new Event('input', { bubbles:true }));
+    return true;
+  }
+  window.lbInsertCommentMention = lbInsertCommentMention;
+
+  function lbReplyToComment(pseudo, input = null){
+    if (window.lbIsAuthed !== true) {
+      document.getElementById('lbBtnOpenAuth')?.click();
+      return false;
+    }
+    return lbInsertCommentMention(input || $('homeLiveWallInput'), pseudo);
+  }
+  window.lbReplyToComment = lbReplyToComment;
+
+  function lbShowMentionToast(item){
+    if (!item || document.hidden) return;
+    document.getElementById('lbWallMentionToast')?.remove();
+    const toast = document.createElement('button');
+    toast.type = 'button';
+    toast.id = 'lbWallMentionToast';
+    toast.className = 'lb-wall-mention-toast';
+    const author = String(item.displayPseudo || item.pseudo || 'Un voyageur').trim();
+    const text = String(item.text || '').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
+    toast.innerHTML = '<strong>' + escapeHtml(author) + ' vous a mentionné</strong><span>' + escapeHtml(text.slice(0, 105)) + (text.length > 105 ? '…' : '') + '</span>';
+    toast.addEventListener('click', () => {
+      document.getElementById('lbVoiceChatExpandBtn')?.click();
+      toast.remove();
+    });
+    document.body.appendChild(toast);
+    window.setTimeout(() => toast.remove(), 8500);
+  }
+
+  function lbNotifyCurrentUserMentions(items){
+    const meId = String(currentUser?.id ?? '').trim();
+    const token = lbMentionToken(lbCurrentWallPseudo());
+    if (!meId || !token || !Array.isArray(items)) return;
+
+    const storageKey = 'lb_wall_mentions_seen_v1_' + meId;
+    let seen = [];
+    try { seen = JSON.parse(localStorage.getItem(storageKey) || '[]'); } catch(_err){}
+    if (!Array.isArray(seen)) seen = [];
+    const seenSet = new Set(seen.map(String));
+    const needle = '@' + token.toLowerCase();
+    const maxAge = 24 * 60 * 60 * 1000;
+
+    const matches = items.filter((item) => {
+      const id = String(item?.id ?? '');
+      if (!id || seenSet.has(id) || lbCommentOwnedByCurrentUser(item)) return false;
+      if (Date.now() - Number(item?.ts || 0) > maxAge) return false;
+      return String(item?.text || '').toLowerCase().includes(needle);
+    });
+
+    if (!matches.length) return;
+    matches.forEach((item) => seenSet.add(String(item.id)));
+    try { localStorage.setItem(storageKey, JSON.stringify(Array.from(seenSet).slice(-100))); } catch(_err){}
+    lbShowMentionToast(matches[0]);
+  }
+  window.lbNotifyCurrentUserMentions = lbNotifyCurrentUserMentions;
 
   function wallNormalizeKey(value){
     return String(value || '').replace(/\D+/g, '').trim();
@@ -12301,7 +12438,7 @@ function scheduleWeatherAfterTableSettled(){
     } else {
       feed.innerHTML = wall.map((it) => `
         <div class="live-wall-item live-wall-item--home live-wall-item--compact">
-          <div class="live-wall-item-text"><strong>${buildPseudoTriggerHtml(it)}</strong><span class="live-wall-inline-meta">${escapeHtml(fmtHour(it.ts))}</span> : ${lbRenderWallMessageHtml(it.text || '')}${currentUser?.role === 'admin' && it.id ? `<span class="fav-comments-row"><span class="fav-comment-btn" role="button" tabindex="0" data-comment-delete="${escapeHtml(String(it.id))}" aria-label="Supprimer le commentaire" title="Supprimer le commentaire">❌</span></span>` : ''}</div>
+          <div class="live-wall-item-text"><strong>${buildPseudoTriggerHtml(it)}</strong><span class="live-wall-inline-meta">${escapeHtml(fmtHour(it.ts))}</span> : ${lbRenderWallMessageHtml(it.text || '')}${lbBuildCommentActionsHtml(it)}</div>
         </div>
       `).join('');
       feed.scrollTop = 0;
@@ -12376,6 +12513,7 @@ function scheduleWeatherAfterTableSettled(){
     }
 
     renderCommentsUI();
+    if (isAuthed) lbNotifyCurrentUserMentions(lbCommentState.wall);
     refreshGamificationUI({ force: true }).catch(()=>{});
     return isAuthed;
   }
@@ -12395,6 +12533,7 @@ function scheduleWeatherAfterTableSettled(){
           .slice(0, 50);
         window.lbCommentState = lbCommentState;
         renderCommentsUI();
+        lbNotifyCurrentUserMentions(lbCommentState.wall);
         return lbCommentState.wall;
       }catch(err){
         console.warn('Impossible de charger les commentaires', err);
@@ -12429,8 +12568,9 @@ function scheduleWeatherAfterTableSettled(){
   async function deleteComment(id){
     const commentId = String(id || '').trim();
     if (!commentId) throw new Error('Commentaire introuvable');
-    if (currentUser?.role !== 'admin') throw new Error('Action réservée aux admins');
+    if (!currentUser) throw new Error('Connexion requise');
 
+    // Le serveur garde l'autorité finale : admin OU auteur réel du message.
     const res = await fetch(`https://vps.labetaillere.fr/api/comments/${encodeURIComponent(commentId)}`, {
       method: 'DELETE',
       credentials: 'include'
@@ -12470,8 +12610,19 @@ function scheduleWeatherAfterTableSettled(){
     if (feed && !feed.dataset.deleteBound){
       feed.dataset.deleteBound = '1';
       feed.addEventListener('click', async (e) => {
+        const replyBtn = e.target.closest('[data-comment-reply-pseudo]');
+        if (replyBtn) {
+          e.preventDefault();
+          e.stopPropagation();
+          lbReplyToComment(replyBtn.getAttribute('data-comment-reply-pseudo'));
+          return;
+        }
+
         const btn = e.target.closest('[data-comment-delete]');
         if (!btn) return;
+        e.preventDefault();
+        e.stopPropagation();
+        if (btn.hasAttribute('data-comment-own-delete') && !window.confirm('Supprimer votre message ?')) return;
         try{
           await deleteComment(btn.getAttribute('data-comment-delete'));
         }catch(err){
@@ -12480,7 +12631,8 @@ function scheduleWeatherAfterTableSettled(){
       });
       feed.addEventListener('keydown', async (e) => {
         const btn = e.target.closest('[data-comment-delete]');
-        if (!btn || (e.key !== 'Enter' && e.key !== ' ')) return;
+        // Les boutons natifs déclenchent déjà click avec Entrée/Espace.
+        if (!btn || btn.tagName === 'BUTTON' || (e.key !== 'Enter' && e.key !== ' ')) return;
         e.preventDefault();
         try{
           await deleteComment(btn.getAttribute('data-comment-delete'));

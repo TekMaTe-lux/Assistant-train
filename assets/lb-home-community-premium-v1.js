@@ -111,7 +111,7 @@
       const link = document.createElement('link');
       link.id = 'lb-home-community-chat-v1-css';
       link.rel = 'stylesheet';
-      link.href = './assets/lb-home-community-chat-v1.css?v=1';
+      link.href = './assets/lb-home-community-chat-v1.css?v=2';
       (document.head || document.documentElement).appendChild(link);
     }
     if (!document.getElementById('lb-home-community-collapsed-v2-css')) {
@@ -124,7 +124,7 @@
     if (!document.getElementById('lb-home-community-chat-v1-js')) {
       const script = document.createElement('script');
       script.id = 'lb-home-community-chat-v1-js';
-      script.src = './assets/lb-home-community-chat-v1.js?v=1';
+      script.src = './assets/lb-home-community-chat-v1.js?v=2';
       script.async = false;
       (document.head || document.documentElement).appendChild(script);
     }
