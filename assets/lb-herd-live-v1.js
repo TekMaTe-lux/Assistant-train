@@ -65,7 +65,7 @@
               <h3 id="lbHerdLiveTitle">🐄 Le troupeau en direct</h3>
               <div class="lb-herd-live-kicker"><i aria-hidden="true"></i><span data-herd-window>Activité des 5 dernières min</span></div>
             </div>
-            <button type="button" class="lb-herd-live-close" data-herd-close aria-label="Fermer">×</button>
+            <button type="button" class="lb-herd-live-close tron-close-button" data-herd-close aria-label="Fermer" title="Fermer"></button>
           </div>
           <div class="lb-herd-live-grid">
             <div class="lb-herd-live-stat lb-herd-live-stat--audience"><strong data-herd-active>—</strong><span>actifs sur le site</span><small><b data-herd-members>—</b> membres · <b data-herd-visitors>—</b> visiteurs</small></div>
