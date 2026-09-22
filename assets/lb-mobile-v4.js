@@ -458,7 +458,7 @@
   if (document.getElementById('lb-home-community-premium-v1')) return;
   const script = document.createElement('script');
   script.id = 'lb-home-community-premium-v1';
-  script.src = './assets/lb-home-community-premium-v1.js?v=3';
+  script.src = './assets/lb-home-community-premium-v1.js?v=4';
   script.async = false;
   (document.head || document.documentElement).appendChild(script);
 })();

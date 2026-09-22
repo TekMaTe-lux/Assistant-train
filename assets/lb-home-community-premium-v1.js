@@ -118,13 +118,13 @@
       const link = document.createElement('link');
       link.id = 'lb-home-community-collapsed-v2-css';
       link.rel = 'stylesheet';
-      link.href = './assets/lb-home-community-collapsed-v2.css?v=4';
+      link.href = './assets/lb-home-community-collapsed-v2.css?v=5';
       (document.head || document.documentElement).appendChild(link);
     }
     if (!document.getElementById('lb-home-community-chat-v1-js')) {
       const script = document.createElement('script');
       script.id = 'lb-home-community-chat-v1-js';
-      script.src = './assets/lb-home-community-chat-v1.js?v=2';
+      script.src = './assets/lb-home-community-chat-v1.js?v=3';
       script.async = false;
       (document.head || document.documentElement).appendChild(script);
     }

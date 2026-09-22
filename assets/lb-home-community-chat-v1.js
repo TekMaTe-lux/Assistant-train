@@ -33,6 +33,9 @@
       const copy = source.cloneNode(true);
       copy.querySelector(':scope > strong')?.remove();
       copy.querySelector(':scope > .live-wall-inline-meta')?.remove();
+      const actionNode = copy.querySelector('.lb-comment-actions');
+      const actionsHtml = actionNode?.outerHTML || '';
+      actionNode?.remove();
       const messageHtml = copy.innerHTML.replace(/^\s*:\s*/, '').trim();
       const pseudoHtml = pseudoStrong?.innerHTML || '<span>Bétail</span>';
       const timeText = timeNode?.textContent?.trim() || '';
@@ -47,7 +50,8 @@
             <span class="lb-chat-row-time">${escapeText(timeText)}</span>
           </div>
           <div class="lb-chat-row-message">${messageHtml}</div>
-        </div>`;
+        </div>
+        ${actionsHtml ? `<div class="lb-chat-row-actions">${actionsHtml}</div>` : ''}`;
     });
   }
 
