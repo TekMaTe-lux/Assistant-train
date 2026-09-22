@@ -68,7 +68,7 @@
             <button type="button" class="lb-herd-live-close" data-herd-close aria-label="Fermer">×</button>
           </div>
           <div class="lb-herd-live-grid">
-            <div class="lb-herd-live-stat"><strong data-herd-active>—</strong><span>actifs sur le site</span></div>
+            <div class="lb-herd-live-stat lb-herd-live-stat--audience"><strong data-herd-active>—</strong><span>actifs sur le site</span><small><b data-herd-members>—</b> membres · <b data-herd-visitors>—</b> visiteurs</small></div>
             <div class="lb-herd-live-stat"><strong data-herd-aboard>—</strong><span>voyageurs déclarés à bord</span></div>
             <div class="lb-herd-live-stat"><strong data-herd-infos>—</strong><span>infos terrain · 30 min</span></div>
             <div class="lb-herd-live-stat"><strong data-herd-confirmed>—</strong><span>infos confirmées · 30 min</span></div>
@@ -110,6 +110,8 @@
     }
 
     setText('[data-herd-active]', active);
+    setText('[data-herd-members]', Math.max(0, Number(data.member_count || 0)));
+    setText('[data-herd-visitors]', Math.max(0, Number(data.visitor_count || 0)));
     setText('[data-herd-aboard]', Math.max(0, Number(data.aboard_count || 0)));
     setText('[data-herd-infos]', Math.max(0, Number(data.field_infos_30m || 0)));
     setText('[data-herd-confirmed]', Math.max(0, Number(data.confirmed_infos_30m || 0)));
@@ -128,7 +130,7 @@
     requestInFlight = fetch(API_URL, {
       method: 'POST',
       mode: 'cors',
-      credentials: 'omit',
+      credentials: 'include',
       cache: 'no-store',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ visitor_id: visitorId })
