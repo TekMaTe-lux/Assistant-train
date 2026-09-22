@@ -111,7 +111,7 @@
       const link = document.createElement('link');
       link.id = 'lb-home-community-chat-v1-css';
       link.rel = 'stylesheet';
-      link.href = './assets/lb-home-community-chat-v1.css?v=2';
+      link.href = './assets/lb-home-community-chat-v1.css?v=3';
       (document.head || document.documentElement).appendChild(link);
     }
     if (!document.getElementById('lb-home-community-collapsed-v2-css')) {
