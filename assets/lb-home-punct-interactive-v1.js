@@ -339,10 +339,27 @@
     console.warn('[Accueil] Détail ponctualité indisponible', error);
   }
 
-  function detectArcMode(event, canvas) {
+  function detectArcMode(event, target) {
     try {
-      if (!canvas || typeof Chart === 'undefined' || typeof Chart.getChart !== 'function') return null;
-      const chart = Chart.getChart(canvas);
+      if (!target) return null;
+
+      // Nouveau donut CSS : aucun canvas/Chart.js nécessaire sur l'accueil.
+      if (target.classList?.contains('home-punct-css-ring')) {
+        const pct = Number(target.dataset.pct);
+        if (!Number.isFinite(pct)) return null;
+        const rect = target.getBoundingClientRect();
+        const x = Number(event.clientX) - (rect.left + rect.width / 2);
+        const y = Number(event.clientY) - (rect.top + rect.height / 2);
+        const radius = Math.sqrt((x * x) + (y * y));
+        const outer = Math.min(rect.width, rect.height) / 2;
+        if (!(outer > 0) || radius < outer * .56 || radius > outer * 1.05) return null;
+        const angle = (Math.atan2(y, x) * 180 / Math.PI + 450) % 360;
+        return (angle / 360 * 100) <= pct ? 'ontime' : 'impacted';
+      }
+
+      // Compatibilité avec une ancienne version en cache utilisant encore Chart.js.
+      if (typeof Chart === 'undefined' || typeof Chart.getChart !== 'function') return null;
+      const chart = Chart.getChart(target);
       if (!chart || typeof chart.getElementsAtEventForMode !== 'function') return null;
       const active = chart.getElementsAtEventForMode(event, 'nearest', { intersect: true }, false);
       if (!active || !active.length) return null;
@@ -379,10 +396,10 @@
       ['homeWxPunctualityChartYesterday', 'yesterday']
     ];
 
-    configs.forEach(([canvasId, period]) => {
-      const canvas = document.getElementById(canvasId);
-      const wrap = canvas?.closest('.home-punct-chart-wrap');
-      if (!canvas || !wrap || wrap.dataset.punctInteractive === '1') return;
+    configs.forEach(([targetId, period]) => {
+      const target = document.getElementById(targetId);
+      const wrap = target?.closest('.home-punct-chart-wrap');
+      if (!target || !wrap || wrap.dataset.punctInteractive === '1') return;
 
       wrap.dataset.punctInteractive = '1';
       wrap.dataset.punctPeriod = period;
@@ -394,7 +411,7 @@
         : 'Ouvrir le détail de la ponctualité des 30 derniers jours');
 
       wrap.addEventListener('click', (event) => {
-        const mode = event.target === canvas ? detectArcMode(event, canvas) : null;
+        const mode = target.contains(event.target) ? detectArcMode(event, target) : null;
         openDetail(period, mode, wrap);
       });
 
