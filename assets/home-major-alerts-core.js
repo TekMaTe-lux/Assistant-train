@@ -114,42 +114,42 @@ window.addEventListener('click', (event) => {
         .lb-major-alert-banner__inner {
           position:relative;
           z-index:1;
-          min-height:58px;
+          min-height:48px;
           max-width:1240px;
           margin:0 auto;
           display:grid;
-          grid-template-columns:26px minmax(0,1fr) auto;
+          grid-template-columns:22px minmax(0,1fr) auto;
           align-items:center;
-          gap:11px;
-          padding:7px 0 7px 7px;
+          gap:9px;
+          padding:4px 0 4px 6px;
         }
 
         .lb-major-alert-banner__icon {
           position:relative;
-          width:26px;
-          height:26px;
+          width:22px;
+          height:22px;
           display:grid;
           place-items:center;
           border:0;
           border-radius:0;
           background:transparent;
           color:var(--alarm);
-          font:900 16px/1 "Orbitron",system-ui,sans-serif;
+          font:900 14px/1 "Orbitron",system-ui,sans-serif;
           text-shadow:0 0 11px color-mix(in srgb,var(--alarm) 48%,transparent);
           box-shadow:none;
         }
         .lb-major-alert-banner__icon::before {
           content:"";
           position:absolute;
-          width:7px;
-          height:7px;
+          width:5px;
+          height:5px;
           border-radius:50%;
           background:var(--alarm);
           box-shadow:
             0 0 0 4px color-mix(in srgb,var(--alarm) 9%,transparent),
             0 0 12px color-mix(in srgb,var(--alarm) 45%,transparent);
           opacity:.95;
-          transform:translate(-8px,-8px);
+          transform:translate(-6px,-6px);
         }
 
         .lb-major-alert-banner__content {
@@ -165,15 +165,15 @@ window.addEventListener('click', (event) => {
           gap:6px;
           min-width:0;
           color:var(--alarm);
-          font:900 .58rem/1 "Orbitron",system-ui,sans-serif;
-          letter-spacing:.105em;
+          font:900 .51rem/1 "Orbitron",system-ui,sans-serif;
+          letter-spacing:.085em;
           text-transform:uppercase;
           white-space:nowrap;
           text-shadow:0 0 12px color-mix(in srgb,var(--alarm) 16%,transparent);
         }
         .lb-major-alert-banner__eyebrow::after {
           content:"";
-          width:24px;
+          width:18px;
           height:1px;
           background:linear-gradient(90deg,color-mix(in srgb,var(--alarm) 65%,transparent),transparent);
           flex:0 0 auto;
@@ -185,7 +185,7 @@ window.addEventListener('click', (event) => {
           text-overflow:ellipsis;
           white-space:nowrap;
           color:#fff;
-          font:800 .93rem/1.04 "Rajdhani",system-ui,sans-serif;
+          font:800 .82rem/1.02 "Rajdhani",system-ui,sans-serif;
           letter-spacing:.005em;
         }
 
@@ -195,7 +195,7 @@ window.addEventListener('click', (event) => {
           text-overflow:ellipsis;
           white-space:nowrap;
           color:#f1dfe3;
-          font:700 .73rem/1.08 "Rajdhani",system-ui,sans-serif;
+          font:700 .65rem/1.04 "Rajdhani",system-ui,sans-serif;
           letter-spacing:.01em;
           opacity:.90;
         }
@@ -208,12 +208,15 @@ window.addEventListener('click', (event) => {
         }
 
         .lb-major-alert-banner__more {
+          -webkit-tap-highlight-color:transparent;
+          touch-action:manipulation;
+          appearance:none;
           position:relative;
           border:0;
-          padding:5px 2px;
+          padding:3px 1px;
           background:transparent;
           color:var(--alarm-soft);
-          font:800 .73rem/1 "Rajdhani",system-ui,sans-serif;
+          font:800 .66rem/1 "Rajdhani",system-ui,sans-serif;
           letter-spacing:.02em;
           white-space:nowrap;
           cursor:pointer;
@@ -238,10 +241,13 @@ window.addEventListener('click', (event) => {
         }
 
         .lb-major-alert-banner__close {
-          width:25px;
-          height:25px;
-          min-width:25px;
-          min-height:25px;
+          -webkit-tap-highlight-color:transparent;
+          touch-action:manipulation;
+          appearance:none;
+          width:21px;
+          height:21px;
+          min-width:21px;
+          min-height:21px;
           display:grid;
           place-items:center;
           margin:0;
@@ -250,7 +256,7 @@ window.addEventListener('click', (event) => {
           border-radius:7px;
           background:transparent;
           color:rgba(255,213,219,.64);
-          font:600 11px/1 system-ui,sans-serif;
+          font:600 9px/1 system-ui,sans-serif;
           cursor:pointer;
           box-shadow:none;
           transition:background .15s ease,color .15s ease;
@@ -270,7 +276,7 @@ window.addEventListener('click', (event) => {
           pointer-events:none;
         }
         body.lb-major-alert-banner-visible #lbMajorAlertSpacer {
-          height:var(--lb-major-banner-height,58px);
+          height:var(--lb-major-banner-height,48px);
         }
 
         @media (max-width:700px) {
@@ -280,21 +286,21 @@ window.addEventListener('click', (event) => {
           }
 
           .lb-major-alert-banner__inner {
-            min-height:60px;
-            grid-template-columns:24px minmax(0,1fr) auto;
-            gap:8px;
-            padding:6px 0 6px 7px;
+            min-height:44px;
+            grid-template-columns:20px minmax(0,1fr) auto;
+            gap:7px;
+            padding:3px 0 3px 5px;
           }
 
           .lb-major-alert-banner__icon {
-            width:24px;
-            height:24px;
-            font-size:14px;
+            width:20px;
+            height:20px;
+            font-size:12px;
           }
           .lb-major-alert-banner__icon::before {
-            width:6px;
-            height:6px;
-            transform:translate(-7px,-7px);
+            width:4px;
+            height:4px;
+            transform:translate(-5px,-5px);
             box-shadow:
               0 0 0 3px color-mix(in srgb,var(--alarm) 9%,transparent),
               0 0 10px color-mix(in srgb,var(--alarm) 42%,transparent);
@@ -305,21 +311,21 @@ window.addEventListener('click', (event) => {
           }
 
           .lb-major-alert-banner__eyebrow {
-            font-size:.47rem;
-            letter-spacing:.08em;
+            font-size:.43rem;
+            letter-spacing:.07em;
             gap:5px;
           }
           .lb-major-alert-banner__eyebrow::after {
-            width:16px;
+            width:12px;
           }
 
           .lb-major-alert-banner__title {
-            font-size:.79rem;
+            font-size:.73rem;
             line-height:1.02;
           }
 
           .lb-major-alert-banner__text {
-            font-size:.64rem;
+            font-size:.58rem;
             line-height:1.05;
           }
 
@@ -329,23 +335,23 @@ window.addEventListener('click', (event) => {
 
           .lb-major-alert-banner__more {
             padding:4px 0;
-            font-size:.62rem;
+            font-size:.60rem;
           }
           .lb-major-alert-banner__more::after {
             margin-left:3px;
           }
 
           .lb-major-alert-banner__close {
-            width:22px;
-            height:22px;
-            min-width:22px;
-            min-height:22px;
+            width:19px;
+            height:19px;
+            min-width:19px;
+            min-height:19px;
             border-radius:6px;
-            font-size:9px;
+            font-size:8px;
           }
 
           body.lb-major-alert-banner-visible #lbMajorAlertSpacer {
-            height:var(--lb-major-banner-height,60px);
+            height:var(--lb-major-banner-height,44px);
           }
         }
 
