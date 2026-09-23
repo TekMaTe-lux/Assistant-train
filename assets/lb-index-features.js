@@ -2611,24 +2611,25 @@
     delaysByTrain.forEach((reports, key)=>{
       const entry = ensureTrain(key);
       if (!entry) return;
-      const values = reports.map((item)=> item.delay).sort((a,b)=> a-b);
-      const middle = Math.floor(values.length / 2);
-      entry.travelerDelayMin = values.length % 2
-        ? values[middle]
-        : Math.round((values[middle - 1] + values[middle]) / 2);
-      entry.delayReports = values.length;
-      entry.lastReportAt = Math.max(...reports.map((item)=> item.ts));
+      // Le résumé de compatibilité doit toujours reprendre une observation réelle :
+      // jamais de moyenne/médiane entre deux gares (ex. +5 et +8 ne devient pas +7).
+      const latest = reports.slice().sort((a,b)=> Number(b.ts || 0) - Number(a.ts || 0))[0] || null;
+      entry.travelerDelayMin = latest ? Math.round(Number(latest.delay) || 0) : null;
+      entry.delayReports = reports.length;
+      entry.lastReportAt = latest ? Number(latest.ts || 0) : 0;
     });
     delaysByStop.forEach((group)=>{
       const entry = ensureTrain(group.trainKey);
       if (!entry) return;
-      const values = group.reports.map((item)=> item.delay).sort((a,b)=> a-b);
-      const middle = Math.floor(values.length / 2);
+      // Une gare porte la dernière mesure réellement publiée à cette gare.
+      // On ne fabrique aucune valeur intermédiaire à partir de plusieurs mesures.
+      const latest = group.reports.slice().sort((a,b)=> Number(b.ts || 0) - Number(a.ts || 0))[0] || null;
+      if (!latest) return;
       entry.travelerStops[group.stopKey] = {
         station:group.station,
-        delayMin:values.length % 2 ? values[middle] : Math.round((values[middle - 1] + values[middle]) / 2),
-        reports:values.length,
-        lastReportAt:Math.max(...group.reports.map((item)=> item.ts))
+        delayMin:Math.round(Number(latest.delay) || 0),
+        reports:group.reports.length,
+        lastReportAt:Number(latest.ts || 0)
       };
     });
 
