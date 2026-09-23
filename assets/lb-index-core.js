@@ -10004,6 +10004,10 @@ document.addEventListener('DOMContentLoaded', () => {
   window.addEventListener('hashchange', () => {
     if (location.hash === '#stats') resizeStatsCharts();
   });
+  window.addEventListener('lb:chart-ready', () => {
+    if (currentOverview) renderOverview();
+    resizeStatsCharts();
+  });
   document.addEventListener('visibilitychange', () => {
     if (!document.hidden && location.hash === '#stats') resizeStatsCharts();
   });
@@ -16079,6 +16083,11 @@ async function loadAffluenceDate(dateStr){
       renderAffLists();
     }catch(e){}
   }
+
+  window.addEventListener('lb:chart-ready', () => {
+    const t = (affState.data?.trains || {})[String(affState.currentTrain || '')];
+    if (t) renderAffEvolutionChart(t);
+  });
 
   window.lbAff = {
     loadDate: loadAffluenceDate,
