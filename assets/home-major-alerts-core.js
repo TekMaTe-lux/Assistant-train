@@ -21,6 +21,10 @@ window.addEventListener('click', (event) => {
   if (!trigger && !close && !backdrop) return;
   event.preventDefault();
   event.stopImmediatePropagation();
+
+  if (close || backdrop) {
+    window.__lbMajorAlertSuppressOpenUntil = Date.now() + 650;
+  }
   setHomeMajorAlertModal(!!trigger);
 }, true);
 
@@ -773,16 +777,22 @@ window.addEventListener('click', (event) => {
   }
 
   function closeModal(){
+    window.__lbMajorAlertSuppressOpenUntil = Date.now() + 650;
     modal.classList.remove('is-open');
     modal.style.removeProperty('display');
     modal.setAttribute('aria-hidden', 'true');
     document.body.style.removeProperty('overflow');
-    badge.focus();
   }
+
+  closeButton?.addEventListener('pointerdown', (event) => {
+    event.stopPropagation();
+    window.__lbMajorAlertSuppressOpenUntil = Date.now() + 650;
+  }, { passive: true });
 
   bannerOpen?.addEventListener('click', (event) => {
     event.preventDefault();
     event.stopPropagation();
+    if (Date.now() < Number(window.__lbMajorAlertSuppressOpenUntil || 0)) return;
     openModal();
   });
   bannerClose?.addEventListener('click', (event) => {
