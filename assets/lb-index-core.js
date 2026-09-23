@@ -5229,8 +5229,10 @@ function updateSelectionUI(){
     requestAnimationFrame(()=>{
       if (window.Sortable) {
         initSelectionSortable();
-      } else {
-        console.warn('SortableJS non chargé ; le drag & drop est désactivé.');
+      } else if (typeof window.lbEnsureSortable === 'function') {
+        window.lbEnsureSortable().then((SortableCtor)=>{
+          if (SortableCtor) initSelectionSortable();
+        }).catch(()=>{});
       }
     });
   }
