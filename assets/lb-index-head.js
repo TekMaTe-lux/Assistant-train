@@ -50,37 +50,57 @@ window.lbLoadScriptOnce = window.lbLoadScriptOnce || function lbLoadScriptOnce(s
 };
 
 
+function ensureEmbeddedCarteLoaded(){
+  const frame = document.querySelector('#carte iframe');
+  if (!frame || frame.dataset.lbMapLoaded === '1') return frame;
+
+  const source = String(frame.dataset.src || '').trim();
+  if (!source) return frame;
+
+  frame.dataset.lbMapLoaded = '1';
+  frame.src = source;
+  return frame;
+}
+
 function initEmbeddedCarteFrame(){
   const frame = document.querySelector('#carte iframe');
-  if (!frame || frame.dataset.embedInit === '1') return;
-  frame.dataset.embedInit = '1';
+  if (!frame) return;
 
-  const hideInnerUi = () => {
-    try{
-      const doc = frame.contentDocument || frame.contentWindow?.document;
-      if (!doc) return;
-      const selectors = [
-        '.leaflet-top.leaflet-right',
-        '.map-title', '.map-header', '.hero', 'header', 'nav',
-        '[data-embed-hide]', '.banner', '.top-banner', '.project-support', '.support-project'
-      ];
-      selectors.forEach(sel => {
-        doc.querySelectorAll(sel).forEach(el => { el.style.display = 'none'; });
-      });
-      doc.body && (doc.body.style.marginTop = '0');
-      doc.documentElement && (doc.documentElement.style.marginTop = '0');
-    }catch(e){ /* cross-origin or selector unsupported */ }
-  };
+  if (frame.dataset.embedInit !== '1') {
+    frame.dataset.embedInit = '1';
 
-  frame.addEventListener('load', () => {
-    hideInnerUi();
-    let n = 0;
-    const t = setInterval(() => {
+    const hideInnerUi = () => {
+      try{
+        const doc = frame.contentDocument || frame.contentWindow?.document;
+        if (!doc) return;
+        const selectors = [
+          '.leaflet-top.leaflet-right',
+          '.map-title', '.map-header', '.hero', 'header', 'nav',
+          '[data-embed-hide]', '.banner', '.top-banner', '.project-support', '.support-project'
+        ];
+        selectors.forEach(sel => {
+          doc.querySelectorAll(sel).forEach(el => { el.style.display = 'none'; });
+        });
+        doc.body && (doc.body.style.marginTop = '0');
+        doc.documentElement && (doc.documentElement.style.marginTop = '0');
+      }catch(e){ /* cross-origin or selector unsupported */ }
+    };
+
+    frame.addEventListener('load', () => {
+      if (frame.src === 'about:blank') return;
       hideInnerUi();
-      n += 1;
-      if (n > 20) clearInterval(t);
-    }, 200);
-  });
+      let n = 0;
+      const t = setInterval(() => {
+        hideInnerUi();
+        n += 1;
+        if (n > 20) clearInterval(t);
+      }, 200);
+    });
+  }
+
+  // La carte coûte plusieurs Mo de données et beaucoup de CPU. Elle ne démarre
+  // qu'au premier affichage de l'onglet Carte, puis reste vivante pour les retours.
+  if ((location.hash || '').toLowerCase() === '#carte') ensureEmbeddedCarteLoaded();
 }
 
 document.addEventListener('DOMContentLoaded', initEmbeddedCarteFrame);
