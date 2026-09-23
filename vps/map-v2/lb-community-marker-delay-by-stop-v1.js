@@ -25,6 +25,18 @@
     .replace(/,?\s*gare(?:\s+centrale)?\b.*$/i, '')
     .replace(/\s+/g, ' ').trim().toLowerCase();
 
+  function installStyle(){
+    if (document.getElementById('lb-community-delay-by-stop-v1-style')) return;
+    const style = document.createElement('style');
+    style.id = 'lb-community-delay-by-stop-v1-style';
+    style.textContent = `
+      /* Tant que la position n'a pas validé la gare source, on masque la valeur globale de compatibilité. */
+      .lb-map-traveler-delay.lb-map-traveler-delay-community:not([data-lb-community-position-ok="1"]),
+      .lb-community-delay-status:not([data-lb-community-position-ok="1"]){visibility:hidden!important}
+    `;
+    document.head.appendChild(style);
+  }
+
   function snapshotItem(trainNumber){
     const key = normalizeTrain(trainNumber);
     if (!key) return null;
@@ -150,6 +162,7 @@
     badge.title = `Signalement voyageur NON OFFICIEL depuis ${station || 'la dernière gare signalée'} : +${delay} min`;
     badge.setAttribute('aria-label', `Signalement voyageur non officiel : ${delay} minutes de retard depuis ${station || 'la dernière gare signalée'}`);
     badge.dataset.lbCommunityDelay = String(delay);
+    badge.dataset.lbCommunityPositionOk = '1';
     badge.dataset.lbSourceStation = station;
     badge.dataset.lbStopStation = station;
     badge.classList.add('lb-map-traveler-delay-community');
@@ -189,6 +202,7 @@
       chip.textContent = `(+${delay} min)`;
       chip.title = `Signalement voyageur depuis ${station}`;
       chip.dataset.lbCommunityDelay = String(delay);
+      chip.dataset.lbCommunityPositionOk = '1';
       chip.dataset.lbSourceStation = station;
     }
     block.classList.add('lb-community-has-delay');
@@ -246,6 +260,7 @@
   window.lbCommunityDelayByStopV1 = { reportForTrainPosition, refresh:schedule };
 
   function start(){
+    installStyle();
     installHooks();
     schedule();
     setTimeout(() => { installHooks(); schedule(); }, 0);
