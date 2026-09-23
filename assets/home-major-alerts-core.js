@@ -377,7 +377,16 @@ window.addEventListener('click', (event) => {
     const relevant = corridorTrains.length > 0
       || ((participant === 'LOR' || scope === 'general') && isCorridorText(text));
     const broad = scope === 'general' || corridorTrains.length >= 8;
-    const major = hasMajorImpact(text);
+
+    // Les messages SIRI Lorraine sont parfois rédigés de façon très sobre
+    // ("circulation perturbée", "des suppressions sont à prévoir") sans employer
+    // les mots "très perturbée". Si LOR cite au moins deux points du Sillon et
+    // annonce un impact réel sur la circulation, on le traite comme majeur #BER.
+    const lorraineCorridorImpact = participant === 'LOR'
+      && corridorPlacesIn(text).length >= 2
+      && /(circulation[^.]{0,100}perturbee|suppressions?|interruption|retards?)/.test(text);
+
+    const major = hasMajorImpact(text) || lorraineCorridorImpact;
 
     if (!relevant || !broad || !major) return null;
 
