@@ -348,11 +348,11 @@ window.addEventListener('click', (event) => {
     if (/(tous les trains[^.]{0,100}supprim|interruption totale|aucun train|circulation[^.]{0,80}interromp)/.test(text)) {
       return { key: 'critical', icon: '❌', label: 'Circulation interrompue', rank: 5 };
     }
-    if (
-      /(service reduit|service modifie|nombreuses suppressions|remplac[ée]s? par des cars)/.test(text)
-      || (/circulation[^.]{0,100}perturbee/.test(text) && /suppressions?/.test(text))
-    ) {
-      return { key: 'warning', icon: '⚠️', label: 'Service perturbé', rank: 4 };
+    if (/circulation[^.]{0,100}perturbee/.test(text) && /suppressions?/.test(text)) {
+      return { key: 'critical', icon: '⚠️', label: 'Service perturbé', rank: 5 };
+    }
+    if (/(service reduit|service modifie|nombreuses suppressions|remplac[ée]s? par des cars)/.test(text)) {
+      return { key: 'warning', icon: '⚠️', label: 'Service réduit', rank: 4 };
     }
     if (/(forts? retards?|retards? importants?)/.test(text)) {
       return { key: 'delay', icon: '⏰', label: 'Retards importants', rank: 3 };
@@ -398,7 +398,12 @@ window.addEventListener('click', (event) => {
       text,
       corridorTrains,
       severity: severityFor(text),
-      fingerprint: normalize(situation?.detail || situation?.description || situation?.summary || '')
+      // Les broadcasts SIRI peuvent publier le même incident une fois en scope
+      // général puis une seconde fois avec les trains affectés. La description
+      // est plus stable que le détail : on neutralise seulement le préfixe
+      // régional pour fusionner ces vrais doublons sans masquer deux incidents.
+      fingerprint: normalize(situation?.description || situation?.detail || situation?.summary || '')
+        .replace(/^lorraine\s*:\s*/, '')
         .replace(/[^a-z0-9]+/g, ' ')
         .trim()
     };
