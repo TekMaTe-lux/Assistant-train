@@ -57,114 +57,149 @@ window.addEventListener('click', (event) => {
       style.textContent = `
         #lbMajorAlertBanner[hidden] { display: none !important; }
         #lbMajorAlertBanner {
-          --lb-major-accent: #dc3545;
-          --lb-major-bg: rgba(74, 10, 18, .90);
+          --lb-major-accent: #ff5368;
+          --lb-major-bg: rgba(47, 8, 16, .94);
           position: fixed;
           left: 0;
           right: 0;
           z-index: 12950;
           top: var(--lb-major-banner-top, 72px);
-          padding: 0 max(10px, env(safe-area-inset-right)) 0 max(10px, env(safe-area-inset-left));
-          border-bottom: 1px solid color-mix(in srgb, var(--lb-major-accent) 72%, transparent);
+          padding: 0 max(12px, env(safe-area-inset-right)) 0 max(12px, env(safe-area-inset-left));
+          border-bottom: 1px solid color-mix(in srgb, var(--lb-major-accent) 62%, transparent);
           background:
             linear-gradient(90deg,
-              color-mix(in srgb, var(--lb-major-bg) 94%, transparent),
-              rgba(7, 20, 28, .84));
-          box-shadow: 0 8px 26px rgba(0,0,0,.24), 0 0 18px color-mix(in srgb, var(--lb-major-accent) 12%, transparent);
-          -webkit-backdrop-filter: blur(14px) saturate(130%);
-          backdrop-filter: blur(14px) saturate(130%);
+              color-mix(in srgb, var(--lb-major-bg) 96%, transparent),
+              rgba(7, 22, 31, .94));
+          box-shadow:
+            0 8px 24px rgba(0,0,0,.22),
+            inset 0 -1px 0 rgba(255,255,255,.035);
+          -webkit-backdrop-filter: blur(14px) saturate(132%);
+          backdrop-filter: blur(14px) saturate(132%);
         }
         #lbMajorAlertBanner[data-level="warning"] {
-          --lb-major-accent: #ffc107;
-          --lb-major-bg: rgba(78, 54, 3, .90);
+          --lb-major-accent: #ffc247;
+          --lb-major-bg: rgba(62, 43, 8, .94);
         }
         #lbMajorAlertBanner[data-level="delay"] {
-          --lb-major-accent: #fd7e14;
-          --lb-major-bg: rgba(76, 34, 4, .90);
+          --lb-major-accent: #ff8a34;
+          --lb-major-bg: rgba(65, 31, 7, .94);
+        }
+        #lbMajorAlertBanner[data-level="critical"] {
+          --lb-major-accent: #ff5368;
+          --lb-major-bg: rgba(58, 7, 17, .95);
         }
         #lbMajorAlertBanner[data-level="info"] {
-          --lb-major-accent: #17a2b8;
-          --lb-major-bg: rgba(5, 47, 57, .90);
+          --lb-major-accent: #35d7f3;
+          --lb-major-bg: rgba(5, 44, 54, .94);
         }
         .lb-major-alert-banner__inner {
-          min-height: 46px;
+          min-height: 56px;
           max-width: 1240px;
           margin: 0 auto;
           display: grid;
           grid-template-columns: auto minmax(0, 1fr) auto;
           align-items: center;
-          gap: 10px;
+          gap: 11px;
+          padding: 7px 0;
         }
         .lb-major-alert-banner__icon {
           display: grid;
           place-items: center;
-          width: 29px;
-          height: 29px;
-          border: 1px solid color-mix(in srgb, var(--lb-major-accent) 80%, white 10%);
-          border-radius: 8px;
+          width: 31px;
+          height: 31px;
+          border-radius: 10px;
           color: var(--lb-major-accent);
-          background: color-mix(in srgb, var(--lb-major-accent) 10%, transparent);
-          box-shadow: 0 0 12px color-mix(in srgb, var(--lb-major-accent) 18%, transparent);
-          font-size: 16px;
+          border: 1px solid color-mix(in srgb, var(--lb-major-accent) 58%, transparent);
+          background: color-mix(in srgb, var(--lb-major-accent) 11%, rgba(255,255,255,.025));
+          box-shadow: inset 0 0 0 1px rgba(255,255,255,.025);
+          font-size: 15px;
           line-height: 1;
         }
-        .lb-major-alert-banner__open {
+        .lb-major-alert-banner__content {
           min-width: 0;
-          border: 0;
-          padding: 7px 0;
-          background: transparent;
-          color: #f7fbfd;
-          text-align: left;
-          cursor: pointer;
-          display: flex;
-          align-items: baseline;
-          gap: 9px;
-        }
-        .lb-major-alert-banner__open:focus-visible,
-        .lb-major-alert-banner__close:focus-visible {
-          outline: 2px solid var(--lb-major-accent);
-          outline-offset: 2px;
+          display: grid;
+          gap: 2px;
+          align-content: center;
         }
         .lb-major-alert-banner__eyebrow {
-          flex: 0 0 auto;
           color: var(--lb-major-accent);
-          font: 900 .70rem/1 "Orbitron", system-ui, sans-serif;
-          letter-spacing: .055em;
+          font: 900 .62rem/1 "Orbitron", system-ui, sans-serif;
+          letter-spacing: .075em;
           text-transform: uppercase;
           white-space: nowrap;
+        }
+        .lb-major-alert-banner__title {
+          min-width: 0;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+          color: #fff;
+          font: 800 .91rem/1.08 "Rajdhani", system-ui, sans-serif;
+          letter-spacing: .01em;
         }
         .lb-major-alert-banner__text {
           min-width: 0;
           overflow: hidden;
           text-overflow: ellipsis;
           white-space: nowrap;
-          color: #eefbff;
-          font: 700 .88rem/1.2 "Rajdhani", system-ui, sans-serif;
-          letter-spacing: .01em;
+          color: #d8edf3;
+          font: 700 .78rem/1.1 "Rajdhani", system-ui, sans-serif;
+          letter-spacing: .012em;
+          opacity: .94;
+        }
+        .lb-major-alert-banner__actions {
+          display: flex;
+          align-items: center;
+          gap: 7px;
+          flex: 0 0 auto;
         }
         .lb-major-alert-banner__more {
-          flex: 0 0 auto;
-          color: #9cefff;
-          font-size: .76rem;
-          font-weight: 800;
+          border: 1px solid rgba(79, 218, 242, .25);
+          border-radius: 999px;
+          padding: 6px 10px;
+          background: rgba(36, 179, 207, .08);
+          color: #8eefff;
+          font: 800 .72rem/1 "Rajdhani", system-ui, sans-serif;
+          letter-spacing: .015em;
           white-space: nowrap;
+          cursor: pointer;
+          transition: background .15s ease, border-color .15s ease, color .15s ease, transform .15s ease;
+        }
+        .lb-major-alert-banner__more:hover {
+          background: rgba(43, 204, 232, .14);
+          border-color: rgba(79, 218, 242, .42);
+          color: #e6fbff;
+          transform: translateY(-1px);
+        }
+        .lb-major-alert-banner__more:focus-visible {
+          outline: 2px solid rgba(79, 218, 242, .45);
+          outline-offset: 2px;
         }
         .lb-major-alert-banner__close {
-          width: 38px;
-          height: 38px;
-          border: 0;
-          border-radius: 9px;
-          background: transparent;
-          color: #dbe7eb;
-          font-size: 22px;
-          line-height: 1;
+          display: grid;
+          place-items: center;
+          width: 27px;
+          height: 27px;
+          margin: 0;
+          padding: 0;
+          border: 1px solid rgba(105, 220, 240, .18);
+          border-radius: 999px;
+          background: rgba(255,255,255,.025);
+          color: #78d9e9;
+          font: 700 12px/1 system-ui, sans-serif;
           cursor: pointer;
-          opacity: .82;
+          opacity: .9;
+          transition: background .15s ease, border-color .15s ease, color .15s ease, transform .15s ease;
         }
         .lb-major-alert-banner__close:hover {
-          background: rgba(255,255,255,.08);
-          color: #fff;
-          opacity: 1;
+          background: rgba(255,255,255,.07);
+          border-color: rgba(105, 220, 240, .34);
+          color: #e7fbff;
+          transform: scale(1.04);
+        }
+        .lb-major-alert-banner__close:focus-visible {
+          outline: 2px solid rgba(79, 218, 242, .40);
+          outline-offset: 2px;
         }
         #lbMajorAlertSpacer {
           height: 0;
@@ -172,50 +207,62 @@ window.addEventListener('click', (event) => {
           pointer-events: none;
         }
         body.lb-major-alert-banner-visible #lbMajorAlertSpacer {
-          height: var(--lb-major-banner-height, 46px);
+          height: var(--lb-major-banner-height, 56px);
         }
         @media (max-width: 700px) {
           #lbMajorAlertBanner {
-            padding-left: max(7px, env(safe-area-inset-left));
-            padding-right: max(7px, env(safe-area-inset-right));
+            padding-left: max(8px, env(safe-area-inset-left));
+            padding-right: max(8px, env(safe-area-inset-right));
           }
           .lb-major-alert-banner__inner {
-            min-height: 52px;
-            gap: 7px;
-          }
-          .lb-major-alert-banner__icon {
-            width: 27px;
-            height: 27px;
-            border-radius: 7px;
-            font-size: 14px;
-          }
-          .lb-major-alert-banner__open {
-            display: grid;
-            grid-template-columns: minmax(0, 1fr) auto;
-            gap: 2px 7px;
-            align-items: center;
+            min-height: 58px;
+            gap: 8px;
             padding: 6px 0;
           }
-          .lb-major-alert-banner__eyebrow {
-            grid-column: 1 / -1;
-            font-size: .58rem;
+          .lb-major-alert-banner__icon {
+            width: 28px;
+            height: 28px;
+            border-radius: 9px;
+            font-size: 13px;
           }
-          .lb-major-alert-banner__text {
+          .lb-major-alert-banner__content {
+            gap: 2px;
+          }
+          .lb-major-alert-banner__eyebrow {
+            font-size: .54rem;
+            letter-spacing: .06em;
+          }
+          .lb-major-alert-banner__title {
             font-size: .80rem;
           }
+          .lb-major-alert-banner__text {
+            font-size: .69rem;
+          }
+          .lb-major-alert-banner__actions {
+            gap: 5px;
+          }
           .lb-major-alert-banner__more {
-            font-size: .68rem;
+            padding: 5px 8px;
+            font-size: .66rem;
           }
           .lb-major-alert-banner__close {
-            width: 36px;
-            height: 42px;
+            width: 24px;
+            height: 24px;
+            font-size: 10px;
           }
           body.lb-major-alert-banner-visible #lbMajorAlertSpacer {
-            height: var(--lb-major-banner-height, 52px);
+            height: var(--lb-major-banner-height, 58px);
           }
+        }
+        @media (max-width: 390px) {
+          .lb-major-alert-banner__inner { gap: 6px; }
+          .lb-major-alert-banner__more { padding: 5px 7px; }
+          .lb-major-alert-banner__close { width: 23px; height: 23px; }
         }
         @media (prefers-reduced-motion: reduce) {
           #lbMajorAlertSpacer { transition: none; }
+          .lb-major-alert-banner__more,
+          .lb-major-alert-banner__close { transition: none; }
         }
       `;
       document.head.appendChild(style);
@@ -231,12 +278,15 @@ window.addEventListener('click', (event) => {
       banner.innerHTML = `
         <div class="lb-major-alert-banner__inner">
           <span class="lb-major-alert-banner__icon" id="lbMajorAlertBannerIcon" aria-hidden="true">⚠️</span>
-          <button class="lb-major-alert-banner__open" id="lbMajorAlertBannerOpen" type="button">
+          <div class="lb-major-alert-banner__content">
             <strong class="lb-major-alert-banner__eyebrow" id="lbMajorAlertBannerEyebrow">PERTURBATION MAJEURE</strong>
+            <span class="lb-major-alert-banner__title" id="lbMajorAlertBannerTitle" hidden></span>
             <span class="lb-major-alert-banner__text" id="lbMajorAlertBannerText"></span>
-            <span class="lb-major-alert-banner__more">Plus d’infos</span>
-          </button>
-          <button class="lb-major-alert-banner__close" id="lbMajorAlertBannerClose" type="button" aria-label="Masquer ce bandeau">×</button>
+          </div>
+          <div class="lb-major-alert-banner__actions">
+            <button class="lb-major-alert-banner__more" id="lbMajorAlertBannerOpen" type="button">Plus d’infos</button>
+            <button class="lb-major-alert-banner__close" id="lbMajorAlertBannerClose" type="button" aria-label="Masquer ce bandeau"><span aria-hidden="true">✕</span></button>
+          </div>
         </div>`;
 
       const topBar = document.querySelector('.top-bar');
@@ -257,6 +307,7 @@ window.addEventListener('click', (event) => {
   const banner = ensureBannerUi();
   const bannerIcon = document.getElementById('lbMajorAlertBannerIcon');
   const bannerEyebrow = document.getElementById('lbMajorAlertBannerEyebrow');
+  const bannerTitle = document.getElementById('lbMajorAlertBannerTitle');
   const bannerText = document.getElementById('lbMajorAlertBannerText');
   const bannerOpen = document.getElementById('lbMajorAlertBannerOpen');
   const bannerClose = document.getElementById('lbMajorAlertBannerClose');
@@ -447,6 +498,34 @@ window.addEventListener('click', (event) => {
     return '';
   }
 
+  function bannerTitleFor(item){
+    const situation = item?.situation || {};
+    const summary = String(situation.summary || '')
+      .replace(/^[^\p{L}\p{N}]+/u, '')
+      .trim();
+
+    // Les intitulés régionaux génériques n'apportent rien : on cherche alors
+    // la cause dans le message, pour obtenir par ex. « Panne d’un train ».
+    if (
+      summary
+      && !/^(perturbation(?: en)? lorraine|perturbation lorraine)\.?$/i.test(summary)
+      && !/^(information trafic|info trafic)\.?$/i.test(summary)
+    ) {
+      return summary.length > 74 ? `${summary.slice(0, 71)}…` : summary;
+    }
+
+    const source = String(situation.description || situation.detail || '');
+    const causeMatch = source.match(/suite\s+[àa]\s+([^\n.]+)/i);
+    if (causeMatch?.[1]) {
+      const cause = causeMatch[1].trim().replace(/[.!]+$/, '');
+      if (cause) {
+        const title = cause.charAt(0).toUpperCase() + cause.slice(1);
+        return title.length > 74 ? `${title.slice(0, 71)}…` : title;
+      }
+    }
+    return '';
+  }
+
   function renderBanner(items, strongest){
     if (!banner) return;
     if (!Array.isArray(items) || items.length === 0) {
@@ -476,12 +555,17 @@ window.addEventListener('click', (event) => {
     const first = items[0];
     const severity = first?.severity || strongest || { key:'critical', icon:'⚠️', label:'Perturbation majeure' };
     const route = routeLabelForBanner(first);
+    const title = bannerTitleFor(first);
     const firstLabel = route ? `${severity.label} — ${route}` : severity.label;
     const suffix = items.length > 1 ? ` + ${items.length - 1} autre${items.length > 2 ? 's' : ''}` : '';
 
     banner.dataset.level = strongest?.key || severity.key || 'critical';
     if (bannerIcon) bannerIcon.textContent = strongest?.icon || severity.icon || '⚠️';
     if (bannerEyebrow) bannerEyebrow.textContent = items.length > 1 ? `${items.length} PERTURBATIONS MAJEURES` : 'PERTURBATION MAJEURE';
+    if (bannerTitle) {
+      bannerTitle.textContent = title;
+      bannerTitle.hidden = !title;
+    }
     if (bannerText) bannerText.textContent = `${firstLabel}${suffix}`;
     banner.hidden = false;
     document.body.classList.add('lb-major-alert-banner-visible');
@@ -568,6 +652,7 @@ window.addEventListener('click', (event) => {
 
   bannerOpen?.addEventListener('click', (event) => {
     event.preventDefault();
+    event.stopPropagation();
     openModal();
   });
   bannerClose?.addEventListener('click', (event) => {
