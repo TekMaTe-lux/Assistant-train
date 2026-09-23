@@ -211,53 +211,140 @@ window.addEventListener('click', (event) => {
         }
         @media (max-width: 700px) {
           #lbMajorAlertBanner {
-            padding-left: max(8px, env(safe-area-inset-left));
-            padding-right: max(8px, env(safe-area-inset-right));
+            padding-left: max(9px, env(safe-area-inset-left));
+            padding-right: max(9px, env(safe-area-inset-right));
           }
           .lb-major-alert-banner__inner {
-            min-height: 58px;
+            position: relative;
+            min-height: 62px;
+            grid-template-columns: 28px minmax(0, 1fr) 22px;
             gap: 8px;
-            padding: 6px 0;
+            padding: 7px 0;
           }
           .lb-major-alert-banner__icon {
             width: 28px;
             height: 28px;
+            min-width: 28px;
+            min-height: 28px;
             border-radius: 9px;
             font-size: 13px;
           }
           .lb-major-alert-banner__content {
-            gap: 2px;
+            min-width: 0;
+            gap: 1px;
+            padding-right: 0;
           }
           .lb-major-alert-banner__eyebrow {
-            font-size: .54rem;
-            letter-spacing: .06em;
+            font-size: .50rem;
+            letter-spacing: .055em;
           }
           .lb-major-alert-banner__title {
-            font-size: .80rem;
+            font-size: .79rem;
+            line-height: 1.02;
+            padding-right: 2px;
           }
           .lb-major-alert-banner__text {
-            font-size: .69rem;
+            font-size: .66rem;
+            line-height: 1.08;
+            padding-right: 68px;
           }
           .lb-major-alert-banner__actions {
-            gap: 5px;
+            display: contents;
           }
           .lb-major-alert-banner__more {
-            padding: 5px 8px;
-            font-size: .66rem;
+            position: absolute;
+            right: 29px;
+            bottom: 8px;
+            width: auto !important;
+            min-width: 0 !important;
+            max-width: none !important;
+            height: auto !important;
+            min-height: 0 !important;
+            margin: 0 !important;
+            padding: 1px 2px !important;
+            border: 0 !important;
+            border-radius: 0 !important;
+            background: transparent !important;
+            box-shadow: none !important;
+            color: #83eafa;
+            font: 800 .62rem/1 "Rajdhani", system-ui, sans-serif;
+            letter-spacing: .01em;
+            white-space: nowrap;
+            text-decoration: none;
+            transform: none !important;
+          }
+          .lb-major-alert-banner__more:hover {
+            background: transparent !important;
+            border: 0 !important;
+            color: #d9fbff;
+            box-shadow: none !important;
+            transform: none !important;
+          }
+          .lb-major-alert-banner__more:focus-visible {
+            outline: 1px solid rgba(79,218,242,.52);
+            outline-offset: 2px;
+            border-radius: 3px !important;
           }
           .lb-major-alert-banner__close {
-            width: 24px;
-            height: 24px;
-            font-size: 10px;
+            grid-column: 3;
+            justify-self: end;
+            align-self: center;
+            box-sizing: border-box !important;
+            width: 22px !important;
+            min-width: 22px !important;
+            max-width: 22px !important;
+            height: 22px !important;
+            min-height: 22px !important;
+            max-height: 22px !important;
+            margin: 0 !important;
+            padding: 0 !important;
+            border: 1px solid rgba(105,220,240,.20) !important;
+            border-radius: 999px !important;
+            background: rgba(255,255,255,.025) !important;
+            box-shadow: none !important;
+            color: #72d5e6;
+            font-size: 9px;
+            line-height: 1;
+            transform: none !important;
+          }
+          .lb-major-alert-banner__close:hover {
+            background: rgba(255,255,255,.06) !important;
+            border-color: rgba(105,220,240,.32) !important;
+            box-shadow: none !important;
+            transform: none !important;
           }
           body.lb-major-alert-banner-visible #lbMajorAlertSpacer {
-            height: var(--lb-major-banner-height, 58px);
+            height: var(--lb-major-banner-height, 62px);
           }
         }
         @media (max-width: 390px) {
-          .lb-major-alert-banner__inner { gap: 6px; }
-          .lb-major-alert-banner__more { padding: 5px 7px; }
-          .lb-major-alert-banner__close { width: 23px; height: 23px; }
+          .lb-major-alert-banner__inner {
+            grid-template-columns: 27px minmax(0, 1fr) 21px;
+            gap: 7px;
+          }
+          .lb-major-alert-banner__icon {
+            width: 27px;
+            height: 27px;
+            min-width: 27px;
+            min-height: 27px;
+          }
+          .lb-major-alert-banner__title { font-size: .76rem; }
+          .lb-major-alert-banner__text {
+            font-size: .64rem;
+            padding-right: 62px;
+          }
+          .lb-major-alert-banner__more {
+            right: 27px;
+            font-size: .60rem;
+          }
+          .lb-major-alert-banner__close {
+            width: 21px !important;
+            min-width: 21px !important;
+            max-width: 21px !important;
+            height: 21px !important;
+            min-height: 21px !important;
+            max-height: 21px !important;
+          }
         }
         @media (prefers-reduced-motion: reduce) {
           #lbMajorAlertSpacer { transition: none; }
