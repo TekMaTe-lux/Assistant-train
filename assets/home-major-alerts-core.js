@@ -46,8 +46,8 @@ window.addEventListener('click', (event) => {
 
   // LB_MAJOR_ALERT_BANNER_V1 — vue compacte des mêmes alertes majeures que le badge.
   // Aucun appel réseau supplémentaire : le bandeau est alimenté par render(items).
-  const BANNER_DISMISS_KEY = 'lb.major-alert-banner.dismissed.v1';
   let currentBannerSignature = '';
+  let dismissedBannerSignature = '';
 
   const ensureBannerUi = () => {
     let style = document.getElementById('lb-major-alert-banner-style');
@@ -443,6 +443,8 @@ window.addEventListener('click', (event) => {
     }
   };
   window.addEventListener('resize', syncBannerGeometry, { passive: true });
+  window.addEventListener('orientationchange', () => window.setTimeout(syncBannerGeometry, 80), { passive: true });
+  window.addEventListener('load', () => window.setTimeout(syncBannerGeometry, 120), { passive: true });
 
   const escapeHtml = (value) => String(value || '').replace(/[&<>"']/g, (char) => ({
     '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;'
@@ -664,9 +666,7 @@ window.addEventListener('click', (event) => {
     ).filter(Boolean).sort();
     currentBannerSignature = ids.join('|');
 
-    let dismissed = '';
-    try { dismissed = sessionStorage.getItem(BANNER_DISMISS_KEY) || ''; } catch (_) {}
-    if (dismissed && dismissed === currentBannerSignature) {
+    if (dismissedBannerSignature && dismissedBannerSignature === currentBannerSignature) {
       banner.hidden = true;
       document.body.classList.remove('lb-major-alert-banner-visible');
       document.documentElement.style.removeProperty('--lb-major-banner-height');
@@ -782,9 +782,7 @@ window.addEventListener('click', (event) => {
   bannerClose?.addEventListener('click', (event) => {
     event.preventDefault();
     event.stopPropagation();
-    if (currentBannerSignature) {
-      try { sessionStorage.setItem(BANNER_DISMISS_KEY, currentBannerSignature); } catch (_) {}
-    }
+    dismissedBannerSignature = currentBannerSignature || '';
     banner.hidden = true;
     document.body.classList.remove('lb-major-alert-banner-visible');
     document.documentElement.style.removeProperty('--lb-major-banner-height');
