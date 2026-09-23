@@ -371,14 +371,23 @@ window.addEventListener('click', (event) => {
           0%,100% { opacity:.86; }
           50% { opacity:1; }
         }
+        @keyframes lbAlarmBang {
+          0%,100% { transform:scale(1); opacity:.90; }
+          50% { transform:scale(1.08); opacity:1; }
+        }
         #lbMajorAlertBanner[data-level="critical"] .lb-major-alert-banner__icon::before {
           animation:lbAlarmPulse 1.6s ease-in-out infinite;
+        }
+        #lbMajorAlertBanner[data-level="critical"] .lb-major-alert-banner__icon {
+          animation:lbAlarmBang 2.4s ease-in-out infinite;
+          transform-origin:center;
         }
 
         @media (prefers-reduced-motion:reduce) {
           #lbMajorAlertSpacer { transition:none; }
           .lb-major-alert-banner__more,
           .lb-major-alert-banner__close { transition:none; }
+          #lbMajorAlertBanner .lb-major-alert-banner__icon,
           #lbMajorAlertBanner .lb-major-alert-banner__icon::before { animation:none !important; }
         }
       `;
