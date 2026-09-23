@@ -139,6 +139,9 @@
       const label = document.createElement('div');
       label.className = 'lb-stop-traveler-delay-propagated';
       label.textContent = `+${delay} min*`;
+      label.dataset.lbStopStation = stopName;
+      label.dataset.lbSourceStation = sourceStation;
+      label.dataset.lbCommunityDelay = String(delay);
       label.title = `Retard signalé depuis ${sourceStation} par ${reports} voyageur${reports > 1 ? 's' : ''} — appliqué aux arrêts suivants jusqu’au prochain signalement.`;
       label.setAttribute('aria-label', `Retard communautaire de ${delay} minutes, signalé depuis ${sourceStation}`);
       row.appendChild(label);
