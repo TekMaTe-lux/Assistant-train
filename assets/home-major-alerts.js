@@ -645,20 +645,24 @@
       return;
     }
 
-    // Sur l'accueil, ne pas télécharger/parsing ~3 Mo de snapshot canonique avant
-    // que le premier écran soit rendu. Une interaction utilisateur le déclenche aussitôt.
+    // Sur l'accueil, ne pas télécharger/parsing ~3 Mo de snapshot canonique
+    // pendant le rendu initial. Les vues de données le réveillent immédiatement ;
+    // sinon un rafraîchissement de sécurité arrive quelques secondes plus tard.
     const wake = () => startCanonicalWarmup();
-    window.addEventListener('pointerdown', wake, { once:true, passive:true });
-    window.addEventListener('keydown', wake, { once:true });
+    const wakeOnDataView = () => {
+      const nextHash = (window.location.hash || '').toLowerCase();
+      if (nextHash && nextHash !== '#home') wake();
+    };
+    window.addEventListener('hashchange', wakeOnDataView, { passive:true });
 
     if (document.readyState === 'complete') {
-      window.setTimeout(wake, 1200);
+      window.setTimeout(wake, 8000);
     } else {
-      window.addEventListener('load', () => window.setTimeout(wake, 1200), { once:true });
+      window.addEventListener('load', () => window.setTimeout(wake, 8000), { once:true });
     }
 
-    // Filet de sécurité si l'événement load est retardé par une ressource tierce.
-    window.setTimeout(wake, 6500);
+    // Filet de sécurité indépendant du load.
+    window.setTimeout(wake, 10000);
   };
 
   const install = () => {
