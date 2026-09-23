@@ -9140,7 +9140,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (automaticRange && (key !== 'custom' || options.loadCustom)) {
       setGranularity(granularityForRange(automaticRange));
     }
-    if (key !== 'custom' || options.loadCustom) loadOverview();
+    if ((key !== 'custom' || options.loadCustom) && options.skipLoad !== true) loadOverview();
   }
 
   function setView(view, options = {}){
@@ -10022,7 +10022,17 @@ document.addEventListener('DOMContentLoaded', () => {
   setGranularity(granularity);
   setCompareKind('period');
   setView('overview', { autoRun: false });
-  setPeriod('30d');
+
+  // PERF : initialise les contrôles Stats immédiatement, mais ne charge les
+  // données complètes que lorsque l'utilisateur ouvre réellement #stats.
+  const statsViewIsOpen = () => (window.location.hash || '').toLowerCase() === '#stats';
+  const ensureStatsViewData = () => {
+    if (!statsViewIsOpen()) return;
+    if (!currentOverview) loadOverview();
+  };
+  setPeriod('30d', { skipLoad: !statsViewIsOpen() });
+  window.addEventListener('hashchange', ensureStatsViewData, { passive:true });
+
   if (window.lbIsAuthed === true && window.lbPrefsCache) {
     hydrateFromAccount(window.lbPrefsCache, { applyDefaults: true });
   }
