@@ -80,11 +80,11 @@
     return refreshPromise;
   }
 
-  function firstSignalsByStop(){
+  function latestSignalsByStop(){
     const map = new Map();
     signals.slice().sort((a,b)=>Number(a.ts||0)-Number(b.ts||0) || Number(a.id||0)-Number(b.id||0)).forEach((s)=>{
       const key=`${s.trainNumber}|${s.stopKey}`;
-      if (!map.has(key)) map.set(key,s); // le premier signalement actif fait foi
+      map.set(key,s); // la dernière mesure réellement publiée à cette gare fait foi
     });
     return Array.from(map.values());
   }
@@ -99,7 +99,7 @@
       trains[number]={...item,travelerStops:{...(item.travelerStops||{})}};
     });
 
-    const first=firstSignalsByStop();
+    const first=latestSignalsByStop();
     first.forEach((s)=>{
       const previous=trains[s.trainNumber] && typeof trains[s.trainNumber]==='object' ? trains[s.trainNumber] : {};
       const travelerStops={...(previous.travelerStops||{})};
@@ -114,11 +114,10 @@
     byTrain.forEach((list,number)=>{
       const item=trains[number]||{};
       if (Number(item.travelerDelayMin)>0) return; // snapshot natif prioritaire
-      const vals=list.map(s=>s.delayMin).sort((a,b)=>a-b);
-      if (!vals.length) return;
-      const mid=Math.floor(vals.length/2);
-      const delay=vals.length%2 ? vals[mid] : Math.round((vals[mid-1]+vals[mid])/2);
-      trains[number]={...item,travelerDelayMin:delay,delayReports:list.length,lastReportAt:Math.max(...list.map(s=>Number(s.ts||0)))};
+      const latest=list.slice().sort((a,b)=>Number(b.ts||0)-Number(a.ts||0))[0] || null;
+      if (!latest) return;
+      // Compatibilité uniquement : reprendre une vraie mesure, jamais une moyenne/médiane.
+      trains[number]={...item,travelerDelayMin:latest.delayMin,delayReports:list.length,lastReportAt:Number(latest.ts||0)};
     });
     return {...base,canContribute:canContribute(),trains,voteMetadata:true,voiceToMapSafe:true};
   }
