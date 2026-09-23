@@ -2633,6 +2633,50 @@
     return { generatedAt:now, presenceTtlMs:4 * 60 * 60 * 1000, signalTtlMs:45 * 60 * 1000, trains };
   }
 
+  function openSignalAtStop({ trainNumber, station, delayMin } = {}){
+    const trainKey = normalizeKey(trainNumber);
+    const stop = String(station || '').trim();
+    if (!trainKey) return;
+
+    openSignalForTrain(trainKey);
+    COMMUNITY.selectedSignalType = 'retard';
+    COMMUNITY.selectedInfoTag = '';
+
+    document.querySelectorAll('.lb-signal-type').forEach((button)=>{
+      button.classList.toggle('is-selected', button.getAttribute('data-signal-type') === 'retard');
+    });
+
+    // On ne recopie volontairement PAS l'ancien retard dans la liste :
+    // l'usager doit choisir la nouvelle valeur réellement constatée à cette gare.
+    const delaySelect = $id('lbSignalDelaySelect');
+    if (delaySelect) delaySelect.value = '';
+
+    const normalizeStation = (value)=> String(value || '')
+      .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+      .toLowerCase().replace(/[^a-z0-9]+/g, ' ').replace(/\s+/g, ' ').trim();
+
+    const applyStation = ()=>{
+      const stationSelect = $id('lbSignalStationSelect');
+      if (!stationSelect || !stop) return;
+      const wanted = normalizeStation(stop);
+      const option = Array.from(stationSelect.options).find((item)=> normalizeStation(item.value) === wanted);
+      if (option) stationSelect.value = option.value;
+    };
+
+    applyStation();
+    setTimeout(applyStation, 250);
+    setTimeout(applyStation, 700);
+
+    updateSignalTypeUI();
+    const previous = Math.max(0, Math.round(Number(delayMin || 0)));
+    const feedback = $id('lbSignalFeedback');
+    if (feedback) {
+      feedback.textContent = stop
+        ? `Nouvelle mesure à ${stop}${previous > 0 ? ` · valeur précédente +${previous} min` : ''}. Choisissez le retard constaté puis publiez.`
+        : 'Choisissez la nouvelle valeur de retard constatée puis publiez.';
+    }
+  }
+
   function selectGpsEstimateInSignalModal({ trainNumber, delayMin, station, accuracy } = {}){
     const trainKey = normalizeKey(trainNumber);
     if (!trainKey) return;
@@ -2683,6 +2727,7 @@
     refresh: refreshCommunityViews,
     openLive: ()=> openCommunityModal('lbLiveModal'),
     openSignal: (trainNumber)=> openSignalForTrain(trainNumber),
+    openSignalAt: (context)=> openSignalAtStop(context),
     openSignalEstimate: (estimate)=> selectGpsEstimateInSignalModal(estimate),
     togglePresence: (trainNumber)=> publishPresence(trainNumber),
     getMapSnapshot: ()=> buildCommunityMapSnapshot()
