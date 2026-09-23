@@ -41,6 +41,6 @@
   // Pont carte historique : présence, signaler, GPS et messages parent <-> iframe.
   load('./assets/lb-community-map-bridge-core-v1.js?v=20260923-nextstop-1', 'lb-community-map-bridge-core-v1', () => {
     // V3 corrige l'heure UTC et complète seulement les retards absents du snapshot natif.
-    load('./assets/lb-community-map-votes-v3.js?v=20260914-1', 'lb-community-map-votes-v3');
+    load('./assets/lb-community-map-votes-v3.js?v=20260923-stoplogic-1', 'lb-community-map-votes-v3');
   });
 })();
