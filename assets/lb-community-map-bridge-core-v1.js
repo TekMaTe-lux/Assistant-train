@@ -372,7 +372,15 @@
     }
     if (data.type === 'lb:community:open-signal') {
       if (!canContribute()) { requestAuthentication(); return; }
-      if (train) window.lbCommunityLive?.openSignal?.(train);
+      if (train) {
+        const station = String(data.station || '').trim();
+        const delayMin = Math.max(0, Math.round(Number(data.delayMin || 0)));
+        if (station && typeof window.lbCommunityLive?.openSignalAt === 'function') {
+          window.lbCommunityLive.openSignalAt({ trainNumber:train, station, delayMin });
+        } else {
+          window.lbCommunityLive?.openSignal?.(train);
+        }
+      }
       return;
     }
     if (data.type === 'lb:community:toggle-presence') {
