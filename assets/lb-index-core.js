@@ -15978,18 +15978,24 @@ async function loadAffluenceDate(dateStr){
     const trainDate=$('trainDate')?.value;
     if(trainDate && [...sel.options].some(o=>o.value===trainDate)) sel.value=trainDate;
 
-    // PERF: le fichier affluence journalier dépasse 1 Mo décodé.
-    // On ne le charge plus sur l'accueil : seulement quand la vue Carte/Affluence
-    // est réellement ouverte, ou lorsqu'une fiche train le demande explicitement.
-    const ensureForCarte = ()=>{
-      if ((location.hash || '').toLowerCase() !== '#carte') return;
+    // PERF: le gros fichier affluence ne part pas sur l'accueil.
+    // Il est en revanche indispensable dans Carte ET Mes Bétaillères favorites.
+    const affViewNeedsData = ()=>{
+      const hash = (location.hash || '').toLowerCase();
+      return hash === '#carte'
+        || hash === '#favoris'
+        || hash === '#favtrainswidget'
+        || document.body?.classList?.contains('page-favoris');
+    };
+    const ensureForRelevantView = ()=>{
+      if (!affViewNeedsData()) return;
       if (!affState.data && sel.value) loadAffluenceDate(sel.value);
     };
-    window.addEventListener('hashchange', ensureForCarte, { passive:true });
-    ensureForCarte();
+    window.addEventListener('hashchange', ensureForRelevantView, { passive:true });
+    ensureForRelevantView();
 
     sel.addEventListener('change', ()=>{
-      if (affState.data || (location.hash || '').toLowerCase() === '#carte') {
+      if (affState.data || affViewNeedsData()) {
         loadAffluenceDate(sel.value);
       }
       const td=$('trainDate');
@@ -16004,8 +16010,13 @@ async function loadAffluenceDate(dateStr){
       const daySel=$('affDaySel');
       if(daySel && daySel.value!==d && [...daySel.options].some(o=>o.value===d)) daySel.value=d;
       // Ne pas télécharger l'affluence en arrière-plan sur l'accueil.
-      // Une donnée déjà chargée reste synchronisée ; la vue Carte la charge à la demande.
-      if (affState.data || (location.hash || '').toLowerCase() === '#carte') {
+      // Carte et Favoris la chargent à la demande.
+      const hash = (location.hash || '').toLowerCase();
+      const needsAff = hash === '#carte'
+        || hash === '#favoris'
+        || hash === '#favtrainswidget'
+        || document.body?.classList?.contains('page-favoris');
+      if (affState.data || needsAff) {
         loadAffluenceDate(d);
       }
     };
