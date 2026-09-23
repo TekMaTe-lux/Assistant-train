@@ -83,15 +83,6 @@ window.addEventListener('click', (event) => {
           backdrop-filter:blur(15px) saturate(132%);
         }
 
-        #lbMajorAlertBanner::before {
-          content:"";
-          position:absolute;
-          inset:0 auto 0 0;
-          width:3px;
-          background:linear-gradient(180deg,#ff7889 0%,#ff314d 55%,#b50f2a 100%);
-          box-shadow:0 0 16px rgba(255,52,77,.42);
-        }
-
         #lbMajorAlertBanner::after {
           content:"";
           position:absolute;
@@ -110,11 +101,6 @@ window.addEventListener('click', (event) => {
           border-bottom-color:rgba(255,186,58,.56);
           background:linear-gradient(90deg,rgba(69,40,6,.985),rgba(46,28,8,.975) 46%,rgba(21,15,9,.965));
         }
-        #lbMajorAlertBanner[data-level="warning"]::before {
-          background:linear-gradient(180deg,#ffd37a,#ffb52c 58%,#b97906);
-          box-shadow:0 0 16px rgba(255,183,46,.30);
-        }
-
         .lb-major-alert-banner__inner {
           position:relative;
           z-index:1;
