@@ -348,8 +348,11 @@ window.addEventListener('click', (event) => {
     if (/(tous les trains[^.]{0,100}supprim|interruption totale|aucun train|circulation[^.]{0,80}interromp)/.test(text)) {
       return { key: 'critical', icon: '❌', label: 'Circulation interrompue', rank: 5 };
     }
-    if (/(service reduit|service modifie|nombreuses suppressions|remplac[ée]s? par des cars)/.test(text)) {
-      return { key: 'warning', icon: '⚠️', label: 'Service réduit', rank: 4 };
+    if (
+      /(service reduit|service modifie|nombreuses suppressions|remplac[ée]s? par des cars)/.test(text)
+      || (/circulation[^.]{0,100}perturbee/.test(text) && /suppressions?/.test(text))
+    ) {
+      return { key: 'warning', icon: '⚠️', label: 'Service perturbé', rank: 4 };
     }
     if (/(forts? retards?|retards? importants?)/.test(text)) {
       return { key: 'delay', icon: '⏰', label: 'Retards importants', rank: 3 };
@@ -434,6 +437,7 @@ window.addEventListener('click', (event) => {
     );
     if (/thionville/.test(text) && /luxembourg/.test(text)) return 'Thionville–Luxembourg';
     if (/metz/.test(text) && /luxembourg/.test(text)) return 'Metz–Luxembourg';
+    if (/metz/.test(text) && /thionville/.test(text)) return 'Metz–Thionville';
     if (/nancy/.test(text) && /metz/.test(text)) return 'Nancy–Metz';
     return '';
   }
