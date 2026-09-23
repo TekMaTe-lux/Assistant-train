@@ -343,8 +343,8 @@
     try {
       if (!target) return null;
 
-      // Nouveau donut CSS : aucun canvas/Chart.js nécessaire sur l'accueil.
-      if (target.classList?.contains('home-punct-css-ring')) {
+      // Donut SVG natif : aucun canvas/Chart.js nécessaire sur l'accueil.
+      if (target.classList?.contains('home-punct-svg-ring') || target.classList?.contains('home-punct-css-ring')) {
         const pct = Number(target.dataset.pct);
         if (!Number.isFinite(pct)) return null;
         const rect = target.getBoundingClientRect();
