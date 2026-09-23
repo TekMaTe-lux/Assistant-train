@@ -407,6 +407,18 @@ document.addEventListener('DOMContentLoaded', () => {
   }
   window.lbEnsureChartJs = ensureChartJs;
 
+  function ensureSortable() {
+    if (window.Sortable) return Promise.resolve(window.Sortable);
+    return loadScript(
+      'lb-sortable-lazy',
+      'https://cdn.jsdelivr.net/npm/sortablejs@1.15.2/Sortable.min.js'
+    ).then(() => window.Sortable || null).catch((error) => {
+      console.warn('[PERF] SortableJS non chargé', error);
+      return null;
+    });
+  }
+  window.lbEnsureSortable = ensureSortable;
+
   function ensureOptionalViews() {
     const hash = (location.hash || '').toLowerCase();
 
