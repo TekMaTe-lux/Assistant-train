@@ -338,3 +338,44 @@ document.addEventListener('DOMContentLoaded', () => {
     navigator.serviceWorker.ready.then(() => askWorker(navigator.onLine)).catch(() => {});
   }, { once:true });
 })();
+
+
+/* LB_PERF_OPTIONAL_VIEWS_V1
+ * Les enrichissements lourds d'une vue ne sont chargés qu'à son ouverture.
+ */
+(() => {
+  const loaded = new Set();
+
+  function loadCss(id, href) {
+    if (loaded.has(id) || document.getElementById(id)) return;
+    loaded.add(id);
+    const link = document.createElement('link');
+    link.id = id;
+    link.rel = 'stylesheet';
+    link.href = href;
+    document.head.appendChild(link);
+  }
+
+  function loadScript(id, src) {
+    if (loaded.has(id) || document.getElementById(id)) return;
+    loaded.add(id);
+    const script = document.createElement('script');
+    script.id = id;
+    script.src = src;
+    script.defer = true;
+    document.head.appendChild(script);
+  }
+
+  function ensureStatsDiscovery() {
+    if ((location.hash || '').toLowerCase() !== '#stats') return;
+    loadCss('lb-stats-discovery-v1-css-lazy', './assets/lb-stats-discovery-v1.css?v=1');
+    loadScript('lb-stats-discovery-v1-js-lazy', './assets/lb-stats-discovery-v1.js?v=1');
+  }
+
+  window.addEventListener('hashchange', ensureStatsDiscovery, { passive:true });
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', ensureStatsDiscovery, { once:true });
+  } else {
+    ensureStatsDiscovery();
+  }
+})();
