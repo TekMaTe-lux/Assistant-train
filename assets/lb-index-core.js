@@ -17391,9 +17391,21 @@ async function loadAffluenceDate(dateStr){
     }
     const trainDate=$('trainDate')?.value;
     if(trainDate && [...sel.options].some(o=>o.value===trainDate)) sel.value=trainDate;
-    loadAffluenceDate(sel.value);
+
+    // PERF: le fichier affluence journalier dépasse 1 Mo décodé.
+    // On ne le charge plus sur l'accueil : seulement quand la vue Carte/Affluence
+    // est réellement ouverte, ou lorsqu'une fiche train le demande explicitement.
+    const ensureForCarte = ()=>{
+      if ((location.hash || '').toLowerCase() !== '#carte') return;
+      if (!affState.data && sel.value) loadAffluenceDate(sel.value);
+    };
+    window.addEventListener('hashchange', ensureForCarte, { passive:true });
+    ensureForCarte();
+
     sel.addEventListener('change', ()=>{
-      loadAffluenceDate(sel.value);
+      if (affState.data || (location.hash || '').toLowerCase() === '#carte') {
+        loadAffluenceDate(sel.value);
+      }
       const td=$('trainDate');
       if(td){ td.value=sel.value; td.dispatchEvent(new Event('change',{bubbles:true})); }
     });
@@ -17405,7 +17417,11 @@ async function loadAffluenceDate(dateStr){
       if(!d) return;
       const daySel=$('affDaySel');
       if(daySel && daySel.value!==d && [...daySel.options].some(o=>o.value===d)) daySel.value=d;
-      loadAffluenceDate(d);
+      // Ne pas télécharger l'affluence en arrière-plan sur l'accueil.
+      // Une donnée déjà chargée reste synchronisée ; la vue Carte la charge à la demande.
+      if (affState.data || (location.hash || '').toLowerCase() === '#carte') {
+        loadAffluenceDate(d);
+      }
     };
     $('trainDate')?.addEventListener('change', refresh);
     $('selectionDate')?.addEventListener('change', ()=>setTimeout(refresh,0));
