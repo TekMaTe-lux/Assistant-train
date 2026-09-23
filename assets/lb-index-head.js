@@ -1,3 +1,79 @@
+/* LB_PERF_FETCH_COALESCE_V1
+ * Mutualise uniquement les GET identiques lancés presque simultanément.
+ * Aucun cache métier long : on évite seulement que plusieurs modules redemandent
+ * la même ressource pendant le même rendu.
+ */
+(() => {
+  if (window.__LB_FETCH_COALESCE_V1__ || typeof window.fetch !== 'function') return;
+  window.__LB_FETCH_COALESCE_V1__ = true;
+
+  const nativeFetch = window.fetch.bind(window);
+  const inflight = new Map();
+  const recent = new Map();
+
+  function policy(url) {
+    const host = url.hostname;
+    const path = url.pathname;
+    const ownHost = host === location.hostname;
+    const apiHost = host === 'vps.labetaillere.fr';
+    if (apiHost || ownHost) {
+      if (path === '/api/me') return 3000;
+      if (path === '/api/ranking') return 4000;
+      if (path === '/api/stats/beta/overview') return 5000;
+      if (path === '/api/community/presence') return 1200;
+      if (path === '/api/comments' || path === '/api/comments/') return 900;
+    }
+    if (host === 'api.open-meteo.com' && path === '/v1/forecast') return 10000;
+    return 0;
+  }
+
+  function canonicalKey(url, init, input) {
+    const u = new URL(url.href);
+    ['_', 't', 'cb'].forEach((name) => u.searchParams.delete(name));
+    u.searchParams.sort();
+    const credentials = String(init?.credentials || input?.credentials || '');
+    return 'GET|' + credentials + '|' + u.toString();
+  }
+
+  window.fetch = function lbCoalescedFetch(input, init) {
+    try {
+      const method = String(init?.method || input?.method || 'GET').toUpperCase();
+      if (method !== 'GET' || init?.signal || input?.signal) return nativeFetch(input, init);
+
+      const raw = typeof input === 'string' || input instanceof URL ? String(input) : String(input?.url || '');
+      if (!raw) return nativeFetch(input, init);
+      const url = new URL(raw, location.href);
+      const ttl = policy(url);
+      if (!ttl) return nativeFetch(input, init);
+
+      const key = canonicalKey(url, init, input);
+      const now = Date.now();
+      const cached = recent.get(key);
+      if (cached && cached.expiresAt > now) return Promise.resolve(cached.response.clone());
+      if (cached) recent.delete(key);
+
+      const running = inflight.get(key);
+      if (running) return running.then((response) => response.clone());
+
+      const request = nativeFetch(input, init).then((response) => {
+        if (response?.ok) {
+          recent.set(key, { response: response.clone(), expiresAt: Date.now() + ttl });
+          window.setTimeout(() => {
+            const item = recent.get(key);
+            if (item && item.expiresAt <= Date.now()) recent.delete(key);
+          }, ttl + 100);
+        }
+        return response;
+      }).finally(() => inflight.delete(key));
+
+      inflight.set(key, request);
+      return request.then((response) => response.clone());
+    } catch (_) {
+      return nativeFetch(input, init);
+    }
+  };
+})();
+
 // Rendu échelonné pour gros tableaux (évite le mur de mémoire sur iOS)
 function renderRowsChunked(htmlRows, tbody, chunk=200){
   tbody.textContent = '';
