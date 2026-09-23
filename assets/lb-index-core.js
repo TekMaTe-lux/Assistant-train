@@ -12423,62 +12423,83 @@ function getGtfsDelayForStop(trainNumber, stopName){
     return rows;
   }
 
-  function buildFavStopsDetails(payload, trainNumber, nowMin){
+  function buildFavStopsDetails(payload, trainNumber, nowMin, widgetState = 'before', options = {}){
     const rows = buildFavStopRows(payload, trainNumber);
     if (!rows.length) return '';
 
-    // next = premier arrêt à venir non supprimé
+    const forceDeleted = options?.forceDeleted === true;
+    const state = String(widgetState || 'before');
+
+    // Premier arrêt encore à venir. Pour un train terminé, on conserve le terminus
+    // comme repère mais toutes les lignes sont marquées "passées".
     let next = rows.find(r => (nowMin == null || r.effectiveMin >= nowMin) && !r.isDeleted);
     if (!next) next = rows.find(r => (nowMin == null || r.effectiveMin >= nowMin)) || rows[rows.length-1];
 
-    // terminus = dernier arrêt non supprimé
-    let terminus = [...rows].reverse().find(r => !r.isDeleted) || rows[rows.length-1];
+    const nextIndex = Math.max(0, rows.indexOf(next));
+    const voieHtml = (r) => {
+      const voie = r?.voieLabel ? String(r.voieLabel) : '';
+      if (!voie) return '';
+      const label = (typeof formatVoieLabel === 'function') ? formatVoieLabel(voie) : voie;
+      return `<span class="fav-route-track voie-badge">${escapeHtml(label)}</span>`;
+    };
 
-    const rowHtml = (r, mode) => {
-      const voie = r.voieLabel ? String(r.voieLabel) : '';
-      const voieBadge = voie
-        ? `<span class="voie-badge" style="margin-left:8px;">${escapeHtml(formatVoieLabel ? formatVoieLabel(voie) : voie)}</span>`
-        : '';
-      const deletedCls = r.isDeleted ? ' deleted' : '';
-      const pastCls = (nowMin != null && r.effectiveMin < nowMin) ? ' is-past' : '';
-      const modeCls = mode === 'expanded' ? ' is-expanded' : ' is-compact';
+    const rowHtml = (r, index) => {
+      const deleted = forceDeleted || Boolean(r.isDeleted);
+      const past = !deleted && (
+        state === 'after'
+        || (state === 'running' && nowMin != null && r.effectiveMin < nowMin)
+      );
+      const isNext = !deleted && !past && (
+        (state === 'running' && index === nextIndex)
+        || (state === 'before' && index === 0)
+      );
+      const rowState = deleted ? 'deleted' : (past ? 'past' : (isNext ? 'next' : 'future'));
+      const timeHtml = fmtTime(r.plannedMin, r.amendedMin, deleted);
+
       return `
-        <div class="fav-next-row${deletedCls}${pastCls}${modeCls}">
-          <span class="fav-timecell">${fmtTime(r.plannedMin, r.amendedMin, r.isDeleted)}</span>
-          <span class="fav-stopwrap${deletedCls}">
-            <span class="fav-stop${deletedCls}">${escapeHtml(r.name)}</span>
-          </span>
-          <span class="fav-voiecell">${voieBadge}</span>
+        <div class="fav-route-row is-${rowState}" data-stop-state="${rowState}">
+          <span class="fav-route-time">${timeHtml}</span>
+          <span class="fav-route-node" aria-hidden="true"></span>
+          <span class="fav-route-stop">${escapeHtml(r.name)}</span>
+          <span class="fav-route-trackcell">${voieHtml(r)}</span>
         </div>`;
     };
 
-    const compactRow = (() => {
-      const voie = next.voieLabel ? String(next.voieLabel) : '';
-      const voieBadge = voie
-        ? `<span class="voie-badge" style="margin-left:8px;">${escapeHtml(formatVoieLabel ? formatVoieLabel(voie) : voie)}</span>`
-        : '';
-      const deletedCls = next.isDeleted ? ' deleted' : '';
-      return `
-        <div class="fav-next-row${deletedCls} is-compact">
-          <span class="fav-timecell">${fmtTime(next.plannedMin, next.amendedMin, next.isDeleted)}</span>
-          <span class="fav-stopwrap${deletedCls}">
-            <span class="fav-stop${deletedCls}">→ Prochain : ${escapeHtml(next.name)}</span>
-          </span>
-          <span class="fav-voiecell">${voieBadge}</span>
-        </div>`;
-    })();
+    const first = rows[0];
+    const last = rows[rows.length - 1];
+    const nextTrack = voieHtml(next);
+    const nextTime = fmtTime(next.plannedMin, next.amendedMin, forceDeleted || next.isDeleted);
 
-    const expandedRows = rows.map(r => rowHtml(r, 'expanded')).join('');
+    let summaryMain = 'Parcours';
+    let summarySub = `${rows.length} arrêt${rows.length > 1 ? 's' : ''}`;
 
-    // Compact AU-DESSUS + Details en dessous
+    if (forceDeleted) {
+      summaryMain = 'Parcours supprimé';
+      summarySub = `${rows.length} arrêt${rows.length > 1 ? 's' : ''}`;
+    } else if (state === 'running') {
+      summaryMain = `Prochain : ${escapeHtml(next.name)}`;
+      summarySub = `${nextTime}${nextTrack ? ' ' + nextTrack : ''}`;
+    } else if (state === 'after') {
+      summaryMain = 'Parcours terminé';
+      summarySub = `${escapeHtml(last.name)} · ${fmtTime(last.plannedMin, last.amendedMin, last.isDeleted)}`;
+    } else {
+      summaryMain = 'Parcours';
+      summarySub = `${rows.length} arrêt${rows.length > 1 ? 's' : ''} · départ ${fmtTime(first.plannedMin, first.amendedMin, first.isDeleted)}`;
+    }
+
+    const expandedRows = rows.map((r, index) => rowHtml(r, index)).join('');
+    const openAttr = state === 'running' ? ' open' : '';
+
     return `
-      <div class="fav-stops-compact fav-stops-compact-flat">
-        ${compactRow}
-      </div>
-
-      <details class="fav-details fav-stops-details" style="margin-top:10px;">
-        <summary class="fav-details-summary" style="cursor:pointer;user-select:none;opacity:.95;">Voir tous les arrêts</summary>
-        <div class="fav-box fav-box-info fav-stops-expanded" style="margin-top:8px;">
+      <details class="fav-route-details fav-stops-details" data-route-state="${escapeHtml(forceDeleted ? 'cancelled' : state)}"${openAttr}>
+        <summary class="fav-route-summary">
+          <span class="fav-route-summary-copy">
+            <strong class="fav-route-summary-main">${summaryMain}</strong>
+            <span class="fav-route-summary-sub">${summarySub}</span>
+          </span>
+          <span class="fav-route-summary-chevron" aria-hidden="true">›</span>
+        </summary>
+        <div class="fav-route-timeline">
           ${expandedRows}
         </div>
       </details>
@@ -12668,7 +12689,7 @@ function getGtfsDelayForStop(trainNumber, stopName){
         causeEl.style.display = '';
         causeEl.innerHTML = `<div class="fav-box fav-box-danger"><div class="fav-box-body">${escapeHtml(causeText)}</div></div>`;
       }
-      line.innerHTML = '';
+      line.innerHTML = buildFavStopsDetails(payload, trainId, st.now, canceledState, { forceDeleted:true });
       if (statsEl){
         renderFavStats(kind, trainId).catch(()=>{});
         if (!statsEl.hasAttribute('data-user-opened')) statsEl.open = false;
@@ -12735,7 +12756,7 @@ function getGtfsDelayForStop(trainNumber, stopName){
     `;
 
     const nextTrainHtml = isFutureService ? '' : buildNextTrainInfo(widgetState, st);
-	const stopsHtml = (widgetState === 'running') ? buildFavStopsDetails(payload, trainId, st.now) : '';
+	const stopsHtml = buildFavStopsDetails(payload, trainId, isFutureService ? null : st.now, widgetState);
     const affInfo = (!isFutureService && typeof window.getAffluenceTrainInfo === 'function') ? window.getAffluenceTrainInfo(trainId, (kind==='AM' ? (window.__lbPreferredAffStation||'') : (window.__lbPreferredAffTo||''))) : null;
         const affHtml = affInfo ? (()=> {
 	      const depName = affInfo.depStop?.station || affInfo.depStop?.name || '';
@@ -12802,7 +12823,7 @@ function getGtfsDelayForStop(trainNumber, stopName){
       `;
     })() : '';
 	if (card) card.classList.toggle('is-delayed', Boolean(isDelayed));
-    line.innerHTML = (causeHtml || '') + progressHtml + (nextTrainHtml || '') + (affHtml || '') + (stopsHtml || '');
+    line.innerHTML = (causeHtml || '') + progressHtml + (nextTrainHtml || '') + (stopsHtml || '') + (affHtml || '');
 if (statsEl){
       renderFavStats(kind, trainId).catch(()=>{});
       if (!statsEl.hasAttribute('data-user-opened')) statsEl.open = false;
