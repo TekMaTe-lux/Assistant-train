@@ -616,30 +616,56 @@
     const observer = new MutationObserver(scheduleSync);
     observer.observe(host, { childList: true, subtree: true, characterData: true });
 
-    refreshCanonicalSnapshot().then(() => {
-      scheduleSync();
-      syncTrainDetailFromCanonical();
-      syncTrainTableFromCanonical();
-    });
-    window.setInterval(() => {
-      refreshCanonicalSnapshot(true).then(() => {
-        scheduleSync();
-        syncTrainDetailFromCanonical();
-        syncTrainTableFromCanonical();
-      });
+  };
+
+  let canonicalWarmupStarted = false;
+  let canonicalInterval = 0;
+
+  const syncCanonicalEverywhere = (force = false) => refreshCanonicalSnapshot(force).then(() => {
+    syncLiveStatusFromCanonical(document);
+    syncLiveDelayedArrivalTimes(document);
+    syncTrainDetailFromCanonical();
+    syncTrainTableFromCanonical();
+  });
+
+  const startCanonicalWarmup = () => {
+    if (canonicalWarmupStarted) return;
+    canonicalWarmupStarted = true;
+    syncCanonicalEverywhere(false).catch(() => {});
+    canonicalInterval = window.setInterval(() => {
+      syncCanonicalEverywhere(true).catch(() => {});
     }, CANONICAL_REFRESH_MS);
+  };
+
+  const scheduleCanonicalWarmup = () => {
+    const hash = (window.location.hash || '').toLowerCase();
+    // Si l'utilisateur arrive directement dans une vue de données, priorité à la fraîcheur.
+    if (hash && hash !== '#home') {
+      startCanonicalWarmup();
+      return;
+    }
+
+    // Sur l'accueil, ne pas télécharger/parsing ~3 Mo de snapshot canonique avant
+    // que le premier écran soit rendu. Une interaction utilisateur le déclenche aussitôt.
+    const wake = () => startCanonicalWarmup();
+    window.addEventListener('pointerdown', wake, { once:true, passive:true });
+    window.addEventListener('keydown', wake, { once:true });
+
+    if (document.readyState === 'complete') {
+      window.setTimeout(wake, 1200);
+    } else {
+      window.addEventListener('load', () => window.setTimeout(wake, 1200), { once:true });
+    }
+
+    // Filet de sécurité si l'événement load est retardé par une ressource tierce.
+    window.setTimeout(wake, 6500);
   };
 
   const install = () => {
     installLiveCardSync();
     installCanonicalDetailSync();
     installCanonicalTableSync();
-    refreshCanonicalSnapshot().then(() => {
-      syncLiveStatusFromCanonical(document);
-      syncLiveDelayedArrivalTimes(document);
-      syncTrainDetailFromCanonical();
-      syncTrainTableFromCanonical();
-    });
+    scheduleCanonicalWarmup();
   };
 
   if (document.readyState === 'loading') {
