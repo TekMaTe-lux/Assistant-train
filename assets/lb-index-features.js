@@ -21,6 +21,7 @@
     selectedSignalType: '',
     selectedInfoTag: '',
     editingSignalId: '',
+    returnToMapAfterSignal: false,
     liveDirection: 'all',
     liveTrains: [],
     signals: [],
@@ -1654,6 +1655,7 @@
   function openSignalForTrain(trainNumber){
     if (!requireCommunityAuthentication()) return;
     COMMUNITY.selectedTrain = normalizeKey(trainNumber || COMMUNITY.selectedTrain);
+    COMMUNITY.returnToMapAfterSignal = false;
     resetSignalEditMode();
     resetSignalDraft();
     openCommunityModal('lbSignalModal');
@@ -1975,6 +1977,7 @@
           : `${INFO_TAG_LABELS[infoTag] || 'Information'}`;
     const signalMessage = `[${signalType.toUpperCase().replace(/-/g,' ')}] ${label}${(needsStation && station) ? ` [${station}]` : ''} — ${baseDetail}`;
     const editingSignalId = String(COMMUNITY.editingSignalId || '').trim();
+    const returnToMapAfterSignal = COMMUNITY.returnToMapAfterSignal === true;
 
     const publishAutoWallAlertIfNeeded = async ()=>{
       const isSuppression = signalType === 'suppression';
@@ -2022,6 +2025,7 @@
       if (delaySelectEl) delaySelectEl.value = '';
       COMMUNITY.selectedSignalType = '';
       COMMUNITY.selectedInfoTag = '';
+      COMMUNITY.returnToMapAfterSignal = false;
       resetSignalEditMode();
       document.querySelectorAll('.lb-signal-type.is-selected').forEach((btn)=> btn.classList.remove('is-selected'));
       if (feedback) feedback.textContent = 'Signalement publié ✅';
@@ -2029,8 +2033,10 @@
       await loadSignals();
       if (typeof window.refreshGamificationUI === 'function') window.refreshGamificationUI({ force: true }).catch(()=>{});
       closeCommunityModal('lbSignalModal');
-      openCommunityModal('lbLiveModal');
-      renderLiveFeed(trainKey);
+      if (!returnToMapAfterSignal) {
+        openCommunityModal('lbLiveModal');
+        renderLiveFeed(trainKey);
+      }
     }catch(err){
       console.error('SIGNAL_POST_ERROR', err);
       if (feedback) feedback.textContent = `Échec de publication: ${err?.message || err}`;
@@ -2639,6 +2645,7 @@
     if (!trainKey) return;
 
     openSignalForTrain(trainKey);
+    COMMUNITY.returnToMapAfterSignal = true;
     COMMUNITY.selectedSignalType = 'retard';
     COMMUNITY.selectedInfoTag = '';
 
