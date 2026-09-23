@@ -340,11 +340,13 @@ document.addEventListener('DOMContentLoaded', () => {
 })();
 
 
-/* LB_PERF_OPTIONAL_VIEWS_V1
+/* LB_PERF_OPTIONAL_VIEWS_V2
  * Les enrichissements lourds d'une vue ne sont chargés qu'à son ouverture.
+ * Chart.js n'est plus dans le chemin critique de l'accueil.
  */
 (() => {
   const loaded = new Set();
+  const scriptPromises = new Map();
 
   function loadCss(id, href) {
     if (loaded.has(id) || document.getElementById(id)) return;
@@ -357,25 +359,71 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   function loadScript(id, src) {
-    if (loaded.has(id) || document.getElementById(id)) return;
-    loaded.add(id);
-    const script = document.createElement('script');
-    script.id = id;
-    script.src = src;
-    script.defer = true;
-    document.head.appendChild(script);
+    if (scriptPromises.has(id)) return scriptPromises.get(id);
+    const existing = document.getElementById(id);
+    if (existing) {
+      const ready = Promise.resolve(existing);
+      scriptPromises.set(id, ready);
+      return ready;
+    }
+
+    const promise = new Promise((resolve, reject) => {
+      const script = document.createElement('script');
+      script.id = id;
+      script.src = src;
+      script.async = true;
+      script.addEventListener('load', () => resolve(script), { once:true });
+      script.addEventListener('error', () => reject(new Error('Chargement impossible : ' + src)), { once:true });
+      document.head.appendChild(script);
+    });
+    scriptPromises.set(id, promise);
+    return promise;
   }
 
-  function ensureStatsDiscovery() {
-    if ((location.hash || '').toLowerCase() !== '#stats') return;
-    loadCss('lb-stats-discovery-v1-css-lazy', './assets/lb-stats-discovery-v1.css?v=1');
-    loadScript('lb-stats-discovery-v1-js-lazy', './assets/lb-stats-discovery-v1.js?v=1');
+  let chartReadyEventSent = false;
+  function ensureChartJs() {
+    if (typeof window.Chart === 'function') {
+      if (!chartReadyEventSent) {
+        chartReadyEventSent = true;
+        window.dispatchEvent(new CustomEvent('lb:chart-ready'));
+      }
+      return Promise.resolve(window.Chart);
+    }
+
+    return loadScript(
+      'lb-chartjs-lazy',
+      'https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js'
+    ).then(() => {
+      if (typeof window.Chart !== 'function') throw new Error('Chart.js indisponible');
+      if (!chartReadyEventSent) {
+        chartReadyEventSent = true;
+        window.dispatchEvent(new CustomEvent('lb:chart-ready'));
+      }
+      return window.Chart;
+    }).catch((error) => {
+      console.warn('[PERF] Chart.js non chargé', error);
+      return null;
+    });
+  }
+  window.lbEnsureChartJs = ensureChartJs;
+
+  function ensureOptionalViews() {
+    const hash = (location.hash || '').toLowerCase();
+
+    if (hash === '#stats' || hash === '#carte' || hash === '#affluence') {
+      ensureChartJs();
+    }
+
+    if (hash === '#stats') {
+      loadCss('lb-stats-discovery-v1-css-lazy', './assets/lb-stats-discovery-v1.css?v=1');
+      loadScript('lb-stats-discovery-v1-js-lazy', './assets/lb-stats-discovery-v1.js?v=1');
+    }
   }
 
-  window.addEventListener('hashchange', ensureStatsDiscovery, { passive:true });
+  window.addEventListener('hashchange', ensureOptionalViews, { passive:true });
   if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', ensureStatsDiscovery, { once:true });
+    document.addEventListener('DOMContentLoaded', ensureOptionalViews, { once:true });
   } else {
-    ensureStatsDiscovery();
+    ensureOptionalViews();
   }
 })();
