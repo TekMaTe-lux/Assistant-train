@@ -58,6 +58,12 @@
   const extractList = (data) => Array.isArray(data) ? data : ['comments','signals','items','data','results'].map(k=>data?.[k]).find(Array.isArray) || [];
   const canContribute = () => window.lbIsAuthed === true;
   const mapFrames = () => Array.from(document.querySelectorAll(MAP_SELECTOR));
+  const mapIsActive = () => (window.location.hash || '').toLowerCase() === '#carte';
+  const mapIsLoaded = () => mapFrames().some((frame) =>
+    frame?.dataset?.lbMapLoaded === '1'
+    || (frame?.src && !/^about:blank(?:$|#)/i.test(String(frame.src)))
+  );
+  const mapNeedsCommunityData = () => mapIsActive() && mapIsLoaded();
   const voteMeta = (s) => s ? { signalId:s.id, score:s.upvotes-s.downvotes, upvotes:s.upvotes, downvotes:s.downvotes, myVote:s.myVote } : null;
 
   async function refreshSignals(force=false){
@@ -151,13 +157,34 @@
     if(delegateVote(d.signalId,d.value)){setTimeout(()=>queue(0,null,true),650);setTimeout(()=>queue(0,null,true),1800);}
   });
 
-  window.addEventListener('lb:community-data-changed',()=>queue(0,null,true));
-  window.addEventListener('lb:community-presence-changed',()=>queue(0));
-  document.addEventListener('lb:auth-state',()=>queue(0,null,true));
-  window.addEventListener('pageshow',()=>{bindFrames();queue(0,null,true);});
-  window.addEventListener('hashchange',()=>{bindFrames();queue(0,null,true);});
+  window.addEventListener('lb:community-data-changed',()=>{
+    if (mapNeedsCommunityData()) queue(0,null,true);
+  });
+  window.addEventListener('lb:community-presence-changed',()=>{
+    if (mapNeedsCommunityData()) queue(0);
+  });
+  document.addEventListener('lb:auth-state',()=>{
+    if (mapNeedsCommunityData()) queue(0,null,true);
+  });
+  window.addEventListener('pageshow',()=>{
+    bindFrames();
+    if (mapNeedsCommunityData()) queue(0,null,true);
+  });
+  window.addEventListener('hashchange',()=>{
+    bindFrames();
+    if (mapNeedsCommunityData()) {
+      queue(0,null,true);
+      setTimeout(()=>queue(0),650);
+    }
+  });
 
-  function start(){bindFrames();queue(120,null,true);setTimeout(()=>{bindFrames();queue(0);},1100);}
+  function start(){
+    bindFrames();
+    if (mapNeedsCommunityData()) {
+      queue(120,null,true);
+      setTimeout(()=>{bindFrames();queue(0);},1100);
+    }
+  }
   window.lbCommunityMapVotesV2={refresh:()=>refreshAndBroadcast(null,true),get signals(){return signals.slice();}};
   if(document.readyState==='loading') document.addEventListener('DOMContentLoaded',start,{once:true}); else start();
 })();
