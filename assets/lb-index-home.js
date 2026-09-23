@@ -560,94 +560,53 @@
     return window.lbPunctualityColor(n);
   }
 
-  function ensureHomeCenterTextPlugin(){
-    if (homeCenterPluginRegistered || typeof Chart !== 'function' || typeof Chart.register !== 'function') return;
-    Chart.register({
-      id: HOME_CENTER_PLUGIN_ID,
-      afterDraw: function(chart, args, options){
-        var meta = chart.getDatasetMeta(0);
-        var arc = meta && meta.data && meta.data[0];
-        var lines = options && Array.isArray(options.lines) ? options.lines : [];
-        if (!arc || !lines.length) return;
-        var ctx = chart.ctx;
-        ctx.save();
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'middle';
-        lines.forEach(function(line){
-          ctx.fillStyle = line.color || '#e8fbff';
-          var responsiveFontPx = Math.max(
-            11,
-            Math.min(17, Math.round((Number(chart.width) || 60) * 0.18))
-          );
-          ctx.font = line.font || ('900 ' + responsiveFontPx + 'px Orbitron, system-ui');
-          ctx.fillText(line.text, arc.x, arc.y);
-        });
-        ctx.restore();
-      }
-    });
-    homeCenterPluginRegistered = true;
-  }
-
-  function makeDonutChart(canvas){
-    if (!canvas || typeof Chart !== 'function') return null;
-    ensureHomeCenterTextPlugin();
-    return new Chart(canvas, {
-      type: 'doughnut',
-      data: {
-        labels: ['Ponctualité', 'Reste'],
-        datasets: [{
-          data: [0, 100],
-          backgroundColor: ['#22c55e', HOME_RING_REST_COLOR],
-          borderWidth: 0,
-          cutout: '74%'
-        }]
-      },
-      options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        plugins: {
-          legend: { display: false },
-          tooltip: { enabled: false },
-          homePunctCenterText: { lines: [] }
-        }
-      }
-    });
+  function makeDonutRing(node){
+    return node || null;
   }
 
   function ensureHomePunctualityChart(){
     var host = document.getElementById('homePunctualityChartHost');
     if (!host) return null;
     host.classList.add('home-punct-chart-host');
+
     if (!document.getElementById('homeWxPunctualityChart30d') || !document.getElementById('homeWxPunctualityChartYesterday')){
       host.innerHTML =
-        '<div class="home-punct-chart-wrap" title="Ponctualité des 30 derniers jours complets"><canvas id="homeWxPunctualityChart30d" aria-label="Ponctualité à J-30"></canvas><span class="home-punct-mini-label">J-30</span></div>' +
-        '<div class="home-punct-chart-wrap" title="Ponctualité de la journée d’hier"><canvas id="homeWxPunctualityChartYesterday" aria-label="Ponctualité à J-1"></canvas><span class="home-punct-mini-label">J-1</span></div>';
+        '<div class="home-punct-chart-wrap" title="Ponctualité des 30 derniers jours complets">' +
+          '<div id="homeWxPunctualityChart30d" class="home-punct-css-ring" role="img" aria-label="Ponctualité à J-30" data-pct="">' +
+            '<strong class="home-punct-css-value">—</strong>' +
+          '</div>' +
+          '<span class="home-punct-mini-label">J-30</span>' +
+        '</div>' +
+        '<div class="home-punct-chart-wrap" title="Ponctualité de la journée d’hier">' +
+          '<div id="homeWxPunctualityChartYesterday" class="home-punct-css-ring" role="img" aria-label="Ponctualité à J-1" data-pct="">' +
+            '<strong class="home-punct-css-value">—</strong>' +
+          '</div>' +
+          '<span class="home-punct-mini-label">J-1</span>' +
+        '</div>';
     }
-    if (!homePunctChart30d) homePunctChart30d = makeDonutChart(document.getElementById('homeWxPunctualityChart30d'));
-    if (!homePunctChartYesterday) homePunctChartYesterday = makeDonutChart(document.getElementById('homeWxPunctualityChartYesterday'));
+
+    if (!homePunctChart30d) homePunctChart30d = makeDonutRing(document.getElementById('homeWxPunctualityChart30d'));
+    if (!homePunctChartYesterday) homePunctChartYesterday = makeDonutRing(document.getElementById('homeWxPunctualityChartYesterday'));
     return { thirty: homePunctChart30d, yesterday: homePunctChartYesterday };
   }
 
-  function setDonutValue(chart, pct, label, total){
-    if (!chart) return;
+  function setDonutValue(ring, pct, label, total){
+    if (!ring) return;
     var value = Number(pct);
     var valid = Number.isFinite(value);
     value = valid ? Math.max(0, Math.min(100, value)) : 0;
     var ringColor = valid ? homeColorForPunctuality(value) : '#668b95';
-    chart.data.datasets[0].data = valid ? [value, Math.max(0, 100 - value)] : [0, 100];
-    chart.data.datasets[0].backgroundColor = [ringColor, HOME_RING_REST_COLOR];
-    chart.options.plugins.homePunctCenterText.lines = [
-      { text: valid ? homeFmtPctShort(value) : '—', color: '#e8fbff' }
-    ];
-    var canvas = chart.canvas;
-    if (canvas) {
-      var description = valid
-        ? 'Ponctualité ' + label + ' : ' + value.toLocaleString('fr-FR', { maximumFractionDigits: 1 }) + ' %, ' + Number(total || 0).toLocaleString('fr-FR') + ' circulations observées'
-        : 'Ponctualité ' + label + ' indisponible';
-      canvas.setAttribute('aria-label', description);
-      if (canvas.parentElement) canvas.parentElement.title = description;
-    }
-    chart.update();
+    ring.style.setProperty('--lb-home-punct-pct', (valid ? value : 0) + '%');
+    ring.style.setProperty('--lb-home-punct-color', ringColor);
+    ring.dataset.pct = valid ? String(value) : '';
+    var valueNode = ring.querySelector('.home-punct-css-value');
+    if (valueNode) valueNode.textContent = valid ? homeFmtPctShort(value) : '—';
+
+    var description = valid
+      ? 'Ponctualité ' + label + ' : ' + value.toLocaleString('fr-FR', { maximumFractionDigits: 1 }) + ' %, ' + Number(total || 0).toLocaleString('fr-FR') + ' circulations observées'
+      : 'Ponctualité ' + label + ' indisponible';
+    ring.setAttribute('aria-label', description);
+    if (ring.parentElement) ring.parentElement.title = description;
   }
 
   function renderHomePunctualityCharts(p30, py){
