@@ -572,17 +572,25 @@
     if (!document.getElementById('homeWxPunctualityChart30d') || !document.getElementById('homeWxPunctualityChartYesterday')){
       host.innerHTML =
         '<div class="home-punct-chart-wrap" title="Ponctualité des 30 derniers jours complets">' +
-          '<div id="homeWxPunctualityChart30d" class="home-punct-css-ring" role="img" aria-label="Ponctualité à J-30" data-pct="">' +
-            '<strong class="home-punct-css-value">—</strong>' +
+          '<div id="homeWxPunctualityChart30d" class="home-punct-svg-ring" role="img" aria-label="Ponctualité à J-30" data-pct="">' +
+            '<svg class="home-punct-svg" viewBox="0 0 72 72" aria-hidden="true" focusable="false">' +
+              '<circle class="home-punct-svg-track" cx="36" cy="36" r="28" pathLength="100"></circle>' +
+              '<circle class="home-punct-svg-progress" cx="36" cy="36" r="28" pathLength="100"></circle>' +
+            '</svg>' +
+            '<strong class="home-punct-svg-value">—</strong>' +
           '</div>' +
           '<span class="home-punct-mini-label">J-30</span>' +
         '</div>' +
         '<div class="home-punct-chart-wrap" title="Ponctualité de la journée d’hier">' +
-          '<div id="homeWxPunctualityChartYesterday" class="home-punct-css-ring" role="img" aria-label="Ponctualité à J-1" data-pct="">' +
-            '<strong class="home-punct-css-value">—</strong>' +
+          '<div id="homeWxPunctualityChartYesterday" class="home-punct-svg-ring" role="img" aria-label="Ponctualité à J-1" data-pct="">' +
+            '<svg class="home-punct-svg" viewBox="0 0 72 72" aria-hidden="true" focusable="false">' +
+              '<circle class="home-punct-svg-track" cx="36" cy="36" r="28" pathLength="100"></circle>' +
+              '<circle class="home-punct-svg-progress" cx="36" cy="36" r="28" pathLength="100"></circle>' +
+            '</svg>' +
+            '<strong class="home-punct-svg-value">—</strong>' +
           '</div>' +
           '<span class="home-punct-mini-label">J-1</span>' +
-        '</div>';
+        '</div>' ;
     }
 
     if (!homePunctChart30d) homePunctChart30d = makeDonutRing(document.getElementById('homeWxPunctualityChart30d'));
@@ -599,7 +607,15 @@
     ring.style.setProperty('--lb-home-punct-pct', (valid ? value : 0) + '%');
     ring.style.setProperty('--lb-home-punct-color', ringColor);
     ring.dataset.pct = valid ? String(value) : '';
-    var valueNode = ring.querySelector('.home-punct-css-value');
+
+    var progress = ring.querySelector('.home-punct-svg-progress');
+    if (progress) {
+      progress.style.stroke = ringColor;
+      progress.style.strokeDasharray = '100';
+      progress.style.strokeDashoffset = String(valid ? (100 - value) : 100);
+    }
+
+    var valueNode = ring.querySelector('.home-punct-svg-value');
     if (valueNode) valueNode.textContent = valid ? homeFmtPctShort(value) : '—';
 
     var description = valid
