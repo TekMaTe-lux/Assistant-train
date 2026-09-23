@@ -16,7 +16,7 @@
   const SIGNAL_TTL_MS = 45 * 60 * 1000;
   const API_SIGNALS = '/api/comments?scope=signals';
   let currentTrain = '';
-  let currentHint = { station:'', delay:0 };
+  let currentHint = { station:'', clickedStation:'', sourceStation:'', delay:0 };
   let currentSignals = [];
   let currentUser = null;
   let shell = null;
@@ -114,6 +114,10 @@
       .lb-signal-dialog-close{flex:0 0 auto;width:34px;height:34px;border:1px solid rgba(0,234,255,.28);border-radius:50%;background:rgba(5,31,51,.9);color:#eaffff;font-size:18px;cursor:pointer}
       .lb-signal-dialog-body{overflow:auto;padding:12px 14px 15px;overscroll-behavior:contain}
       .lb-signal-dialog-info{margin:0 0 10px;padding:8px 10px;border:1px solid rgba(183,140,255,.24);border-radius:10px;background:rgba(77,43,113,.12);font-size:10.5px;line-height:1.35;color:#d8c9eb}
+      .lb-signal-new-measure{margin:0 0 10px;padding:9px 10px;border:1px solid rgba(0,234,255,.25);border-radius:11px;background:rgba(5,31,51,.72);display:flex;align-items:center;gap:8px}
+      .lb-signal-new-measure-copy{min-width:0;flex:1;color:#cde8ef;font-size:10.5px;line-height:1.25}
+      .lb-signal-new-measure-copy strong{color:#fff}
+      .lb-signal-new-measure button{flex:0 0 auto;min-height:34px;padding:7px 10px;border:1px solid rgba(0,234,255,.42);border-radius:9px;background:rgba(4,52,69,.92);color:#effdff;font-size:10.5px;font-weight:900;cursor:pointer}
       .lb-signal-dialog-loading,.lb-signal-dialog-empty{padding:22px 8px;text-align:center;color:#a9c6d1;font-size:12px}
       .lb-signal-card{margin-top:9px;padding:11px;border:1px solid rgba(183,140,255,.28);border-radius:13px;background:rgba(60,35,88,.14)}
       .lb-signal-card.is-target{border-color:rgba(183,140,255,.68);box-shadow:inset 0 0 0 1px rgba(183,140,255,.12),0 0 12px rgba(183,140,255,.07)}
@@ -138,6 +142,8 @@
         .lb-signal-dialog-title{font-size:18px}
         .lb-signal-dialog-body{padding:10px 12px calc(16px + env(safe-area-inset-bottom))}
         .lb-signal-actions button{min-height:44px;font-size:11.5px}
+        .lb-signal-new-measure{align-items:stretch;flex-direction:column}
+        .lb-signal-new-measure button{width:100%;min-height:42px;font-size:11px}
       }
     `;
     document.head.appendChild(style);
@@ -213,6 +219,16 @@
       return;
     }
 
+    const clickedStation = String(currentHint.clickedStation || '').trim();
+    const clickedStopKey = normalizeStop(clickedStation);
+    const hasSignalAtClickedStop = !!clickedStopKey && currentSignals.some((signal)=> signal.stopKey === clickedStopKey);
+    const newMeasure = clickedStation && !hasSignalAtClickedStop
+      ? `<div class="lb-signal-new-measure">
+          <div class="lb-signal-new-measure-copy">Le retard a changé à <strong>${htmlEscape(clickedStation)}</strong> ? Ajoutez une nouvelle mesure sans modifier le signalement précédent.</div>
+          <button type="button" data-lb-signal-new-measure>✎ Nouvelle valeur ici</button>
+        </div>`
+      : '';
+
     const cards = list.map((signal) => {
       const owner = isOwner(signal);
       const score = signal.upvotes - signal.downvotes;
@@ -234,7 +250,7 @@
       </article>`;
     }).join('');
 
-    setBody(`<div class="lb-signal-dialog-info">Ces retards sont déclarés par des voyageurs. Ils ne remplacent pas l’information officielle SNCF/CFL.</div>${cards}${errorText ? `<div class="lb-signal-dialog-error">${htmlEscape(errorText)}</div>` : ''}`);
+    setBody(`<div class="lb-signal-dialog-info">Ces retards sont déclarés par des voyageurs. Ils ne remplacent pas l’information officielle SNCF/CFL.</div>${newMeasure}${cards}${errorText ? `<div class="lb-signal-dialog-error">${htmlEscape(errorText)}</div>` : ''}`);
   }
 
   async function fetchCurrentUser(){
@@ -262,18 +278,44 @@
 
   function contextFromTarget(target){
     const marker = target.closest('.cow-marker');
+    const row = target.closest('.trip-stop');
     const train = normalizeTrain(marker?.getAttribute('data-train-number')) || currentTripNumber();
-    const delay = Math.round(Number(String(target.textContent || '').match(/\+\s*(\d{1,3})/)?.[1] || 0));
+    const delay = Math.round(Number(
+      target.dataset?.lbCommunityDelay
+      || String(target.textContent || '').match(/\+\s*(\d{1,3})/)?.[1]
+      || 0
+    ));
     const title = String(target.getAttribute('title') || '');
     const stationMatch = title.match(/depuis\s+(.+?)(?:\s+par\b|\s*[—-]|$)/i);
-    return { train, station:String(stationMatch?.[1] || '').trim(), delay };
+    const clickedStation = String(
+      target.dataset?.lbStopStation
+      || row?.querySelector('.stop-name')?.textContent
+      || ''
+    ).trim();
+    const sourceStation = String(
+      target.dataset?.lbSourceStation
+      || stationMatch?.[1]
+      || ''
+    ).trim();
+    return {
+      train,
+      station:sourceStation || clickedStation,
+      clickedStation,
+      sourceStation,
+      delay
+    };
   }
 
   async function openDialog(context){
     const train = normalizeTrain(context?.train);
     if (!train) return;
     currentTrain = train;
-    currentHint = { station:String(context?.station || ''), delay:Math.round(Number(context?.delay) || 0) };
+    currentHint = {
+      station:String(context?.station || ''),
+      clickedStation:String(context?.clickedStation || context?.station || ''),
+      sourceStation:String(context?.sourceStation || context?.station || ''),
+      delay:Math.round(Number(context?.delay) || 0)
+    };
     ensureStyle();
     const root = ensureShell();
     root.hidden = false;
@@ -376,6 +418,24 @@
   }
 
   document.addEventListener('click', (event) => {
+    const newMeasureButton = event.target?.closest?.('[data-lb-signal-new-measure]');
+    if (newMeasureButton) {
+      event.preventDefault(); event.stopPropagation();
+      const station = String(currentHint.clickedStation || '').trim();
+      if (!station) return;
+      closeDialog();
+      try {
+        window.parent?.postMessage({
+          type:'lb:community:open-signal',
+          trainNumber:currentTrain,
+          station,
+          delayMin:Math.max(0, Math.round(Number(currentHint.delay) || 0)),
+          source:'map-next-stop'
+        }, '*');
+      } catch(_) {}
+      return;
+    }
+
     const deleteButton = event.target?.closest?.('[data-lb-signal-delete]');
     if (deleteButton) {
       event.preventDefault(); event.stopPropagation();
