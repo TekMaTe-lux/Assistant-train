@@ -5820,6 +5820,7 @@ $('#btnProposer').off('click').on('click', proposerTrainsOD);
     if (kind === 'AM' || kind === 'PM') {
       try {
         window.__lbActiveFixedPresetKind = kind;
+        window.__lbShouldAutoCenterLive = true;
         await applyRapidPreset(kind, { trigger: this, openModal: false, auto: true, forceDirection: true });
         closeSelectionModal?.({ restoreFocus:false });
         $('#loadTrains').trigger('click');
@@ -5843,6 +5844,7 @@ $('#btnProposer').off('click').on('click', proposerTrainsOD);
       }
       location.hash = '#search';
       window.__lbActiveFixedPresetKind = kind;
+      window.__lbShouldAutoCenterLive = true;
       await applyRapidPreset(kind, { trigger: this, openModal: false, auto: true, forceDirection: true });
       closeSelectionModal?.({ restoreFocus:false });
       $('#loadTrains').trigger('click');
@@ -6141,6 +6143,171 @@ $(document)
   .on('click.lbRange', '#trainInfo .lb-table-range-edge[data-lb-range]', function(){
     lbExtendFixedPreset(this.dataset.lbRange);
   });
+
+
+function lbSelectedTableIsToday(){
+  const selected = String(document.getElementById('trainDate')?.value || '').trim();
+  if (!selected) return false;
+  try {
+    const parts = new Intl.DateTimeFormat('en-CA', {
+      timeZone:'Europe/Luxembourg', year:'numeric', month:'2-digit', day:'2-digit'
+    }).formatToParts(new Date());
+    const get = (type)=> parts.find((p)=> p.type === type)?.value || '';
+    return selected === get('year') + '-' + get('month') + '-' + get('day');
+  } catch (_) { return false; }
+}
+
+function lbLuxNowMinutes(){
+  try {
+    const parts = new Intl.DateTimeFormat('fr-FR', {
+      timeZone:'Europe/Luxembourg', hour:'2-digit', minute:'2-digit', hourCycle:'h23'
+    }).formatToParts(new Date());
+    const hh = Number(parts.find((p)=>p.type === 'hour')?.value || 0);
+    const mm = Number(parts.find((p)=>p.type === 'minute')?.value || 0);
+    return hh * 60 + mm;
+  } catch (_) {
+    const d = new Date();
+    return d.getHours() * 60 + d.getMinutes();
+  }
+}
+
+function lbCellEffectiveClockMinutes(cell){
+  if (!cell || cell.querySelector('.deleted')) return null;
+  const preferred = cell.querySelector('.gtfs-retard-new,.delay-stack .delayed,.delayed');
+  const text = String(preferred?.textContent || cell.textContent || '');
+  const matches = Array.from(text.matchAll(/\b([01]?\d|2[0-3]):([0-5]\d)\b/g));
+  if (!matches.length) return null;
+  const m = matches[matches.length - 1];
+  return Number(m[1]) * 60 + Number(m[2]);
+}
+
+function lbDetectLiveTableColumns(){
+  if (!lbSelectedTableIsToday()) return [];
+  const table = document.querySelector('#trainInfo table');
+  if (!table) return [];
+  const headers = Array.from(table.querySelectorAll('thead th[data-train-number]'));
+  const rows = Array.from(table.querySelectorAll('tbody tr'));
+  const now = lbLuxNowMinutes();
+  const out = [];
+
+  headers.forEach((th, index)=>{
+    const times = rows
+      .map((row)=> lbCellEffectiveClockMinutes(row.cells?.[index + 1]))
+      .filter(Number.isFinite);
+    if (!times.length) return;
+    const start = times[0];
+    const end = times[times.length - 1];
+    if (now < start || now > end) return;
+    const nextEvent = times.find((value)=> value >= now);
+    out.push({
+      number:String(th.dataset.trainNumber || '').replace(/\D/g,''),
+      th:th, index:index, start:start, end:end,
+      nextEvent:Number.isFinite(nextEvent) ? nextEvent : end,
+      now:now
+    });
+  });
+  return out;
+}
+
+function lbEnsureTableLivingStyles(){
+  if (document.getElementById('lbTableLivingStyles')) return;
+  const style = document.createElement('style');
+  style.id = 'lbTableLivingStyles';
+  style.textContent =
+    '#trainInfo th.lb-table-live-head{box-shadow:inset 0 -2px 0 rgba(30,226,240,.45)}' +
+    '#trainInfo th.lb-table-live-focus{box-shadow:inset 0 -2px 0 #27e3f0;background:rgba(8,83,98,.22)!important}' +
+    '#trainInfo td.lb-table-live-cell{background-color:rgba(25,220,235,.025)}' +
+    '#trainInfo td.lb-table-live-focus-cell{background-color:rgba(25,220,235,.055)}' +
+    '#trainInfo .lb-table-herd{display:inline-flex;align-items:center;margin-left:2px;font-size:9px;line-height:1;vertical-align:middle;white-space:nowrap;opacity:.95;filter:none!important;text-shadow:none!important}' +
+    '#trainInfo .lb-table-herd sup{margin-left:0;font-size:7px;line-height:1;color:#d7fbff;font-weight:800;top:-.1em;position:relative}' +
+    '#trainInfo td .gtfs-retard,#trainInfo td .delay-stack{line-height:1.02}' +
+    '#trainInfo td .gtfs-retard-base,#trainInfo td .delay-strike{color:rgba(214,229,235,.52)!important;font-size:.78em!important;font-weight:500!important;text-decoration-thickness:1px!important;text-decoration-color:rgba(214,229,235,.58)!important}' +
+    '#trainInfo td .gtfs-retard-new,#trainInfo td .delay-stack .delayed{color:#ff9b37!important;font-size:1.02em!important;font-weight:850!important;letter-spacing:-.01em;text-shadow:none!important}' +
+    '#trainInfo td .deleted{color:#ff6675!important;font-weight:750!important;text-shadow:none!important}';
+  document.head.appendChild(style);
+}
+
+function lbApplyTablePresence(liveEntries){
+  const headers = Array.from(document.querySelectorAll('#trainInfo th[data-train-number]'));
+  if (!headers.length) return;
+  const entries = Array.isArray(liveEntries) ? liveEntries : lbDetectLiveTableColumns();
+  const liveSet = new Set(entries.map((entry)=> entry.number));
+  let snapshot = null;
+  try { snapshot = window.lbCommunityLive?.getMapSnapshot?.() || null; } catch (_) {}
+  const trains = snapshot?.trains || {};
+
+  headers.forEach((th)=>{
+    th.querySelectorAll('.lb-table-herd').forEach((node)=>node.remove());
+    const number = String(th.dataset.trainNumber || '').replace(/\D/g,'');
+    if (!number || !liveSet.has(number)) return;
+    const count = Number(trains?.[number]?.presenceCount || 0);
+    if (!(count > 0)) return;
+
+    const badge = document.createElement('span');
+    badge.className = 'lb-table-herd';
+    const label = String(count) + ' voyageur' + (count > 1 ? 's' : '') + ' déclaré' + (count > 1 ? 's' : '') + ' à bord';
+    badge.setAttribute('aria-label', label);
+    badge.title = label;
+    badge.innerHTML = count > 1 ? '🐄<sup>' + Math.round(count) + '</sup>' : '🐄';
+    th.appendChild(badge);
+  });
+}
+
+function lbApplyLiveColumnClasses(liveEntries){
+  const table = document.querySelector('#trainInfo table');
+  if (!table) return;
+  const headers = Array.from(table.querySelectorAll('thead th[data-train-number]'));
+  const rows = Array.from(table.querySelectorAll('tbody tr'));
+  headers.forEach((th)=> th.classList.remove('lb-table-live-head','lb-table-live-focus'));
+  rows.forEach((row)=> Array.from(row.cells || []).forEach((cell)=> cell.classList.remove('lb-table-live-cell','lb-table-live-focus-cell')));
+
+  (liveEntries || []).forEach((entry)=>{
+    entry.th?.classList.add('lb-table-live-head');
+    rows.forEach((row)=> row.cells?.[entry.index + 1]?.classList.add('lb-table-live-cell'));
+  });
+}
+
+function lbCenterMostLiveTrain(liveEntries){
+  if (!window.__lbShouldAutoCenterLive) return;
+  window.__lbShouldAutoCenterLive = false;
+  if (!Array.isArray(liveEntries) || !liveEntries.length) return;
+
+  const target = liveEntries.slice().sort((a,b)=>{
+    if (b.start !== a.start) return b.start - a.start;
+    return Math.abs(a.nextEvent - a.now) - Math.abs(b.nextEvent - b.now);
+  })[0];
+  if (!target?.th) return;
+
+  target.th.classList.add('lb-table-live-focus');
+  const table = target.th.closest('table');
+  const rows = table ? Array.from(table.querySelectorAll('tbody tr')) : [];
+  rows.forEach((row)=> row.cells?.[target.index + 1]?.classList.add('lb-table-live-focus-cell'));
+
+  const scroller = document.querySelector('#trainInfo .table-scroll');
+  if (!scroller) return;
+  requestAnimationFrame(()=>{
+    const sr = scroller.getBoundingClientRect();
+    const tr = target.th.getBoundingClientRect();
+    const desired = scroller.scrollLeft + (tr.left - sr.left) - ((scroller.clientWidth - tr.width) / 2);
+    const max = Math.max(0, scroller.scrollWidth - scroller.clientWidth);
+    scroller.scrollLeft = Math.max(0, Math.min(max, desired));
+  });
+}
+
+function lbRefreshTableLivingUI(){
+  lbEnsureTableLivingStyles();
+  const live = lbDetectLiveTableColumns();
+  lbApplyLiveColumnClasses(live);
+  lbApplyTablePresence(live);
+  lbCenterMostLiveTrain(live);
+}
+
+if (!window.__lbTableLivingEventsBound) {
+  window.__lbTableLivingEventsBound = true;
+  window.addEventListener('lb:community-presence-changed', ()=> lbApplyTablePresence());
+  window.addEventListener('lb:community-data-changed', ()=> lbApplyTablePresence());
+  window.addEventListener('gtfsrt:loaded', ()=> setTimeout(lbRefreshTableLivingUI, 0));
+}
 
 async function loadFastStaticBatch(date, numbers){
   const list = Array.from(new Set((numbers || []).map(v => String(v || '').trim()).filter(v => /^\d{4,6}$/.test(v))));
@@ -7132,6 +7299,8 @@ linkifyGaresAndTrains(document);
 // horodatage visible sans attendre
 setLastUpdated();
 lbEnsureRangeControls();
+lbRefreshTableLivingUI();
+setTimeout(lbRefreshTableLivingUI, 450);
 
 // afficher le bouton refresh tout de suite
 // 6.2 — Laisser le rendu respirer, puis lancer les tâches lourdes en parallèle
@@ -8106,6 +8275,7 @@ function resetGtfsRetards(scope) {
       }
     }
   }
+  if (typeof lbRefreshTableLivingUI === 'function') lbRefreshTableLivingUI();
 }
 /* ---------- ALERTES ---------- */
 const urlAlertes = 'https://vps.labetaillere.fr/gtfs/alertes_sillon_lorrain.json';
