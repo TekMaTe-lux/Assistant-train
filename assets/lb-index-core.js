@@ -6303,10 +6303,18 @@ function lbApplyLiveColumnClasses(liveEntries){
   headers.forEach((th)=> th.classList.remove('lb-table-live-head','lb-table-live-focus'));
   rows.forEach((row)=> Array.from(row.cells || []).forEach((cell)=> cell.classList.remove('lb-table-live-cell','lb-table-live-focus-cell')));
 
+  const focusedNumber = String(window.__lbFocusedLiveTrainNumber || '');
+  let focusedStillLive = false;
   (liveEntries || []).forEach((entry)=>{
     entry.th?.classList.add('lb-table-live-head');
     rows.forEach((row)=> row.cells?.[entry.index + 1]?.classList.add('lb-table-live-cell'));
+    if (focusedNumber && entry.number === focusedNumber) {
+      focusedStillLive = true;
+      entry.th?.classList.add('lb-table-live-focus');
+      rows.forEach((row)=> row.cells?.[entry.index + 1]?.classList.add('lb-table-live-focus-cell'));
+    }
   });
+  if (focusedNumber && !focusedStillLive) window.__lbFocusedLiveTrainNumber = '';
 }
 
 function lbCenterMostLiveTrain(liveEntries){
@@ -6330,6 +6338,7 @@ function lbCenterMostLiveTrain(liveEntries){
   })[0];
   if (!target?.th) return;
 
+  window.__lbFocusedLiveTrainNumber = target.number;
   target.th.classList.add('lb-table-live-focus');
   const table = target.th.closest('table');
   const rows = table ? Array.from(table.querySelectorAll('tbody tr')) : [];
