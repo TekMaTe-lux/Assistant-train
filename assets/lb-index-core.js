@@ -6002,11 +6002,15 @@ function lbEnsureRangeControls(){
 
   if (!host || !kind || !hasTable) {
     host?.classList.remove('lb-fixed-range-mode');
+    const hint = host?.querySelector('.lb-table-swipe-hint');
+    if (hint) hint.style.removeProperty('display');
     host?.querySelectorAll('.lb-table-range-edge').forEach((el) => el.remove());
     return;
   }
 
   host.classList.add('lb-fixed-range-mode');
+  const swipeHint = host.querySelector('.lb-table-swipe-hint');
+  if (swipeHint) swipeHint.style.setProperty('display', 'none', 'important');
 
   if (!document.getElementById('lbTableRangeControlsStyle')) {
     const style = document.createElement('style');
@@ -6015,30 +6019,37 @@ function lbEnsureRangeControls(){
       #trainInfo.lb-fixed-range-mode{position:relative}
       #trainInfo.lb-fixed-range-mode>.lb-table-swipe-hint{display:none!important}
       #trainInfo .lb-table-range-edge{
-        position:absolute;
-        top:6px;
-        z-index:35;
-        width:30px;
-        height:30px;
-        margin:0;
-        padding:0;
-        border:1px solid rgba(40,225,245,.72);
-        border-radius:999px;
-        background:#062735;
-        color:#9cf8ff;
-        display:grid;
-        place-items:center;
-        font:800 22px/1 Arial,sans-serif;
-        cursor:pointer;
-        opacity:.9;
+        position:absolute!important;
+        top:5px!important;
+        z-index:35!important;
+        width:26px!important;
+        min-width:26px!important;
+        max-width:26px!important;
+        height:26px!important;
+        min-height:26px!important;
+        max-height:26px!important;
+        margin:0!important;
+        padding:0!important;
+        border:1px solid rgba(40,225,245,.72)!important;
+        border-radius:999px!important;
+        background:#062735!important;
+        color:#9cf8ff!important;
+        display:grid!important;
+        place-items:center!important;
+        font:800 18px/24px Arial,sans-serif!important;
+        cursor:pointer!important;
+        opacity:.88;
+        box-sizing:border-box!important;
       }
-      #trainInfo .lb-table-range-edge--earlier{left:4px}
-      #trainInfo .lb-table-range-edge--later{right:4px}
-      #trainInfo .lb-table-range-edge:disabled{opacity:.35;cursor:default}
+      #trainInfo .lb-table-range-edge--earlier{left:3px!important}
+      #trainInfo .lb-table-range-edge--later{right:3px!important}
+      #trainInfo .lb-table-range-edge:disabled{opacity:.32;cursor:default!important}
       @media(max-width:640px){
-        #trainInfo .lb-table-range-edge{width:28px;height:28px;top:5px;font-size:20px}
-        #trainInfo .lb-table-range-edge--earlier{left:3px}
-        #trainInfo .lb-table-range-edge--later{right:3px}
+        #trainInfo .lb-table-range-edge{
+          width:26px!important;min-width:26px!important;max-width:26px!important;
+          height:26px!important;min-height:26px!important;max-height:26px!important;
+          top:4px!important;font-size:18px!important
+        }
       }
     `;
     document.head.appendChild(style);
