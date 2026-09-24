@@ -5813,12 +5813,26 @@ syncSelectionDateFromMain();
 $('#btnProposer').off('click').on('click', proposerTrainsOD);
 
   // Raccourcis presets rapides
-  $(document).off('click.preset', '.preset-btn[data-preset-kind]').on('click.preset', '.preset-btn[data-preset-kind]', function(){
+  // AM/PM sont désormais des accès directs : pas de modal de sélection.
+  $(document).off('click.preset', '.preset-btn[data-preset-kind]').on('click.preset', '.preset-btn[data-preset-kind]', async function(){
     const kind = this.dataset.presetKind;
     if (!kind) return;
+    if (kind === 'AM' || kind === 'PM') {
+      try {
+        window.__lbActiveFixedPresetKind = kind;
+        await applyRapidPreset(kind, { trigger: this, openModal: false, auto: true, forceDirection: true });
+        closeSelectionModal?.({ restoreFocus:false });
+        $('#loadTrains').trigger('click');
+      } catch (e) {
+        console.warn('Preset rapide direct impossible', e);
+      }
+      return;
+    }
+    window.__lbActiveFixedPresetKind = null;
     applyRapidPreset(kind, { trigger: this, openModal: true });
   });
-  $(document).off('click.homePreset', '.home-quick-presets__btn[data-home-preset-kind]').on('click.homePreset', '.home-quick-presets__btn[data-home-preset-kind]', function(){
+
+  $(document).off('click.homePreset', '.home-quick-presets__btn[data-home-preset-kind]').on('click.homePreset', '.home-quick-presets__btn[data-home-preset-kind]', async function(){
     const kind = this.dataset.homePresetKind;
     if (!kind) return;
     try{
@@ -5828,7 +5842,10 @@ $('#btnProposer').off('click').on('click', proposerTrainsOD);
         modeSelect.dispatchEvent(new Event('change', { bubbles:true }));
       }
       location.hash = '#search';
-      applyRapidPreset(kind, { trigger: this, openModal: true });
+      window.__lbActiveFixedPresetKind = kind;
+      await applyRapidPreset(kind, { trigger: this, openModal: false, auto: true, forceDirection: true });
+      closeSelectionModal?.({ restoreFocus:false });
+      $('#loadTrains').trigger('click');
     }catch(e){
       console.warn('Preset accueil impossible à ouvrir', e);
     }
@@ -5898,6 +5915,8 @@ $('#btnProposer').off('click').on('click', proposerTrainsOD);
 
   // Saisie manuelle (si tu gardes l’input CSV masqué pour compat)
   $('#trainNumbers').off('input').on('input', () => {
+  window.__lbActiveFixedPresetKind = null;
+  lbEnsureRangeControls();
   const raw = $('#trainNumbers').val();
   const tokens = String(raw || '')
     .split(/[,\s]+/)
@@ -5935,6 +5954,160 @@ function addManualTrain(){
   $(document).on('keydown', '#manualTrainInput', function(e){
     if (e.key === 'Enter') addManualTrain();
   });
+
+function lbRangeClockToMin(raw){
+  const digits = String(raw || '').replace(/\D/g, '');
+  if (digits.length < 4) return null;
+  const hh = Number(digits.slice(0, 2));
+  const mm = Number(digits.slice(2, 4));
+  if (!Number.isFinite(hh) || !Number.isFinite(mm) || mm > 59) return null;
+  return hh * 60 + mm;
+}
+
+function lbRangeMinToClock(value){
+  const m = Math.max(0, Math.min(1439, Math.round(Number(value) || 0)));
+  return String(Math.floor(m / 60)).padStart(2, '0') + ':' + String(m % 60).padStart(2, '0');
+}
+
+function lbCurrentStaticRangeBounds(){
+  const rows = window.__lbFastStaticBatch?.trains || {};
+  const startName = String($('#startStation').val() || '').trim();
+  const startNorm = typeof normalizeStationName === 'function' ? normalizeStationName(startName) : startName.toLowerCase();
+  const values = [];
+
+  Array.from(selectedTrains || []).forEach((num) => {
+    const train = rows[String(num)];
+    const stops = Array.isArray(train?.stop_times) ? train.stop_times : [];
+    let stop = stops.find((s) => {
+      const name = String(s?.stop_point?.name || '');
+      const norm = typeof normalizeStationName === 'function' ? normalizeStationName(name) : name.toLowerCase();
+      return startNorm && norm === startNorm;
+    });
+    if (!stop) stop = stops[0] || null;
+    const raw = stop?.departure_time || stop?.arrival_time || '';
+    const min = lbRangeClockToMin(raw);
+    if (Number.isFinite(min)) values.push(min);
+  });
+
+  if (!values.length) return null;
+  return { min: Math.min(...values), max: Math.max(...values) };
+}
+
+function lbEnsureRangeControls(){
+  const host = document.getElementById('trainInfo');
+  const kind = window.__lbActiveFixedPresetKind;
+  const hasTable = !!host?.querySelector('table');
+  let bar = document.getElementById('lbTableRangeControls');
+
+  if (!kind || !hasTable) {
+    if (bar) bar.remove();
+    return;
+  }
+
+  if (!document.getElementById('lbTableRangeControlsStyle')) {
+    const style = document.createElement('style');
+    style.id = 'lbTableRangeControlsStyle';
+    style.textContent = `
+      .lb-table-range-controls{display:flex;align-items:center;justify-content:center;gap:10px;margin:10px 0 12px;padding:8px 10px;border:1px solid rgba(0,229,255,.22);border-radius:14px;background:rgba(2,22,31,.72)}
+      .lb-table-range-controls__btn{min-height:38px;padding:8px 14px;border:1px solid rgba(0,229,255,.55);border-radius:11px;background:rgba(2,31,42,.92);color:#dffcff;font:700 13px/1.1 inherit;cursor:pointer}
+      .lb-table-range-controls__btn:hover{background:rgba(0,193,230,.14)}
+      .lb-table-range-controls__btn:disabled{opacity:.45;cursor:default}
+      .lb-table-range-controls__meta{min-width:120px;text-align:center;color:#d9faff;font-size:12px;line-height:1.25}
+      .lb-table-range-controls__meta b{display:block;color:#fff;font-size:13px}
+      @media(max-width:640px){.lb-table-range-controls{gap:6px;padding:7px 8px}.lb-table-range-controls__btn{padding:8px 10px;font-size:12px}.lb-table-range-controls__meta{min-width:92px;font-size:11px}}
+    `;
+    document.head.appendChild(style);
+  }
+
+  if (!bar) {
+    bar = document.createElement('div');
+    bar.id = 'lbTableRangeControls';
+    bar.className = 'lb-table-range-controls';
+    bar.innerHTML = `
+      <button type="button" class="lb-table-range-controls__btn" data-lb-range="earlier">← Plus tôt</button>
+      <div class="lb-table-range-controls__meta"><b data-lb-range-label></b><span data-lb-range-count></span></div>
+      <button type="button" class="lb-table-range-controls__btn" data-lb-range="later">Plus tard →</button>
+    `;
+    host.parentNode?.insertBefore(bar, host);
+  }
+
+  const label = bar.querySelector('[data-lb-range-label]');
+  const count = bar.querySelector('[data-lb-range-count]');
+  if (label) label.textContent = kind === 'PM' ? 'Soir' : 'Matin';
+  if (count) count.textContent = `${selectedTrains.size} train${selectedTrains.size > 1 ? 's' : ''}`;
+}
+
+async function lbExtendFixedPreset(direction){
+  if (window.__lbRangeBusy) return;
+  const kind = window.__lbActiveFixedPresetKind;
+  if (!kind || !['earlier','later'].includes(direction)) return;
+
+  const bounds = lbCurrentStaticRangeBounds();
+  if (!bounds) return;
+
+  const startName = String($('#startStation').val() || '').trim();
+  const endName = String($('#endStation').val() || '').trim();
+  const date = $('#trainDate').val();
+  const ymd = dateInputToYMD(date);
+  if (!startName || !endName || !ymd) return;
+
+  const fromMin = direction === 'earlier' ? Math.max(0, bounds.min - 60) : Math.min(1439, bounds.max + 1);
+  const toMin   = direction === 'earlier' ? Math.max(0, bounds.min - 1) : Math.min(1439, bounds.max + 60);
+  if (toMin < fromMin) return;
+
+  const bar = document.getElementById('lbTableRangeControls');
+  const buttons = bar ? Array.from(bar.querySelectorAll('button')) : [];
+  buttons.forEach((btn) => { btn.disabled = true; });
+
+  window.__lbRangeBusy = true;
+  try {
+    const proposals = await computeItineraryProposals({
+      startName,
+      endName,
+      fromHHMM: lbRangeMinToClock(fromMin),
+      toHHMM: lbRangeMinToClock(toMin),
+      allowTransfers: false,
+      includeCfl: false,
+      ymd
+    });
+
+    const current = Array.from(selectedTrains);
+    const additions = (proposals?.directs || [])
+      .map((t) => String(t.selectionKey || t.numero || '').trim())
+      .filter((n) => /^\d{5,6}$/.test(n) && !selectedTrains.has(n));
+
+    if (!additions.length) {
+      const meta = bar?.querySelector('[data-lb-range-count]');
+      if (meta) {
+        const original = meta.textContent;
+        meta.textContent = direction === 'earlier' ? 'Rien avant sur 1 h' : 'Rien après sur 1 h';
+        setTimeout(() => { if (meta.isConnected) meta.textContent = original; }, 1800);
+      }
+      return;
+    }
+
+    if (direction === 'earlier') {
+      selectedTrains.clear();
+      additions.forEach((n) => selectedTrains.add(n));
+      current.forEach((n) => selectedTrains.add(n));
+    } else {
+      additions.forEach((n) => selectedTrains.add(n));
+    }
+
+    updateSelectionUI();
+    await $('#loadTrains').trigger('click');
+  } catch (err) {
+    console.warn('[Tableau] extension horaire impossible', err?.message || err);
+  } finally {
+    window.__lbRangeBusy = false;
+    buttons.forEach((btn) => { btn.disabled = false; });
+    setTimeout(lbEnsureRangeControls, 0);
+  }
+}
+
+$(document).off('click.lbRange', '#lbTableRangeControls [data-lb-range]').on('click.lbRange', '#lbTableRangeControls [data-lb-range]', function(){
+  lbExtendFixedPreset(this.dataset.lbRange);
+});
 
 async function loadFastStaticBatch(date, numbers){
   const list = Array.from(new Set((numbers || []).map(v => String(v || '').trim()).filter(v => /^\d{4,6}$/.test(v))));
@@ -6925,6 +7098,7 @@ linkifyGaresAndTrains(document);
 
 // horodatage visible sans attendre
 setLastUpdated();
+lbEnsureRangeControls();
 
 // afficher le bouton refresh tout de suite
 // 6.2 — Laisser le rendu respirer, puis lancer les tâches lourdes en parallèle
