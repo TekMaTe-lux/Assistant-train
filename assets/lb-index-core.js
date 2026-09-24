@@ -15958,20 +15958,23 @@ document.addEventListener('DOMContentLoaded', () => {
 
   async function loadAffluenceSummaryDate(dateStr){
     if (!/^\d{4}-\d{2}-\d{2}$/.test(String(dateStr || ''))) return null;
-    if (affState.data && String(affState.data.date || '') === String(dateStr)) {
+    const displayed = Array.from(document.querySelectorAll('#trainInfo th[data-train-number]'))
+      .map((th) => String(th.dataset.trainNumber || '').match(/\d{5,6}/)?.[0])
+      .filter(Boolean);
+    const hasAllDisplayed = displayed.length > 0
+      && displayed.every((num) => affState.maxByTrain instanceof Map && affState.maxByTrain.has(num));
+
+    if (affState.data && String(affState.data.date || '') === String(dateStr) && hasAllDisplayed) {
       applyAffluenceDots(document);
       return affState.maxByTrain;
     }
-    if (affState.summaryDate === dateStr && affState.maxByTrain?.size) {
+    if (affState.summaryDate === dateStr && affState.maxByTrain?.size && hasAllDisplayed) {
       applyAffluenceDots(document);
       return affState.maxByTrain;
     }
     if (affState.summaryPromise) return affState.summaryPromise;
 
     affState.summaryPromise = (async()=>{
-      const displayed = Array.from(document.querySelectorAll('#trainInfo th[data-train-number]'))
-        .map((th) => String(th.dataset.trainNumber || '').match(/\d{5,6}/)?.[0])
-        .filter(Boolean);
       const params = new URLSearchParams({ date: dateStr });
       if (displayed.length) params.set('trains', Array.from(new Set(displayed)).join(','));
       const url = `${AFF_SUMMARY_ENDPOINT}?${params.toString()}`;
