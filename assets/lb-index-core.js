@@ -6344,22 +6344,26 @@ function lbCenterMostLiveTrain(liveEntries){
   const rows = table ? Array.from(table.querySelectorAll('tbody tr')) : [];
   rows.forEach((row)=> row.cells?.[target.index + 1]?.classList.add('lb-table-live-focus-cell'));
 
-  const scroller = document.querySelector('#trainInfo .table-scroll');
-  if (!scroller) return;
   const focusNumber = target.number;
   const centerNow = ()=>{
     const currentHeader = Array.from(document.querySelectorAll('#trainInfo th[data-train-number]'))
       .find((th)=> String(th.dataset.trainNumber || '').replace(/\D/g,'') === focusNumber);
-    if (!currentHeader || !scroller.isConnected) return;
-    const sr = scroller.getBoundingClientRect();
-    const tr = currentHeader.getBoundingClientRect();
-    const desired = scroller.scrollLeft + (tr.left - sr.left) - ((scroller.clientWidth - tr.width) / 2);
+    const scroller = currentHeader?.closest?.('.table-scroll')
+      || document.querySelector('#trainInfo .table-scroll');
+    if (!currentHeader || !scroller || !scroller.isConnected) return;
     const max = Math.max(0, scroller.scrollWidth - scroller.clientWidth);
-    scroller.scrollLeft = Math.max(0, Math.min(max, desired));
+    if (!(max > 0)) return;
+    const desired = Number(currentHeader.offsetLeft || 0)
+      - ((scroller.clientWidth - currentHeader.offsetWidth) / 2);
+    scroller.scrollTo({
+      left: Math.max(0, Math.min(max, desired)),
+      behavior: 'auto'
+    });
   };
   requestAnimationFrame(centerNow);
   setTimeout(centerNow, 120);
   setTimeout(centerNow, 320);
+  setTimeout(centerNow, 800);
 }
 
 function lbRefreshTableLivingUI(){
