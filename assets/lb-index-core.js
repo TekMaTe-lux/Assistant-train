@@ -6270,14 +6270,17 @@ function lbApplyLiveColumnClasses(liveEntries){
 function lbCenterMostLiveTrain(liveEntries){
   if (!window.__lbShouldAutoCenterLive) return;
   if (!Array.isArray(liveEntries) || !liveEntries.length) {
-    clearTimeout(window.__lbAutoCenterLiveFallbackTimer);
-    window.__lbAutoCenterLiveFallbackTimer = setTimeout(()=>{
-      window.__lbShouldAutoCenterLive = false;
-    }, 1100);
+    if (!window.__lbAutoCenterLiveFallbackTimer) {
+      window.__lbAutoCenterLiveFallbackTimer = setTimeout(()=>{
+        window.__lbShouldAutoCenterLive = false;
+        window.__lbAutoCenterLiveFallbackTimer = null;
+      }, 1100);
+    }
     return;
   }
 
   clearTimeout(window.__lbAutoCenterLiveFallbackTimer);
+  window.__lbAutoCenterLiveFallbackTimer = null;
   window.__lbShouldAutoCenterLive = false;
   const target = liveEntries.slice().sort((a,b)=>{
     if (b.start !== a.start) return b.start - a.start;
