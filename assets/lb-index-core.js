@@ -6398,6 +6398,35 @@ if (!window.__lbTableLivingEventsBound) {
     window.__lbLiveFocusRealtimeReady = true;
     setTimeout(lbRefreshTableLivingUI, 0);
   });
+
+  document.addEventListener('pointerdown', (event)=>{
+    const cell = event.target?.closest?.('#trainInfo tbody td');
+    if (!cell || event.target?.closest?.('a,button')) return;
+    const isMobile = window.matchMedia?.('(max-width: 720px), (hover: none) and (pointer: coarse) and (max-width: 900px)')?.matches;
+    if (!isMobile) return;
+
+    const row = cell.parentElement;
+    const table = cell.closest('table');
+    if (!row || !table) return;
+    const index = Array.from(row.cells || []).indexOf(cell);
+    if (index < 0) return;
+
+    table.querySelectorAll('.lb-touch-row,.lb-touch-col').forEach((node)=>{
+      node.classList.remove('lb-touch-row','lb-touch-col');
+    });
+    row.classList.add('lb-touch-row');
+    if (index > 0) {
+      table.querySelectorAll('tr').forEach((tr)=> tr.cells?.[index]?.classList.add('lb-touch-col'));
+    }
+
+    clearTimeout(window.__lbMobileTableTouchTimer);
+    window.__lbMobileTableTouchTimer = setTimeout(()=>{
+      if (!table.isConnected) return;
+      table.querySelectorAll('.lb-touch-row,.lb-touch-col').forEach((node)=>{
+        node.classList.remove('lb-touch-row','lb-touch-col');
+      });
+    }, 1600);
+  }, { passive:true });
 }
 
 async function loadFastStaticBatch(date, numbers){
