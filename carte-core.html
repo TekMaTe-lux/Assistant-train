@@ -3473,14 +3473,15 @@ function sanitizeCflStationName(name){
   // Elle demande directement au HUB SNCF du VPS, qui applique cache + quota + coalescing.
   const CARTE_SNCF_HUB_URL = 'https://vps.labetaillere.fr/sncf/hub';
   const CARTE_SNCF_CLIENT = 'front-carte';
+  const CARTE_SNCF_SELECTED_CLIENT = 'front-carte-selected';
 
-  // On limite l'enrichissement SNCF carte toutes les 5 minutes.
-  // Le HUB VPS garde ensuite son propre TTL/quota : HIT = cache, MISS/REFRESH = vrai appel SNCF compté.
-  const CARTE_SEEN_INTERVAL_MS = 5 * 60 * 1000;
+  // Le cache global retards_carte + GTFS-RT continue de rafraîchir la carte rapidement.
+  // L'enrichissement Navitia par train est volontairement plus lent : il ne doit jamais vider le quota.
+  const CARTE_SEEN_INTERVAL_MS = 10 * 60 * 1000;
   let lastCarteSeenPost = 0;
   let pendingCarteHubPromise = null;
   const carteHubNumbersCache = new Map(); // key=date:num -> { t, data }
-  const CARTE_HUB_FRONT_TTL_MS = 60 * 1000;
+  const CARTE_HUB_FRONT_TTL_MS = 4 * 60 * 1000;
 
   /**
    * Construit le tail SNCF pour un train affiché sur la carte.
@@ -3638,7 +3639,7 @@ function sanitizeCflStationName(name){
    * Enrichit les trains visibles via le HUB SNCF central.
    * Aucun appel direct API SNCF/Navitia ici : le quota/cache est géré par le VPS.
    */
-  async function refreshVisibleTrainDataViaHub(trains) {
+  async function refreshVisibleTrainDataViaHub(trains, client = CARTE_SNCF_CLIENT) {
     const nums = computeVisibleTrainNumbersForHub(trains);
     if (!nums.length) return;
     if (pendingCarteHubPromise) return pendingCarteHubPromise;
@@ -3656,7 +3657,7 @@ function sanitizeCflStationName(name){
     }
 
     pendingCarteHubPromise = (async()=>{
-      const url = `${CARTE_SNCF_HUB_URL}?date=${encodeURIComponent(dateKey)}&nums=${encodeURIComponent(missing.join(','))}&client=${encodeURIComponent(CARTE_SNCF_CLIENT)}`;
+      const url = `${CARTE_SNCF_HUB_URL}?date=${encodeURIComponent(dateKey)}&nums=${encodeURIComponent(missing.join(','))}&client=${encodeURIComponent(client)}`;
       try {
         console.log('[CARTE SNCF HUB] tentative:', url);
         const res = await fetchWithTimeoutNoHeaders(url, 15000);
@@ -3696,7 +3697,7 @@ function sanitizeCflStationName(name){
     if (now - last < CARTE_SELECTED_HUB_REFRESH_MS) return;
     carteSelectedHubRefreshAt.set(key, now);
 
-    refreshVisibleTrainDataViaHub([train]).then(()=>{
+    refreshVisibleTrainDataViaHub([train], CARTE_SNCF_SELECTED_CLIENT).then(()=>{
       if (activeTripId && trainDataById.has(activeTripId)){
         const activeTrain = trainDataById.get(activeTripId);
         if (activeTrain && extractSncfHubNumberForTrain(activeTrain) === num){
@@ -7114,7 +7115,7 @@ function stationNameMatchesKeywords(name, keywords){
     document.getElementById('counts').textContent = `${list.length} train(s) actifs`;
     document.getElementById('clock').textContent = 'Heure locale : ' + new Date().toLocaleTimeString();
 
-    // --- Remontée vers le VPS toutes les 5 minutes ---
+    // --- Enrichissement HUB SNCF de fond (10 min, protégé par quota serveur) ---
     const nowMs = Date.now();
     if (nowMs - lastCarteSeenPost >= CARTE_SEEN_INTERVAL_MS) {
       lastCarteSeenPost = nowMs;
