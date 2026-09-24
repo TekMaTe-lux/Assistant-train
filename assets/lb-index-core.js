@@ -15636,7 +15636,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
 (function(){
   const VPS_BASE = 'https://vps.labetaillere.fr/affluence/detail';
-  const AFF_FORECAST_BASE = 'https://vps.labetaillere.fr/affluence/forecast';
+  const AFF_SUMMARY_ENDPOINT = 'https://vps.labetaillere.fr/api/train-static-affluence-summary';
   const $ = (id)=>document.getElementById(id);
   const affState = { data:null, byStation:new Map(), stations:[], currentTrain:'', currentStop:0, maxByTrain:new Map(), summaryDate:'', summaryPromise:null };
 
@@ -15784,7 +15784,12 @@ document.addEventListener('DOMContentLoaded', () => {
     if (affState.summaryPromise) return affState.summaryPromise;
 
     affState.summaryPromise = (async()=>{
-      const url = `${AFF_FORECAST_BASE}/forecast_${dateStr}.json`;
+      const displayed = Array.from(document.querySelectorAll('#trainInfo th[data-train-number]'))
+        .map((th) => String(th.dataset.trainNumber || '').match(/\d{5,6}/)?.[0])
+        .filter(Boolean);
+      const params = new URLSearchParams({ date: dateStr });
+      if (displayed.length) params.set('trains', Array.from(new Set(displayed)).join(','));
+      const url = `${AFF_SUMMARY_ENDPOINT}?${params.toString()}`;
       const r = await fetch(url, { cache:'default' });
       if (!r.ok) throw new Error(`affluence_summary_http_${r.status}`);
       const js = await r.json();
@@ -15792,11 +15797,11 @@ document.addEventListener('DOMContentLoaded', () => {
       Object.entries(js?.trains || {}).forEach(([num,row])=>{
         const n = (String(num).match(/\d{5,6}/)||[])[0];
         if (!n) return;
-        const pct = Number(row?.globalPct);
+        const pct = Number(row?.maxPct);
         const safePct = Number.isFinite(pct) ? Math.max(0, Math.min(100, Math.round(pct))) : null;
         map.set(n, {
           maxPct: safePct,
-          peakStop: '',
+          peakStop: String(row?.peakStop || ''),
           color: row?.color || pctToColor(safePct)
         });
       });
