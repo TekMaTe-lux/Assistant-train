@@ -6798,30 +6798,70 @@ if (!newStart) {
       });
     });
 
-    /* 2) Gares présentes dans les trains */
+    /* 2) Gares présentes dans les trains
+       CFL : le tableau ne doit pas rester limité au seul Sillon lorrain.
+       On reconstruit aussi l'ordre réel des arrêts à partir des trains sélectionnés. */
     const stopsInTrains = new Set();
+    const dynamicStops = [];
+    const dynamicStopKeys = new Set();
+    const toTableStopName = (value) => {
+      const raw = String(value || '').trim();
+      if (!raw) return '';
+      return typeof cflFormatStopDisplayName === 'function'
+        ? cflFormatStopDisplayName(raw)
+        : raw.replace(/,\s*Gare(?: Centrale)?$/i, '').trim();
+    };
+    const tableStopKey = (value) => normalizeStationName(toTableStopName(value));
+
     numbers.forEach(num => {
       const train = results[num]?.train;
-      if (!train) return;
-      train.stop_times.forEach(s => stopsInTrains.add(s.stop_point.name));
+      if (!train || !Array.isArray(train.stop_times)) return;
+      train.stop_times.forEach((row) => {
+        const name = toTableStopName(row?.stop_point?.name);
+        if (!name) return;
+        stopsInTrains.add(name);
+        const key = tableStopKey(name);
+        if (!key || dynamicStopKeys.has(key)) return;
+        dynamicStopKeys.add(key);
+        dynamicStops.push(name);
+      });
     });
 
-    /* 3) Ordre de ligne + ajouts "added" */
-    const mergedStopsOrdered = fixedStops.filter(
-      name => stopsInTrains.has(name) || addedStopsNames.has(name)
-    );
-    // si un arrêt ajouté n’existe pas dans fixedStops, on le met à la fin
-    const extrasNotInFixed = [...addedStopsNames].filter(n => !fixedStops.includes(n));
-    const mergedStops = mergedStopsOrdered.concat(extrasNotInFixed);
+    /* 3) Ordre de ligne
+       - Sillon seul : on conserve l'ordre historique BER.
+       - Dès qu'un train CFL est sélectionné : on utilise l'ordre réel de ses arrêts,
+         ce qui permet Luxembourg -> Mersch / Ettelbruck / Diekirch / Wiltz, etc.
+       - Les arrêts ajoutés en temps réel restent conservés. */
+    const hasCflSelection = cflKeys.length > 0;
+    const fixedPresent = fixedStops.filter(name => stopsInTrains.has(name) || addedStopsNames.has(name));
+    const extrasNotInFixed = [...addedStopsNames]
+      .map(toTableStopName)
+      .filter(Boolean)
+      .filter(name => !fixedStops.includes(name));
 
-    /* Filtre De/À pour l’affichage */
-    const startName = $('#startStation').val() || '';
-    const endName   = $('#endStation').val() || '';
+    let mergedStops;
+    if (hasCflSelection && dynamicStops.length) {
+      mergedStops = dynamicStops.slice();
+      extrasNotInFixed.forEach((name) => {
+        const key = tableStopKey(name);
+        if (key && !mergedStops.some(stop => tableStopKey(stop) === key)) mergedStops.push(name);
+      });
+    } else {
+      mergedStops = fixedPresent.concat(extrasNotInFixed);
+    }
+
+    /* Filtre De/À pour l'affichage.
+       Les selects CFL portent "Diekirch, Gare", alors que le tableau affiche "Diekirch". */
+    const startNameRaw = $('#startStation').val() || '';
+    const endNameRaw   = $('#endStation').val() || '';
+    const startName = toTableStopName(startNameRaw);
+    const endName   = toTableStopName(endNameRaw);
     let displayStops = filterByOD(mergedStops, startName, endName);
 
-    /* 3bis) Forcer l'affichage de toute la ligne pour les presets rapides */
+    /* 3bis) Les presets rapides BER restent strictement sur la ligne historique.
+       On ne force jamais fixedStops pour une recherche CFL hors Sillon. */
     const presetKind = detectPresetMatch(numbers) || (lastRapidPreset?.kind ?? null);
-    if (presetKind) {
+    if (presetKind && !hasCflSelection) {
       const forcedStops = filterByOD(fixedStops, startName, endName);
       const forcedExtras = extrasNotInFixed.filter(n => !forcedStops.includes(n));
       const combinedStops = forcedStops.concat(forcedExtras);
