@@ -227,7 +227,31 @@ document.addEventListener('DOMContentLoaded', () => {
   let pending = 0;
   let lastPending = 0;
   let successTimer = null;
+  let transientTimer = null;
+  let lastTransientKey = '';
+  let lastTransientAt = 0;
   const staleData = new Map();
+  const TRANSIENT_REPEAT_GUARD_MS = 30000;
+
+  const hideBadgeSoon = (badge, delay = 4200) => {
+    clearTimeout(transientTimer);
+    transientTimer = setTimeout(() => {
+      if (badge) badge.style.display = 'none';
+    }, delay);
+  };
+
+  const showTransient = (badge, text, key, delay = 4200) => {
+    const now = Date.now();
+    if (key && key === lastTransientKey && now - lastTransientAt < TRANSIENT_REPEAT_GUARD_MS) {
+      badge.style.display = 'none';
+      return;
+    }
+    lastTransientKey = key || text;
+    lastTransientAt = now;
+    badge.textContent = text;
+    badge.style.display = 'block';
+    hideBadgeSoon(badge, delay);
+  };
 
   const ensureBadge = () => {
     let badge = document.getElementById('lbOfflineStatus');
@@ -239,16 +263,16 @@ document.addEventListener('DOMContentLoaded', () => {
     Object.assign(badge.style, {
       position: 'fixed',
       left: '50%',
-      bottom: 'calc(var(--bottom-bar-height, 84px) + env(safe-area-inset-bottom, 0px) + 10px)',
+      bottom: 'calc(var(--bottom-bar-height, 84px) + env(safe-area-inset-bottom, 0px) + 8px)',
       transform: 'translateX(-50%)',
       zIndex: '2147483000',
-      maxWidth: 'calc(100vw - 28px)',
-      padding: '8px 12px',
+      maxWidth: 'min(520px, calc(100vw - 44px))',
+      padding: '6px 10px',
       borderRadius: '999px',
       border: '1px solid rgba(255,255,255,.22)',
       background: 'rgba(8,14,24,.94)',
       color: '#fff',
-      font: '600 12px/1.25 system-ui,-apple-system,Segoe UI,sans-serif',
+      font: '650 11px/1.2 system-ui,-apple-system,Segoe UI,sans-serif',
       boxShadow: '0 8px 30px rgba(0,0,0,.35)',
       backdropFilter: 'blur(10px)',
       pointerEvents: 'none',
@@ -279,31 +303,39 @@ document.addEventListener('DOMContentLoaded', () => {
     const staleTime = stale ? formatCachedAt(stale.cachedAt) : '';
     clearTimeout(successTimer);
     if (!navigator.onLine) {
-      if (pending > 0) {
-        badge.textContent = `📡 Hors connexion · ${pending} action${pending > 1 ? 's' : ''} en attente · ${staleTime ? `données de ${staleTime}` : 'envoi automatique au retour du réseau'}`;
-      } else if (stale) {
-        badge.textContent = `📡 Hors connexion · dernières données ${stale.label} : ${staleTime}`;
-      } else {
-        badge.textContent = '📡 Hors connexion · les dernières données disponibles restent consultables';
-      }
-      badge.style.display = 'block';
+      const text = pending > 0
+        ? `📡 Hors connexion · ${pending} action${pending > 1 ? 's' : ''} en attente`
+        : (stale
+            ? `📡 Hors connexion · dernières données ${stale.label} : ${staleTime}`
+            : '📡 Hors connexion · dernières données disponibles');
+      showTransient(badge, text, 'offline:' + pending + ':' + (stale?.label || ''), 5200);
       return;
     }
     if (pending > 0) {
-      badge.textContent = `🟠 ${pending} action${pending > 1 ? 's' : ''} en cours de synchronisation`;
-      badge.style.display = 'block';
+      showTransient(
+        badge,
+        `🟠 ${pending} action${pending > 1 ? 's' : ''} en synchronisation`,
+        'pending:' + pending,
+        4200
+      );
       return;
     }
     if (stale) {
-      badge.textContent = `🕘 Réseau instable · dernières données ${stale.label} : ${staleTime}`;
-      badge.style.display = 'block';
+      showTransient(
+        badge,
+        `🕘 Réseau instable · données ${stale.label} de ${staleTime}`,
+        'stale:' + stale.label + ':' + stale.cachedAt,
+        3800
+      );
       return;
     }
     if (lastPending > 0) {
-      badge.textContent = '✅ Tout est synchronisé';
+      clearTimeout(transientTimer);
+      badge.textContent = '✅ Synchronisé';
       badge.style.display = 'block';
-      successTimer = setTimeout(() => { badge.style.display = 'none'; }, 2200);
+      successTimer = setTimeout(() => { badge.style.display = 'none'; }, 1800);
     } else {
+      clearTimeout(transientTimer);
       badge.style.display = 'none';
     }
   };
