@@ -6185,26 +6185,64 @@ function lbCellEffectiveClockMinutes(cell){
   return Number(m[1]) * 60 + Number(m[2]);
 }
 
+function lbDelayForStaticStop(trainNumber, stopName){
+  const perTrain = window.retardsGTFS?.[String(trainNumber || '')];
+  if (!perTrain || typeof perTrain !== 'object') return 0;
+  let raw = perTrain[stopName];
+  if (raw == null && typeof normalizeStationName === 'function') {
+    const wanted = normalizeStationName(stopName);
+    if (wanted) {
+      for (const [name, value] of Object.entries(perTrain)) {
+        if (normalizeStationName(name) === wanted) {
+          raw = value;
+          break;
+        }
+      }
+    }
+  }
+  const delay = Number(raw);
+  return Number.isFinite(delay) && delay > 0 ? delay : 0;
+}
+
 function lbDetectLiveTableColumns(){
   if (!lbSelectedTableIsToday()) return [];
   const table = document.querySelector('#trainInfo table');
   if (!table) return [];
   const headers = Array.from(table.querySelectorAll('thead th[data-train-number]'));
-  const rows = Array.from(table.querySelectorAll('tbody tr'));
+  const rows = window.__lbFastStaticBatch?.trains || {};
   const now = lbLuxNowMinutes();
   const out = [];
 
   headers.forEach((th, index)=>{
-    const times = rows
-      .map((row)=> lbCellEffectiveClockMinutes(row.cells?.[index + 1]))
-      .filter(Number.isFinite);
+    const number = String(th.dataset.trainNumber || '').replace(/\D/g,'');
+    const staticTrain = rows[number];
+    let times = [];
+
+    if (staticTrain && Array.isArray(staticTrain.stop_times)) {
+      times = staticTrain.stop_times.map((stop)=>{
+        const raw = stop?.departure_time || stop?.arrival_time || '';
+        const base = lbRangeClockToMin(raw);
+        if (!Number.isFinite(base)) return null;
+        const stopName = String(stop?.stop_point?.name || stop?.stop_name || '');
+        return base + lbDelayForStaticStop(number, stopName);
+      }).filter(Number.isFinite);
+    }
+
+    // Secours si le batch n'est pas encore disponible.
+    if (!times.length) {
+      const bodyRows = Array.from(table.querySelectorAll('tbody tr'));
+      times = bodyRows
+        .map((row)=> lbCellEffectiveClockMinutes(row.cells?.[index + 1]))
+        .filter(Number.isFinite);
+    }
+
     if (!times.length) return;
     const start = times[0];
     const end = times[times.length - 1];
     if (now < start || now > end) return;
     const nextEvent = times.find((value)=> value >= now);
     out.push({
-      number:String(th.dataset.trainNumber || '').replace(/\D/g,''),
+      number:number,
       th:th, index:index, start:start, end:end,
       nextEvent:Number.isFinite(nextEvent) ? nextEvent : end,
       now:now
@@ -6278,9 +6316,9 @@ function lbCenterMostLiveTrain(liveEntries){
 
   const realtimeReady = window.__lbLiveFocusRealtimeReady === true;
   const deadlineReached = Date.now() >= Number(window.__lbLiveFocusDeadline || 0);
-  if (!realtimeReady && !deadlineReached) return;
 
   if (!Array.isArray(liveEntries) || !liveEntries.length) {
+    if (!realtimeReady && !deadlineReached) return;
     window.__lbShouldAutoCenterLive = false;
     return;
   }
