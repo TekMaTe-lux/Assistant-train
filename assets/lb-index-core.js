@@ -6346,13 +6346,20 @@ function lbCenterMostLiveTrain(liveEntries){
 
   const scroller = document.querySelector('#trainInfo .table-scroll');
   if (!scroller) return;
-  requestAnimationFrame(()=>{
+  const focusNumber = target.number;
+  const centerNow = ()=>{
+    const currentHeader = Array.from(document.querySelectorAll('#trainInfo th[data-train-number]'))
+      .find((th)=> String(th.dataset.trainNumber || '').replace(/\D/g,'') === focusNumber);
+    if (!currentHeader || !scroller.isConnected) return;
     const sr = scroller.getBoundingClientRect();
-    const tr = target.th.getBoundingClientRect();
+    const tr = currentHeader.getBoundingClientRect();
     const desired = scroller.scrollLeft + (tr.left - sr.left) - ((scroller.clientWidth - tr.width) / 2);
     const max = Math.max(0, scroller.scrollWidth - scroller.clientWidth);
     scroller.scrollLeft = Math.max(0, Math.min(max, desired));
-  });
+  };
+  requestAnimationFrame(centerNow);
+  setTimeout(centerNow, 120);
+  setTimeout(centerNow, 320);
 }
 
 function lbRefreshTableLivingUI(){
