@@ -5821,6 +5821,8 @@ $('#btnProposer').off('click').on('click', proposerTrainsOD);
       try {
         window.__lbActiveFixedPresetKind = kind;
         window.__lbShouldAutoCenterLive = true;
+        window.__lbLiveFocusRealtimeReady = false;
+        window.__lbLiveFocusDeadline = Date.now() + 3000;
         await applyRapidPreset(kind, { trigger: this, openModal: false, auto: true, forceDirection: true });
         closeSelectionModal?.({ restoreFocus:false });
         $('#loadTrains').trigger('click');
@@ -5845,6 +5847,8 @@ $('#btnProposer').off('click').on('click', proposerTrainsOD);
       location.hash = '#search';
       window.__lbActiveFixedPresetKind = kind;
       window.__lbShouldAutoCenterLive = true;
+      window.__lbLiveFocusRealtimeReady = false;
+      window.__lbLiveFocusDeadline = Date.now() + 3000;
       await applyRapidPreset(kind, { trigger: this, openModal: false, auto: true, forceDirection: true });
       closeSelectionModal?.({ restoreFocus:false });
       $('#loadTrains').trigger('click');
@@ -6272,6 +6276,10 @@ function lbCenterMostLiveTrain(liveEntries){
   const currentTable = document.querySelector('#trainInfo table');
   if (!currentTable || currentTable.hasAttribute('data-lb-fast-static')) return;
 
+  const realtimeReady = window.__lbLiveFocusRealtimeReady === true;
+  const deadlineReached = Date.now() >= Number(window.__lbLiveFocusDeadline || 0);
+  if (!realtimeReady && !deadlineReached) return;
+
   if (!Array.isArray(liveEntries) || !liveEntries.length) {
     window.__lbShouldAutoCenterLive = false;
     return;
@@ -6312,7 +6320,10 @@ if (!window.__lbTableLivingEventsBound) {
   window.__lbTableLivingEventsBound = true;
   window.addEventListener('lb:community-presence-changed', ()=> lbApplyTablePresence());
   window.addEventListener('lb:community-data-changed', ()=> lbApplyTablePresence());
-  window.addEventListener('gtfsrt:loaded', ()=> setTimeout(lbRefreshTableLivingUI, 0));
+  window.addEventListener('gtfsrt:loaded', ()=>{
+    window.__lbLiveFocusRealtimeReady = true;
+    setTimeout(lbRefreshTableLivingUI, 0);
+  });
 }
 
 async function loadFastStaticBatch(date, numbers){
@@ -7307,6 +7318,7 @@ setLastUpdated();
 lbEnsureRangeControls();
 lbRefreshTableLivingUI();
 setTimeout(lbRefreshTableLivingUI, 450);
+setTimeout(lbRefreshTableLivingUI, 3200);
 
 // afficher le bouton refresh tout de suite
 // 6.2 — Laisser le rendu respirer, puis lancer les tâches lourdes en parallèle
