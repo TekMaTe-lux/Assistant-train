@@ -470,3 +470,165 @@ if (
 
   window.lbAppShell = Object.freeze({ toast, currentPage });
 })();
+
+/* LB_CFL_JOURNEY_STATIONS_V1 — étend la recherche trajet aux gares ferroviaires CFL. */
+(() => {
+  const API_URL = 'https://vps.labetaillere.fr/api/rail-stations';
+  const SILLON_NAMES = [
+    'Luxembourg','Howald','Bettembourg','Hettange-Grande','Thionville','Uckange',
+    'Hagondange','Walygator parc','Maizières-lès-Metz','Woippy','Metz Nord','Metz',
+    'Ars-sur-Moselle','Ancy-sur-Moselle','Novéant-sur-Moselle','Pagny-sur-Moselle',
+    'Vandières','Pont-à-Mousson','Dieulouard','Belleville','Marbache','Pompey',
+    'Frouard','Champigneulles','Nancy'
+  ];
+
+  let cflStations = [];
+  let loaded = false;
+
+  const norm = (value) => String(value || '')
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/metz-ville/g, 'metz')
+    .replace(/\b(gare|sncf|centrale|station|halte)\b/g, ' ')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  const sillonKeys = new Set(SILLON_NAMES.map(norm));
+
+  function isSharedSillonStation(name) {
+    return sillonKeys.has(norm(name));
+  }
+
+  function isCflStationName(name) {
+    const key = norm(name);
+    return !!key && cflStations.some((station) => norm(station) === key);
+  }
+
+  function appendCflOptions() {
+    if (!loaded || !cflStations.length) return;
+    const selects = [
+      document.getElementById('startStation'),
+      document.getElementById('endStation')
+    ].filter(Boolean);
+
+    selects.forEach((select) => {
+      const previous = select.value;
+      select.querySelectorAll('optgroup[data-lb-cfl-stations]').forEach((node) => node.remove());
+
+      const existing = new Set(Array.from(select.options).map((option) => norm(option.value || option.textContent)));
+      const group = document.createElement('optgroup');
+      group.label = 'Réseau CFL';
+      group.dataset.lbCflStations = '1';
+
+      cflStations.forEach((name) => {
+        const key = norm(name);
+        if (!key || existing.has(key) || isSharedSillonStation(name)) return;
+        const option = document.createElement('option');
+        option.value = name;
+        option.textContent = name;
+        option.dataset.lbCfl = '1';
+        group.appendChild(option);
+        existing.add(key);
+      });
+
+      if (group.children.length) select.appendChild(group);
+      if (previous && Array.from(select.options).some((option) => option.value === previous)) {
+        select.value = previous;
+      }
+    });
+
+    const datalist = document.getElementById('stationNamesList');
+    if (datalist) {
+      const existing = new Set(Array.from(datalist.options).map((option) => norm(option.value)));
+      cflStations.forEach((name) => {
+        const key = norm(name);
+        if (!key || existing.has(key) || isSharedSillonStation(name)) return;
+        const option = document.createElement('option');
+        option.value = name;
+        datalist.appendChild(option);
+        existing.add(key);
+      });
+    }
+  }
+
+  function selectedUsesCfl() {
+    const start = document.getElementById('startStation')?.value || '';
+    const end = document.getElementById('endStation')?.value || '';
+    return isCflStationName(start) || isCflStationName(end);
+  }
+
+  function syncCflToggle() {
+    const toggle = document.getElementById('includeCFLStatic');
+    if (toggle && selectedUsesCfl()) toggle.checked = true;
+  }
+
+  function hookSearchUi() {
+    const originalBuild = window.buildStationSelects;
+    if (typeof originalBuild === 'function' && !originalBuild.__lbCflWrapped) {
+      const wrapped = function(...args) {
+        const result = originalBuild.apply(this, args);
+        appendCflOptions();
+        return result;
+      };
+      wrapped.__lbCflWrapped = true;
+      window.buildStationSelects = wrapped;
+    }
+
+    ['startStationSearch','endStationSearch'].forEach((id) => {
+      const input = document.getElementById(id);
+      if (!input || input.dataset.lbCflHooked === '1') return;
+      input.dataset.lbCflHooked = '1';
+      ['change','blur'].forEach((eventName) => {
+        input.addEventListener(eventName, () => setTimeout(syncCflToggle, 0));
+      });
+    });
+
+    const swap = document.getElementById('swapStations');
+    if (swap && swap.dataset.lbCflHooked !== '1') {
+      swap.dataset.lbCflHooked = '1';
+      swap.addEventListener('click', () => setTimeout(syncCflToggle, 0));
+    }
+
+    const submit = document.getElementById('btnProposer');
+    if (submit && submit.dataset.lbCflHooked !== '1') {
+      submit.dataset.lbCflHooked = '1';
+      submit.addEventListener('click', syncCflToggle, true);
+    }
+
+    const direction = document.getElementById('directionToggle');
+    if (direction && direction.dataset.lbCflHooked !== '1') {
+      direction.dataset.lbCflHooked = '1';
+      direction.addEventListener('change', () => setTimeout(() => {
+        appendCflOptions();
+        syncCflToggle();
+      }, 0));
+    }
+  }
+
+  async function loadCflStations() {
+    try {
+      const response = await fetch(API_URL, { cache: 'force-cache' });
+      if (!response.ok) throw new Error('HTTP ' + response.status);
+      const payload = await response.json();
+      const names = Array.isArray(payload?.stations) ? payload.stations : [];
+      cflStations = [...new Set(names.map((name) => String(name || '').trim()).filter(Boolean))];
+      loaded = true;
+      appendCflOptions();
+      hookSearchUi();
+    } catch (error) {
+      console.warn('[BER] Gares CFL indisponibles pour la recherche trajet', error);
+    }
+  }
+
+  function init() {
+    hookSearchUi();
+    loadCflStations();
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', init, { once: true });
+  } else {
+    init();
+  }
+})();
