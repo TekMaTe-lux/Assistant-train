@@ -6269,9 +6269,16 @@ function lbApplyLiveColumnClasses(liveEntries){
 
 function lbCenterMostLiveTrain(liveEntries){
   if (!window.__lbShouldAutoCenterLive) return;
-  window.__lbShouldAutoCenterLive = false;
-  if (!Array.isArray(liveEntries) || !liveEntries.length) return;
+  if (!Array.isArray(liveEntries) || !liveEntries.length) {
+    clearTimeout(window.__lbAutoCenterLiveFallbackTimer);
+    window.__lbAutoCenterLiveFallbackTimer = setTimeout(()=>{
+      window.__lbShouldAutoCenterLive = false;
+    }, 1100);
+    return;
+  }
 
+  clearTimeout(window.__lbAutoCenterLiveFallbackTimer);
+  window.__lbShouldAutoCenterLive = false;
   const target = liveEntries.slice().sort((a,b)=>{
     if (b.start !== a.start) return b.start - a.start;
     return Math.abs(a.nextEvent - a.now) - Math.abs(b.nextEvent - b.now);
