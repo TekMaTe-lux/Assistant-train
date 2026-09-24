@@ -7342,11 +7342,12 @@ const stopHasSchedule = (result, stopName) => {
         } else if (fallbackNumbers.length > 1) {
           trainsLabel = `les trains ${fallbackNumbers.join(', ')}`;
         }
-        const reasonItems = Array.from(sncfFallback.reasons).map(r => `<li>${escapeHtml(r)}</li>`).join('');
+        const quotaFallback = sncfFallback.reasons.has('sncf_quota')
+          || sncfFallback.reasons.has('hub_batch_unavailable');
         banner.innerHTML = `
-          <strong>⚠️ Données temps réel SNCF indisponibles.</strong>
-          Horaires théoriques (GTFS statique) affichés pour ${trainsLabel}.
-          ${reasonItems ? `<ul>${reasonItems}</ul>` : ''}
+          <strong>⚠️ Temps réel SNCF temporairement indisponible.</strong>
+          Horaires théoriques affichés pour ${trainsLabel}.
+          ${quotaFallback ? '<span> Le tableau reste disponible.</span>' : ''}
         `;
         host.insertBefore(banner, host.firstChild);
       }
