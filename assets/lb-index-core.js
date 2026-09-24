@@ -5997,44 +5997,73 @@ function lbEnsureRangeControls(){
   const host = document.getElementById('trainInfo');
   const kind = window.__lbActiveFixedPresetKind;
   const hasTable = !!host?.querySelector('table');
-  let bar = document.getElementById('lbTableRangeControls');
 
-  if (!kind || !hasTable) {
-    if (bar) bar.remove();
+  document.getElementById('lbTableRangeControls')?.remove();
+
+  if (!host || !kind || !hasTable) {
+    host?.classList.remove('lb-fixed-range-mode');
+    host?.querySelectorAll('.lb-table-range-edge').forEach((el) => el.remove());
     return;
   }
+
+  host.classList.add('lb-fixed-range-mode');
 
   if (!document.getElementById('lbTableRangeControlsStyle')) {
     const style = document.createElement('style');
     style.id = 'lbTableRangeControlsStyle';
     style.textContent = `
-      .lb-table-range-controls{display:flex;align-items:center;justify-content:center;gap:10px;margin:10px 0 12px;padding:8px 10px;border:1px solid rgba(0,229,255,.22);border-radius:14px;background:rgba(2,22,31,.72)}
-      .lb-table-range-controls__btn{min-height:38px;padding:8px 14px;border:1px solid rgba(0,229,255,.55);border-radius:11px;background:rgba(2,31,42,.92);color:#dffcff;font:700 13px/1.1 inherit;cursor:pointer}
-      .lb-table-range-controls__btn:hover{background:rgba(0,193,230,.14)}
-      .lb-table-range-controls__btn:disabled{opacity:.45;cursor:default}
-      .lb-table-range-controls__meta{min-width:120px;text-align:center;color:#d9faff;font-size:12px;line-height:1.25}
-      .lb-table-range-controls__meta b{display:block;color:#fff;font-size:13px}
-      @media(max-width:640px){.lb-table-range-controls{gap:6px;padding:7px 8px}.lb-table-range-controls__btn{padding:8px 10px;font-size:12px}.lb-table-range-controls__meta{min-width:92px;font-size:11px}}
+      #trainInfo.lb-fixed-range-mode{position:relative}
+      #trainInfo.lb-fixed-range-mode>.lb-table-swipe-hint{display:none!important}
+      #trainInfo .lb-table-range-edge{
+        position:absolute;
+        top:6px;
+        z-index:35;
+        width:30px;
+        height:30px;
+        margin:0;
+        padding:0;
+        border:1px solid rgba(40,225,245,.72);
+        border-radius:999px;
+        background:#062735;
+        color:#9cf8ff;
+        display:grid;
+        place-items:center;
+        font:800 22px/1 Arial,sans-serif;
+        cursor:pointer;
+        opacity:.9;
+      }
+      #trainInfo .lb-table-range-edge--earlier{left:4px}
+      #trainInfo .lb-table-range-edge--later{right:4px}
+      #trainInfo .lb-table-range-edge:disabled{opacity:.35;cursor:default}
+      @media(max-width:640px){
+        #trainInfo .lb-table-range-edge{width:28px;height:28px;top:5px;font-size:20px}
+        #trainInfo .lb-table-range-edge--earlier{left:3px}
+        #trainInfo .lb-table-range-edge--later{right:3px}
+      }
     `;
     document.head.appendChild(style);
   }
 
-  if (!bar) {
-    bar = document.createElement('div');
-    bar.id = 'lbTableRangeControls';
-    bar.className = 'lb-table-range-controls';
-    bar.innerHTML = `
-      <button type="button" class="lb-table-range-controls__btn" data-lb-range="earlier">← Plus tôt</button>
-      <div class="lb-table-range-controls__meta"><b data-lb-range-label></b><span data-lb-range-count></span></div>
-      <button type="button" class="lb-table-range-controls__btn" data-lb-range="later">Plus tard →</button>
-    `;
-    host.parentNode?.insertBefore(bar, host);
-  }
+  host.querySelectorAll('.lb-table-range-edge').forEach((el) => el.remove());
 
-  const label = bar.querySelector('[data-lb-range-label]');
-  const count = bar.querySelector('[data-lb-range-count]');
-  if (label) label.textContent = kind === 'PM' ? 'Soir' : 'Matin';
-  if (count) count.textContent = `${selectedTrains.size} train${selectedTrains.size > 1 ? 's' : ''}`;
+  const earlier = document.createElement('button');
+  earlier.type = 'button';
+  earlier.className = 'lb-table-range-edge lb-table-range-edge--earlier';
+  earlier.dataset.lbRange = 'earlier';
+  earlier.textContent = '‹';
+  earlier.title = 'Ajouter les trains précédents';
+  earlier.setAttribute('aria-label', 'Ajouter les trains précédents');
+
+  const later = document.createElement('button');
+  later.type = 'button';
+  later.className = 'lb-table-range-edge lb-table-range-edge--later';
+  later.dataset.lbRange = 'later';
+  later.textContent = '›';
+  later.title = 'Ajouter les trains suivants';
+  later.setAttribute('aria-label', 'Ajouter les trains suivants');
+
+  host.appendChild(earlier);
+  host.appendChild(later);
 }
 
 async function lbExtendFixedPreset(direction){
@@ -6045,80 +6074,62 @@ async function lbExtendFixedPreset(direction){
   const bounds = lbCurrentStaticRangeBounds();
   if (!bounds) return;
 
-  const startName = String($('#startStation').val() || '').trim();
-  const endName = String($('#endStation').val() || '').trim();
   const date = $('#trainDate').val();
   const ymd = dateInputToYMD(date);
-  if (!startName || !endName || !ymd) return;
+  if (!ymd) return;
 
-  // On cherche le prochain train réellement disponible dans une large fenêtre,
-  // puis on n'ajoute que le plus proche. Un clic = une extension simple.
-  const fromMin = direction === 'earlier' ? Math.max(0, bounds.min - 360) : Math.min(1439, bounds.max + 1);
-  const toMin   = direction === 'earlier' ? Math.max(0, bounds.min - 1) : Math.min(1439, bounds.max + 360);
-  if (toMin < fromMin) return;
-
-  const bar = document.getElementById('lbTableRangeControls');
-  const buttons = bar ? Array.from(bar.querySelectorAll('button')) : [];
+  const anchor = direction === 'earlier' ? bounds.min : bounds.max;
+  const host = document.getElementById('trainInfo');
+  const buttons = host ? Array.from(host.querySelectorAll('.lb-table-range-edge')) : [];
   buttons.forEach((btn) => { btn.disabled = true; });
 
   window.__lbRangeBusy = true;
   try {
-    const proposals = await computeItineraryProposals({
-      startName,
-      endName,
-      fromHHMM: lbRangeMinToClock(fromMin),
-      toHHMM: lbRangeMinToClock(toMin),
-      allowTransfers: false,
-      includeCfl: false,
-      ymd
+    const params = new URLSearchParams({
+      date,
+      kind,
+      side: direction,
+      anchor: String(anchor),
+      limit: '6'
     });
+    const response = await fetch(
+      'https://vps.labetaillere.fr/api/train-static-corridor-neighbors?' + params.toString(),
+      { cache:'default' }
+    );
+    if (!response.ok) throw new Error('corridor_neighbors_' + response.status);
+    const payload = await response.json();
 
     const current = Array.from(selectedTrains);
-    const candidates = (proposals?.directs || [])
-      .map((t) => ({
-        num: String(t.selectionKey || t.numero || '').trim(),
-        dep: lbRangeClockToMin(t.dep || t.departure_time || '')
-      }))
-      .filter((x) => /^\d{5,6}$/.test(x.num) && !selectedTrains.has(x.num));
+    const additions = (Array.isArray(payload?.trains) ? payload.trains : [])
+      .map((row) => String(row?.train || '').trim())
+      .filter((num) => /^88\d{3}$/.test(num) && !selectedTrains.has(num))
+      .slice(0, 3);
 
-    candidates.sort((a, b) => (a.dep ?? 99999) - (b.dep ?? 99999));
-    const chosen = direction === 'earlier'
-      ? candidates[candidates.length - 1]
-      : candidates[0];
-    const additions = chosen ? [chosen.num] : [];
-
-    if (!additions.length) {
-      const meta = bar?.querySelector('[data-lb-range-count]');
-      if (meta) {
-        const original = meta.textContent;
-        meta.textContent = direction === 'earlier' ? 'Aucun train avant' : 'Aucun train après';
-        setTimeout(() => { if (meta.isConnected) meta.textContent = original; }, 1800);
-      }
-      return;
-    }
+    if (!additions.length) return;
 
     if (direction === 'earlier') {
       selectedTrains.clear();
-      additions.forEach((n) => selectedTrains.add(n));
-      current.forEach((n) => selectedTrains.add(n));
+      additions.forEach((num) => selectedTrains.add(num));
+      current.forEach((num) => selectedTrains.add(num));
     } else {
-      additions.forEach((n) => selectedTrains.add(n));
+      additions.forEach((num) => selectedTrains.add(num));
     }
 
     updateSelectionUI();
-    await $('#loadTrains').trigger('click');
+    $('#loadTrains').trigger('click');
   } catch (err) {
-    console.warn('[Tableau] extension horaire impossible', err?.message || err);
+    console.warn('[Tableau] extension corridor impossible', err?.message || err);
   } finally {
     window.__lbRangeBusy = false;
-    buttons.forEach((btn) => { btn.disabled = false; });
     setTimeout(lbEnsureRangeControls, 0);
   }
 }
 
-$(document).off('click.lbRange', '#lbTableRangeControls [data-lb-range]').on('click.lbRange', '#lbTableRangeControls [data-lb-range]', function(){
-  lbExtendFixedPreset(this.dataset.lbRange);
-});
+$(document)
+  .off('click.lbRange', '#trainInfo .lb-table-range-edge[data-lb-range]')
+  .on('click.lbRange', '#trainInfo .lb-table-range-edge[data-lb-range]', function(){
+    lbExtendFixedPreset(this.dataset.lbRange);
+  });
 
 async function loadFastStaticBatch(date, numbers){
   const list = Array.from(new Set((numbers || []).map(v => String(v || '').trim()).filter(v => /^\d{4,6}$/.test(v))));
