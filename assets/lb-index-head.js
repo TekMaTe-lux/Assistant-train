@@ -308,7 +308,7 @@ document.addEventListener('DOMContentLoaded', () => {
         : (stale
             ? `📡 Hors connexion · dernières données ${stale.label} : ${staleTime}`
             : '📡 Hors connexion · dernières données disponibles');
-      showTransient(badge, text, 'offline:' + pending + ':' + (stale?.label || ''), 5200);
+      showTransient(badge, text, 'offline:' + pending + ':' + (stale?.label || ''), 4400);
       return;
     }
     if (pending > 0) {
@@ -316,7 +316,7 @@ document.addEventListener('DOMContentLoaded', () => {
         badge,
         `🟠 ${pending} action${pending > 1 ? 's' : ''} en synchronisation`,
         'pending:' + pending,
-        4200
+        3400
       );
       return;
     }
@@ -324,8 +324,8 @@ document.addEventListener('DOMContentLoaded', () => {
       showTransient(
         badge,
         `🕘 Réseau instable · données ${stale.label} de ${staleTime}`,
-        'stale:' + stale.label + ':' + stale.cachedAt,
-        3800
+        'stale:' + stale.label,
+        3200
       );
       return;
     }
