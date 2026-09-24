@@ -8374,7 +8374,8 @@ async function chargerEtAfficherAlertes() {
         // ("Retrouvez les informations...", liens, etc.). On déduplique sur le cœur
         // du message + les trains concernés, sans fusionner deux causes différentes.
         const coreDescriptionKey = descriptionKey
-          .replace(/\s+(retrouvez|plus d informations|toutes les informations)\b.*$/i, '')
+          .replace(/(?:retrouvez|plus d informations|toutes les informations)\b.*$/i, '')
+          .replace(/[.!?\s]+$/g, '')
           .trim();
         const fingerprint = `${titleKey}|${targetKey}|${(coreDescriptionKey || descriptionKey).slice(0, 220)}`;
 
