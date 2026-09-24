@@ -6051,8 +6051,10 @@ async function lbExtendFixedPreset(direction){
   const ymd = dateInputToYMD(date);
   if (!startName || !endName || !ymd) return;
 
-  const fromMin = direction === 'earlier' ? Math.max(0, bounds.min - 60) : Math.min(1439, bounds.max + 1);
-  const toMin   = direction === 'earlier' ? Math.max(0, bounds.min - 1) : Math.min(1439, bounds.max + 60);
+  // On cherche le prochain train réellement disponible dans une large fenêtre,
+  // puis on n'ajoute que le plus proche. Un clic = une extension simple.
+  const fromMin = direction === 'earlier' ? Math.max(0, bounds.min - 360) : Math.min(1439, bounds.max + 1);
+  const toMin   = direction === 'earlier' ? Math.max(0, bounds.min - 1) : Math.min(1439, bounds.max + 360);
   if (toMin < fromMin) return;
 
   const bar = document.getElementById('lbTableRangeControls');
@@ -6072,15 +6074,24 @@ async function lbExtendFixedPreset(direction){
     });
 
     const current = Array.from(selectedTrains);
-    const additions = (proposals?.directs || [])
-      .map((t) => String(t.selectionKey || t.numero || '').trim())
-      .filter((n) => /^\d{5,6}$/.test(n) && !selectedTrains.has(n));
+    const candidates = (proposals?.directs || [])
+      .map((t) => ({
+        num: String(t.selectionKey || t.numero || '').trim(),
+        dep: lbRangeClockToMin(t.dep || t.departure_time || '')
+      }))
+      .filter((x) => /^\d{5,6}$/.test(x.num) && !selectedTrains.has(x.num));
+
+    candidates.sort((a, b) => (a.dep ?? 99999) - (b.dep ?? 99999));
+    const chosen = direction === 'earlier'
+      ? candidates[candidates.length - 1]
+      : candidates[0];
+    const additions = chosen ? [chosen.num] : [];
 
     if (!additions.length) {
       const meta = bar?.querySelector('[data-lb-range-count]');
       if (meta) {
         const original = meta.textContent;
-        meta.textContent = direction === 'earlier' ? 'Rien avant sur 1 h' : 'Rien après sur 1 h';
+        meta.textContent = direction === 'earlier' ? 'Aucun train avant' : 'Aucun train après';
         setTimeout(() => { if (meta.isConnected) meta.textContent = original; }, 1800);
       }
       return;
