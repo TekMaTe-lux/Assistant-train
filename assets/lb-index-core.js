@@ -6547,6 +6547,8 @@ function renderFastStaticPreview(payload, numbers, fixedStops, startName, endNam
     $('#trainInfo').html('<p>Chargement de vos bétaillères…</p>');
 
     // Fast path : affiche immédiatement les horaires statiques depuis le VPS.
+    // On invalide d'abord tout ancien batch pour ne jamais réutiliser une autre sélection.
+    window.__lbFastStaticBatch = null;
     // Le moteur historique continue ensuite et remplace ce preview par le rendu
     // enrichi (suppressions, voies, causes, compositions) sans bloquer l'usager.
     let fastStaticVisible = false;
@@ -6602,16 +6604,42 @@ function renderFastStaticPreview(payload, numbers, fixedStops, startName, endNam
       };
       const results = {};
 
+      const buildStaticSncfFallback = (num, reason = 'sncf_unavailable') => {
+        const train = window.__lbFastStaticBatch?.trains?.[num];
+        if (!train || !Array.isArray(train.stop_times) || !train.stop_times.length) return null;
+        sncfFallback.used = true;
+        sncfFallback.numbers.add(num);
+        sncfFallback.reasons.add(reason);
+        sncfFallback.details.set(num, reason);
+        return {
+          train,
+          impacted: {},
+          newStart: null,
+          newEnd: null,
+          disruptions: [],
+          disruptionCauses: [],
+          voies: getVoiesForTrain(num),
+          cflVoies: getCflVoiesForTrain(num),
+          gtfsFallback: true,
+          fallbackDetails: {
+            reason,
+            tooltip: 'Horaires théoriques affichés — enrichissement SNCF temporairement indisponible'
+          }
+        };
+      };
+
       /* 1) Enrichissement SNCF : un seul HUB batch pour tous les trains.
          Le tableau statique est déjà visible pendant cet enrichissement. */
       let sncfBatchResponses = {};
+      let sncfBatchUnavailable = false;
       if (sncfNumbers.length) {
         try {
           sncfBatchResponses = await fetchVehicleJourneysBatchViaHub(date, sncfNumbers, {
             client: 'front-tableau-batch'
           });
         } catch (err) {
-          console.warn('[SNCF HUB BATCH] indisponible, fallback unitaire conservé', err?.message || err);
+          sncfBatchUnavailable = true;
+          console.warn('[SNCF HUB BATCH] indisponible — maintien du tableau statique', err?.message || err);
         }
       }
 
@@ -6624,14 +6652,35 @@ function renderFastStaticPreview(payload, numbers, fixedStops, startName, endNam
 
   try {
 
-    const response = sncfBatchResponses[num] || await fetchJSON(url, { client: 'front-tableau' });
+    let response = sncfBatchResponses[num] || null;
+
+    // Si le batch global est lui-même indisponible, ne surtout pas déclencher
+    // N appels unitaires : le statique déjà visible est notre filet de sécurité.
+    if (!response && sncfBatchUnavailable) {
+      const fallback = buildStaticSncfFallback(num, 'hub_batch_unavailable');
+      if (fallback) {
+        results[num] = fallback;
+        continue;
+      }
+    }
+
+    response = response || await fetchJSON(url, { client: 'front-tableau' });
 
     // 🔎 LOG 2 — voir le statut HTTP exact
     if (!response.ok) {
       console.warn('[Proxy SNCF] HTTP', response.status, 'pour', url);
 
+      const fallback = buildStaticSncfFallback(
+        num,
+        response.status === 429 ? 'sncf_quota' : ('sncf_http_' + response.status)
+      );
+      if (fallback) {
+        results[num] = fallback;
+        continue;
+      }
+
       if (response.status === 429) {
-        console.warn('[Proxy SNCF] Quota atteint – données non rafraîchies (cache requis).');
+        console.warn('[Proxy SNCF] Quota atteint – données non rafraîchies (statique conservé).');
       }
 
       if (response.status === 404) {
@@ -6644,7 +6693,8 @@ function renderFastStaticPreview(payload, numbers, fixedStops, startName, endNam
 
   const train = res?.vehicle_journeys?.[0];
   if (!train) {
-    results[num] = { error: 'Non prévu' };
+    const fallback = buildStaticSncfFallback(num, 'sncf_empty');
+    results[num] = fallback || { error: 'Non prévu' };
     continue;
   }
 
@@ -6705,7 +6755,8 @@ if (!newStart) {
         results[num] = { train, impacted, newStart, newEnd, disruptions, disruptionCauses, voies, cflVoies };
       } catch (e) {
         console.error("Erreur lors de la requête API:", e);
-        results[num] = { error: 'Non prévu' };
+        const fallback = buildStaticSncfFallback(num, 'sncf_exception');
+        results[num] = fallback || { error: 'Non prévu' };
       }
     }
 
