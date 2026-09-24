@@ -5887,6 +5887,64 @@ function addManualTrain(){
     if (e.key === 'Enter') addManualTrain();
   });
 
+async function loadFastStaticBatch(date, numbers){
+  const list = Array.from(new Set((numbers || []).map(v => String(v || '').trim()).filter(v => /^\d{4,6}$/.test(v))));
+  if (!date || !list.length) return null;
+  const params = new URLSearchParams({ date, trains: list.join(',') });
+  const response = await fetch('https://vps.labetaillere.fr/api/train-static-batch?' + params.toString(), {
+    cache: 'default'
+  });
+  if (!response.ok) throw new Error('static_batch_' + response.status);
+  return response.json();
+}
+
+function renderFastStaticPreview(payload, numbers, fixedStops, startName, endName){
+  const host = document.getElementById('trainInfo');
+  const trains = payload?.trains || {};
+  if (!host || !numbers?.length || !Object.keys(trains).length) return false;
+
+  const names = new Set();
+  const extras = [];
+  numbers.forEach((num) => {
+    const stopTimes = trains[num]?.stop_times || [];
+    stopTimes.forEach((stop) => {
+      const name = stop?.stop_point?.name;
+      if (!name || names.has(name)) return;
+      names.add(name);
+      if (!fixedStops.includes(name)) extras.push(name);
+    });
+  });
+
+  let displayStops = fixedStops.filter(name => names.has(name)).concat(extras);
+  displayStops = filterByOD(displayStops, startName || '', endName || '');
+  if (!displayStops.length) return false;
+
+  let html = '<table data-lb-fast-static="1"><thead><tr><th class="gare-head"><span>Gare</span></th>';
+  numbers.forEach((num) => {
+    const safe = escapeHtml(num);
+    html += '<th class="train-header status-head" data-train-number="' + safe + '" data-train-label="' + safe + '"><span class="train-num">' + safe + '</span><span class="train-state icon" title="Horaire statique, mise à jour temps réel en cours"></span></th>';
+  });
+  html += '</tr></thead><tbody>';
+
+  displayStops.forEach((stopName) => {
+    html += '<tr data-gare="' + escapeHtml(stopName) + '"><td><span class="gare-label">' + escapeHtml(stopName) + '</span><span class="wx" aria-live="polite"></span></td>';
+    numbers.forEach((num) => {
+      const stopTimes = trains[num]?.stop_times || [];
+      const stop = stopTimes.find((row) => row?.stop_point?.name === stopName);
+      const raw = stop ? (stop.departure_time || stop.arrival_time || '') : '';
+      html += raw
+        ? '<td data-base-time="' + escapeHtml(raw) + '"><span>' + escapeHtml(ft(raw)) + '</span></td>'
+        : '<td>-</td>';
+    });
+    html += '</tr>';
+  });
+  html += '</tbody></table>';
+
+  injectTableChunkedIntoTrainInfo(html, { chunk: 200 });
+  host.dataset.lbFastStatic = '1';
+  return true;
+}
+
   // Bouton “Générer le tableau”
   $('#loadTrains').off('click').on('click', async function () {
     // Empêche les doubles générations (clics rapides + auto-refresh)
@@ -5943,6 +6001,36 @@ function addManualTrain(){
    GTFSLoadingUI.show('Chargement des Bétaillères…');
 
     $('#trainInfo').html('<p>Chargement de vos bétaillères…</p>');
+
+    // Fast path : affiche immédiatement les horaires statiques depuis le VPS.
+    // Le moteur historique continue ensuite et remplace ce preview par le rendu
+    // enrichi (suppressions, voies, causes, compositions) sans bloquer l'usager.
+    let fastStaticVisible = false;
+    if (!cflKeys.length && sncfNumbers.length === numbers.length) {
+      try {
+        const fastPayload = await loadFastStaticBatch(date, sncfNumbers);
+        if (fastPayload?.count === sncfNumbers.length) {
+          fastStaticVisible = renderFastStaticPreview(
+            fastPayload,
+            sncfNumbers,
+            fixedStops,
+            $('#startStation').val() || '',
+            $('#endStation').val() || ''
+          );
+          if (fastStaticVisible) {
+            GTFSLoadingUI.hide();
+            if (typeof isSelectedDateToday !== 'function' || isSelectedDateToday()) {
+              setTimeout(() => {
+                loadGtfsRetards({ forceFresh: false, useCachedFirst: true })
+                  .catch((err) => console.warn('[Tableau fast] temps réel indisponible', err?.message || err));
+              }, 0);
+            }
+          }
+        }
+      } catch (err) {
+        console.warn('[Tableau fast] batch statique indisponible, moteur historique conservé', err?.message || err);
+      }
+    }
 
     try {
       await Promise.all([
