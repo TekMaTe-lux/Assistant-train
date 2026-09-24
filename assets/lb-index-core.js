@@ -8370,9 +8370,13 @@ async function chargerEtAfficherAlertes() {
           .filter(Boolean)
           .sort()
           .join(',');
-        const fingerprint = descriptionKey.length >= 24
-          ? `${titleKey}|${descriptionKey}`
-          : `${titleKey}|${descriptionKey}|${targetKey}`;
+        // SIRI et GTFS publient souvent la même alerte avec un suffixe différent
+        // ("Retrouvez les informations...", liens, etc.). On déduplique sur le cœur
+        // du message + les trains concernés, sans fusionner deux causes différentes.
+        const coreDescriptionKey = descriptionKey
+          .replace(/\s+(retrouvez|plus d informations|toutes les informations)\b.*$/i, '')
+          .trim();
+        const fingerprint = `${titleKey}|${targetKey}|${(coreDescriptionKey || descriptionKey).slice(0, 220)}`;
 
         if (!alertesUniques.has(fingerprint)) {
           alertesUniques.set(fingerprint, alert);
@@ -8407,6 +8411,13 @@ async function chargerEtAfficherAlertes() {
 		updateDisruptionsSummaryVisibility();
         return;
       }
+
+      // Une alerte externe existe : supprimer le placeholder du rendu SNCF local.
+      Array.from(container.children).forEach((node) => {
+        if (node?.tagName === 'P' && /Aucune perturbation dans vos bétaillères/i.test(node.textContent || '')) {
+          node.remove();
+        }
+      });
 
       // 3) Rendu : titre + “trains concernés” (uniquement nos trains affichés)
       alertesFiltres.forEach((alerte) => {
