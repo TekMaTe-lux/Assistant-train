@@ -1901,8 +1901,8 @@ function isPivotDirectionallyValid(startName, viaName, endName){
 
 /************ CHARGEMENT GTFS (stops/stop_times/trips/calendar_dates only) ************/
 
-const CFL_ALLOWED_ROUTE_IDS = new Set(['300','299','297']);
-const CFL_ALLOWED_ROUTE_SHORT_NAMES = new Set(['RB','RE','IC']);
+const CFL_ALLOWED_ROUTE_IDS = new Set(['301','300','299','297']);
+const CFL_ALLOWED_ROUTE_SHORT_NAMES = new Set(['TER','RB','RE','IC']);
 
 function cflIsAllowedTrainType(shortName){
   const upper = String(shortName || '').trim().toUpperCase();
@@ -4349,7 +4349,7 @@ function lbCflCommercialPrefix(row){
     row?.headsign
   ];
   for (const v of probes){
-    const m = String(v || '').trim().match(/\b(RB|RE|IC)\b/i);
+    const m = String(v || '').trim().match(/\b(TER|RB|RE|IC)\b/i);
     if (m) return m[1].toUpperCase();
   }
   return '';
@@ -4364,8 +4364,8 @@ function lbVpsCflNumero(row){
     row?.tripShortName,
     row?.trip_short_name
   ].map(v => String(v || '').trim()).find(Boolean) || '';
-  const match = raw.match(/(?:RB|RE|IC)?\s*0*(\d{3,6})/i);
-  return match ? match[1] : canonicalizeCflNumero(raw.replace(/^(RB|RE|IC|CFL)[\s-]*/i, ''));
+  const match = raw.match(/(?:TER|RB|RE|IC)?\s*0*(\d{3,6})/i);
+  return match ? match[1] : canonicalizeCflNumero(raw.replace(/^(TER|RB|RE|IC|CFL)[\s-]*/i, ''));
 }
 
 function lbVpsSelectionKey(row, source){
@@ -4383,7 +4383,7 @@ function lbCleanDisplayLabel(label, numero, source, row){
   // VPS CFL : affichage public = RB6890 / RE6816 / ICxxxx, mais clé interne = CFL-6890.
   const commercialPrefix = source === 'CFL' ? lbCflCommercialPrefix({ ...(row || {}), displayLabel: raw }) : '';
   if (source === 'CFL') {
-    const typedRaw = raw.match(/^(RB|RE|IC)\s*0*(\d{3,6})$/i);
+    const typedRaw = raw.match(/^(TER|RB|RE|IC)\s*0*(\d{3,6})$/i);
     if (typedRaw) return `${typedRaw[1].toUpperCase()}${typedRaw[2]}`;
     if (commercialPrefix && num) return `${commercialPrefix}${stripLeadingZerosForDisplay(num)}`;
     if (/^CFL\s*\d+$/i.test(raw)) return stripLeadingZerosForDisplay(num || raw.replace(/^CFL\s*/i, ''));
@@ -4964,7 +4964,7 @@ function extractCflTrainTypeFromResult(result){
   }
   const mode = result.train?.display_informations?.commercial_mode || '';
   if (mode){
-    const match = mode.match(/\b(RB|RE|IC)\b/i);
+    const match = mode.match(/\b(TER|RB|RE|IC)\b/i);
     if (match) {
       const inferred = normalizeCflTrainType(match[1]);
       if (inferred) return inferred;
