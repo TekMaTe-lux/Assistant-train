@@ -3033,9 +3033,20 @@ function cflFormatStopDisplayName(name){
   const raw = (name || '').trim();
   if (!raw) return '';
   if (CFL_STOP_DISPLAY_OVERRIDES[raw]) return CFL_STOP_DISPLAY_OVERRIDES[raw];
-  if (/[,\s]Gare Centrale$/i.test(raw)) return raw.replace(/[,\s]Gare Centrale$/i, '');
-  if (/[,\s]Gare$/i.test(raw)) return raw.replace(/[,\s]Gare$/i, '');
-  return raw;
+
+  // Les noms GTFS CFL sont souvent de la forme "Thionville, Gare".
+  // L'ancien motif retirait " Gare" mais laissait la virgule ("Thionville,"),
+  // ce qui empêchait la correspondance avec les gares du tableau BER.
+  let cleaned = raw
+    .replace(/,\s*Gare Centrale$/i, '')
+    .replace(/,\s*Gare SNCF$/i, '')
+    .replace(/,\s*Gare$/i, '')
+    .replace(/\s+Gare Centrale$/i, '')
+    .replace(/\s+Gare$/i, '')
+    .trim();
+
+  if (/^Metz-Ville$/i.test(cleaned)) cleaned = 'Metz';
+  return cleaned;
 }
 
 function parseHafasRealtimeTime(value){
