@@ -473,7 +473,7 @@ if (
 
 /* LB_CFL_JOURNEY_STATIONS_V1 — étend la recherche trajet aux gares ferroviaires CFL. */
 (() => {
-  const API_URL = 'https://vps.labetaillere.fr/api/rail-stations';
+  const API_URL = 'https://vps.labetaillere.fr/api/stations?rail=1';
   const SILLON_NAMES = [
     'Luxembourg','Howald','Bettembourg','Hettange-Grande','Thionville','Uckange',
     'Hagondange','Walygator parc','Maizières-lès-Metz','Woippy','Metz Nord','Metz',
