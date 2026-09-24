@@ -6101,7 +6101,7 @@ async function lbExtendFixedPreset(direction){
       kind,
       side: direction,
       anchor: String(anchor),
-      limit: '6'
+      limit: '2'
     });
     const response = await fetch(
       'https://vps.labetaillere.fr/api/train-static-corridor-neighbors?' + params.toString(),
@@ -6114,7 +6114,7 @@ async function lbExtendFixedPreset(direction){
     const additions = (Array.isArray(payload?.trains) ? payload.trains : [])
       .map((row) => String(row?.train || '').trim())
       .filter((num) => /^88\d{3}$/.test(num) && !selectedTrains.has(num))
-      .slice(0, 3);
+      .slice(0, 2);
 
     if (!additions.length) return;
 
