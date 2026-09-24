@@ -1,4 +1,4 @@
-const CACHE_VERSION = 'v66';
+const CACHE_VERSION = 'v67';
 const APP_CACHE = `lbetaillere-app-${CACHE_VERSION}`;
 const STATIC_CACHE = `lbetaillere-static-${CACHE_VERSION}`;
 const DATA_CACHE = `lbetaillere-data-${CACHE_VERSION}`;
