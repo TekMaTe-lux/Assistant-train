@@ -263,7 +263,7 @@ document.addEventListener('DOMContentLoaded', () => {
     Object.assign(badge.style, {
       position: 'fixed',
       left: '50%',
-      bottom: 'calc(var(--bottom-bar-height, 84px) + env(safe-area-inset-bottom, 0px) + 8px)',
+      bottom: 'calc(var(--bottom-bar-height, 84px) + env(safe-area-inset-bottom, 0px) + 58px)',
       transform: 'translateX(-50%)',
       zIndex: '2147483000',
       maxWidth: 'min(520px, calc(100vw - 44px))',
