@@ -559,8 +559,11 @@ if (
   }
 
   function syncCflToggle() {
+    if (!selectedUsesCfl()) return;
     const toggle = document.getElementById('includeCFLStatic');
-    if (toggle && selectedUsesCfl()) toggle.checked = true;
+    const transfers = document.getElementById('allowTransfer');
+    if (toggle) toggle.checked = true;
+    if (transfers) transfers.checked = true;
   }
 
   function hookSearchUi() {
