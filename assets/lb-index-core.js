@@ -6366,8 +6366,24 @@ function lbCenterMostLiveTrain(liveEntries){
   setTimeout(centerNow, 800);
 }
 
+function lbDecorateMobileTableReadability(){
+  const table = document.querySelector('#trainInfo table');
+  if (!table) return;
+  const isMobile = window.matchMedia?.('(max-width: 720px), (hover: none) and (pointer: coarse) and (max-width: 900px)')?.matches;
+  if (!isMobile) return;
+
+  table.querySelectorAll('tbody tr').forEach((row)=>{
+    Array.from(row.cells || []).slice(1).forEach((cell)=>{
+      const plain = String(cell.textContent || '').replace(/\s+/g, ' ').trim();
+      const isEmpty = /^(?:-|—)$/.test(plain);
+      cell.classList.toggle('lb-empty-cell', isEmpty);
+    });
+  });
+}
+
 function lbRefreshTableLivingUI(){
   lbEnsureTableLivingStyles();
+  lbDecorateMobileTableReadability();
   const live = lbDetectLiveTableColumns();
   lbApplyLiveColumnClasses(live);
   lbApplyTablePresence(live);
