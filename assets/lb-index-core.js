@@ -5526,6 +5526,55 @@ async function fetchVehicleJourneyViaHub(date, num, { client = 'front-central', 
   return promise;
 }
 
+async function fetchVehicleJourneysBatchViaHub(date, numbers, { client = 'front-tableau-batch', timeoutMs = 15000 } = {}) {
+  const safeDate = String(date || '').trim();
+  const safeClient = String(client || 'front-tableau-batch').trim() || 'front-tableau-batch';
+  const list = Array.from(new Set((numbers || []).map(v => String(v || '').trim()).filter(Boolean)));
+  const results = {};
+  const pending = [];
+  const now = Date.now();
+
+  list.forEach((num) => {
+    const key = `${safeDate}:${num}`;
+    const cached = SNCF_FRONT_CACHE.get(key);
+    if (cached?.data && (now - cached.t) < SNCF_FRONT_TTL_MS) {
+      results[num] = { ok: true, status: 200, data: cached.data, cache: 'FRONT-HIT' };
+    } else {
+      pending.push(num);
+    }
+  });
+
+  if (!pending.length) return results;
+
+  const hubUrl = `${VPS_BASE}/sncf/hub?date=${encodeURIComponent(safeDate)}&nums=${encodeURIComponent(pending.join(','))}&client=${encodeURIComponent(safeClient)}`;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(hubUrl, { credentials: 'omit', signal: controller.signal });
+    const hub = await response.json().catch(() => null);
+    if (!response.ok || !hub?.trains) throw new Error(`hub_batch_error_${response.status}`);
+
+    pending.forEach((num) => {
+      const item = hub.trains[num];
+      if (!item) return;
+      results[num] = {
+        ok: !!item.ok,
+        status: item.status || response.status,
+        data: item.data,
+        cache: item.cache || null,
+        hub
+      };
+      if (item.ok && item.data) {
+        SNCF_FRONT_CACHE.set(`${safeDate}:${num}`, { t: Date.now(), data: item.data });
+      }
+    });
+    console.debug('[SNCF HUB BATCH]', safeClient, pending.length, hub.summary || '', hub.quota || '');
+    return results;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 // Fetch JSON générique avec garde stricte SNCF :
 // - aucun appel direct api.sncf.com / data.gouv côté navigateur
 // - aucun fallback navigateur vers /sncf/vehicle_journey
@@ -6058,7 +6107,19 @@ function renderFastStaticPreview(payload, numbers, fixedStops, startName, endNam
       };
       const results = {};
 
-      /* 1) Récupération des données API pour chaque train */
+      /* 1) Enrichissement SNCF : un seul HUB batch pour tous les trains.
+         Le tableau statique est déjà visible pendant cet enrichissement. */
+      let sncfBatchResponses = {};
+      if (sncfNumbers.length) {
+        try {
+          sncfBatchResponses = await fetchVehicleJourneysBatchViaHub(date, sncfNumbers, {
+            client: 'front-tableau-batch'
+          });
+        } catch (err) {
+          console.warn('[SNCF HUB BATCH] indisponible, fallback unitaire conservé', err?.message || err);
+        }
+      }
+
     for (const num of sncfNumbers) {
 
   const url = vpsVehicleJourneyUrl(date, num);
@@ -6068,7 +6129,7 @@ function renderFastStaticPreview(payload, numbers, fixedStops, startName, endNam
 
   try {
 
-    const response = await fetchJSON(url, { client: 'front-tableau' });
+    const response = sncfBatchResponses[num] || await fetchJSON(url, { client: 'front-tableau' });
 
     // 🔎 LOG 2 — voir le statut HTTP exact
     if (!response.ok) {
