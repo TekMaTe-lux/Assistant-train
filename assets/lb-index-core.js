@@ -4309,7 +4309,7 @@ function lbSamePlaceForMerge(a, b){
 }
 
 function lbTrainMergeKey(value){
-  const raw0 = String(value || '').trim().replace(/^CFL\s+/i, '');
+  const raw0 = String(value || '').trim().replace(/^CFL[\s-]+/i, '');
   const raw = (typeof canonicalizeCflNumero === 'function') ? canonicalizeCflNumero(raw0) : raw0.replace(/^0+/, '');
   if (!raw) return '';
 
