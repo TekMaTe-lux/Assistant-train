@@ -5951,6 +5951,8 @@ function renderFastStaticPreview(payload, numbers, fixedStops, startName, endNam
   const host = document.getElementById('trainInfo');
   const trains = payload?.trains || {};
   if (!host || !numbers?.length || !Object.keys(trains).length) return false;
+  // Réutilisé par les filtres GTFS/SIRI : évite de charger le gros GTFS dans le navigateur.
+  window.__lbFastStaticBatch = payload;
 
   const names = new Set();
   const extras = [];
@@ -7973,6 +7975,21 @@ function buildDisplayedFilters(ymd){
     if (t.route_id) routeIds.add(t.route_id);
     for (const sid of getStopsForTripQuick(t.trip_id)) stopIds.add(sid);
   }
+
+  // Fast path : le tableau statique batch contient déjà trip_id, route_id et stop_id.
+  // On s'en sert pour associer les alertes GTFS/SIRI sans télécharger stop_times.txt/trips.txt.
+  const fastTrains = window.__lbFastStaticBatch?.trains || {};
+  displayedNums.forEach((num) => {
+    const row = fastTrains[num];
+    if (!row || typeof row !== 'object') return;
+    if (row.trip_id) tripIds.add(String(row.trip_id));
+    if (row.route_id) routeIds.add(String(row.route_id));
+    (Array.isArray(row.stop_times) ? row.stop_times : []).forEach((st) => {
+      const sid = st?.stop_point?.id || st?.stop_id;
+      if (sid) stopIds.add(String(sid));
+    });
+  });
+
   return { displayedNums, tripIds, routeIds, stopIds };
 }
 
@@ -8057,7 +8074,11 @@ async function chargerEtAfficherAlertes() {
 
   const ymd = `${selectedDate.getFullYear()}${String(selectedDate.getMonth()+1).padStart(2,'0')}${String(selectedDate.getDate()).padStart(2,'0')}`;
 
-  try { if (typeof ensureGTFSLoaded === 'function') await ensureGTFSLoaded({ silent: true }); } catch(e){ console.warn('GTFS non chargé pour alertes:', e); }
+  try {
+    if (!window.__lbFastStaticBatch && typeof ensureGTFSLoaded === 'function') {
+      await ensureGTFSLoaded({ silent: true });
+    }
+  } catch(e){ console.warn('GTFS non chargé pour alertes:', e); }
   try { if (typeof ensureTransferIndexesBuilt === 'function') ensureTransferIndexesBuilt(); } catch(e){ console.warn('Index alertes non construit:', e); }   // accélère getStopsForTripQuick
   try { if (typeof buildStationGroups === 'function') buildStationGroups(); } catch(e){ console.warn('Groupes gares alertes non construits:', e); }
 
@@ -15603,8 +15624,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
 (function(){
   const VPS_BASE = 'https://vps.labetaillere.fr/affluence/detail';
+  const AFF_FORECAST_BASE = 'https://vps.labetaillere.fr/affluence/forecast';
   const $ = (id)=>document.getElementById(id);
-  const affState = { data:null, byStation:new Map(), stations:[], currentTrain:'', currentStop:0, maxByTrain:new Map() };
+  const affState = { data:null, byStation:new Map(), stations:[], currentTrain:'', currentStop:0, maxByTrain:new Map(), summaryDate:'', summaryPromise:null };
 
   // Chart (évolution du train)
   let affEvoChart = null;
@@ -15736,6 +15758,49 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
   window.applyAffluenceDots = applyAffluenceDots;
+
+  async function loadAffluenceSummaryDate(dateStr){
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(String(dateStr || ''))) return null;
+    if (affState.data && String(affState.data.date || '') === String(dateStr)) {
+      applyAffluenceDots(document);
+      return affState.maxByTrain;
+    }
+    if (affState.summaryDate === dateStr && affState.maxByTrain?.size) {
+      applyAffluenceDots(document);
+      return affState.maxByTrain;
+    }
+    if (affState.summaryPromise) return affState.summaryPromise;
+
+    affState.summaryPromise = (async()=>{
+      const url = `${AFF_FORECAST_BASE}/forecast_${dateStr}.json`;
+      const r = await fetch(url, { cache:'default' });
+      if (!r.ok) throw new Error(`affluence_summary_http_${r.status}`);
+      const js = await r.json();
+      const map = new Map();
+      Object.entries(js?.trains || {}).forEach(([num,row])=>{
+        const n = (String(num).match(/\d{5,6}/)||[])[0];
+        if (!n) return;
+        const pct = Number(row?.globalPct);
+        const safePct = Number.isFinite(pct) ? Math.max(0, Math.min(100, Math.round(pct))) : null;
+        map.set(n, {
+          maxPct: safePct,
+          peakStop: '',
+          color: row?.color || pctToColor(safePct)
+        });
+      });
+      affState.maxByTrain = map;
+      affState.summaryDate = dateStr;
+      window.__lbAffluenceMaxByTrain = map;
+      applyAffluenceDots(document);
+      return map;
+    })().catch((err)=>{
+      console.warn('[Affluence] résumé léger indisponible', err?.message || err);
+      return affState.maxByTrain;
+    }).finally(()=>{ affState.summaryPromise = null; });
+
+    return affState.summaryPromise;
+  }
+  window.lbLoadAffluenceSummaryDate = loadAffluenceSummaryDate;
 
   function inferSide(t){
     const dk=String(t?.dirKey||'').toUpperCase(),o=String(t?.origin||'').toLowerCase(),d=String(t?.destination||'').toLowerCase();
@@ -16199,7 +16264,12 @@ async function loadAffluenceDate(dateStr){
         if (rafId) return;
         rafId = requestAnimationFrame(()=>{
           rafId = 0;
-          applyAffluenceDots(document);
+          const d = $('trainDate')?.value;
+          if (d && document.querySelector('#trainInfo table')) {
+            loadAffluenceSummaryDate(d);
+          } else {
+            applyAffluenceDots(document);
+          }
         });
       });
       mo.observe(obsHost,{childList:true,subtree:true});
