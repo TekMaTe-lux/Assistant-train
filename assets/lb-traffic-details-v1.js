@@ -1,4 +1,4 @@
-/* La Bétaillère — détail Info trafic v3 */
+/* La Bétaillère — détail Info trafic v4 : fenêtre réellement actuelle */
 (function () {
   'use strict';
 
@@ -22,8 +22,12 @@
   let activeSegmentKey = '';
 
   const STATIC_SUMMARY_URL = 'https://vps.labetaillere.fr/api/train-static-summary';
+  const CURRENT_LOOKAHEAD_MIN = 90;
+  const CURRENT_GRACE_MIN = 30;
   const timetableCache = new Map();
   let timetablePromise = null;
+  let badgeRefreshPromise = null;
+  let badgeRefreshTimer = 0;
 
   const qs = (selector, root = document) => root.querySelector(selector);
   const qsa = (selector, root = document) => Array.from(root.querySelectorAll(selector));
@@ -176,6 +180,148 @@
   function formatClock(value) {
     const match = String(value || '').match(/(\d{1,2}):(\d{2})/);
     return match ? `${String(Number(match[1])).padStart(2, '0')}:${match[2]}` : '';
+  }
+
+  function clockToMinutes(value) {
+    const match = String(value || '').match(/(\d{1,2}):(\d{2})/);
+    if (!match) return null;
+    const hour = Number(match[1]);
+    const minute = Number(match[2]);
+    if (!Number.isFinite(hour) || !Number.isFinite(minute) || hour < 0 || hour > 47 || minute < 0 || minute > 59) return null;
+    return (hour * 60) + minute;
+  }
+
+  function luxNowMinutes(date = new Date()) {
+    try {
+      const parts = new Intl.DateTimeFormat('fr-FR', {
+        timeZone: 'Europe/Luxembourg',
+        hour: '2-digit',
+        minute: '2-digit',
+        hourCycle: 'h23'
+      }).formatToParts(date);
+      const hour = Number(parts.find((part) => part.type === 'hour')?.value || 0);
+      const minute = Number(parts.find((part) => part.type === 'minute')?.value || 0);
+      return (hour * 60) + minute;
+    } catch (_) {
+      return (date.getHours() * 60) + date.getMinutes();
+    }
+  }
+
+  function scheduleInCurrentWindow(schedule, nowMin = luxNowMinutes()) {
+    if (!schedule || typeof schedule !== 'object') return true;
+
+    let departure = clockToMinutes(schedule.departure);
+    let arrival = clockToMinutes(schedule.arrival);
+    if (departure == null && arrival == null) return true;
+    if (departure == null) departure = arrival;
+    if (arrival == null) arrival = departure;
+    if (arrival < departure) arrival += 24 * 60;
+
+    // « Situation actuelle » = trains en parcours, arrivés depuis moins de 30 min,
+    // ou dont le départ est prévu dans les 90 prochaines minutes.
+    return departure <= (nowMin + CURRENT_LOOKAHEAD_MIN) &&
+      arrival >= (nowMin - CURRENT_GRACE_MIN);
+  }
+
+  function summarizeRecords(records) {
+    const list = Array.isArray(records) ? records : [];
+    return {
+      total: list.length,
+      onTime: list.filter((item) => item.state === 'ontime').length,
+      delayed: list.filter((item) => item.state === 'delayed').length,
+      canceled: list.filter((item) => item.state === 'canceled').length,
+      partial: list.filter((item) => item.state === 'partial').length,
+      maxDelayMin: list.reduce((max, item) => Math.max(max, Number(item?.maxDelayMin || 0)), 0),
+      records: list
+    };
+  }
+
+  function currentWindowStats(stats, nowMin = luxNowMinutes()) {
+    if (!stats) return null;
+    const records = (stats.records || []).filter((record) => {
+      const schedule = timetableCache.get(String(record?.trainNumber || ''));
+      return scheduleInCurrentWindow(schedule, nowMin);
+    });
+    return summarizeRecords(records);
+  }
+
+  function pickCurrentBadgeState(stats) {
+    if (!stats) return { level: 'loading', label: 'Données indisponibles' };
+    if (!stats.total) return { level: 'green', label: 'Aucun train actuellement' };
+
+    if (typeof window.__lbPickTrafficLevel === 'function') {
+      try {
+        return window.__lbPickTrafficLevel({
+          total: stats.total,
+          delayed: stats.delayed,
+          maxDelayMin: stats.maxDelayMin,
+          partialCount: stats.partial,
+          canceledCount: stats.canceled
+        });
+      } catch (_) {}
+    }
+
+    const impacted = stats.delayed + stats.partial + stats.canceled;
+    if (!impacted) return { level: 'green', label: 'Trafic fluide' };
+    if (stats.partial + stats.canceled >= 2 || impacted >= 3) return { level: 'orange', label: 'Trafic perturbé' };
+    return { level: 'yellow', label: 'Trafic ralenti' };
+  }
+
+  function applyCurrentBadgeState(segment, state) {
+    const badge = document.getElementById(segment.badgeId);
+    if (!badge) return;
+
+    if (typeof window.__lbSetTrafficBadge === 'function') {
+      try {
+        window.__lbSetTrafficBadge(badge, state);
+        return;
+      } catch (_) {}
+    }
+
+    const level = state?.level || 'loading';
+    badge.classList.remove('traffic-pill--loading', 'traffic-pill--green', 'traffic-pill--yellow', 'traffic-pill--orange', 'traffic-pill--red');
+    badge.classList.add(`traffic-pill--${level}`);
+    badge.textContent = state?.label || 'Données indisponibles';
+    const row = badge.closest('.traffic-split-row');
+    if (row) {
+      row.dataset.trafficLevel = level;
+      row.classList.remove('traffic-row--loading', 'traffic-row--green', 'traffic-row--yellow', 'traffic-row--orange', 'traffic-row--red');
+      row.classList.add(`traffic-row--${level}`);
+    }
+  }
+
+  async function refreshCurrentTrafficBadges() {
+    if (badgeRefreshPromise) return badgeRefreshPromise;
+
+    badgeRefreshPromise = (async () => {
+      const raw = getCurrentRaw();
+      if (!getTrainsObject(raw)) return;
+
+      const analyses = Object.entries(SEGMENTS).map(([key, segment]) => ({
+        key,
+        segment,
+        stats: analyzeSegment(raw, segment)
+      }));
+      const allRecords = analyses.flatMap((entry) => entry.stats?.records || []);
+      await loadTimetableFor(allRecords);
+      const nowMin = luxNowMinutes();
+
+      analyses.forEach((entry) => {
+        const currentStats = currentWindowStats(entry.stats, nowMin);
+        applyCurrentBadgeState(entry.segment, pickCurrentBadgeState(currentStats));
+      });
+    })().finally(() => {
+      badgeRefreshPromise = null;
+    });
+
+    return badgeRefreshPromise;
+  }
+
+  function queueCurrentTrafficBadgeRefresh(delay = 0) {
+    window.clearTimeout(badgeRefreshTimer);
+    badgeRefreshTimer = window.setTimeout(() => {
+      refreshCurrentTrafficBadges().catch(() => {});
+    }, Math.max(0, Number(delay || 0)));
   }
 
   function routeHtml(record, schedule = null) {
@@ -642,8 +788,15 @@
 
     await refreshSourceIfNeeded();
     if (activeSegmentKey !== segmentKey || !currentModal.classList.contains('is-open')) return;
-    const stats = analyzeSegment(getCurrentRaw(), segment);
-    renderDetail(segment, stats, getBadgeState(segment));
+
+    const allStats = analyzeSegment(getCurrentRaw(), segment);
+    if (allStats?.records?.length) await loadTimetableFor(allStats.records);
+    if (activeSegmentKey !== segmentKey || !currentModal.classList.contains('is-open')) return;
+
+    const stats = currentWindowStats(allStats);
+    const currentBadgeState = pickCurrentBadgeState(stats);
+    applyCurrentBadgeState(segment, currentBadgeState);
+    renderDetail(segment, stats, currentBadgeState);
     const affected = affectedRecords(stats);
     if (affected.length) hydrateAffectedRoutes(segmentKey, affected);
   }
@@ -692,6 +845,15 @@
     ensureModal();
     const host = document.getElementById('homeTrafficRows');
     if (host) new MutationObserver(enhanceRows).observe(host, { childList: true, subtree: true });
+
+    queueCurrentTrafficBadgeRefresh(120);
+    window.addEventListener('gtfsrt:loaded', () => queueCurrentTrafficBadgeRefresh(30));
+    document.addEventListener('visibilitychange', () => {
+      if (!document.hidden) queueCurrentTrafficBadgeRefresh(50);
+    });
+    window.setInterval(() => {
+      if (!document.hidden) queueCurrentTrafficBadgeRefresh(0);
+    }, 60 * 1000);
   }
 
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init, { once: true });
@@ -701,7 +863,11 @@
     open: openSegment,
     close: closeModal,
     analyze: (segmentKey) => SEGMENTS[segmentKey]
-      ? analyzeSegment(getCurrentRaw(), SEGMENTS[segmentKey])
-      : null
+      ? currentWindowStats(analyzeSegment(getCurrentRaw(), SEGMENTS[segmentKey]))
+      : null,
+    refreshCurrentTrafficBadges,
+    scheduleInCurrentWindow,
+    currentWindowStats,
+    currentWindow: Object.freeze({ lookaheadMin: CURRENT_LOOKAHEAD_MIN, graceMin: CURRENT_GRACE_MIN })
   });
 })();
