@@ -347,3 +347,15 @@
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start, { once:true });
   else start();
 })();
+
+
+// Estimation GPS du retard : module séparé pour garder le correctif de gares stable.
+(function loadSignalGpsDelayModule(){
+  const id = 'lb-signal-gps-delay-script';
+  if (document.getElementById(id)) return;
+  const script = document.createElement('script');
+  script.id = id;
+  script.src = './assets/signal-gps-delay.js?v=20260905-1';
+  script.async = false;
+  (document.head || document.documentElement).appendChild(script);
+})();
