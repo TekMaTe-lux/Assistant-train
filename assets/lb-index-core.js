@@ -17864,7 +17864,7 @@ async function loadAffluenceDate(dateStr){
       title.textContent = `Train ${key || '—'}`;
       body.innerHTML = `<div class="alert-detail-card info"><div class="alert-detail-row">ℹ️ ${esc(t)}</div></div>`;
     } else {
-      title.textContent = `Train ${key} — détail perturbation`;
+      title.textContent = `Train ${key} — ${list.every(it => it.level === 'info') ? 'information' : 'détail perturbation'}`;
       body.innerHTML = list.map((it) => `
         <div class="alert-detail-card ${esc(it.level)}">
           <div class="alert-detail-row"><span>${esc(it.icon)}</span><span>${esc(it.title)}</span></div>
