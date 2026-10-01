@@ -1,4 +1,47 @@
 'use strict';
+/* Operational works dates override a publication window or a generic heading. */
+window.LBWorkNoticeState = window.LBWorkNoticeState || ((event, now = Date.now()) => {
+  const text = ['summary','title','description','text','detail','header_text','description_text','detail_html']
+    .map(key => String(event?.[key] || '').replace(/<[^>]*>/g, ' '))
+    .join(' ').normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .replace(/[’‘]/g, "'").replace(/\s+/g, ' ').trim().toLowerCase();
+  if (event?.kind !== 'travaux' && !/\btravaux\b|operations programmees|chantier/.test(text)) return null;
+  const parts = Object.fromEntries(new Intl.DateTimeFormat('en-GB', {
+    timeZone:'Europe/Paris',year:'numeric',month:'2-digit',day:'2-digit',
+    hour:'2-digit',minute:'2-digit',second:'2-digit',hourCycle:'h23'
+  }).formatToParts(new Date(now)).map(part => [part.type, part.value]));
+  const wallNow = Date.UTC(+parts.year,+parts.month-1,+parts.day,+parts.hour,+parts.minute,+parts.second);
+  const months = {janvier:1,fevrier:2,mars:3,avril:4,mai:5,juin:6,juillet:7,aout:8,septembre:9,octobre:10,novembre:11,decembre:12};
+  const M = '(?:'+Object.keys(months).join('|')+')';
+  const W = '(?:(?:lundi|mardi|mercredi|jeudi|vendredi|samedi|dimanche)\\s+)?';
+  const T = '(?:\\s+(?:a\\s+)?(\\d{1,2})[h:](\\d{2})?)?';
+  const date = (day,month,year,hour,minute,end=false) => {
+    const y=+(year || parts.year),m=months[month],d=+day,h=+(hour || 0),n=+(minute || 0);
+    const value=Date.UTC(y,m-1,d,h,n);
+    const check=new Date(value);
+    if (!m || check.getUTCFullYear()!==y || check.getUTCMonth()!==m-1 || check.getUTCDate()!==d || h>23 || n>59) return null;
+    return value + (end && hour == null ? 86400000-1 : 0);
+  };
+  const intervals=[];
+  let remaining=text;
+  const range=new RegExp('(?:du|depuis le|a partir du)\\s+'+W+'(\\d{1,2})(?:er)?(?:\\s+('+M+'))?(?:\\s+(\\d{4}))?'+T+'\\s+(?:au|jusqu[\\s\\x27]*au)\\s+'+W+'(\\d{1,2})(?:er)?\\s+('+M+')(?:\\s+(\\d{4}))?'+T,'g');
+  for (const match of text.matchAll(range)) {
+    const [,d1,m1,y1,h1,n1,d2,m2,y2,h2,n2]=match;
+    const a=date(d1,m1 || m2,y1 || y2,h1,n1),b=date(d2,m2,y2 || y1,h2,n2,true);
+    if(a!==null && b!==null && b>=a) { intervals.push([a,b]); remaining=remaining.replace(match[0],' '); }
+  }
+  const discrete=new RegExp('(?<!\\d)(\\d{1,2}(?:er)?(?:\\s*(?:et|&|/|-)\\s*\\d{1,2})*)\\s+('+M+')(?:\\s+(\\d{4}))?','g');
+  for(const match of remaining.matchAll(discrete)) {
+    for(const day of match[1].match(/\d{1,2}/g)) {
+      const a=date(day,match[2],match[3]),b=date(day,match[2],match[3],null,null,true);
+      if(a!==null && b!==null) intervals.push([a,b]);
+    }
+  }
+  if(!intervals.length) return null;
+  if(intervals.some(([a,b]) => a<=wallNow && wallNow<=b)) return 'active';
+  return intervals.some(([a]) => a>wallNow) ? 'upcoming' : 'ended';
+});
+
 
 document.documentElement.dataset.homeMajorAlertsController = '4';
 
@@ -463,6 +506,8 @@ window.addEventListener('click', (event) => {
     .toLowerCase();
 
   const activeNow = (situation, now) => {
+    const workState = window.LBWorkNoticeState(situation, now);
+    if (workState === 'upcoming' || workState === 'ended') return false;
     const periods = Array.isArray(situation?.validity_periods)
       ? situation.validity_periods
       : [];
