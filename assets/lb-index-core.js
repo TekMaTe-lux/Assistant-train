@@ -8727,7 +8727,7 @@ async function chargerEtAfficherAlertes() {
 
   // Utilitaires locaux : texte brut pour les recherches + HTML nettoyé pour l'affichage.
   const stripHtml = (s) => {
-    const doc = new DOMParser().parseFromString(String(s || ''), 'text/html');
+    const doc = new DOMParser().parseFromString(String(s || '').replace(/<br\b[^>]*>|<\/\s*(?:p|div|li)\s*>/gi, ' '), 'text/html');
     return (doc.body.textContent || '').replace(/\s+/g, ' ').trim();
   };
 
@@ -9003,46 +9003,69 @@ async function chargerEtAfficherAlertes() {
        * On conserve la version la plus riche (détail/liens SIRI) et on fusionne les cibles.
        */
       const alertesUniques = new Map();
-      alertesFiltres.forEach((alert) => {
-        const titleKey = normalizeAlertText(alert.header_text || '');
-        const descriptionKey = normalizeAlertText(alert.description_text || '');
-        const targetKey = (Array.isArray(alert.informed_entities) ? alert.informed_entities : [])
-          .map((ent) => extractTrainNumber([
-            ent?.trip_id, ent?.vehicle_journey_id, ent?.name
-          ].filter(Boolean).join(' ')))
-          .filter(Boolean)
-          .sort()
-          .join(',');
-        // SIRI et GTFS publient souvent la même alerte avec un suffixe différent
-        // ("Retrouvez les informations...", liens, etc.). On déduplique sur le cœur
-        // du message + les trains concernés, sans fusionner deux causes différentes.
-        const coreDescriptionKey = descriptionKey
-          .replace(/(?:retrouvez|plus d informations|toutes les informations)\b.*$/i, '')
-          .replace(/[.!?\s]+$/g, '')
-          .trim();
-        const fingerprint = `${titleKey}|${targetKey}|${(coreDescriptionKey || descriptionKey).slice(0, 220)}`;
-
-        if (!alertesUniques.has(fingerprint)) {
-          alertesUniques.set(fingerprint, alert);
-          return;
-        }
-
-        const current = alertesUniques.get(fingerprint);
-        const incomingIsRicher = Boolean(alert.detail_html)
-          && String(alert.detail_html).length > String(current.detail_html || '').length;
-        const preferred = incomingIsRicher ? alert : current;
-        const secondary = incomingIsRicher ? current : alert;
-        preferred.informed_entities = [
-          ...(Array.isArray(preferred.informed_entities) ? preferred.informed_entities : []),
-          ...(Array.isArray(secondary.informed_entities) ? secondary.informed_entities : [])
-        ];
-        preferred.source = Array.from(new Set([
-          ...String(preferred.source || '').split(' + '),
-          ...String(secondary.source || '').split(' + ')
-        ].filter(Boolean))).join(' + ');
-        alertesUniques.set(fingerprint, preferred);
+      const messageKey = value => normalizeAlertText(value)
+        .replace(/(?:retrouvez|plus d[' ]informations|toutes les informations)\b.*$/i, '')
+        .replace(/[^a-z0-9]+/g, ' ').trim();
+      const plannedTrackWorkKey = alert => {
+        if (window.LBWorkNoticeState(alert) !== 'upcoming') return '';
+        const text=normalizeAlertText(alert.detail_html || alert.description_text || '')
+          .replace(/\b(?:lundi|mardi|mercredi|jeudi|vendredi|samedi|dimanche)\s+/g,'');
+        if (!/circulation des trains est perturbee/.test(text)
+            || !/travaux (?:de maintenance )?sur (?:la )?voie/.test(text)) return '';
+        const route=text.match(/entre ([a-z -]+?) et ([a-z -]+?) en raison de travaux/);
+        const dates=text.match(/\bdu (\d{1,2}) au (\d{1,2})(?:\/(\d{1,2})|\s+(janvier|fevrier|mars|avril|mai|juin|juillet|aout|septembre|octobre|novembre|decembre))(?:\s+(\d{4}))?/);
+        if(!route || !dates) return '';
+        const months=['janvier','fevrier','mars','avril','mai','juin','juillet','aout','septembre','octobre','novembre','decembre'];
+        const month=dates[3]?+dates[3]:months.indexOf(dates[4])+1;
+        const year=dates[5] || new Intl.DateTimeFormat('en',{timeZone:'Europe/Paris',year:'numeric'}).format(new Date());
+        return ['planned-track-work',year,month,+dates[1],+dates[2],route[1].trim(),route[2].trim()].join('|');
+      };
+      const alertPriority = alert => {
+        const effect=Number.parseInt(alert.effect,10),cause=Number.parseInt(alert.cause,10);
+        return getStyleParCauseCode(Number.isFinite(effect)?effect:cause).prio;
+      };
+      const mergeAlert = (current, incoming) => {
+        const richness = alert => String(alert.detail_html || alert.description_text || '').length;
+        const preferred = {...(richness(incoming)>richness(current)?incoming:current)};
+        const strongest = alertPriority(incoming)<alertPriority(current)?incoming:current;
+        preferred.effect=strongest.effect;
+        preferred.cause=strongest.cause;
+        const entities = new Map();
+        [...(current.informed_entities || []),...(incoming.informed_entities || [])].forEach(entity => {
+          if (entity && typeof entity==='object') entities.set(JSON.stringify(entity),entity);
+        });
+        preferred.informed_entities=[...entities.values()];
+        preferred.source=[...new Set([current.source,incoming.source]
+          .flatMap(source => String(source || '').split(' + ')).filter(Boolean))].join(' + ');
+        // Keep source links even when the more complete wording comes from another feed.
+        let detail=String(preferred.detail_html || preferred.description_text || '');
+        const urls=new Set();
+        const documents=[detail,current.detail_html,incoming.detail_html].filter(Boolean)
+          .map(html => new DOMParser().parseFromString(String(html),'text/html'));
+        documents[0]?.querySelectorAll('a[href]').forEach(link=>urls.add(link.getAttribute('href')));
+        documents.slice(1).forEach(doc => doc.querySelectorAll('a[href]').forEach(link => {
+          const href=link.getAttribute('href');
+          if (/^https?:\/\//i.test(href || '') && !urls.has(href)) {
+            detail+='<p>'+link.outerHTML+'</p>';urls.add(href);
+          }
+        }));
+        if(detail) preferred.detail_html=detail;
+        return preferred;
+      };
+      alertesFiltres.forEach(alert => {
+        const body=messageKey(alert.description_text || alert.detail_html || '');
+        const targets=(alert.informed_entities || []).map(entity =>
+          extractTrainNumber([entity?.trip_id,entity?.vehicle_journey_id,entity?.name].filter(Boolean).join(' '))
+        ).filter(Boolean).sort().join(',');
+        // Precise identical messages may have different headings or target subsets.
+        // Short/generic texts retain title and targets, to avoid merging unrelated incidents.
+        const fingerprint=plannedTrackWorkKey(alert) || (body.length>=48
+          ? 'message|'+body
+          : messageKey(alert.header_text || '')+'|'+targets+'|'+body);
+        const existing=alertesUniques.get(fingerprint);
+        alertesUniques.set(fingerprint,existing?mergeAlert(existing,alert):alert);
       });
-      alertesFiltres = Array.from(alertesUniques.values());
+      alertesFiltres = [...alertesUniques.values()];
 
       // 2) Tri par priorité (effect)
       alertesFiltres.sort((A, B) => {
