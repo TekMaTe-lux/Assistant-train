@@ -1363,20 +1363,15 @@ function adjustTrainTableRowHeights(){
   const avail = Math.max(80, scroller.clientHeight - headerH - 6); // 6px marge
   let rowH = Math.floor(avail / n);
 
-  // bornes: priorité absolue à voir tout le trajet sans scroll vertical interne
-  // (même avec beaucoup de gares), quitte à compacter fortement.
-  rowH = Math.max(7, Math.min(54, rowH));
+  // Mobile compact v2 : gagner des lignes sans rendre les horaires microscopiques.
+  // 24 px reste lisible, y compris avec une heure corrigée et une voie compacte.
+  rowH = Math.max(24, Math.min(40, rowH));
 
-  // padding ultra-compact pour les gros tableaux
-  const padY = Math.max(0, Math.min(8, Math.floor((rowH - 12) / 2)));
+  const padY = rowH <= 26 ? 1 : (rowH <= 31 ? 2 : 3);
 
-  // typographie adaptative pour tenir toutes les lignes
-  const rowFont = rowH <= 9  ? '0.48rem'
-                : rowH <= 11 ? '0.52rem'
-                : rowH <= 13 ? '0.56rem'
-                : rowH <= 15 ? '0.60rem'
-                : rowH <= 18 ? '0.66rem'
-                : rowH <= 22 ? '0.72rem'
+  const rowFont = rowH <= 25 ? '0.68rem'
+                : rowH <= 29 ? '0.72rem'
+                : rowH <= 34 ? '0.76rem'
                 : '0.78rem';
 
   host.style.setProperty('--lb-row-h', rowH + 'px');
@@ -18037,4 +18032,247 @@ async function loadAffluenceDate(dateStr){
     e.preventDefault();
     openForKey(alertKey, trainNo, fallback);
   });
+})();
+
+
+/* ================= TABLEAU : NAVIGATION DE DATE =================
+ * Le raccourci d'accueil reste un clic direct sur aujourd'hui.
+ * Une fois le tableau affiché, cette barre permet J-1 / calendrier / J+1
+ * sans perdre le preset, le sens ou la sélection de trains en cours.
+ */
+(() => {
+  const NAV_ID = 'tableDateNav';
+  const MAIN_DATE_ID = 'trainDate';
+  const luxTodayISO = () => {
+    try {
+      const parts = Object.fromEntries(
+        new Intl.DateTimeFormat('en-CA', {
+          timeZone: 'Europe/Luxembourg',
+          year: 'numeric',
+          month: '2-digit',
+          day: '2-digit'
+        }).formatToParts(new Date())
+          .filter((part) => part.type !== 'literal')
+          .map((part) => [part.type, part.value])
+      );
+      return `${parts.year}-${parts.month}-${parts.day}`;
+    } catch (_) {
+      const d = new Date();
+      const y = d.getFullYear();
+      const m = String(d.getMonth() + 1).padStart(2, '0');
+      const day = String(d.getDate()).padStart(2, '0');
+      return `${y}-${m}-${day}`;
+    }
+  };
+
+  const isoToUTCDate = (value) => {
+    const match = String(value || '').match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (!match) return null;
+    return new Date(Date.UTC(+match[1], +match[2] - 1, +match[3], 12));
+  };
+
+  const dateToISO = (date) => {
+    if (!(date instanceof Date) || !Number.isFinite(date.getTime())) return '';
+    return [
+      date.getUTCFullYear(),
+      String(date.getUTCMonth() + 1).padStart(2, '0'),
+      String(date.getUTCDate()).padStart(2, '0')
+    ].join('-');
+  };
+
+  const shiftISO = (value, delta) => {
+    const date = isoToUTCDate(value) || isoToUTCDate(luxTodayISO());
+    date.setUTCDate(date.getUTCDate() + Number(delta || 0));
+    return dateToISO(date);
+  };
+
+  const formatMainDate = (value) => {
+    const date = isoToUTCDate(value);
+    if (!date) return 'Aujourd’hui';
+    return new Intl.DateTimeFormat('fr-FR', {
+      weekday: 'short',
+      day: 'numeric',
+      month: 'short',
+      timeZone: 'UTC'
+    }).format(date).replace(/\.$/, '');
+  };
+
+  const formatNeighbour = (value) => {
+    const date = isoToUTCDate(value);
+    if (!date) return '';
+    return new Intl.DateTimeFormat('fr-FR', {
+      weekday: 'short',
+      day: 'numeric',
+      timeZone: 'UTC'
+    }).format(date).replace(/\.$/, '');
+  };
+
+  function currentTableDate() {
+    const input = document.getElementById(MAIN_DATE_ID);
+    const value = String(input?.value || '').trim();
+    return /^\d{4}-\d{2}-\d{2}$/.test(value) ? value : luxTodayISO();
+  }
+
+  function ensureDateNav() {
+    let nav = document.getElementById(NAV_ID);
+    if (nav) return nav;
+
+    const tableNav = document.getElementById('tableauViewNav');
+    if (!tableNav) return null;
+
+    nav = document.createElement('div');
+    nav.id = NAV_ID;
+    nav.className = 'table-date-nav';
+    nav.hidden = true;
+    nav.setAttribute('aria-label', 'Changer le jour du tableau');
+    nav.innerHTML = `
+      <button type="button" class="table-date-nav__step table-date-nav__step--prev" data-table-date-step="-1" aria-label="Jour précédent">
+        <span class="table-date-nav__arrow" aria-hidden="true">‹</span>
+        <span class="table-date-nav__neighbour" data-table-date-prev></span>
+      </button>
+      <label class="table-date-nav__picker">
+        <span class="table-date-nav__date" data-table-date-label></span>
+        <span class="table-date-nav__hint" data-table-date-hint>Aujourd’hui</span>
+        <input type="date" class="table-date-nav__input" data-table-date-picker aria-label="Choisir la date du tableau">
+      </label>
+      <button type="button" class="table-date-nav__step table-date-nav__step--next" data-table-date-step="1" aria-label="Jour suivant">
+        <span class="table-date-nav__neighbour" data-table-date-next></span>
+        <span class="table-date-nav__arrow" aria-hidden="true">›</span>
+      </button>
+      <button type="button" class="table-date-nav__today" data-table-date-today hidden>Aujourd’hui</button>
+    `;
+
+    tableNav.insertAdjacentElement('afterend', nav);
+
+    nav.querySelectorAll('[data-table-date-step]').forEach((button) => {
+      button.addEventListener('click', () => {
+        const delta = Number(button.getAttribute('data-table-date-step') || 0);
+        void applyTableDate(shiftISO(currentTableDate(), delta));
+      });
+    });
+
+    const picker = nav.querySelector('[data-table-date-picker]');
+    picker?.addEventListener('change', () => {
+      const value = String(picker.value || '');
+      if (/^\d{4}-\d{2}-\d{2}$/.test(value)) void applyTableDate(value);
+    });
+
+    nav.querySelector('[data-table-date-today]')?.addEventListener('click', () => {
+      void applyTableDate(luxTodayISO());
+    });
+
+    return nav;
+  }
+
+  function syncDateNavLabels() {
+    const nav = ensureDateNav();
+    if (!nav) return;
+    const value = currentTableDate();
+    const today = luxTodayISO();
+    const picker = nav.querySelector('[data-table-date-picker]');
+    if (picker && picker.value !== value) picker.value = value;
+
+    const label = nav.querySelector('[data-table-date-label]');
+    if (label) label.textContent = formatMainDate(value);
+
+    const hint = nav.querySelector('[data-table-date-hint]');
+    if (hint) hint.textContent = value === today ? 'Aujourd’hui' : 'Jour sélectionné';
+
+    const prev = nav.querySelector('[data-table-date-prev]');
+    if (prev) prev.textContent = formatNeighbour(shiftISO(value, -1));
+
+    const next = nav.querySelector('[data-table-date-next]');
+    if (next) next.textContent = formatNeighbour(shiftISO(value, 1));
+
+    const todayButton = nav.querySelector('[data-table-date-today]');
+    if (todayButton) todayButton.hidden = value === today;
+  }
+
+  async function applyTableDate(value) {
+    const main = document.getElementById(MAIN_DATE_ID);
+    if (!main || !/^\d{4}-\d{2}-\d{2}$/.test(String(value || ''))) return;
+
+    const changed = main.value !== value;
+    main.value = value;
+    if (changed) {
+      main.dispatchEvent(new Event('input', { bubbles: true }));
+      main.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+    syncDateNavLabels();
+
+    try {
+      const kind = window.__lbActiveFixedPresetKind;
+      if (kind && typeof applyRapidPreset === 'function') {
+        await applyRapidPreset(kind, {
+          auto: true,
+          openModal: false,
+          focus: false,
+          forceDirection: false
+        });
+      }
+    } catch (error) {
+      console.warn('[tableau date] rafraîchissement du preset', error);
+    }
+
+    // Le même bouton de génération garantit que toutes les règles existantes
+    // (GTFS statique, temps réel, voies, alertes) restent inchangées.
+    document.getElementById('loadTrains')?.click();
+  }
+
+  function syncDateNavVisibility() {
+    const nav = ensureDateNav();
+    const tableNav = document.getElementById('tableauViewNav');
+    const trainInfo = document.getElementById('trainInfo');
+    if (!nav || !tableNav || !trainInfo) return;
+
+    const activeTab = tableNav.querySelector('[data-tableau-view][aria-selected="true"]');
+    const tableView = !activeTab || activeTab.getAttribute('data-tableau-view') === 'global';
+    const visible = !tableNav.hidden && tableView && !!trainInfo.querySelector('table');
+
+    nav.hidden = !visible;
+    document.body.classList.toggle('lb-table-date-nav-visible', visible);
+    if (visible) {
+      syncDateNavLabels();
+      requestAnimationFrame(() => {
+        try { adjustTrainTableRowHeights(); } catch (_) {}
+      });
+    }
+  }
+
+  function initTableDateNav() {
+    ensureDateNav();
+    syncDateNavLabels();
+    syncDateNavVisibility();
+
+    const main = document.getElementById(MAIN_DATE_ID);
+    main?.addEventListener('input', syncDateNavLabels);
+    main?.addEventListener('change', syncDateNavLabels);
+
+    const trainInfo = document.getElementById('trainInfo');
+    if (trainInfo) {
+      new MutationObserver(syncDateNavVisibility).observe(trainInfo, {
+        childList: true,
+        subtree: false
+      });
+    }
+
+    const tableNav = document.getElementById('tableauViewNav');
+    if (tableNav) {
+      new MutationObserver(syncDateNavVisibility).observe(tableNav, {
+        attributes: true,
+        subtree: true,
+        attributeFilter: ['hidden', 'class', 'aria-selected', 'style']
+      });
+      tableNav.addEventListener('click', () => setTimeout(syncDateNavVisibility, 0));
+    }
+
+    window.addEventListener('resize', syncDateNavVisibility, { passive: true });
+    window.addEventListener('hashchange', () => setTimeout(syncDateNavVisibility, 0));
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', initTableDateNav, { once: true });
+  } else {
+    initTableDateNav();
+  }
 })();
