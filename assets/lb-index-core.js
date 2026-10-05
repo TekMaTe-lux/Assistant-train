@@ -1391,16 +1391,13 @@ function adjustTrainTableRowHeights(){
   host.style.setProperty('--lb-row-font-size', rowFont, 'important');
 }
 
-/* Scroll vers le tableau généré pour le mettre immédiatement en vue */
+/* Scroll vers le tableau généré : la barre de DATE doit rester visible.
+   On attend deux frames pour laisser le MutationObserver rendre #tableDateNav visible
+   après l'injection du tableau, puis on calcule la position réelle. */
 function scrollTrainTableIntoView(){
   const host = document.getElementById('trainInfo');
   if (!host) return;
 
-  const scroller = host.querySelector('.table-scroll');
-  const target = scroller || host;
-
-  // IMPORTANT: la top-bar est en position:fixed -> scrollIntoView colle sous la barre
-  // et masque la ligne des numéros de train. On scroll donc avec un offset.
   const cssVar = (name) => {
     try { return getComputedStyle(document.documentElement).getPropertyValue(name).trim(); } catch(e){ return ''; }
   };
@@ -1409,14 +1406,30 @@ function scrollTrainTableIntoView(){
     const n = parseFloat(v);
     return Number.isFinite(n) ? n : 72;
   })();
-  const extra = 12; // petit padding visuel sous la barre
-  const y = target.getBoundingClientRect().top + (window.pageYOffset || document.documentElement.scrollTop || 0) - topBarPx - extra;
 
-  requestAnimationFrame(() => {
-    // recentre la vue en haut du tableau (et remet le scroll interne à 0)
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    if (!host.isConnected) return;
+
+    const scroller = host.querySelector('.table-scroll');
+    const dateNav = document.getElementById('tableDateNav');
+
+    // Priorité à la date dès qu'elle est affichée. Sinon, secours sur le tableau.
+    const dateVisible = !!dateNav
+      && !dateNav.hidden
+      && getComputedStyle(dateNav).display !== 'none'
+      && dateNav.getBoundingClientRect().height > 0;
+    const target = dateVisible ? dateNav : (scroller || host);
+
+    // La top-bar est fixe : place la date juste dessous avec une petite respiration.
+    // Sur mobile, 6 px suffisent et évitent de perdre inutilement de la hauteur utile.
+    const isMobile = window.matchMedia?.('(max-width: 768px)')?.matches;
+    const extra = isMobile ? 6 : 10;
+    const pageY = window.pageYOffset || document.documentElement.scrollTop || 0;
+    const y = target.getBoundingClientRect().top + pageY - topBarPx - extra;
+
     try { if (scroller) scroller.scrollTop = 0; } catch(e){}
     window.scrollTo({ top: Math.max(0, Math.round(y)), behavior: 'smooth' });
-  });
+  }));
 }
 // — Helper: fixe le sens d’affichage ET force toujours De/À pour AM/PM
 function setDirectionForPreset(kind, config){
@@ -6546,6 +6559,10 @@ function renderFastStaticPreview(payload, numbers, fixedStops, startName, endNam
 
   injectTableChunkedIntoTrainInfo(html, { chunk: 200 });
   host.dataset.lbFastStatic = '1';
+
+  // Le preview apparaît avant l'enrichissement : recentrer immédiatement sur la date,
+  // pas seulement lorsque le rendu complet arrive quelques centaines de ms plus tard.
+  scrollTrainTableIntoView();
   return true;
 }
 
