@@ -83,11 +83,12 @@
 
   function positionPicker(picker, trigger) {
     const rect = trigger.getBoundingClientRect();
-    const pickerRect = picker.getBoundingClientRect();
     const gap = 7;
     const margin = 8;
-    const width = pickerRect.width || 250;
-    const height = pickerRect.height || 46;
+    // offsetWidth/offsetHeight ignorent l'animation scale d'ouverture :
+    // la bulle reste donc réellement dans le viewport jusqu'au dernier pixel.
+    const width = picker.offsetWidth || picker.getBoundingClientRect().width || 250;
+    const height = picker.offsetHeight || picker.getBoundingClientRect().height || 46;
 
     let left = rect.left + (rect.width / 2) - (width / 2);
     left = Math.max(margin, Math.min(left, window.innerWidth - width - margin));
