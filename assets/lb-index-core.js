@@ -1369,10 +1369,10 @@ function adjustTrainTableRowHeights(){
 
   const padY = rowH <= 26 ? 1 : (rowH <= 31 ? 2 : 3);
 
-  const rowFont = rowH <= 25 ? '0.68rem'
-                : rowH <= 29 ? '0.72rem'
-                : rowH <= 34 ? '0.76rem'
-                : '0.78rem';
+  const rowFont = rowH <= 25 ? '0.72rem'
+                : rowH <= 29 ? '0.75rem'
+                : rowH <= 34 ? '0.78rem'
+                : '0.80rem';
 
   // Les valeurs historiques mobiles sont en !important dans la feuille de base.
   // L'inline important permet enfin au calcul adaptatif de piloter réellement la densité.
