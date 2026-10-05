@@ -8,19 +8,20 @@
   function targetHeight() {
     if (mobileQuery.matches) {
       const vh = Math.round(window.visualViewport?.height || window.innerHeight || 0);
-      return vh && vh < 620 ? 128 : 144;
+      return vh && vh < 620 ? 144 : 160;
     }
-    return 176;
+    return window.matchMedia('(min-width: 1025px)').matches ? null : 176;
   }
 
   function applyFeedHeight() {
     const feed = document.getElementById(FEED_ID);
     if (!feed) return false;
-    const px = `${targetHeight()}px`;
+    const target = targetHeight();
+    const px = target === null ? 'auto' : `${target}px`;
     const wanted = [
       ['height', px],
-      ['min-height', px],
-      ['max-height', px],
+      ['min-height', target === null ? '0px' : px],
+      ['max-height', target === null ? 'none' : px],
       ['overflow-y', 'auto'],
       ['overflow-x', 'hidden']
     ];
