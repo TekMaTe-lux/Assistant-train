@@ -11980,7 +11980,7 @@ function scheduleWeatherAfterTableSettled(){
       : '';
 
     const react = commentId
-      ? `<button type="button" class="lb-comment-action lb-comment-react${myMeta ? ' is-reacted' : ''}" data-comment-react="${escapeHtml(commentId)}" data-my-reaction="${escapeHtml(myReaction)}" aria-label="Réagir à ce commentaire" aria-expanded="false" title="${myMeta ? escapeHtml(myMeta.label) : 'Réagir'}">${myMeta ? myMeta.emoji : '☺'}</button>`
+      ? `<button type="button" class="lb-comment-action lb-comment-react${myMeta ? ' is-reacted' : ''}" data-comment-react="${escapeHtml(commentId)}" data-my-reaction="${escapeHtml(myReaction)}" aria-label="Réagir à ce commentaire" aria-expanded="false" title="${myMeta ? escapeHtml(myMeta.label) : 'J’aime / Réagir'}">${myMeta ? myMeta.emoji : '👍'}</button>`
       : '';
 
     const reply = token
