@@ -8546,6 +8546,7 @@ function resetGtfsRetards(scope) {
 /* ---------- ALERTES ---------- */
 const urlAlertes = 'https://vps.labetaillere.fr/gtfs/alertes_sillon_lorrain.json';
 const urlSiriAlertes = 'https://vps.labetaillere.fr/gtfs/siri_sx_alertes.json';
+const urlHafasAlertes = 'https://vps.labetaillere.fr/gtfs/hafas_him_cfl.json';
 const LB_ALERTS_BY_TRAIN = new Map();
 const LB_ALERTS_BY_KEY = new Map();
 const LB_TABLE_DISRUPTIONS_BY_TRAIN = new Map();
@@ -8830,11 +8831,20 @@ async function chargerEtAfficherAlertes() {
       // Une panne SIRI ne doit jamais empêcher l'affichage des alertes GTFS.
       console.warn('[alertes] SIRI indisponible, GTFS conservé :', error);
       return { situations: [] };
+    }),
+    fetch(urlHafasAlertes + cacheBust).then(response => {
+      if (!response.ok) throw new Error(`HTTP ${response.status} sur ${urlHafasAlertes}`);
+      return response.json();
+    }).catch((error) => {
+      // HAFAS/HIM complète les sources SNCF mais ne doit jamais bloquer le tableau.
+      console.warn('[alertes] HAFAS CFL indisponible, GTFS/SIRI conservés :', error);
+      return { incidents: [] };
     })
   ])
-    .then(([alertesRaw, siriRaw]) => {
+    .then(([alertesRaw, siriRaw, hafasRaw]) => {
       const alertes = Array.isArray(alertesRaw) ? alertesRaw.slice() : [];
       const siriSituations = Array.isArray(siriRaw?.situations) ? siriRaw.situations : [];
+      const hafasIncidents = Array.isArray(hafasRaw?.incidents) ? hafasRaw.incidents : [];
 
       let infoWrapper = document.getElementById('alertesInline');
       if (!infoWrapper) {
@@ -8959,6 +8969,62 @@ async function chargerEtAfficherAlertes() {
         });
       });
 
+      /*
+       * Normalisation CFL HAFAS/HIM -> même modèle que GTFS/SIRI.
+       * HAFAS est particulièrement utile pour les messages CFL transfrontaliers :
+       * retard, suppression, suppression partielle, capacité réduite et informations trafic.
+       */
+      const hafasEffectCode = (incident) => {
+        const text = normalizeAlertText(`${incident?.title || ''} ${incident?.text || ''}`);
+        if (/suppression partielle|partiellement supprim|supprim[^.]{0,80}\bentre\b/.test(text)) return 3;
+        if (/suppression|supprim|annul/.test(text)) return 1;
+        if (/suroccup|offre de places reduites|nombre reduit de places|capacite reduite|places assises.*(?:reduite|garantie)/.test(text)) return 2;
+        if (/\bretard(?:s|ee|e)?\b|circule avec du retard/.test(text)) return 6;
+        if (/\btravaux\b|maintenance (?:de |sur )?(?:la )?voie|chantier/.test(text)) return 9;
+        return '';
+      };
+
+      hafasIncidents.forEach((incident) => {
+        if (!incident || typeof incident !== 'object' || incident.active === false) return;
+
+        const title = String(incident.title || '').trim() || 'Information CFL';
+        const text = String(incident.text || '').trim();
+        const trainNumbers = new Set(
+          (Array.isArray(incident.trainNumbers) ? incident.trainNumbers : [])
+            .map((value) => extractTrainNumber(String(value || '')))
+            .filter(Boolean)
+        );
+
+        // Certains HIM CFL n'exposent pas trainNumbers alors que le numéro est présent dans le texte.
+        if (!trainNumbers.size) {
+          const inferred = extractTrainNumber(`${title} ${stripHtml(text)}`);
+          if (inferred) trainNumbers.add(inferred);
+        }
+
+        const entities = [...trainNumbers].map((number) => ({
+          vehicle_journey_id: String(number),
+          name: `Train ${number}`
+        }));
+
+        const startMs = Date.parse(String(incident.start || ''));
+        const endMs = Date.parse(String(incident.end || ''));
+        const safeBody = text || title;
+
+        alertes.push({
+          header_text: title,
+          description_text: safeBody,
+          detail_html: safeBody,
+          cause: '',
+          effect: hafasEffectCode(incident),
+          active_period_start: Number.isFinite(startMs) ? Math.floor(startMs / 1000) : null,
+          active_period_end: Number.isFinite(endMs) ? Math.floor(endMs / 1000) : null,
+          informed_entities: entities,
+          source: 'CFL/HAFAS',
+          source_id: String(incident.id || ''),
+          source_modified_at: String(incident.modifiedAt || '')
+        });
+      });
+
       // Nettoyage des états visuels d'alertes du tableau.
       // Important : on vide aussi le Set global, sinon les favoris peuvent rester en "réduit"
       // après une nouvelle recherche alors que l'alerte n'est plus pertinente.
@@ -8998,9 +9064,10 @@ async function chargerEtAfficherAlertes() {
       });
 
       /*
-       * Déduplication croisée GTFS/SIRI.
+       * Déduplication croisée GTFS/SIRI/HAFAS.
        * Une description suffisamment précise identique ne doit produire qu'une carte.
-       * On conserve la version la plus riche (détail/liens SIRI) et on fusionne les cibles.
+       * Les événements train équivalents (suppression, partielle, retard, capacité)
+       * sont aussi fusionnés même si les opérateurs n'emploient pas exactement les mêmes mots.
        */
       const alertesUniques = new Map();
       const messageKey = value => normalizeAlertText(value)
@@ -9023,6 +9090,14 @@ async function chargerEtAfficherAlertes() {
       const alertPriority = alert => {
         const effect=Number.parseInt(alert.effect,10),cause=Number.parseInt(alert.cause,10);
         return getStyleParCauseCode(Number.isFinite(effect)?effect:cause).prio;
+      };
+      const alertEventFamily = alert => {
+        const text=normalizeAlertText(`${alert.header_text || ''} ${alert.description_text || ''} ${alert.detail_html || ''}`);
+        if (/suppression partielle|partiellement supprim|supprim[^.]{0,80}\bentre\b/.test(text)) return 'partial-cancel';
+        if (/suppression|supprim|annul/.test(text)) return 'cancel';
+        if (/suroccup|offre de places reduites|nombre reduit de places|capacite reduite|places assises.*(?:reduite|garantie)/.test(text)) return 'capacity';
+        if (/\bretard(?:s|ee|e)?\b|circule avec du retard/.test(text)) return 'delay';
+        return '';
       };
       const mergeAlert = (current, incoming) => {
         const richness = alert => String(alert.detail_html || alert.description_text || '').length;
@@ -9059,9 +9134,12 @@ async function chargerEtAfficherAlertes() {
         ).filter(Boolean).sort().join(',');
         // Precise identical messages may have different headings or target subsets.
         // Short/generic texts retain title and targets, to avoid merging unrelated incidents.
-        const fingerprint=plannedTrackWorkKey(alert) || (body.length>=48
-          ? 'message|'+body
-          : messageKey(alert.header_text || '')+'|'+targets+'|'+body);
+        const family=alertEventFamily(alert);
+        const fingerprint=plannedTrackWorkKey(alert)
+          || (family && targets ? 'event|'+family+'|'+targets
+            : (body.length>=48
+              ? 'message|'+body
+              : messageKey(alert.header_text || '')+'|'+targets+'|'+body));
         const existing=alertesUniques.get(fingerprint);
         alertesUniques.set(fingerprint,existing?mergeAlert(existing,alert):alert);
       });
