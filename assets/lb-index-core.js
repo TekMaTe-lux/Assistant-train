@@ -9099,6 +9099,13 @@ async function chargerEtAfficherAlertes() {
         if (/\bretard(?:s|ee|e)?\b|circule avec du retard/.test(text)) return 'delay';
         return '';
       };
+      const publicAlertSource = rawSource => {
+        const raw=String(rawSource || '').trim();
+        const labels=[];
+        if (/(?:SNCF|GTFS(?:-RT)?|SIRI(?:-SX)?)/i.test(raw)) labels.push('SNCF');
+        if (/(?:CFL|HAFAS)/i.test(raw)) labels.push('CFL');
+        return [...new Set(labels)].join(' + ') || raw || 'SNCF';
+      };
       const mergeAlert = (current, incoming) => {
         const richness = alert => String(alert.detail_html || alert.description_text || '').length;
         const preferred = {...(richness(incoming)>richness(current)?incoming:current)};
@@ -9217,15 +9224,23 @@ async function chargerEtAfficherAlertes() {
         }
 
         const trainsCibles = Array.from(new Set([...trainsFromEntities, ...trainsFromText]));
+        const eventFamily = alertEventFamily(alerte);
+        const publicSource = publicAlertSource(alerte.source);
+        const alertLevel = eventFamily === 'cancel'
+          ? 'red'
+          : (eventFamily === 'partial-cancel' || eventFamily === 'delay' || eventFamily === 'capacity' || isReducedSeats)
+            ? 'orange'
+            : (styleMeta.prio === 1 ? 'red' : ((styleMeta.prio === 2 || styleMeta.prio === 3 || styleMeta.prio === 4) ? 'orange' : 'info'));
         const detailEntry = {
           key: `a_${++LB_ALERT_SEQ}`,
-          level: (styleMeta.prio === 1) ? 'red' : ((styleMeta.prio === 2 || styleMeta.prio === 3 || isReducedSeats) ? 'orange' : 'info'),
+          level: alertLevel,
           icon: styleMeta.icone || 'ℹ️',
           title: titre || styleMeta.label || 'Information',
           description: stripHtml(detailRaw) || description || '',
           descriptionHtml: detailHtml || descriptionHtml || '',
           trains: trainsCibles.slice(),
-          source: alerte.source || 'GTFS-RT'
+          source: publicSource,
+          sourceTechnical: alerte.source || ''
         };
         LB_ALERTS_BY_KEY.set(detailEntry.key, detailEntry);
         trainsCibles.forEach((tn) => {
@@ -9266,9 +9281,7 @@ async function chargerEtAfficherAlertes() {
           }
         });
 
-        let classeCouleur = 'disruption-box info';
-        if (styleMeta.prio === 1) classeCouleur = 'disruption-box red';
-        else if (styleMeta.prio === 2 || styleMeta.prio === 3 || isReducedSeats) classeCouleur = 'disruption-box orange';
+        let classeCouleur = 'disruption-box ' + alertLevel;
 
         targetsDisplayed.forEach(numeroTrain => {
           const header = findHeaderByNumber(numeroTrain);
@@ -9293,7 +9306,7 @@ async function chargerEtAfficherAlertes() {
               <div class="disruption-description disruption-description--full">${detailHtml}</div>
             </details>` : ''}
           ${trainsHtml}
-          ${alerte.source ? `<div class="disruption-source">Source : ${escapeAlertHtml(alerte.source)}</div>` : ''}
+          ${publicSource ? `<div class="disruption-source">Source : ${escapeAlertHtml(publicSource)}</div>` : ''}
         `;
         infoWrapper.appendChild(div);
       });
