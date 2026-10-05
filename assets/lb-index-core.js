@@ -1374,9 +1374,11 @@ function adjustTrainTableRowHeights(){
                 : rowH <= 34 ? '0.76rem'
                 : '0.78rem';
 
-  host.style.setProperty('--lb-row-h', rowH + 'px');
-  host.style.setProperty('--lb-cell-pad-y', padY + 'px');
-  host.style.setProperty('--lb-row-font-size', rowFont);
+  // Les valeurs historiques mobiles sont en !important dans la feuille de base.
+  // L'inline important permet enfin au calcul adaptatif de piloter réellement la densité.
+  host.style.setProperty('--lb-row-h', rowH + 'px', 'important');
+  host.style.setProperty('--lb-cell-pad-y', padY + 'px', 'important');
+  host.style.setProperty('--lb-row-font-size', rowFont, 'important');
 }
 
 /* Scroll vers le tableau généré pour le mettre immédiatement en vue */
