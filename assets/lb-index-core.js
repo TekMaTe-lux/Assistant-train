@@ -265,6 +265,12 @@ async function loadVoiesByTrain({ forceFresh = false, onlyIfChanged = false } = 
   if (forceFresh) voiesByTrainPromise = null;
   if (voiesByTrainPromise) return voiesByTrainPromise;
 
+  // Génération du tableau : si les voies sont déjà en mémoire, ne les retélécharge pas.
+  // Le rafraîchissement périodique (onlyIfChanged=true) reste responsable de leur fraîcheur.
+  if (!forceFresh && !onlyIfChanged && window.voiesByTrainMap instanceof Map && window.voiesByTrainMap.size) {
+    return window.voiesByTrainMap;
+  }
+
   if (!forceFresh && (!(window.voiesByTrainMap instanceof Map) || !window.voiesByTrainMap.size)) {
     const cached = lbCacheRead('voiesByTrainMap', 90 * 1000);
     if (Array.isArray(cached)) {
@@ -439,6 +445,10 @@ function mergeCflVoiesMaps(primary, secondary){
 async function loadCflVoiesByTrain({ forceFresh = false, onlyIfChanged = false } = {}){
   if (forceFresh) cflVoiesByTrainPromise = null;
   if (cflVoiesByTrainPromise) return cflVoiesByTrainPromise;
+
+  if (!forceFresh && !onlyIfChanged && window.cflVoiesByTrainMap instanceof Map && window.cflVoiesByTrainMap.size) {
+    return window.cflVoiesByTrainMap;
+  }
 
   cflVoiesByTrainPromise = (async () => {
     try {
@@ -6599,41 +6609,56 @@ function renderFastStaticPreview(payload, numbers, fixedStops, startName, endNam
     // Fast path : affiche immédiatement les horaires statiques depuis le VPS.
     // On invalide d'abord tout ancien batch pour ne jamais réutiliser une autre sélection.
     window.__lbFastStaticBatch = null;
-    // Le moteur historique continue ensuite et remplace ce preview par le rendu
-    // enrichi (suppressions, voies, causes, compositions) sans bloquer l'usager.
+
+    // Les enrichissements indépendants démarrent TOUT DE SUITE en parallèle :
+    // statique, HUB SNCF, compositions et voies. L'utilisateur voit le statique
+    // dès qu'il arrive, sans attendre les autres sources.
+    const staticBatchPromise = (!cflKeys.length && sncfNumbers.length === numbers.length)
+      ? loadFastStaticBatch(date, sncfNumbers).catch((err) => {
+          console.warn('[Tableau fast] batch statique indisponible, moteur historique conservé', err?.message || err);
+          return null;
+        })
+      : Promise.resolve(null);
+
+    const sncfBatchPromise = sncfNumbers.length
+      ? fetchVehicleJourneysBatchViaHub(date, sncfNumbers, {
+          client: 'front-tableau-batch'
+        }).then((data) => ({ data, unavailable: false, error: null }))
+          .catch((error) => ({ data: {}, unavailable: true, error }))
+      : Promise.resolve({ data: {}, unavailable: false, error: null });
+
+    const auxiliaryDataPromise = Promise.all([
+      loadCompoData(),
+      loadVoiesByTrain().catch(() => null),
+      // Ne pas charger ~300 Ko de données HAFAS/CFL pour un tableau 100 % SNCF.
+      cflKeys.length ? loadCflVoiesByTrain().catch(() => null) : Promise.resolve(null)
+    ]);
+
+    // Le moteur enrichi remplacera ensuite ce preview (suppressions, voies, causes,
+    // compositions) sans jamais bloquer le premier affichage.
     let fastStaticVisible = false;
-    if (!cflKeys.length && sncfNumbers.length === numbers.length) {
-      try {
-        const fastPayload = await loadFastStaticBatch(date, sncfNumbers);
-        if (fastPayload?.count === sncfNumbers.length) {
-          fastStaticVisible = renderFastStaticPreview(
-            fastPayload,
-            sncfNumbers,
-            fixedStops,
-            $('#startStation').val() || '',
-            $('#endStation').val() || ''
-          );
-          if (fastStaticVisible) {
-            GTFSLoadingUI.hide();
-            if (typeof isSelectedDateToday !== 'function' || isSelectedDateToday()) {
-              setTimeout(() => {
-                loadGtfsRetards({ forceFresh: false, useCachedFirst: true })
-                  .catch((err) => console.warn('[Tableau fast] temps réel indisponible', err?.message || err));
-              }, 0);
-            }
-          }
+    const fastPayload = await staticBatchPromise;
+    if (fastPayload?.count === sncfNumbers.length && sncfNumbers.length === numbers.length) {
+      fastStaticVisible = renderFastStaticPreview(
+        fastPayload,
+        sncfNumbers,
+        fixedStops,
+        $('#startStation').val() || '',
+        $('#endStation').val() || ''
+      );
+      if (fastStaticVisible) {
+        GTFSLoadingUI.hide();
+        if (typeof isSelectedDateToday !== 'function' || isSelectedDateToday()) {
+          setTimeout(() => {
+            loadGtfsRetards({ forceFresh: false, useCachedFirst: true })
+              .catch((err) => console.warn('[Tableau fast] temps réel indisponible', err?.message || err));
+          }, 0);
         }
-      } catch (err) {
-        console.warn('[Tableau fast] batch statique indisponible, moteur historique conservé', err?.message || err);
       }
     }
 
     try {
-      await Promise.all([
-        loadCompoData(),
-        loadVoiesByTrain().catch(() => null),
-        loadCflVoiesByTrain().catch(() => null)
-      ]);
+      await auxiliaryDataPromise;
 
 
       /* ===== Helper compo (US / UM / UM3) ===== */
@@ -6678,19 +6703,13 @@ function renderFastStaticPreview(payload, numbers, fixedStops, startName, endNam
         };
       };
 
-      /* 1) Enrichissement SNCF : un seul HUB batch pour tous les trains.
-         Le tableau statique est déjà visible pendant cet enrichissement. */
-      let sncfBatchResponses = {};
-      let sncfBatchUnavailable = false;
-      if (sncfNumbers.length) {
-        try {
-          sncfBatchResponses = await fetchVehicleJourneysBatchViaHub(date, sncfNumbers, {
-            client: 'front-tableau-batch'
-          });
-        } catch (err) {
-          sncfBatchUnavailable = true;
-          console.warn('[SNCF HUB BATCH] indisponible — maintien du tableau statique', err?.message || err);
-        }
+      /* 1) Enrichissement SNCF : le HUB batch a déjà démarré en parallèle
+         du preview statique et du chargement des voies/compositions. */
+      const sncfBatchState = await sncfBatchPromise;
+      let sncfBatchResponses = sncfBatchState?.data || {};
+      let sncfBatchUnavailable = !!sncfBatchState?.unavailable;
+      if (sncfBatchUnavailable) {
+        console.warn('[SNCF HUB BATCH] indisponible — maintien du tableau statique', sncfBatchState?.error?.message || sncfBatchState?.error);
       }
 
     for (const num of sncfNumbers) {
@@ -7848,7 +7867,7 @@ const GTFS_RT_DATASETS = [
 
 const GTFS_RT_CACHE_KEY = 'gtfsRtMerged';
 const GTFS_RT_CACHE_MAX_AGE = 90 * 1000;
-const GTFS_RT_USE_CACHED_FIRST = false;
+const GTFS_RT_USE_CACHED_FIRST = true;
 
 function hydrateGtfsRetardsFromCache(){
   const cached = lbCacheRead(GTFS_RT_CACHE_KEY, GTFS_RT_CACHE_MAX_AGE);
@@ -8202,18 +8221,25 @@ async function loadGtfsRetards({ forceFresh = false, useCachedFirst = false } = 
   const rawByDataset = {};
   let lastErr = null;
 
-  for (const dataset of GTFS_RT_DATASETS) {
-    try {
-      const result = await fetchGtfsDataset(dataset, { forceFresh });
+  // SNCF NML, SNCF carte et CFL/HAFAS sont indépendants : les charger en parallèle
+  // évite d'attendre la somme de leurs latences. Promise.allSettled conserve l'ordre
+  // de GTFS_RT_DATASETS, donc la logique de fusion reste identique.
+  const settledDatasets = await Promise.allSettled(
+    GTFS_RT_DATASETS.map((dataset) => fetchGtfsDataset(dataset, { forceFresh }))
+  );
+  settledDatasets.forEach((settled, index) => {
+    const dataset = GTFS_RT_DATASETS[index];
+    if (settled.status === 'fulfilled') {
+      const result = settled.value;
       if (result && result.normalized) {
         datasetResults.push(result);
         rawByDataset[dataset.id] = result.raw;
       }
-} catch (err) {
-      lastErr = err;
-      console.warn(`[GTFS-RT] Source indisponible (${dataset.label}):`, err);
+      return;
     }
-  }
+    lastErr = settled.reason;
+    console.warn(`[GTFS-RT] Source indisponible (${dataset.label}):`, settled.reason);
+  });
 
   if (!datasetResults.length) {
     window.retardsGTFS_RAW = null;
