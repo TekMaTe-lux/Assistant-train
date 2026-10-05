@@ -9151,6 +9151,11 @@ async function chargerEtAfficherAlertes() {
         const text = normalizeAlertText(alert.description_text || alert.detail_html || '');
         if (!/\btravaux\b|\bchantier\b|operations programmees/.test(title+' '+text)) return '';
 
+        // Cette logique de campagne sert uniquement aux messages ciblés train par train.
+        // Les avis généraux de circulation gardent le dédoublonnage historique,
+        // plus strict et déjà éprouvé.
+        if (!/\bvotre train\b/.test(text)) return '';
+
         // La partie calendrier précède généralement "votre train", "la circulation", etc.
         const scheduleMatch = text.match(/^(.*?)(?=\bvotre train\b|\bla circulation\b|\bles trains\b)/);
         const schedule = messageKey(scheduleMatch?.[1] || '');
