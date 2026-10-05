@@ -9138,6 +9138,73 @@ async function chargerEtAfficherAlertes() {
         const year=dates[5] || new Intl.DateTimeFormat('en',{timeZone:'Europe/Paris',year:'numeric'}).format(new Date());
         return ['planned-track-work',year,month,+dates[1],+dates[2],route[1].trim(),route[2].trim()].join('|');
       };
+
+      // Regroupement prudent des campagnes de travaux :
+      // même période/calendrier + même tronçon + message explicitement "travaux".
+      // Contrairement à une similarité de texte générique, cette clé n'est jamais utilisée
+      // pour les retards/incidents ponctuels.
+      const plannedWorkCampaignKey = alert => {
+        const state = window.LBWorkNoticeState(alert);
+        if (state !== 'active' && state !== 'upcoming') return '';
+
+        const title = normalizeAlertText(alert.header_text || '');
+        const text = normalizeAlertText(alert.description_text || alert.detail_html || '');
+        if (!/\btravaux\b|\bchantier\b|operations programmees/.test(title+' '+text)) return '';
+
+        // La partie calendrier précède généralement "votre train", "la circulation", etc.
+        const scheduleMatch = text.match(/^(.*?)(?=\bvotre train\b|\bla circulation\b|\bles trains\b)/);
+        const schedule = messageKey(scheduleMatch?.[1] || '');
+        if (!schedule || !/\b(?:du|les|depuis|partir)\b/.test(schedule)) return '';
+
+        // Pour éviter toute fusion abusive, il faut au moins deux gares explicites du corridor.
+        const stations = Array.from(new Set(
+          garesParLigne
+            .map((gare) => normalizeAlertText(gare?.nom || ''))
+            .filter((name) => name && text.includes(name))
+        )).sort();
+        if (stations.length < 2) return '';
+
+        return ['planned-work-campaign', schedule, stations.join('~')].join('|');
+      };
+
+      const alertTargets = alert => Array.from(new Set(
+        (alert?.informed_entities || []).map(entity =>
+          extractTrainNumber([entity?.trip_id,entity?.vehicle_journey_id,entity?.name].filter(Boolean).join(' '))
+        ).filter(Boolean)
+      )).sort();
+
+      const makeWorkVariant = alert => ({
+        header_text: alert?.header_text || '',
+        description_text: alert?.description_text || '',
+        detail_html: alert?.detail_html || alert?.description_text || '',
+        effect: alert?.effect,
+        cause: alert?.cause,
+        source: alert?.source || '',
+        informed_entities: Array.isArray(alert?.informed_entities) ? alert.informed_entities.slice() : [],
+        targets: alertTargets(alert)
+      });
+
+      const workVariantKey = variant => {
+        const body = messageKey(variant?.description_text || variant?.detail_html || '');
+        const targets = (variant?.targets || alertTargets(variant)).join(',');
+        return body+'|'+targets;
+      };
+
+      const mergeWorkVariants = (...lists) => {
+        const variants = new Map();
+        lists.flat().filter(Boolean).forEach((variant) => {
+          const key = workVariantKey(variant);
+          if (!key) return;
+          const existing = variants.get(key);
+          if (!existing) {
+            variants.set(key, variant);
+            return;
+          }
+          existing.source = [...new Set([existing.source,variant.source]
+            .flatMap(source => String(source || '').split(' + ')).filter(Boolean))].join(' + ');
+        });
+        return [...variants.values()];
+      };
       const alertPriority = alert => {
         const effect=Number.parseInt(alert.effect,10),cause=Number.parseInt(alert.cause,10);
         return getStyleParCauseCode(Number.isFinite(effect)?effect:cause).prio;
@@ -9183,23 +9250,42 @@ async function chargerEtAfficherAlertes() {
           }
         }));
         if(detail) preferred.detail_html=detail;
+
+        const workVariants = mergeWorkVariants(
+          current._lbWorkVariants || [],
+          incoming._lbWorkVariants || []
+        );
+        if (workVariants.length) preferred._lbWorkVariants = workVariants;
+        preferred._lbWorkCampaignKey = incoming._lbWorkCampaignKey || current._lbWorkCampaignKey || '';
+
         return preferred;
       };
       alertesFiltres.forEach(alert => {
         const body=messageKey(alert.description_text || alert.detail_html || '');
-        const targets=(alert.informed_entities || []).map(entity =>
-          extractTrainNumber([entity?.trip_id,entity?.vehicle_journey_id,entity?.name].filter(Boolean).join(' '))
-        ).filter(Boolean).sort().join(',');
+        const targets=alertTargets(alert).join(',');
+
+        const campaignKey = plannedWorkCampaignKey(alert);
+        const legacyWorkKey = plannedTrackWorkKey(alert);
+        const prepared = campaignKey
+          ? {
+              ...alert,
+              _lbWorkCampaignKey: campaignKey,
+              _lbWorkVariants: [makeWorkVariant(alert)]
+            }
+          : alert;
+
         // Precise identical messages may have different headings or target subsets.
-        // Short/generic texts retain title and targets, to avoid merging unrelated incidents.
+        // Work campaigns are grouped only with a strong date+route signature.
+        // Other short/generic texts retain title and targets to avoid false merges.
         const family=alertEventFamily(alert);
-        const fingerprint=plannedTrackWorkKey(alert)
+        const fingerprint=campaignKey
+          || legacyWorkKey
           || (family && targets ? 'event|'+family+'|'+targets
             : (body.length>=48
               ? 'message|'+body
               : messageKey(alert.header_text || '')+'|'+targets+'|'+body));
         const existing=alertesUniques.get(fingerprint);
-        alertesUniques.set(fingerprint,existing?mergeAlert(existing,alert):alert);
+        alertesUniques.set(fingerprint,existing?mergeAlert(existing,prepared):prepared);
       });
       alertesFiltres = [...alertesUniques.values()];
 
@@ -9244,6 +9330,32 @@ async function chargerEtAfficherAlertes() {
         const detailRaw = String(alerte.detail_html ?? descriptionRaw);
         const detailHtml = sanitizeAlertHtml(detailRaw, titre);
         const hasExtendedDetail = normalizeAlertText(detailRaw) !== normalizeAlertText(descriptionRaw);
+
+        const workVariants = Array.isArray(alerte._lbWorkVariants)
+          ? alerte._lbWorkVariants.filter(Boolean)
+          : [];
+        const groupedWork = workVariants.length > 1;
+
+        const workIntro = (() => {
+          if (!groupedWork) return '';
+          const first = stripHtml(workVariants[0]?.description_text || workVariants[0]?.detail_html || '');
+          const match = first.match(/^(.*?)(?=\bvotre train\b|\bla circulation\b|\bles trains\b)/i);
+          return String(match?.[1] || '').replace(/[\s,;:-]+$/g,'').trim();
+        })();
+
+        const workImpactRows = groupedWork ? workVariants.map((variant) => {
+          const raw = stripHtml(variant?.description_text || variant?.detail_html || '');
+          let impact = raw;
+          const match = raw.match(/\bvotre train\s+(.*?)(?:\.\s|$)/i);
+          if (match?.[1]) impact = match[1].trim();
+          impact = impact.replace(/^est\s+/i,'').replace(/\s+/g,' ').trim();
+          if (impact) impact = impact.charAt(0).toUpperCase()+impact.slice(1);
+
+          const targets = Array.from(new Set((variant?.targets || alertTargets(variant))
+            .filter((number) => sets.displayedNums.has(number))));
+
+          return { impact, targets };
+        }).filter((row) => row.impact || row.targets.length) : [];
         // Ne PAS se baser uniquement sur code === 2 : certaines alertes SNCF de retard global
         // remontent avec ce code et provoquent à tort une "composition réduite" sur tous les trains.
         // On marque réduit seulement si le libellé parle explicitement de capacité / places assises / composition courte.
@@ -9275,7 +9387,13 @@ async function chargerEtAfficherAlertes() {
         }
 
         const trainsCibles = Array.from(new Set([...trainsFromEntities, ...trainsFromText]));
-        const eventFamily = alertEventFamily(alerte);
+        const variantFamilies = groupedWork
+          ? workVariants.map((variant) => alertEventFamily(variant)).filter(Boolean)
+          : [];
+        const eventFamily = variantFamilies.includes('cancel') ? 'cancel'
+          : (variantFamilies.includes('partial-cancel') ? 'partial-cancel'
+            : (variantFamilies.includes('delay') ? 'delay'
+              : (variantFamilies.includes('capacity') ? 'capacity' : alertEventFamily(alerte))));
         const publicSource = publicAlertSource(alerte.source);
         const alertLevel = eventFamily === 'cancel'
           ? 'red'
@@ -9343,6 +9461,23 @@ async function chargerEtAfficherAlertes() {
           ? `<div class="disruption-trains">${trainsCibles.map(t => `<span class="disruption-train-pill">${t}</span>`).join('')}</div>`
           : '<div class="disruption-empty">Aucun train impacté listé</div>';
 
+        const workImpactsHtml = groupedWork
+          ? `<div class="disruption-work-group">
+              ${workIntro ? `<div class="disruption-work-intro">${escapeAlertHtml(workIntro)}.</div>` : ''}
+              <div class="disruption-impact-list">
+                ${workImpactRows.map((row) => `
+                  <div class="disruption-impact-row">
+                    <div class="disruption-impact-trains">
+                      ${row.targets.length
+                        ? row.targets.map((t) => `<span class="disruption-train-pill">${escapeAlertHtml(t)}</span>`).join('')
+                        : '<span class="disruption-impact-generic">Trains concernés</span>'}
+                    </div>
+                    <div class="disruption-impact-text">${escapeAlertHtml(row.impact)}</div>
+                  </div>`).join('')}
+              </div>
+            </div>`
+          : '';
+
         const div = document.createElement('div');
         div.className = classeCouleur;
         div.innerHTML = `
@@ -9350,13 +9485,15 @@ async function chargerEtAfficherAlertes() {
             <span class="disruption-icon">${styleMeta.icone || 'ℹ️'}</span>
             <span class="disruption-title-text">${titre}</span>
           </div>
-          ${descriptionHtml ? `<div class="disruption-description">${descriptionHtml}</div>` : ''}
-          ${hasExtendedDetail ? `
+          ${groupedWork
+            ? workImpactsHtml
+            : (descriptionHtml ? `<div class="disruption-description">${descriptionHtml}</div>` : '')}
+          ${(!groupedWork && hasExtendedDetail) ? `
             <details class="disruption-more">
               <summary>Voir le message complet et les liens</summary>
               <div class="disruption-description disruption-description--full">${detailHtml}</div>
             </details>` : ''}
-          ${trainsHtml}
+          ${groupedWork ? '' : trainsHtml}
           ${publicSource ? `<div class="disruption-source">Source : ${escapeAlertHtml(publicSource)}</div>` : ''}
         `;
         infoWrapper.appendChild(div);
