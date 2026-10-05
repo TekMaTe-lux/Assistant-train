@@ -11883,6 +11883,16 @@ function scheduleWeatherAfterTableSettled(){
       trainNumber: String(raw.train_number || raw.trainNumber || '').trim(),
       userId: String(raw.user_id || raw.userId || '').trim(),
 	  accountId: String(raw.account_id || raw.accountId || raw.user_id || '').trim(),
+      reactions: (raw.reactions && typeof raw.reactions === 'object') ? {
+        like: Number(raw.reactions.like || 0),
+        love: Number(raw.reactions.love || 0),
+        haha: Number(raw.reactions.haha || 0),
+        wow: Number(raw.reactions.wow || 0),
+        sad: Number(raw.reactions.sad || 0),
+        angry: Number(raw.reactions.angry || 0)
+      } : { like:0, love:0, haha:0, wow:0, sad:0, angry:0 },
+      reactionTotal: Number(raw.reaction_total || raw.reactionTotal || 0),
+      myReaction: String(raw.my_reaction || raw.myReaction || '').trim().toLowerCase(),
       ts: createdTs
     };
   }
@@ -11939,10 +11949,39 @@ function scheduleWeatherAfterTableSettled(){
   }
   window.lbRenderWallMessageHtml = lbRenderWallMessageHtml;
 
+  const LB_COMMENT_REACTION_META = {
+    like:  { emoji:'👍', label:'J’aime' },
+    love:  { emoji:'❤️', label:'J’adore' },
+    haha:  { emoji:'😂', label:'Haha' },
+    wow:   { emoji:'😮', label:'Wouah' },
+    sad:   { emoji:'😢', label:'Triste' },
+    angry: { emoji:'😡', label:'Grrr' }
+  };
+  window.LB_COMMENT_REACTION_META = LB_COMMENT_REACTION_META;
+
   function lbBuildCommentActionsHtml(item){
     const commentId = String(item?.id ?? '').trim();
     const pseudo = String(item?.displayPseudo || item?.pseudo || 'Voyageur').trim().slice(0, 24);
     const token = lbMentionToken(pseudo);
+
+    const reactions = (item?.reactions && typeof item.reactions === 'object') ? item.reactions : {};
+    const myReaction = String(item?.myReaction || '').trim().toLowerCase();
+    const reactionOrder = Object.keys(LB_COMMENT_REACTION_META);
+    const activeReactions = Object.entries(LB_COMMENT_REACTION_META)
+      .map(([key, meta]) => ({ key, meta, count:Number(reactions[key] || 0) }))
+      .filter((entry) => entry.count > 0)
+      .sort((a,b) => (b.count - a.count) || reactionOrder.indexOf(a.key) - reactionOrder.indexOf(b.key));
+    const reactionTotal = activeReactions.reduce((sum, entry) => sum + entry.count, 0);
+    const topEmoji = activeReactions.slice(0, 3).map((entry) => entry.meta.emoji).join('');
+    const myMeta = LB_COMMENT_REACTION_META[myReaction] || null;
+
+    const reactionSummary = commentId && reactionTotal > 0
+      ? `<button type="button" class="lb-comment-reaction-summary${myMeta ? ' is-mine' : ''}" data-comment-react="${escapeHtml(commentId)}" aria-label="${reactionTotal} réaction${reactionTotal > 1 ? 's' : ''}" title="Voir ou changer ma réaction"><span class="lb-comment-reaction-summary__emoji">${topEmoji}</span><span class="lb-comment-reaction-summary__count">${reactionTotal}</span></button>`
+      : '';
+
+    const react = commentId
+      ? `<button type="button" class="lb-comment-action lb-comment-react${myMeta ? ' is-reacted' : ''}" data-comment-react="${escapeHtml(commentId)}" data-my-reaction="${escapeHtml(myReaction)}" aria-label="Réagir à ce commentaire" aria-expanded="false" title="${myMeta ? escapeHtml(myMeta.label) : 'Réagir'}">${myMeta ? myMeta.emoji : '☺'}</button>`
+      : '';
 
     const reply = token
       ? `<button type="button" class="lb-comment-action lb-comment-reply" data-comment-reply-pseudo="${escapeHtml(pseudo)}" aria-label="Répondre à ${escapeHtml(pseudo)}" title="Répondre à @${escapeHtml(token)}">↩</button>`
@@ -11950,14 +11989,13 @@ function scheduleWeatherAfterTableSettled(){
 
     let remove = '';
     if (commentId && currentUser?.role === 'admin') {
-      // Modération historique : un seul contrôle rouge pour CelestiaFire/admin.
       remove = `<span class="fav-comments-row"><span class="fav-comment-btn" role="button" tabindex="0" data-comment-delete="${escapeHtml(commentId)}" aria-label="Supprimer le commentaire" title="Supprimer le commentaire">❌</span></span>`;
     } else if (commentId && lbCommentOwnedByCurrentUser(item)) {
       remove = `<button type="button" class="lb-comment-action lb-comment-own-delete" data-comment-delete="${escapeHtml(commentId)}" data-comment-own-delete="1" aria-label="Supprimer mon message" title="Supprimer mon message">🗑</button>`;
     }
 
-    return (reply || remove)
-      ? `<span class="lb-comment-actions" aria-label="Actions du message">${reply}${remove}</span>`
+    return (reactionSummary || react || reply || remove)
+      ? `<span class="lb-comment-actions" aria-label="Actions du message">${reactionSummary}${react}${reply}${remove}</span>`
       : '';
   }
   window.lbBuildCommentActionsHtml = lbBuildCommentActionsHtml;
