@@ -9168,9 +9168,12 @@ async function chargerEtAfficherAlertes() {
       };
 
       const alertTargets = alert => Array.from(new Set(
-        (alert?.informed_entities || []).map(entity =>
-          extractTrainNumber([entity?.trip_id,entity?.vehicle_journey_id,entity?.name].filter(Boolean).join(' '))
-        ).filter(Boolean)
+        (alert?.informed_entities || []).map((entity) => {
+          const blob = [entity?.trip_id,entity?.vehicle_journey_id,entity?.name].filter(Boolean).join(' ');
+          // Les trip_id SNCF sont souvent du type OCESN88700F : les bornes de mots
+          // de extractTrainNumber() ne suffisent pas dans ce cas.
+          return extractTrainNumber(blob) || String(blob).match(/(?:^|\D)(\d{5,6})(?:\D|$)/)?.[1] || '';
+        }).filter(Boolean)
       )).sort();
 
       const makeWorkVariant = alert => ({
@@ -9184,11 +9187,8 @@ async function chargerEtAfficherAlertes() {
         targets: alertTargets(alert)
       });
 
-      const workVariantKey = variant => {
-        const body = messageKey(variant?.description_text || variant?.detail_html || '');
-        const targets = (variant?.targets || alertTargets(variant)).join(',');
-        return body+'|'+targets;
-      };
+      const workVariantKey = variant =>
+        messageKey(variant?.description_text || variant?.detail_html || '');
 
       const mergeWorkVariants = (...lists) => {
         const variants = new Map();
@@ -9202,6 +9202,14 @@ async function chargerEtAfficherAlertes() {
           }
           existing.source = [...new Set([existing.source,variant.source]
             .flatMap(source => String(source || '').split(' + ')).filter(Boolean))].join(' + ');
+          existing.targets = Array.from(new Set([
+            ...(existing.targets || alertTargets(existing)),
+            ...(variant.targets || alertTargets(variant))
+          ])).sort();
+          existing.informed_entities = [
+            ...(existing.informed_entities || []),
+            ...(variant.informed_entities || [])
+          ];
         });
         return [...variants.values()];
       };
