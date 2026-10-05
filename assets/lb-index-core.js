@@ -6710,6 +6710,7 @@ function renderFastStaticPreview(payload, numbers, fixedStops, startName, endNam
           newEnd: null,
           disruptions: [],
           disruptionCauses: [],
+          source: 'SNCF',
           voies: getVoiesForTrain(num),
           cflVoies: getCflVoiesForTrain(num),
           gtfsFallback: true,
@@ -6838,7 +6839,7 @@ if (!newStart) {
 
         const voies = getVoiesForTrain(num);
         const cflVoies = getCflVoiesForTrain(num);
-        results[num] = { train, impacted, newStart, newEnd, disruptions, disruptionCauses, voies, cflVoies };
+        results[num] = { train, impacted, newStart, newEnd, disruptions, disruptionCauses, voies, cflVoies, source: 'SNCF' };
       } catch (e) {
         console.error("Erreur lors de la requête API:", e);
         const fallback = buildStaticSncfFallback(num, 'sncf_exception');
@@ -7665,12 +7666,18 @@ scheduleWeatherAfterTableSettled();
               effect,
               cause: causeMessage,
               trains: new Set(),
+              sources: new Set(),
               box,
               icon,
               txt,
               blink
             };
           }
+
+          const publicSource = (String(result?.source || '').toUpperCase().includes('CFL') || num.startsWith('CFL-'))
+            ? 'CFL'
+            : 'SNCF';
+          groupedDisruptions[key].sources.add(publicSource);
 
           const displayNum = num.startsWith('CFL-')
             ? formatTrainDisplayLabel(num, { result })
@@ -7707,13 +7714,16 @@ scheduleWeatherAfterTableSettled();
       });
       sortedGroups.forEach(disr => {
         const trainsList = Array.from(disr.trains).sort((a,b) => a.localeCompare(b));
+        const sourceList = ['SNCF', 'CFL'].filter((name) => disr.sources?.has(name));
+        const publicSource = sourceList.join(' + ') || 'SNCF';
         const detailEntry = {
           key: `d_${++LB_ALERT_SEQ}`,
           level: disr.box === 'red' ? 'red' : (disr.box === 'orange' ? 'orange' : 'info'),
           icon: disr.icon || 'ℹ️',
           title: disr.txt || 'Perturbation',
           description: disr.cause || 'Cause non précisée',
-          trains: trainsList.slice()
+          trains: trainsList.slice(),
+          source: publicSource
         };
         LB_ALERTS_BY_KEY.set(detailEntry.key, detailEntry);
 
@@ -7737,6 +7747,7 @@ scheduleWeatherAfterTableSettled();
             </div>
             <div class="disruption-cause">${disr.cause || 'Cause non précisée'}</div>
             ${trainsHtml}
+            <div class="disruption-source">Source : ${publicSource}</div>
           </div>
         `;
       });
@@ -18026,6 +18037,7 @@ async function loadAffluenceDate(dateStr){
             ? `<div class="alert-detail-desc">${it.descriptionHtml}</div>`
             : (it.description ? `<div class="alert-detail-desc">${esc(it.description)}</div>` : '')}
           ${Array.isArray(it.trains) && it.trains.length ? `<div class="disruption-trains">${it.trains.map(t => `<span class="disruption-train-pill">${esc(t)}</span>`).join('')}</div>` : ''}
+          ${it.source ? `<div class="disruption-source">Source : ${esc(it.source)}</div>` : ''}
         </div>`).join('');
     }
     modal.classList.add('is-open');
