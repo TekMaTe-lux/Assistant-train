@@ -7254,6 +7254,15 @@ try {
       </div>
     </section>
 
+    <section class="map-setting-section" aria-labelledby="display-connections-title">
+      <h3 id="display-connections-title">Correspondances TER</h3>
+      <div class="map-toggle-grid">
+        <label class="map-toggle map-toggle-wide"><input id="toggle-connection-forbach" type="checkbox"><span>Metz ↔ Forbach</span></label>
+        <label class="map-toggle map-toggle-wide"><input id="toggle-connection-vosges" type="checkbox"><span>Nancy ↔ Épinal / Remiremont</span></label>
+        <label class="map-toggle map-toggle-wide"><input id="toggle-connection-saintdie" type="checkbox"><span>Nancy ↔ Saint-Dié</span></label>
+      </div>
+    </section>
+
     <section class="map-setting-section" aria-labelledby="display-stations-title">
       <h3 id="display-stations-title">Gares</h3>
       <div class="map-toggle-grid">
@@ -12766,6 +12775,10 @@ function sanitizeCflStationName(name){
   const staticRelatedNumbersByTrip = new Map();
 
   const AXIS_STATIONS = [
+    {"id": "forbach", "label": "Forbach", "stopArea": "StopArea:OCE87193003", "lat": 49.189228, "lon": 6.901318, "type": "major", "connectionGroup": "forbach"},
+    {"id": "epinal", "label": "Épinal", "stopArea": "StopArea:OCE87144006", "lat": 48.178005, "lon": 6.441787, "type": "major", "connectionGroup": "vosges"},
+    {"id": "remiremont", "label": "Remiremont", "stopArea": "StopArea:OCE87144451", "lat": 48.016342, "lon": 6.598879, "type": "major", "connectionGroup": "vosges"},
+    {"id": "saint-die", "label": "Saint-Dié-des-Vosges", "stopArea": "StopArea:OCE87144014", "lat": 48.282043, "lon": 6.948516, "type": "major", "connectionGroup": "saintdie"},
     { id:'nancy', label:'Nancy', stopArea:'StopArea:OCE87141002', lat:48.689857, lon:6.174579, type:'major' },
     { id:'champigneulles', label:'Champigneulles', stopArea:'StopArea:OCE87141085', lat:48.735025, lon:6.168952, type:'regular' },
     { id:'frouard', label:'Frouard', stopArea:'StopArea:OCE87141077', lat:48.755428, lon:6.143927, type:'regular' },
@@ -12880,6 +12893,7 @@ function sanitizeCflStationName(name){
       for (const match of matches) codes.add(match);
     };
     for (const station of AXIS_STATIONS){
+      if(station.connectionGroup) continue;
       addDigits(station.stopArea);
       if (Array.isArray(station.stopIds)){
         for (const id of station.stopIds) addDigits(id);
@@ -12888,7 +12902,7 @@ function sanitizeCflStationName(name){
     return codes;
   })();
   const axisStationsById = new Map(AXIS_STATIONS.map(st=>[st.id, st]));
-  const SILLON_BOUNDS = L.latLngBounds(AXIS_STATIONS.map(st=>[st.lat, st.lon]));
+  const SILLON_BOUNDS = L.latLngBounds(AXIS_STATIONS.filter(st=>!st.connectionGroup).map(st=>[st.lat, st.lon]));
   if (SILLON_BOUNDS.isValid()){
     map.fitBounds(SILLON_BOUNDS.pad(0.18), { maxZoom: 11 });
   }
@@ -12949,6 +12963,9 @@ function sanitizeCflStationName(name){
     tgv:toggleTgvEl,
     cfl:toggleCflEl,
     delays:toggleDelaysEl,
+    connectionForbach:document.getElementById('toggle-connection-forbach'),
+    connectionVosges:document.getElementById('toggle-connection-vosges'),
+    connectionSaintdie:document.getElementById('toggle-connection-saintdie'),
     smooth:document.getElementById('smooth')
   };
   for (const [key,input] of Object.entries(berPreferenceCheckboxes)){
@@ -12960,6 +12977,28 @@ function sanitizeCflStationName(name){
   const berPeriodInput = document.getElementById('period');
   if (berPeriodInput && Number.isFinite(berPreferredPeriod)){
     berPeriodInput.value = String(Math.max(1,Math.min(30,Math.round(berPreferredPeriod))));
+  }
+
+  const lbConnectionOptions = {
+    forbach:berPreferenceCheckboxes.connectionForbach?.checked === true,
+    vosges:berPreferenceCheckboxes.connectionVosges?.checked === true,
+    saintdie:berPreferenceCheckboxes.connectionSaintdie?.checked === true
+  };
+  for (const [group,key] of Object.entries({
+    forbach:'connectionForbach',vosges:'connectionVosges',saintdie:'connectionSaintdie'
+  })){
+    berPreferenceCheckboxes[key]?.addEventListener('change',event=>{
+      lbConnectionOptions[group]=event.target.checked;
+      berSaveMapPreferences({[key]:event.target.checked});
+      if(activeTripId){
+        const seq=stopTimesByTrip.get(tripIdForSelectedRoute(activeTripId));
+        if(seq && !lbTripVisibleOnMap(seq)){clearActiveSelection();hideTripPanel();}
+      }
+      renderAxisStations();
+      applyTrainFilters();
+      const stations=AXIS_STATIONS.filter(st=>!st.connectionGroup || lbConnectionOptions[st.connectionGroup]);
+      map.fitBounds(L.latLngBounds(stations.map(st=>[st.lat,st.lon])).pad(.12),{maxZoom:11,animate:false});
+    });
   }
 
   const adaptiveLiteMode = (()=>{
@@ -13113,6 +13152,8 @@ function sanitizeCflStationName(name){
 
   function clearSelectedTripRoute(){
     selectedTripDrawToken += 1;
+    berSelectedRouteCoords = null;
+    berSelectedRouteTrainId = null;
     selectedTripRouteLayer.clearLayers();
     selectedTripStopsLayer.clearLayers();
   }
@@ -13376,6 +13417,7 @@ function sanitizeCflStationName(name){
    */
 
   let berSelectedRouteCoords = null;
+  let berSelectedRouteTrainId = null;
 
 
   function berNormalizeSelectedRouteCoords(coords){
@@ -14174,6 +14216,7 @@ function sanitizeCflStationName(name){
 
     if (
       !activeTripId
+      || String(berSelectedRouteTrainId || '') !== String(activeTripId)
       ||
       !Array.isArray(
         berSelectedRouteCoords
@@ -14238,6 +14281,7 @@ function berDrawSelectedRouteProgress(){
 
     if (
       !activeTripId
+      || String(berSelectedRouteTrainId || '') !== String(activeTripId)
       ||
       !Array.isArray(
         berSelectedRouteCoords
@@ -14264,6 +14308,11 @@ function berDrawSelectedRouteProgress(){
 
 
     if (!marker){
+      selectedTripRouteLayer.clearLayers();
+      L.polyline(berSelectedRouteCoords, {
+        pane:'selectedTripRoutePane', color:'#087cff', weight:5.25,
+        opacity:1, interactive:false, className:'ber-route-future-core'
+      }).addTo(selectedTripRouteLayer);
       return;
     }
 
@@ -14512,6 +14561,7 @@ function berDrawSelectedRouteProgress(){
      */
     berSelectedRouteCoords =
       normalized;
+    berSelectedRouteTrainId = activeTripId;
 
 
     berDrawSelectedRouteProgress();
@@ -15646,7 +15696,9 @@ function berDrawSelectedRouteProgress(){
     const profileQuery = '&profile=' + encodeURIComponent(profile);
     const requestedNumber = data?.numberDigits || data?.numberKey || data?.number || trainId || '';
     const numberQuery = '&number=' + encodeURIComponent(requestedNumber);
+    const exactPathId = data?.v2PathId || data?.pathId || null;
     const urls = [
+      ...(exactPathId ? ['/api/map-v2/paths/' + encodeURIComponent(exactPathId)] : []),
       '/api/map-v2/match-path?stops=' + query + profileQuery + numberQuery,
       'http://localhost:8111/api/map-v2/match-path?stops=' + query + profileQuery + numberQuery,
       'http://127.0.0.1:8111/api/map-v2/match-path?stops=' + query + profileQuery + numberQuery
@@ -15656,8 +15708,10 @@ function berDrawSelectedRouteProgress(){
         const response = await fetch(url, { headers:{ Accept:'application/json' } });
         if (response.ok){
           const payload = await response.json();
-          if (payload?.path?.geometry?.type === 'LineString'){
-            return payload.path;
+          const path = payload?.path || payload;
+          if (path?.geometry?.type === 'LineString'){
+            const coords = path.geometry.coordinates.map(c=>[Number(c[1]),Number(c[0])]);
+            if (!url.startsWith('/api/map-v2/paths/') || validateSelectedRouteCorridor(coords, seq)) return path;
           }
         }
       } catch(_) {}
@@ -15672,7 +15726,7 @@ function berDrawSelectedRouteProgress(){
 
   async function lbRefreshMoorailForSelectedRoute(){
     const now=Date.now();
-    if(lbMoorailLiveLoaded && now-lbMoorailSelectedRefreshAt < 10000) return;
+    if(lbMoorailLiveLoaded) return;
     await lbLoadMoorailOverrides();
     lbMoorailSelectedRefreshAt=Date.now();
   }
@@ -15748,7 +15802,8 @@ function berDrawSelectedRouteProgress(){
     if(normal)return {...normal,resolution:'stopTimesByTrip'};
     const number=lbMoorailSelectedTrainNumberV85(trainId);
     if(!number)return null;
-    const variants=Array.isArray(lbMoorailV8TrainRoutes?.[number])?lbMoorailV8TrainRoutes[number]:[];
+    const variants=(Array.isArray(lbMoorailV8TrainRoutes?.[number])?lbMoorailV8TrainRoutes[number]:[])
+      .slice().sort((a,b)=>Number(String(b?.tripId||'')===String(trainId))-Number(String(a?.tripId||'')===String(trainId)));
     for(const variant of variants){
       const routed=lbMoorailSelectedFromNamedStopsV85(variant?.stops||[]);
       if(routed){
@@ -15760,13 +15815,93 @@ function berDrawSelectedRouteProgress(){
     return null;
   }
 
+  const lbSelectedMoorailRequests = new Map();
+  const lbSelectedMoorailGeometry = new Map();
+  const lbSelectedMoorailServicePaths = new Map();
+
+  async function fetchSelectedMoorailRoute(trainId, seq){
+    const data=trainDataById.get(trainId) || buildStaticPanelTrainData(trainId);
+    if(String(data?.source||'').toUpperCase()==='CFL') return null;
+    const date=String(data?.serviceDate || lbCarteTodayIso());
+    const rawId=String(data?.rawTripId || data?.tripId || trainId);
+    const key=date+'|'+rawId;
+    if(lbSelectedMoorailRequests.has(key)) return lbSelectedMoorailRequests.get(key);
+    const promise=(async()=>{
+      try{
+        let pathId=lbSelectedMoorailServicePaths.get(key) || data?.lbMoorailPathId || null;
+        if(!pathId){
+          const query=new URLSearchParams({source:'FR',date,trip_id:rawId});
+          const res=await fetchWithTimeoutNoHeaders('./moorail-path/trip.json?'+query,15000);
+          if(!res.ok) return null;
+          const detail=await res.json();
+          pathId=detail?.pathId || null;
+          if(pathId) lbSelectedMoorailServicePaths.set(key,pathId);
+          if(data && pathId) data.lbMoorailPathId=pathId;
+        }
+        if(!pathId) return null;
+        const geometryKey=date+'|'+pathId;
+        let payload=lbSelectedMoorailGeometry.get(geometryKey);
+        if(!payload){
+          const res=await fetchWithTimeoutNoHeaders('./moorail-path/'+encodeURIComponent(pathId),8000);
+          if(!res.ok) return null;
+          payload=await res.json();
+          lbSelectedMoorailGeometry.set(geometryKey,payload);
+        }
+        const segments=Array.isArray(payload?.segments)&&payload.segments.length
+          ? payload.segments : [payload?.coordinates || []];
+        const coords=[];
+        for(const segment of segments){
+          const normalized=segment.map(c=>[Number(c?.[1]),Number(c?.[0])]).filter(c=>c.every(Number.isFinite));
+          if(coords.length && normalized.length && distLL(
+            {lat:coords.at(-1)[0],lon:coords.at(-1)[1]},
+            {lat:normalized[0][0],lon:normalized[0][1]})>2200) return null;
+          appendRailCoords(coords,normalized);
+        }
+        const oriented=orientOfficialShape(coords,seq);
+        const validated=validateSelectedRouteCorridor(oriented,seq);
+        if(!validated) return null;
+        // A shared corridor can extend beyond this service's origin/terminus.
+        let first=0,last=validated.length-1,cursor=0;
+        for(let n=0;n<seq.length;n++){
+          const stop=stopsById.get(seq[n].stop_id);
+          if(!stop) continue;
+          let best=cursor,distance=Infinity;
+          for(let i=cursor;i<validated.length;i++){
+            const d=distLL(stop,{lat:validated[i][0],lon:validated[i][1]});
+            if(d<distance){best=i;distance=d;}
+          }
+          if(n===0) first=best;
+          if(n===seq.length-1) last=best;
+          cursor=best;
+        }
+        return last>first ? validated.slice(first,last+1) : null;
+      }catch(error){console.warn('[BER selected Moorail route]',error);return null;}
+    })().finally(()=>lbSelectedMoorailRequests.delete(key));
+    lbSelectedMoorailRequests.set(key,promise);
+    return promise;
+  }
+
   async function drawSelectedTripRoute(trainId){
     clearSelectedTripRoute();
     const drawToken = selectedTripDrawToken;
-    const routeTripId = tripIdForSelectedRoute(trainId);
-    if (!routeTripId) return;
+    let routeTripId = tripIdForSelectedRoute(trainId);
+    if (!routeTripId){
+      const bootstrap = trainDataById.get(trainId);
+      const detail = lbEnsureFastTripDetail(bootstrap);
+      if (detail) await detail;
+      if(drawToken !== selectedTripDrawToken || activeTripId !== trainId) return;
+      routeTripId = tripIdForSelectedRoute(trainId);
+      if (!routeTripId) return;
+    }
     const seq = stopTimesByTrip.get(routeTripId) || [];
     drawSelectedStations(routeTripId, seq);
+
+    const immediateCached = validateSelectedRouteCorridor(selectedTripRailPathCache.get(routeTripId), seq);
+    if(immediateCached){
+      addSelectedLatLonPath(immediateCached);
+      focusSelectedRoute(immediateCached);
+      return;
+    }
 
     // Pour SNCF/TGV/ICE : si TOUTES les paires d'arrêts sont validées dans
     // MooRail, ce tracé devient prioritaire sur match-path V2. CFL conserve
@@ -15782,6 +15917,14 @@ function berDrawSelectedRouteProgress(){
         addSelectedLatLonPath(lbMoorailSelected.coords);
         focusSelectedRoute(lbMoorailSelected.coords);
         console.info('[MOO RAIL V5.2] trajet sélectionné validé', trainId, lbMoorailSelected.sectionIds);
+        return;
+      }
+      const exactMoorailRoute=await fetchSelectedMoorailRoute(trainId,seq);
+      if(drawToken !== selectedTripDrawToken || activeTripId !== trainId) return;
+      if(exactMoorailRoute){
+        selectedTripRailPathCache.set(routeTripId,exactMoorailRoute);
+        addSelectedLatLonPath(exactMoorailRoute);
+        focusSelectedRoute(exactMoorailRoute);
         return;
       }
     }
@@ -16252,6 +16395,7 @@ const mapContainerEl = map.getContainer();
         seeded.serviceDate=String(options?.serviceDate || lbCarteServiceDateIso(requestedOffset));
       }
     }
+    clearSelectedTripRoute();
     activeTripId = trainId;
 
     document.body.classList.add('train-trip-open');
@@ -16270,7 +16414,7 @@ const mapContainerEl = map.getContainer();
     tripPanelEl.classList.remove('hidden');
     document.body.classList.add('trip-panel-open');
     renderPanel();
-    drawSelectedTripRoute(trainId);
+    return drawSelectedTripRoute(trainId);
   }
 
   function openStationPanel(stationId){
@@ -16955,6 +17099,7 @@ const mapContainerEl = map.getContainer();
     data.scheduledEndSec=last?.arrival ?? last?.departure ?? null;
     data.startSec=firstP?.departureRealtime ?? firstP?.arrivalRealtime ?? data.scheduledStartSec;
     data.endSec=lastP?.arrivalRealtime ?? lastP?.departureRealtime ?? data.scheduledEndSec;
+    data.lbMoorailPathId=payload.pathId || data.lbMoorailPathId || null;
     data.lbFastDetailReady=true;
     return true;
   }
@@ -18586,6 +18731,7 @@ function setLayerGroupVisibility(group, visible){
     const majorMarkers = [];
     const regularMarkers = [];
     for (const station of AXIS_STATIONS){
+      if(station.connectionGroup && !lbConnectionOptions[station.connectionGroup]) continue;
       if (!isFinite(station.lat) || !isFinite(station.lon)) continue;
       const marker = L.marker([station.lat, station.lon], {
         icon: iconForStation(station),
@@ -19590,7 +19736,7 @@ function setLayerGroupVisibility(group, visible){
       for (const [k,v] of stopTimesByTrip) v.sort((a,b)=>a.seq-b.seq);
 
       for (const [tripId, seq] of Array.from(stopTimesByTrip.entries())){
-        if (!tripPassesAxis(seq, rawStopsById)){
+        if (!tripPassesAxis(seq, rawStopsById) && !lbConnectionGroup(seq, rawStopsById)){
           stopTimesByTrip.delete(tripId);
           continue;
         }
@@ -19971,6 +20117,28 @@ function stationNameMatchesKeywords(name, keywords){
   }
 
   // ---------- Filtre sillon & service du jour ----------
+  function lbConnectionGroup(seq, lookup=stopsById){
+    if(!Array.isArray(seq) || seq.length<2) return null;
+    const codes=new Set();
+    for(const stop of seq){
+      const meta=lookup.get(stop.stop_id);
+      for(const value of [stop.stop_id,meta?.stop_id,meta?.parent_station]){
+        const code=String(value||'').match(/87\d{6}/)?.[0];
+        if(code) codes.add(code);
+      }
+    }
+    if(codes.has('87192039') && codes.has('87193003')) return 'forbach';
+    if(codes.has('87141002') && (codes.has('87144006') || codes.has('87144451'))) return 'vosges';
+    if(codes.has('87141002') && codes.has('87144014')) return 'saintdie';
+    return null;
+  }
+
+  function lbTripVisibleOnMap(seq, lookup=stopsById){
+    if(tripPassesAxis(seq,lookup)) return true;
+    const group=lbConnectionGroup(seq,lookup);
+    return !!(group && lbConnectionOptions[group]);
+  }
+
   function tripPassesAxis(seq, lookup = stopsById){
     if (!Array.isArray(seq) || seq.length < 2) return false;
     let hits = 0;
@@ -20208,7 +20376,7 @@ function stationNameMatchesKeywords(name, keywords){
     const items=[];
     for (const [trip_id, seq] of stopTimesByTrip.entries()){
       if (seq.length<2) continue;
-      if (!tripPassesAxis(seq)) continue;
+      if (!lbTripVisibleOnMap(seq)) continue;
       const instanceOffsets=serviceInstanceOffsets(trip_id);
       if (!instanceOffsets.length) continue;
 
@@ -23029,18 +23197,20 @@ function lbV3ProdBranding(row){
 
 
 function lbV3ProdFastCorridorAllowed(row){
-  if (!row || row.fastNationalComplement !== true) return true;
+  if (!row) return false;
 
   const tripId = String(row.tripId || row.trip_id || lbV3ProdTripId(row) || '');
   if (tripId && typeof stopTimesByTrip !== 'undefined' && stopTimesByTrip?.size){
     const seq = stopTimesByTrip.get(tripId);
     if (Array.isArray(seq) && seq.length >= 2){
-      return tripPassesAxis(seq);
+      return lbTripVisibleOnMap(seq);
     }
     /* GTFS prêt mais trajet absent : un complément national non rattaché
        au sillon ne doit jamais être affiché. */
     if (window.__LB_V3_PROD_GTFS_READY__) return false;
   }
+
+  if (row.fastNationalComplement !== true) return true;
 
   /* Premier rendu, avant le cache statique : filtre conservateur.
      On garde un train si une extrémité / destination commerciale appartient
@@ -23052,6 +23222,7 @@ function lbV3ProdFastCorridorAllowed(row){
   if (!probe) return false;
 
   for (const station of AXIS_STATIONS){
+    if(station.connectionGroup && !lbConnectionOptions[station.connectionGroup]) continue;
     const names = [station.label, ...(station.extraStopNames || [])];
     for (const name of names){
       const key = normalizeStationName(name);
