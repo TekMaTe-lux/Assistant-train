@@ -121,17 +121,18 @@ function analyze(data) {
   return { visible, impacted, delayed, canceled, partial, ratio, infra, severe, reason, episodeId };
 }
 
-async function sendPush(payload) {
+async function sendPush(payload, episodeId, recovery = false) {
   const users = db.prepare("SELECT user_id,prefs_json FROM user_prefs").all();
 
   let usersSent = 0;
   let devicesSent = 0;
+  let failed = 0;
 
   for (const u of users) {
     const subs = db.prepare("SELECT id,endpoint,p256dh,auth,settings_json FROM push_subscriptions WHERE user_id=?").all(u.user_id);
     if (!subs.length) continue;
 
-    const eligible=subs.filter(sub=>enabled(sub,"trafficSevere",JSON.parse(u.prefs_json || "{}")));
+    const eligible=subs.filter(sub=>enabled(sub,"trafficSevere",JSON.parse(u.prefs_json || "{}")) && (!recovery || db.prepare("SELECT 1 FROM push_traffic_deliveries WHERE subscription_id=? AND user_id=? AND endpoint_hash=? AND recovery_sent_at IS NULL").get(sub.id,u.user_id,crypto.createHash("sha256").update(sub.endpoint).digest("hex"))));
     if (!eligible.length) continue;
     usersSent++;
 
@@ -144,7 +145,11 @@ async function sendPush(payload) {
       try {
         await deliver(webpush, sub, payload, 180);
         devicesSent++;
+        if (recovery) db.prepare("UPDATE push_traffic_deliveries SET recovery_sent_at=? WHERE subscription_id=? AND user_id=?").run(nowIso(),sub.id,u.user_id);
+        else db.prepare(`INSERT INTO push_traffic_deliveries(subscription_id,user_id,episode_id,sent_at,recovery_sent_at,endpoint_hash)
+          VALUES(?,?,?,?,NULL,?) ON CONFLICT(subscription_id,user_id) DO UPDATE SET episode_id=excluded.episode_id,sent_at=excluded.sent_at,recovery_sent_at=NULL,endpoint_hash=excluded.endpoint_hash`).run(sub.id,u.user_id,episodeId,nowIso(),crypto.createHash("sha256").update(sub.endpoint).digest("hex"));
       } catch (err) {
+        if (![404,410].includes(err.statusCode)) failed++;
         console.error("PUSH trafic échec",err.statusCode || "transport");
         if (err.statusCode === 404 || err.statusCode === 410) {
           db.prepare("DELETE FROM push_subscriptions WHERE id=?").run(sub.id);
@@ -153,7 +158,7 @@ async function sendPush(payload) {
     }
   }
 
-  return { usersSent, devicesSent };
+  return { usersSent, devicesSent, failed };
 }
 
 async function main() {
@@ -161,8 +166,8 @@ async function main() {
   const fresh = value => Number.isFinite(Date.parse(value.generated_at)) && Math.abs(Date.now()-Date.parse(value.generated_at))<=15*60000;
   if (!fresh(data)) throw new Error("Temps réel absent ou périmé : envoi suspendu");
   const a = analyze(data);
-  let official=[];
-  try {const siri=readJson(SIRI_PATH);if(fresh(siri))official=classifyActive(siri);} catch(err) {console.warn("Source SIRI indisponible",err.code || "analyse");}
+  let official=[], siriFresh=false;
+  try {const siri=readJson(SIRI_PATH);siriFresh=fresh(siri);if(siriFresh)official=classifyActive(siri);} catch(err) {console.warn("Source SIRI indisponible",err.code || "analyse");}
   a.severe = a.severe || official.length>0;
   a.episodeId=crypto.createHash("sha1").update(official.length ? official.map(x=>x.fingerprint).sort().join("|") : "corridor-severe").digest("hex").slice(0,12);
   a.official=official;
@@ -176,6 +181,14 @@ async function main() {
   console.log("severe:", a.severe ? "OUI" : "NON", "-", a.reason);
 
   if (!a.severe) {
+    if (!siriFresh) {
+      if (!DRY_RUN && state.status === 'calming') db.prepare('UPDATE push_traffic_state SET calm_since=?,last_seen_at=? WHERE id=1').run(nowIso(),nowIso());
+      console.log('Fin d’alerte suspendue : source SIRI absente ou périmée');return;
+    }
+    if (state.status === 'calming' && minutesSince(state.last_seen_at) >= 5) {
+      if (!DRY_RUN) db.prepare('UPDATE push_traffic_state SET calm_since=?,last_seen_at=? WHERE id=1').run(nowIso(),nowIso());
+      console.log('Confirmation du calme reprise après interruption du scanner');return;
+    }
     if (state.status === "severe" && !state.calm_since) {
       if (!DRY_RUN) db.prepare("UPDATE push_traffic_state SET status='calming', calm_since=?, last_seen_at=? WHERE id=1")
         .run(nowIso(), nowIso());
@@ -184,12 +197,19 @@ async function main() {
     }
 
     if (state.status === "calming" && minutesSince(state.calm_since) >= CALM_RESET_MIN) {
+      const recovery=await sendPush({title:'✅ Fin de l’alerte majeure · La Bétaillère',
+        body:'La situation s’est améliorée depuis 20 minutes sur Nancy ↔ Metz ↔ Luxembourg. Des retards ou suppressions peuvent subsister : vérifie tes trains favoris avant de partir.',
+        tag:'lb-major-recovery',url:'/#home'},state.notified_episode_id,true);
+      console.log(`SUIVI FIN ALERTE: ${recovery.devicesSent} appareil(s), ${recovery.failed} échec(s)`);
+      if (recovery.failed) {if (!DRY_RUN) db.prepare('UPDATE push_traffic_state SET last_seen_at=? WHERE id=1').run(nowIso());return;}
+      if (!DRY_RUN) db.prepare('DELETE FROM push_traffic_deliveries').run();
       if (!DRY_RUN) db.prepare("UPDATE push_traffic_state SET status='calm', confirmed_count=0, episode_id=NULL, notified_episode_id=NULL, calm_since=NULL, last_seen_at=? WHERE id=1")
         .run(nowIso());
       console.log("retour au calme confirmé, épisode reset");
       return;
     }
 
+    if (!DRY_RUN && state.status === "calming") db.prepare("UPDATE push_traffic_state SET last_seen_at=? WHERE id=1").run(nowIso());
     console.log("pas de notif");
     return;
   }
@@ -232,7 +252,7 @@ async function main() {
     payload.title="🚨 Perturbation majeure · La Bétaillère";
     payload.body=String(official[0].situation.description || official[0].situation.summary || official[0].severity.label).replace(/<[^>]*>/g," ").replace(/\s+/g," ").slice(0,240);
   }
-  const r = await sendPush(payload);
+  const r = await sendPush(payload,a.episodeId);
   console.log(`PUSH GLOBAL: ${r.usersSent} utilisateur(s), ${r.devicesSent} appareil(s)`);
 
   if (!DRY_RUN && r.devicesSent > 0) {

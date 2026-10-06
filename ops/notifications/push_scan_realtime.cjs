@@ -6,7 +6,8 @@ const {enabled,deliver} = require("./push-routes.cjs");
 const db = new Database(process.env.PUSH_DB_PATH || "./data.sqlite");
 
 const RT_PATH = process.env.PUSH_RT_PATH || "/var/www/html/gtfs/retards_nancymetzlux.json";
-const STATIC_PATH = "/var/www/gtfs/train_static_today.json";
+const STATIC_PATH = process.env.PUSH_STATIC_PATH || "/var/www/gtfs/train_static_today.json";
+const {favoritePayload} = require("./push-personalization.cjs");
 const MIN_DELAY = 10;
 const ONLY_USER_ID = null;
 const DRY_RUN = process.env.DRY_RUN !== "false";
@@ -255,17 +256,6 @@ function buildEvent(train, stops) {
   return null;
 }
 
-function messageForEvent(num, event, msgFrom, msgTo) {
-  if (event.type === "cancel") {
-    return `La Bétaillère ${num} est annoncée supprimée aujourd’hui entre ${msgFrom} et ${msgTo}.\n\nPlus d’informations sur labetaillere.fr`;
-  }
-
-  if (event.type === "partial_cancel") {
-    return `La Bétaillère ${num} est annoncée supprimée entre ${msgFrom} et ${msgTo}.\n\nVérifie l’évolution du trafic sur labetaillere.fr`;
-  }
-
-  return `La Bétaillère ${num} circule avec environ +${event.delay} min entre ${msgFrom} et ${msgTo}.\n\nVérifie l’évolution du trafic sur labetaillere.fr`;
-}
 
 async function main() {
   const rt = readJson(RT_PATH);
@@ -354,18 +344,14 @@ async function main() {
       const devices = db.prepare("SELECT COUNT(*) AS n FROM push_subscriptions WHERE user_id=?").get(u.user_id).n;
       if (!devices) continue;
 
-      const body = messageForEvent(num, event, msgFrom, msgTo);
+      const payload = favoritePayload(num,event,stops,prefs,win,visibleSeg);
+      if (!payload) continue;
+      const body = payload.body;
 
       console.log(`   user ${u.user_id} ✅ ${devices} appareil(s)`);
-      console.log(`   MESSAGE: ${event.title}`);
+      console.log(`   MESSAGE: ${payload.title}`);
       console.log("   " + body.replace(/\n/g, "\n   "));
 
-      const payload = {
-        title: event.title,
-        body,
-        tag: `lb-favorite-${num}-${event.type}`,
-        url: `/#live?train=${encodeURIComponent(num)}`
-      };
 
       const result = await sendPushToUser(u.user_id, payload, JSON.parse(u.prefs_json || "{}"));
       console.log(`   PUSH: ${result.sent} envoyé(s), ${result.failed} échec(s)`);

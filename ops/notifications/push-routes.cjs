@@ -1,5 +1,8 @@
 'use strict';
 function ensureSchema(db) {
+  db.exec(`CREATE TABLE IF NOT EXISTS push_traffic_deliveries (
+    subscription_id INTEGER NOT NULL,user_id INTEGER NOT NULL,episode_id TEXT NOT NULL,
+    sent_at TEXT NOT NULL,recovery_sent_at TEXT,endpoint_hash TEXT NOT NULL,PRIMARY KEY(subscription_id,user_id))`);
   const traffic = db.prepare('PRAGMA table_info(push_traffic_state)').all();
   if (traffic.length && !traffic.some(c => c.name === 'notified_episode_id')) db.exec('ALTER TABLE push_traffic_state ADD COLUMN notified_episode_id TEXT');
   if (!db.prepare('PRAGMA table_info(push_subscriptions)').all().some(c => c.name === 'settings_json')) {
