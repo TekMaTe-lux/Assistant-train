@@ -3100,6 +3100,10 @@
 (() => {
   const PUSH_API_BASE = 'https://vps.labetaillere.fr/api/push';
   const LS_SETTINGS = 'lbPushAlertSettings.v1';
+  let remoteRegistered = false;
+  let lastSubscriptionSync = 0;
+  let syncedEndpoint = '';
+  let syncingSubscription = null;
 
   const $ = (id) => document.getElementById(id);
 
@@ -3128,7 +3132,7 @@
   function setState(active){
     const st = $('lbAlertsState');
     if (!st) return;
-    st.textContent = active ? 'BÊTA ACTIVE' : 'BÊTA';
+    st.textContent = active ? 'ACTIVES' : 'INACTIVES';
     st.classList.toggle('is-on', !!active);
     st.classList.toggle('is-off', !active);
   }
@@ -3141,7 +3145,7 @@
   }
 
   function isAuthed(){
-    return !!(window.lbIsAuthed || window.currentUser || window.lbCurrentUser);
+    return window.lbIsAuthed === true;
   }
 
   async function getRegistration(){
@@ -3159,6 +3163,8 @@
     if ($('lbAlertTraffic')) $('lbAlertTraffic').checked = !!settings.trafficSevere;
 
     if (!isAuthed()) {
+      remoteRegistered = false;
+      lastSubscriptionSync = 0;
       setState(false);
       return;
     }
@@ -3166,9 +3172,17 @@
     try {
       const reg = await navigator.serviceWorker?.getRegistration?.();
       const sub = reg ? await reg.pushManager.getSubscription() : null;
-      setState(!!sub && Notification.permission === 'granted');
+      if (sub && 'Notification' in window && Notification.permission === 'granted') {
+        if (!remoteRegistered || syncedEndpoint !== sub.endpoint || Date.now()-lastSubscriptionSync > 300000) {
+          if (!syncingSubscription) syncingSubscription = saveSubscriptionToVps(sub).finally(()=>{syncingSubscription=null;});
+          await syncingSubscription;
+        }
+        setState(remoteRegistered);
+      } else { remoteRegistered=false; setState(false); }
     } catch (_) {
+      remoteRegistered=false;
       setState(false);
+      setMsg('Inscription serveur non vérifiée. Réessaie avec « Activer les alertes ».',true);
     }
   }
 
@@ -3188,6 +3202,9 @@
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok || !data.ok) throw new Error(data.error || 'Abonnement push refusé par le VPS.');
+    remoteRegistered=true;
+    syncedEndpoint=subscription.endpoint;
+    lastSubscriptionSync=Date.now();
     return data;
   }
 
@@ -3197,7 +3214,7 @@
 
       if (!isAuthed()) throw new Error('Connecte-toi d’abord à ton compte La Bétaillère.');
       if (!('Notification' in window)) throw new Error('Notifications non supportées sur ce navigateur.');
-      if (!('PushManager' in window)) throw new Error('PushManager non supporté sur ce navigateur.');
+      if (!('PushManager' in window)) throw new Error('Sur iPhone/iPad, ajoute La Bétaillère à l’écran d’accueil puis active les alertes depuis cette application.');
       if (Notification.permission === 'denied') throw new Error('Notifications bloquées dans les réglages du navigateur.');
 
       let permission = Notification.permission;
@@ -3211,6 +3228,12 @@
       if (!publicKey) throw new Error('Clé push publique vide côté VPS.');
 
       let subscription = await reg.pushManager.getSubscription();
+      const expectedKey=urlBase64ToUint8Array(publicKey);
+      const actualKey=subscription?.options?.applicationServerKey;
+      if (subscription && actualKey && String(Array.from(new Uint8Array(actualKey)))!==String(Array.from(expectedKey))) {
+        await subscription.unsubscribe();
+        subscription=null;
+      }
       if (!subscription) {
         subscription = await reg.pushManager.subscribe({
           userVisibleOnly: true,
@@ -3219,7 +3242,7 @@
       }
 
       await saveSubscriptionToVps(subscription);
-      setMsg('✅ Appareil inscrit à la phase de test notifications. Certaines alertes peuvent encore être ajustées.');
+      setMsg('✅ Cet appareil est inscrit. Les alertes sont envoyées par le serveur, même lorsque la PWA est fermée.');
       setState(true);
     } catch (err) {
       console.warn('[Alertes Bétaillère] activation impossible', err);
@@ -3245,6 +3268,8 @@
           });
         } catch (_) {}
         await subscription.unsubscribe();
+        remoteRegistered=false;
+        lastSubscriptionSync=0;
       }
 
       setState(false);
@@ -3257,12 +3282,17 @@
 
   window.lbSendTestPush = async function lbSendTestPush(){
     try {
-      setMsg('Envoi de la notification test…');
+      setMsg('Préparation du test…');
       if (!isAuthed()) throw new Error('Connecte-toi d’abord à ton compte La Bétaillère.');
-      const res = await fetch(`${PUSH_API_BASE}/test`, { method: 'POST', credentials: 'include' });
+      const reg=await navigator.serviceWorker?.getRegistration?.();
+      const subscription=reg ? await reg.pushManager.getSubscription() : null;
+      if (!subscription) throw new Error('Active d’abord les alertes sur cet appareil.');
+      await saveSubscriptionToVps(subscription);
+      setMsg('Test dans 10 secondes : ferme maintenant la PWA pour vérifier la réception en arrière-plan.');
+      const res = await fetch(`${PUSH_API_BASE}/test`, { method:'POST',credentials:'include',headers:{'Content-Type':'application/json'},body:JSON.stringify({endpoint:subscription.endpoint,delaySeconds:10}) });
       const data = await res.json().catch(() => ({}));
       if (!res.ok || !data.ok) throw new Error(data.error || 'Erreur envoi notification test.');
-      setMsg(`✅ Notif test envoyée : ${data.sent || 0} appareil(s).`);
+      setMsg(`✅ Test transmis au service push : ${data.sent || 0} appareil(s). Vérifie les notifications de ton téléphone.`);
       if (!data.sent) alert('Aucun appareil enregistré. Clique d’abord sur “Activer”.');
     } catch (err) {
       console.warn('[Alertes Bétaillère] test impossible', err);
@@ -3282,7 +3312,7 @@
         const reg = await navigator.serviceWorker?.getRegistration?.();
         const sub = reg ? await reg.pushManager.getSubscription() : null;
         if (sub) await saveSubscriptionToVps(sub);
-      } catch (_) {}
+      } catch (_) {remoteRegistered=false;setState(false);setMsg('Choix sauvegardés sur cet appareil, mais synchronisation serveur impossible. Réessaie avec « Activer les alertes ».',true);}
     };
     favs?.addEventListener('change', saveAndMaybeSync);
     traffic?.addEventListener('change', saveAndMaybeSync);
@@ -3309,6 +3339,7 @@
   }
 
   document.addEventListener('DOMContentLoaded', bindAlertsUi);
+  document.addEventListener('lb:auth-state',()=>refreshAlertsUi());
   document.addEventListener('visibilitychange', () => {
     if (document.hidden) {
       if (window.__lbAlertsUiTimer) clearTimeout(window.__lbAlertsUiTimer);
