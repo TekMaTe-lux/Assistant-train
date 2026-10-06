@@ -27,6 +27,7 @@ if (
   const qsa = (selector, root = document) => Array.from(root.querySelectorAll(selector));
 
   const pageAliases = {
+    compte: "compte",
     home: "home",
     search: "search",
     carte: "carte",
@@ -404,7 +405,7 @@ if (
     const page = currentPage();
     const info = pageConfig[page];
     const brand = config.brand || "La Bétaillère";
-    document.title = info?.title ? `${info.title} · ${brand}` : brand;
+    document.title = page === "compte" ? `Mon compte · ${brand}` : (info?.title ? `${info.title} · ${brand}` : brand);
     const skip = qs(".lb-skip-link");
     if (skip) skip.href = `#${page}`;
   }

@@ -1,4 +1,4 @@
-const CACHE_VERSION = 'v84';
+const CACHE_VERSION = 'v85';
 const APP_CACHE = `lbetaillere-app-${CACHE_VERSION}`;
 const STATIC_CACHE = `lbetaillere-static-${CACHE_VERSION}`;
 const DATA_CACHE = `lbetaillere-data-${CACHE_VERSION}`;
@@ -14,7 +14,7 @@ const APP_SHELL = [
   './index.html',
   './manifest.webmanifest',
   './config/territory.nancy-metz-lux.js?v=4',
-  './assets/lb-app-shell-v3.js?v=7',
+  './assets/lb-app-shell-v3.js?v=20261006-account1',
   './assets/lb-legacy.css?v=5',
   './assets/lb-design-system-v3.css?v=10',
   './assets/lb-mobile-v4.css?v=14',
@@ -23,7 +23,18 @@ const APP_SHELL = [
   './assets/lb-index-late.css?v=1',
   './assets/lb-home-premium-v2.css?v=1',
   './assets/lb-index-head.js?v=1',
-  './assets/lb-index-core.js?v=20261005-reactions2',
+  './assets/lb-index-core.js?v=20261006-account1',
+  './assets/lb-account-page-v1.js?v=20261006-1',
+  './assets/lb-account-page-v1.css?v=20261006-1',
+  './assets/lb-grade-thumbs/grade-0.webp',
+  './assets/lb-grade-thumbs/grade-1.webp',
+  './assets/lb-grade-thumbs/grade-2.webp',
+  './assets/lb-grade-thumbs/grade-3.webp',
+  './assets/lb-grade-thumbs/grade-4.webp',
+  './assets/lb-grade-thumbs/grade-5.webp',
+  './assets/lb-grade-thumbs/grade-6.webp',
+  './assets/lb-grade-thumbs/grade-7.webp',
+
   './assets/lb-index-home.js?v=2',
   './assets/lb-index-features.js?v=2',
   './assets/lb-comment-reactions-v1.js?v=20261005-2',

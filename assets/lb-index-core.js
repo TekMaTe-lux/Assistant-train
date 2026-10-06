@@ -11626,6 +11626,9 @@ function scheduleWeatherAfterTableSettled(){
       try {
         const res = await fetch(url, {
           ...opts,
+          // Une session doit être relue après connexion / déconnexion.
+          // Le signal contourne la mutualisation GET de 3 s de lb-index-head.
+          ...(cleanPath === '/me' ? { cache: 'no-store', signal: opts.signal || new AbortController().signal } : {}),
           headers: { "Content-Type": "application/json", ...(opts.headers || {}) },
           credentials: "include"
         });
@@ -12505,6 +12508,7 @@ function scheduleWeatherAfterTableSettled(){
   checkAuth().finally(loadMessages);
   startCommentsPolling();
   const openModal = () => {
+    if (window.lbAccountPage) { window.lbAccountPage.show("profile"); return; }
     const modal = $("lbAuthModal");
     if (!modal) return;
     modal.style.display = "flex";
@@ -12527,6 +12531,7 @@ function scheduleWeatherAfterTableSettled(){
   };
 
   const closeModal = () => {
+    if (window.lbAccountPage) return;
     const modal = $("lbAuthModal");
     if (!modal) return;
 	const profileGradeImg = $("lbProfileGradeImage");
@@ -14670,6 +14675,7 @@ if (statsEl){
     if (!prefsModal) return;
     prefsModal.style.display = "flex";
     prefsModal.setAttribute("aria-hidden", "false");
+    window.lbAccountPage?.show("prefs");
     if (!options.skipLoad) {
       PREFS_LIST_CONFIG.forEach(({ key }) => {
         const fields = getPresetFields(key);
@@ -14688,6 +14694,7 @@ if (statsEl){
     if (!prefsModal) return;
     prefsModal.style.display = "none";
     prefsModal.setAttribute("aria-hidden", "true");
+    if (location.hash === "#compte") window.lbAccountPage?.back();
   };
 
   const prefsMsg = (text, isErr = false) => {
@@ -14709,12 +14716,14 @@ if (statsEl){
 	await refreshGamificationUI({ force: true });
     rankingModal.style.display = "flex";
     rankingModal.setAttribute("aria-hidden", "false");
+    window.lbAccountPage?.show("ranking");
     renderGamificationUI();
   });
   if (rankingCloseBtn) rankingCloseBtn.addEventListener("click", () => {
     if (!rankingModal) return;
     rankingModal.style.display = "none";
     rankingModal.setAttribute("aria-hidden", "true");
+    window.lbAccountPage?.back();
   });
   if (rankingModal) {
     rankingModal.addEventListener("click", (e) => {
@@ -14970,6 +14979,7 @@ if (statsEl){
     closeModal();
     registerModal.style.display = "flex";
     registerModal.setAttribute("aria-hidden", "false");
+    window.lbAccountPage?.show("register");
 	const regMsg = $("lbRegMsg");
     if (regMsg) {
       regMsg.textContent = "ℹ️ Remplis les champs pour créer ton compte.";
@@ -14981,6 +14991,7 @@ if (statsEl){
     if (!registerModal) return;
     registerModal.style.display = "none";
     registerModal.setAttribute("aria-hidden", "true");
+    if (location.hash === "#compte") window.lbAccountPage?.back();
   };
 
   if (registerCloseBtn) registerCloseBtn.addEventListener("click", closeRegisterModal);
@@ -15056,12 +15067,14 @@ if (statsEl){
     closeModal();
     contactModal.style.display = "flex";
     contactModal.setAttribute("aria-hidden", "false");
+    window.lbAccountPage?.show("contact");
   };
 
   const closeContactModal = () => {
     if (!contactModal) return;
     contactModal.style.display = "none";
     contactModal.setAttribute("aria-hidden", "true");
+    if (location.hash === "#compte") window.lbAccountPage?.back();
   };
 
   if (contactBtn) contactBtn.addEventListener("click", openContactModal);
@@ -17777,6 +17790,7 @@ async function loadAffluenceDate(dateStr){
 
 (function(){
   const PAGE_HASH_ALIASES = {
+    '#compte': 'compte',
     '#home': 'home',
     '#search': 'search',
     '#carte': 'carte',
@@ -17821,7 +17835,7 @@ async function loadAffluenceDate(dateStr){
     const hash = location.hash || '#home';
     const page = pageFromHash(hash);
 
-    document.body.classList.remove('page-home','page-search','page-carte','page-favoris','page-stats','page-loisirs');
+    document.body.classList.remove('page-home','page-search','page-carte','page-favoris','page-stats','page-loisirs','page-compte');
     document.body.classList.add(`page-${page}`);
 
     pages.forEach((node) => {
