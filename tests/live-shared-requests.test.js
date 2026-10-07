@@ -35,16 +35,68 @@ test('full cancellation and partial terminus keep distinct stop states',()=>{
  const out=ctx.applyEffectiveServicePattern(partial,{status:'PARTIAL'});
  assert.equal(out[0].isDeleted,false);assert.equal(out[1].isNewTerminus,true);assert.equal(out[2].isDeleted,true);
 });
-test('GTFS zeros cannot erase an explicit SNCF trip cancellation on repeated refresh',()=>{
+
+function runningContext() {
+ const ctx={window:{retardsGTFS:{}},Date,console,getGtfsTrainMeta:bucket=>bucket?.meta||{},normalizeStationName:x=>String(x).toLowerCase()};
+ vm.createContext(ctx);
+ vm.runInContext(block('function getGtfsRunningServiceState(', 'function mergeGtfsNormalizedPayloads('),ctx);
+ return ctx;
+}
+test('reinstatement requires a fresh explicit SNCF running status covering every stop',()=>{
+ const ctx=runningContext();const bucket={Luxembourg:0,Thionville:0,Metz:0,meta:{status:'ON_TIME',data_source:'gtfs_rt',feed_generated_at:new Date().toISOString()}};
+ bucket.meta.service_stops=bucket;
+ ctx.window.retardsGTFS['88745']=bucket;
+ assert.equal(ctx.getGtfsRunningServiceState('88745',['Luxembourg','Thionville','Metz']).status,'ON_TIME');
+ bucket.meta.status='DELAYED';bucket.Metz=7;
+ assert.equal(ctx.getGtfsRunningServiceState('88745',['Luxembourg','Thionville','Metz']).maxDelay,7);
+ for(const status of ['CANCELED','PARTIAL_CANCELLATION','SCHEDULED','']){bucket.meta.status=status;assert.equal(ctx.getGtfsRunningServiceState('88745',['Luxembourg','Metz']),null);}
+ bucket.meta.status='ON_TIME';delete bucket.Metz;
+ assert.equal(ctx.getGtfsRunningServiceState('88745',['Luxembourg','Metz']),null);
+ bucket.Metz=null;assert.equal(ctx.getGtfsRunningServiceState('88745',['Luxembourg','Metz']),null);
+ bucket.Metz=0;bucket.meta.data_source='cfl-hafas';assert.equal(ctx.getGtfsRunningServiceState('88745',['Luxembourg','Metz']),null);
+ bucket.meta.data_source='gtfs_rt';bucket.meta.feed_generated_at=new Date(Date.now()-6*60000).toISOString();assert.equal(ctx.getGtfsRunningServiceState('88745',['Luxembourg','Metz']),null);
+ bucket.meta.feed_generated_at=new Date().toISOString();bucket.meta.canceled_stops=['Metz'];assert.equal(ctx.getGtfsRunningServiceState('88745',['Luxembourg','Metz']),null);
+});
+test('old SNCF cancellation restores only on confirmed reinstatement and comes back if proof disappears',()=>{
  const cancelledHtml='<span class="deleted">15:57</span>';
- const cell={dataset:{baseTime:'155700',sncfTripCanceled:'1'},innerHTML:cancelledHtml};
+ const cell={dataset:{baseTime:'155700',sncfTripCanceled:'1'},innerHTML:cancelledHtml,querySelector:selector=>selector.includes('.deleted')&&cell.innerHTML.includes('deleted')?{}:null};
  const row={dataset:{gare:'Luxembourg'},cells:[{},cell]};
- const table={querySelector:()=>({querySelectorAll:()=>[{dataset:{trainNumber:'88745'}}]}),tBodies:[{rows:[row]}]};
- const ctx={document:{querySelector:()=>table},console,isGtfsTrainClearlyRunning:()=>true,resetGtfsRetards:()=>{}};
+ const icon={textContent:'❌',title:'Train supprimé'};
+ const header={dataset:{trainNumber:'88745',sncfCanceledStops:'["Luxembourg"]'},querySelector:()=>icon};
+ const table={querySelector:()=>({querySelectorAll:()=>[header]}),tBodies:[{rows:[row]}]};
+ let confirmed=false;
+ const ctx={document:{querySelector:()=>table},console,isGtfsTrainClearlyRunning:()=>true,getGtfsRunningServiceState:()=>confirmed?{status:'ON_TIME',maxDelay:0}:null,resetGtfsRetards:()=>{},ft:()=> '15:57',escapeHtml:x=>x};
  vm.createContext(ctx);
  const a=core.indexOf('function applyRetardsFromGTFS('),b=core.indexOf('/* ---------- ALERTES ---------- */',a);
  vm.runInContext(core.slice(a,b),ctx);
+ ctx.applyRetardsFromGTFS({'88745':{Luxembourg:0}});assert.equal(cell.innerHTML,cancelledHtml);assert.equal(icon.textContent,'❌');
+ confirmed=true;
  for(let i=0;i<3;i++)ctx.applyRetardsFromGTFS({'88745':{Luxembourg:0}});
- assert.equal(cell.innerHTML,cancelledHtml);
- assert.equal(cell.dataset.gtfsDelayMinutes,undefined);
+ assert.ok(cell.innerHTML.includes('gtfs-restored'));assert.equal(icon.textContent,'');
+ confirmed=false;cell.innerHTML=cancelledHtml;ctx.applyRetardsFromGTFS({'88745':{Luxembourg:0}});
+ assert.equal(cell.innerHTML,cancelledHtml);assert.equal(icon.textContent,'❌');
+});
+test('detail lifts full cancellation using shared proof but preserves explicit canceled stops',()=>{
+ const a=features.indexOf('  function applyEffectiveServicePattern('),b=features.indexOf('  function chooseStaticCandidate(',a);
+ const ctx={impactForRow:row=>row.impact,isLegDeleted:(impact,leg)=>impact?.[leg+'_status']==='deleted',getGtfsDelayForStop:()=>0,isGtfsTrainClearlyRunning:()=>true,getGtfsRunningServiceState:()=>({status:'ON_TIME',maxDelay:0}),normalizeStopKey:x=>x,Set};
+ vm.createContext(ctx);vm.runInContext(features.slice(a,b),ctx);
+ const rows=['Luxembourg','Thionville','Metz'].map(name=>({name,arrival:'15:00',departure:'15:01',impact:{arrival_status:'deleted',departure_status:'deleted'}}));
+ assert.ok(ctx.applyEffectiveServicePattern(rows,{number:'88745',status:'CANCELED',bucket:{}}).every(row=>!row.isDeleted));
+ ctx.getGtfsRunningServiceState=()=>null;
+ assert.ok(ctx.applyEffectiveServicePattern(rows,{number:'88745',status:'CANCELED',bucket:{}}).every(row=>row.isDeleted));
+ const partial=ctx.applyEffectiveServicePattern(rows,{number:'88745',status:'PARTIAL',bucket:{},canceledStopKeys:new Set(['Metz'])});
+ assert.equal(partial[0].isDeleted,false);assert.equal(partial[1].isNewTerminus,true);assert.equal(partial[2].isDeleted,true);
+});
+
+test('CFL merge cannot complete missing SNCF stops for a total reinstatement',()=>{
+ const ctx=runningContext();ctx.window.retardsGTFS['88745']={Luxembourg:0,Metz:0,meta:{status:'ON_TIME',data_source:'gtfs_rt',feed_generated_at:new Date().toISOString(),service_stops:{Metz:0}}};
+ assert.equal(ctx.getGtfsRunningServiceState('88745',['Luxembourg','Metz']),null);
+});
+test('LIVE first paint clears a stale cancellation cause only with the shared running proof',()=>{
+ const a=features.indexOf('  function extractLiveTrains()'),b=features.indexOf('  window.extractLiveTrains',a);
+ let confirmed=true;
+ const ctx={window:{retardsGTFS_RAW:{}},getRawLiveTrainPayload:()=>({trains:{88745:{status:'ON_TIME',stops:{Luxembourg:0,Metz:0}}}}),buildSncfCauseIndex:()=>null,normalizeKey:String,getSncfCauseForTrain:()=> 'Ancienne suppression',classifyOfficialLiveDisruption:()=>({statusClass:'cancel',statusLabel:'Supprimé'}),getGtfsRunningServiceState:()=>confirmed?{status:'ON_TIME',maxDelay:0}:null};
+ vm.createContext(ctx);vm.runInContext(features.slice(a,b),ctx);
+ assert.equal(ctx.extractLiveTrains()[0].statusClass,'ok');assert.equal(ctx.extractLiveTrains()[0].sncfCause,'');
+ confirmed=false;assert.equal(ctx.extractLiveTrains()[0].statusClass,'cancel');
 });

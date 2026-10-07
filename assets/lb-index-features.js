@@ -580,7 +580,7 @@
         });
       }
       const statusRaw = String(payload.status || '').toUpperCase();
-      const sncfCause = getSncfCauseForTrain(trainNumber, payload, causeIndex);
+      let sncfCause = getSncfCauseForTrain(trainNumber, payload, causeIndex);
       let statusLabel = 'À l\'heure';
       let statusClass = 'ok';
       const officialState = classifyOfficialLiveDisruption({
@@ -589,7 +589,14 @@
         disruptions: payload.disruptions,
         stops: Array.isArray(payload.stop_times) ? payload.stop_times : []
       });
-      if (officialState.statusClass){
+      const runningService = typeof getGtfsRunningServiceState === 'function'
+        ? getGtfsRunningServiceState(trainNumber, stopNames) : null;
+      if (officialState.statusClass === 'cancel' && runningService) {
+        maxDelay = runningService.maxDelay;
+        statusClass = maxDelay > 0 ? 'delay' : 'ok';
+        statusLabel = maxDelay > 0 ? `+${maxDelay} min` : 'À l\'heure';
+        sncfCause = '';
+      } else if (officialState.statusClass){
         statusLabel = officialState.statusLabel;
         statusClass = officialState.statusClass;
       } else if (maxDelay > 0){
@@ -1492,11 +1499,15 @@
       let finalInfo = { ...info };
 
 
-      // Priorité identique au tableau :
-      // 1) suppression SNCF/HUB prioritaire
-      // 2) retard SNCF/HUB si > 0 prioritaire
-      // 3) si HUB dit "À l'heure" mais GTFS-RT/HAFAS avait déjà un retard/suppression,
-      //    on conserve le GTFS-RT/HAFAS au lieu de l'écraser.
+      const runningService = typeof getGtfsRunningServiceState === 'function'
+        ? getGtfsRunningServiceState(num, (info.train?.stop_times || []).map(stop => stop.stop_point?.name)) : null;
+      // Même preuve de remise en circulation que le tableau et la fiche.
+      if (info.statusClass === 'cancel' && runningService) {
+        finalInfo.statusClass = runningService.maxDelay > 0 ? 'delay' : 'ok';
+        finalInfo.statusLabel = runningService.maxDelay > 0 ? `+${runningService.maxDelay} min` : 'À l\'heure';
+        finalInfo.maxDelay = runningService.maxDelay;
+        finalInfo.sncfCause = '';
+      }
       if (info.statusClass === 'ok' && currentClass !== 'ok') {
         finalInfo.statusClass = currentClass;
         finalInfo.statusLabel = liveTrain?.statusLabel || (currentClass === 'delay' ? `+${currentDelay} min` : 'Supprimé');
@@ -1511,8 +1522,8 @@
       if (liveTrain){
         liveTrain.statusClass = finalInfo.statusClass || liveTrain.statusClass;
         liveTrain.statusLabel = finalInfo.statusLabel || liveTrain.statusLabel;
-        liveTrain.maxDelay = Number(finalInfo.maxDelay || liveTrain.maxDelay || 0);
-        if (finalInfo.sncfCause) liveTrain.sncfCause = finalInfo.sncfCause;
+        liveTrain.maxDelay = Number(finalInfo.maxDelay || 0);
+        liveTrain.sncfCause = finalInfo.sncfCause || '';
       }
       const card = document.querySelector(`[data-lb-live-train="${String(num).replace(/"/g, '\"')}"]`);
       if (!card) return;
@@ -1523,6 +1534,7 @@
         statusEl.className = `lb-live-status lb-live-status--${finalInfo.statusClass || 'ok'}`;
         statusEl.textContent = finalInfo.statusLabel || 'À l\'heure';
       }
+      if (!finalInfo.sncfCause) card.querySelector('.lb-live-sncf-cause')?.remove();
       if (finalInfo.sncfCause && ['delay','partial','cancel'].includes(finalInfo.statusClass)){
         let causeEl = card.querySelector('.lb-live-sncf-cause');
         if (!causeEl){
@@ -3951,9 +3963,9 @@
     const allStopsDeleted = checkedHubRows.length > 0
       && checkedHubRows.every((row) => row.isDeleted);
     let rawStatus = String(extracted?.raw?.status || meta?.status || '').toUpperCase();
-    // Une annulation explicite de CE voyage prime sur des zéros GTFS encore
-    // programmés. Les perturbations de ligne et les suppressions partielles
-    // restent traitées arrêt par arrêt selon la logique existante.
+    const runningService = typeof getGtfsRunningServiceState === 'function'
+      ? getGtfsRunningServiceState(number, hubStops) : null;
+    if (runningService) rawStatus = runningService.status;
     const journeyDisruptionIds = new Set((journey?.disruptions || []).map(d => d.id));
     const tripId = String(journey?.trip?.id || '');
     const explicitTripCancellation = disruptions.some(disruption => {
@@ -3966,7 +3978,7 @@
       const partial = (disruption.impacted_objects || []).some(object => object?.impacted_stops?.length);
       return (linked || tripAffected) && !partial;
     });
-    if (explicitTripCancellation) rawStatus = 'CANCELED';
+    if (explicitTripCancellation && !runningService) rawStatus = 'CANCELED';
     if (!gtfsClearlyRunning) {
       const statusSaysCanceled = /NO_SERVICE|CANCEL|SUPPR/.test(rawStatus);
       if (!statusSaysCanceled && allStopsDeleted) {
@@ -4148,7 +4160,9 @@
     if (!Array.isArray(rows) || !rows.length || !liveBundle) return rows || [];
 
     const rawLiveStatus = String(liveBundle?.status || '').toUpperCase();
-    const fullCancellation = !rawLiveStatus.includes('PARTIAL')
+    const runningService = typeof getGtfsRunningServiceState === 'function'
+      ? getGtfsRunningServiceState(liveBundle.number, rows.map(row => row.name)) : null;
+    const fullCancellation = !runningService && !rawLiveStatus.includes('PARTIAL')
       && (rawLiveStatus.includes('CANCEL')
         || rawLiveStatus.includes('NO_SERVICE')
         || rawLiveStatus.includes('SUPPR'));

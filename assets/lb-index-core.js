@@ -7128,7 +7128,9 @@ const stopHasSchedule = (result, stopName) => {
         }
       }
 
-      html += `<th class="${classes.join(' ')}" data-train-number="${safeNumber}" data-train-label="${safeLabel}"${fallbackAttr}${favAttr}><span class="train-num">${safeLabel}</span><span class="train-state icon" title="${title}">${icon}</span></th>`;
+      const canceledStopsAttr = result?.disruptions?.some(d => ['NO_SERVICE','CANCELLATION'].includes(d.severity?.effect))
+        ? ` data-sncf-canceled-stops="${escapeHtml(JSON.stringify((result.train?.stop_times || []).map(stop => stop.stop_point?.name).filter(Boolean)))}"` : '';
+      html += `<th${canceledStopsAttr} class="${classes.join(' ')}" data-train-number="${safeNumber}" data-train-label="${safeLabel}"${fallbackAttr}${favAttr}><span class="train-num">${safeLabel}</span><span class="train-state icon" title="${title}">${icon}</span></th>`;
     });
 
     html += '</tr></thead><tbody>';
@@ -8017,6 +8019,34 @@ function isGtfsTrainClearlyRunning(bucket) {
   return false;
 }
 
+// Une remise en circulation totale exige un flux SNCF récent, un statut
+// roulant explicite et chacun des arrêts du parcours (pas seulement CFL).
+function getGtfsRunningServiceState(number, stops) {
+  const bucket = window.retardsGTFS?.[String(number)];
+  const meta = getGtfsTrainMeta(bucket);
+  const status = String(meta.status || '').toUpperCase();
+  const source = String(meta.data_source || '').toLowerCase();
+  if (!bucket || !['ON_TIME','DELAYED','NO_DELAY'].includes(status)) return null;
+  if (!/gtfs_rt|gtfs-rt|siri/.test(source)) return null;
+  const generated = meta.feed_generated_at;
+  const timestamp = typeof generated === 'number'
+    ? (generated < 1e12 ? generated * 1000 : generated)
+    : Date.parse(generated || '');
+  if (!Number.isFinite(timestamp) || Date.now() - timestamp > 5 * 60000 || timestamp > Date.now() + 60000) return null;
+  const serviceStops = meta.service_stops;
+  if (!serviceStops || typeof serviceStops !== 'object') return null;
+  const names = Array.isArray(stops) ? stops.filter(Boolean) : [];
+  if (!names.length || (meta.canceled_stops || []).length) return null;
+  const normalize = name => typeof normalizeStationName === 'function' ? normalizeStationName(name) : String(name).toLowerCase();
+  const delays = names.map(name => {
+    const key = Object.keys(serviceStops).find(key => normalize(key) === normalize(name));
+    const value = key === undefined ? null : serviceStops[key];
+    return value === null || value === undefined || value === '' ? NaN : Number(value);
+  });
+  if (!delays.every(Number.isFinite)) return null;
+  return { status, maxDelay: Math.max(0, ...delays) };
+}
+
 function mergeGtfsNormalizedPayloads(payloads) {
   const merged = {};
   if (!Array.isArray(payloads)) return merged;
@@ -8115,7 +8145,9 @@ function normalizeGtfsRetardsPayload(raw) {
       status: payload.status || payload.trip_status || payload.state || payload.effect || null,
       data_source: payload.data_source || payload.source || null,
       train_id: payload.train_id || payload.trip_id || null,
-      updated_at: payload.updated_at || payload.timestamp || payload.generated_at || null
+      updated_at: payload.updated_at || payload.timestamp || payload.generated_at || null,
+      feed_generated_at: raw.generated_at || raw.updatedAt || raw.timestamp || null,
+      canceled_stops: payload.canceled_stops || payload.canceledStops || []
     });
 
     const candidates = [];
@@ -8129,6 +8161,8 @@ function normalizeGtfsRetardsPayload(raw) {
     }
 
     candidates.forEach(candidate => normalizeGtfsStops(trainNum, candidate, normalized));
+    // Conserver la couverture SNCF avant la fusion des retards CFL/HAFAS.
+    setGtfsTrainMeta(bucket, { service_stops: { ...bucket } });
   };
 
   const ingestNested = (value, keyHint) => {
@@ -8483,6 +8517,19 @@ function resetGtfsRetards(scope) {
   const bodyRows = tbody ? Array.from(tbody.rows) : Array.from(table.querySelectorAll('tbody tr'));
   if (!bodyRows.length) { console.log("[GTFS-RT] Aucun body row — rien à appliquer."); return; }
 
+  const runningServices = headerThs.map((header, index) => {
+    let stops = [];
+    try { stops = JSON.parse(header.dataset.sncfCanceledStops || '[]'); } catch (_) {}
+    const state = getGtfsRunningServiceState(headerNumbers[index], stops);
+    const icon = header.querySelector('.train-state');
+    if (stops.length && icon) {
+      if (!icon.__sncfState) icon.__sncfState = { text: icon.textContent, title: icon.title };
+      icon.textContent = state ? (state.maxDelay > 0 ? '⏰' : '') : icon.__sncfState.text;
+      icon.title = state ? `Circulation confirmée par le temps réel SNCF${state.maxDelay > 0 ? ' · +' + state.maxDelay + ' min' : ''}` : icon.__sncfState.title;
+    }
+    return state;
+  });
+
   for (const row of bodyRows) {
     if (!row) continue;
     const gare = row.dataset.gare || row.querySelector('.gare-label')?.textContent?.trim() || row.cells?.[0]?.textContent?.trim() || '';
@@ -8519,10 +8566,10 @@ function resetGtfsRetards(scope) {
       const retardMinutes = retardMinutesValue == null ? null : Number(retardMinutesValue);
       const gtfsSaysRunning = (typeof isGtfsTrainClearlyRunning === 'function') && isGtfsTrainClearlyRunning(perTrain);
 
-      // Une annulation officielle liée à ce voyage reste prioritaire sur les
-      // horaires/retards GTFS encore programmés. La prochaine réponse SNCF
-      // régénère les cellules sans ce marqueur si le voyage est rétabli.
-      if (cell.dataset.sncfTripCanceled === '1') {
+      // Une ancienne annulation totale n'est levée que si le flux SNCF
+      // récent confirme tous les arrêts. Des zéros isolés ne suffisent pas.
+      const runningService = runningServices[i];
+      if (cell.dataset.sncfTripCanceled === '1' && !runningService) {
         resetGtfsRetards(cell);
         continue;
       }
