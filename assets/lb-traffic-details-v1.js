@@ -790,13 +790,24 @@
     if (activeSegmentKey !== segmentKey || !currentModal.classList.contains('is-open')) return;
 
     const allStats = analyzeSegment(getCurrentRaw(), segment);
-    if (allStats?.records?.length) await loadTimetableFor(allStats.records);
-    if (activeSegmentKey !== segmentKey || !currentModal.classList.contains('is-open')) return;
 
-    const stats = currentWindowStats(allStats);
-    const currentBadgeState = pickCurrentBadgeState(stats);
+    // Affichage immédiat avec les données déjà présentes en mémoire.
+    let stats = currentWindowStats(allStats);
+    let currentBadgeState = pickCurrentBadgeState(stats);
     applyCurrentBadgeState(segment, currentBadgeState);
     renderDetail(segment, stats, currentBadgeState);
+
+    // Les horaires origine/terminus affinent ensuite la fenêtre actuelle sans
+    // bloquer l'ouverture du panneau sur « Actualisation… ».
+    if (allStats?.records?.length) {
+      try { await loadTimetableFor(allStats.records); } catch (_) {}
+      if (activeSegmentKey !== segmentKey || !currentModal.classList.contains('is-open')) return;
+      stats = currentWindowStats(allStats);
+      currentBadgeState = pickCurrentBadgeState(stats);
+      applyCurrentBadgeState(segment, currentBadgeState);
+      renderDetail(segment, stats, currentBadgeState);
+    }
+
     const affected = affectedRecords(stats);
     if (affected.length) hydrateAffectedRoutes(segmentKey, affected);
   }
