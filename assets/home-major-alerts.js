@@ -20,7 +20,7 @@
 
   // Signalement LIVE : toujours proposer le parcours complet, jamais seulement l'origine/destination.
   // La logique de signalement voyageur reste séparée et n'est pas modifiée ci-dessous.
-  load('./assets/signal-stations-fix.js?v=20260902-1', 'lb-signal-stations-fix');
+  load('./assets/signal-stations-fix.js?v=20261007-liveperf1', 'lb-signal-stations-fix');
 
   // Pont léger carte <-> Voix du Bétail + estimation GPS à la demande.
   load('./assets/lb-community-map-bridge-v1.js?v=20260923-perf1', 'lb-community-map-bridge-v1');
