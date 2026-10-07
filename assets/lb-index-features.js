@@ -807,6 +807,54 @@
     return LB_TRAIN_STATIC_TODAY_PROMISE;
   }
 
+  const LB_LIVE_STATIC_BATCH_INFLIGHT = new Map();
+  const LB_LIVE_HUB_BATCH_INFLIGHT = new Map();
+
+  async function loadLiveStaticBatch(sourceTrains){
+    const trains = Array.isArray(sourceTrains) ? sourceTrains : [];
+    const dayKey = toYmd();
+    const numbers = Array.from(new Set(
+      trains.map((train)=> normalizeKey(train?.trainNumber ?? train)).filter(Boolean)
+    )).slice(0, 60);
+    if (!numbers.length || typeof window.loadFastStaticBatch !== 'function') return COMMUNITY.staticInfoCache;
+
+    const missing = numbers.filter((number)=> !COMMUNITY.staticInfoCache.has(`${number}_${dayKey}`));
+    if (!missing.length) return COMMUNITY.staticInfoCache;
+    const requestKey = `${dayKey}|${missing.slice().sort().join(',')}`;
+    if (LB_LIVE_STATIC_BATCH_INFLIGHT.has(requestKey)) return LB_LIVE_STATIC_BATCH_INFLIGHT.get(requestKey);
+
+    const promise = window.loadFastStaticBatch(toIsoDay(), missing)
+      .then((payload)=>{
+        Object.entries(payload?.trains || {}).forEach(([number,row])=>{
+          const key = normalizeKey(number);
+          const rawStops = Array.isArray(row?.stop_times) ? row.stop_times.slice() : [];
+          rawStops.sort((a,b)=> Number(a?.stop_sequence || 0) - Number(b?.stop_sequence || 0));
+          const stopRows = rawStops.map((stop)=>({
+            name:String(stop?.stop_point?.name || stop?.stop_name || stop?.name || '').trim(),
+            time:formatGtfsHHMM(stop?.departure_time || stop?.arrival_time || ''),
+            amendedTime:formatGtfsHHMM(stop?.amended_departure_time || stop?.amended_arrival_time || ''),
+            delayMin:Number.isFinite(Number(stop?.delay_minutes)) ? Number(stop.delay_minutes) : null
+          })).filter((stop)=> stop.name);
+          if (!key || !stopRows.length) return;
+          COMMUNITY.staticInfoCache.set(`${key}_${dayKey}`, {
+            departure:stopRows[0]?.time || '—',
+            arrival:stopRows[stopRows.length-1]?.time || '—',
+            trainType:getCompoForTrain(key),
+            stops:stopRows.map((stop)=> stop.name),
+            stopRows,
+            origin:String(row?.origin || stopRows[0]?.name || '').trim(),
+            destination:String(row?.destination || stopRows[stopRows.length-1]?.name || '').trim(),
+            summaryOnly:false,
+            source:'train_static_batch'
+          });
+        });
+        return COMMUNITY.staticInfoCache;
+      })
+      .finally(()=> LB_LIVE_STATIC_BATCH_INFLIGHT.delete(requestKey));
+    LB_LIVE_STATIC_BATCH_INFLIGHT.set(requestKey, promise);
+    return promise;
+  }
+
   function getTrainStaticTodayInfo(trainNumber){
     const key = normalizeKey(trainNumber);
     if (!key || !LB_TRAIN_STATIC_TODAY || typeof LB_TRAIN_STATIC_TODAY !== 'object') return null;
@@ -953,6 +1001,16 @@
     let info = null;
     let summaryInfo = null;
 
+    // Priorité au petit batch ciblé : les arrêts intermédiaires arrivent
+    // sans attendre le fichier journalier complet (~5 Mo).
+    try {
+      await loadLiveStaticBatch([{ trainNumber:key }]);
+      info = COMMUNITY.staticInfoCache.get(cacheKey) || null;
+    } catch (err) {
+      console.warn('[LIVE static batch] indisponible', err?.message || err);
+    }
+
+    if (!info) {
     // Source ultra-légère: JSON public unique déjà pré-généré sur le VPS.
     // Si ce JSON contient tous les arrêts, on l'utilise directement.
     // Si c'est l'ancien format origine/destination, on le garde pour secours mais on charge le détail au clic seulement.
@@ -993,6 +1051,7 @@
       }
     } catch (err) {
       console.warn('[LIVE static] /api/train-static indisponible', err?.message || err);
+    }
     }
 
     // Secours legacy uniquement si explicitement autorisé à la main.
@@ -1304,9 +1363,8 @@
     modal.setAttribute('aria-hidden', 'false');
     syncCommunityModalState();
     if (id === 'lbLiveModal') {
-      // LIVE léger : les horaires viennent du JSON public train_static_today, pas de stop_times.txt côté navigateur.
+      // Rendu immédiat ; les horaires complets sont hydratés ensuite par petit batch.
       window.LB_ALLOW_HEAVY_GTFS = false;
-      loadTrainStaticToday().finally(()=> refreshLiveModal());
       refreshLiveModal();
     }
     if (id === 'lbSignalModal') refreshSignalModal();
@@ -1406,8 +1464,26 @@
       .slice(0, 30);
     if (!targets.length) return;
 
+    let batchResponses = null;
+    if (typeof window.fetchVehicleJourneysBatchViaHub === 'function') {
+      const hubBatchKey = `${day}|${targets.slice().sort().join(',')}`;
+      try {
+        let hubPromise = LB_LIVE_HUB_BATCH_INFLIGHT.get(hubBatchKey);
+        if (!hubPromise) {
+          hubPromise = window.fetchVehicleJourneysBatchViaHub(day, targets, { client:'front-live-batch', timeoutMs:8000 })
+            .finally(()=> LB_LIVE_HUB_BATCH_INFLIGHT.delete(hubBatchKey));
+          LB_LIVE_HUB_BATCH_INFLIGHT.set(hubBatchKey, hubPromise);
+        }
+        batchResponses = await hubPromise;
+      } catch (error) {
+        console.warn('[LIVE SNCF HUB BATCH] indisponible', error?.message || error);
+      }
+    }
+
     await Promise.allSettled(targets.map(async (num)=>{
-      const response = await window.fetchVehicleJourneyViaHub(day, num, { client: 'front-live', timeoutMs: 12000 });
+      const response = batchResponses
+        ? batchResponses[num]
+        : await window.fetchVehicleJourneyViaHub(day, num, { client:'front-live', timeoutMs:8000 });
       if (!response?.ok || !response?.data) return;
       const info = extractSncfHubLiveInfo(response.data);
       const liveTrain = COMMUNITY.liveTrains.find((it)=> normalizeKey(it?.trainNumber) === num);
@@ -1570,12 +1646,13 @@
   async function hydrateLiveTrainStaticInfos(sourceTrains){
     const trains = Array.isArray(sourceTrains) ? sourceTrains : (Array.isArray(COMMUNITY.liveTrains) ? COMMUNITY.liveTrains : []);
     if (!trains.length) return;
-    try { if (typeof loadCompoData === 'function') await loadCompoData({ forceFresh:false, background:true }); } catch(_) {}
-    await loadTrainStaticToday();
+    await Promise.allSettled([
+      (typeof loadCompoData === 'function') ? loadCompoData({ forceFresh:false, background:true }) : Promise.resolve(null),
+      loadLiveStaticBatch(trains)
+    ]);
     trains.forEach((train)=>{
-      // Important: ici on utilise seulement le JSON déjà chargé.
-      // On ne lance plus /api/train-static en cascade pour chaque carte LIVE.
-      const info = getTrainStaticTodayInfo(train.trainNumber);
+      const key = normalizeKey(train.trainNumber);
+      const info = COMMUNITY.staticInfoCache.get(`${key}_${toYmd()}`) || getTrainStaticTodayInfo(key) || null;
       const effectiveCompo = getEffectiveCompositionCode(train.trainNumber);
       const node = document.querySelector(`[data-lb-train-route-line="${String(train.trainNumber)}"]`);
       if (node && info) node.innerHTML = buildLiveRouteLineHtml(train, info);
@@ -1627,11 +1704,6 @@
   }
 
   function refreshLiveModal(){
-    if (!LB_TRAIN_STATIC_TODAY_DATE && !LB_TRAIN_STATIC_TODAY_PROMISE){
-      loadTrainStaticToday().then(()=>{
-        if ($id('lbLiveModal')?.classList.contains('is-open')) renderLiveTrainCards();
-      });
-    }
     renderLiveTrainCards();
     const displayTrains = sortAndFilterLiveTrainsByDirection(COMMUNITY.liveTrains, COMMUNITY.liveDirection);
     renderLiveFeed(COMMUNITY.selectedTrain || (displayTrains[0]?.trainNumber || ''));
@@ -1706,6 +1778,13 @@
       }
     }
 
+    const officialPatternPromise = (typeof window.lbGetOfficialServicePattern === 'function')
+      ? Promise.resolve(window.lbGetOfficialServicePattern(train.trainNumber, toYmd())).catch((err)=>{
+          console.warn('[Voix du bétail] parcours officiel indisponible', err?.message || err);
+          return null;
+        })
+      : Promise.resolve(null);
+
     let stops = Array.isArray(train.stops) ? train.stops.filter(Boolean) : [];
     const info = await getLiveTrainStaticInfo(train.trainNumber);
     if (info?.stops?.length) stops = info.stops;
@@ -1716,15 +1795,14 @@
       stopsEl.innerHTML = '<div class="lb-live-empty">Aucun arrêt disponible.</div>';
       return;
     }
+
+    // Premier rendu immédiat : parcours statique complet + horaires. Le temps
+    // réel et les suppressions officielles enrichissent ensuite sans bloquer.
+    stopsEl.innerHTML = stopRows.map((row)=>`<article class="lb-train-stop-item"><div class="lb-train-stop-head"><div class="lb-train-stop-name">${safeEscape(row?.name || '')}</div><div class="lb-train-stop-time"><span class="actual">${safeEscape(row?.time || '—')}</span></div></div><div class="lb-train-stop-signals"><span class="lb-stop-chip">Actualisation temps réel…</span></div></article>`).join('');
+
     let officialRows = [];
-  try {
-    if (typeof window.lbGetOfficialServicePattern === 'function') {
-      const official = await window.lbGetOfficialServicePattern(train.trainNumber, toYmd());
-      officialRows = Array.isArray(official?.rows) ? official.rows : [];
-    }
-  } catch (err) {
-    console.warn('[Voix du bétail] parcours officiel indisponible', err?.message || err);
-  }
+    const official = await officialPatternPromise;
+    officialRows = Array.isArray(official?.rows) ? official.rows : [];
   const voiceStopKey = (value)=> String(value || '')
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '')
@@ -1895,9 +1973,8 @@
     }
     COMMUNITY.signalOptionsHydrationKey = hydrationKey;
     COMMUNITY.signalOptionsHydrationPromise = (async()=>{
-      // Un seul JSON groupé pour toute la liste. Le détail /api/train-static
-      // n'est demandé qu'après la sélection d'un train, jamais 30 fois en parallèle.
-      await loadTrainStaticToday();
+      // Petit batch ciblé sur les trains LIVE : pas de téléchargement global de 5 Mo.
+      await loadLiveStaticBatch(COMMUNITY.liveTrains.slice(0, 60));
       COMMUNITY.liveTrains.slice(0, 60).forEach((train)=>{
         const key = normalizeKey(train.trainNumber);
         const info = COMMUNITY.staticInfoCache.get(`${key}_${toYmd()}`)
