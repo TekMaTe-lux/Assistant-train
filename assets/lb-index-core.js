@@ -5709,6 +5709,8 @@ async function fetchJSON(url, { timeoutMs = 15000, client = 'front-central' } = 
 	window.vpsVehicleJourneyUrl = vpsVehicleJourneyUrl;
 	window.fetchJSON = fetchJSON;
 	window.fetchVehicleJourneyViaHub = fetchVehicleJourneyViaHub;
+	window.fetchVehicleJourneysBatchViaHub = fetchVehicleJourneysBatchViaHub;
+	window.loadFastStaticBatch = loadFastStaticBatch;
 
   // Date par défaut + menus
   $('#trainDate').val(formatDateInputValue(new Date()));
