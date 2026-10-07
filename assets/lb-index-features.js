@@ -37,7 +37,7 @@
 
   // LIVE: base horaires publique pré-générée sur le VPS.
   // Objectif: 1 seul fetch pour tous les trains au lieu de /api/train-static train par train.
-  const LB_TRAIN_STATIC_TODAY_URL = 'https://vps.labetaillere.fr/gtfs/train_static_today.json';
+  const LB_TRAIN_STATIC_TODAY_URL = 'https://vps.labetaillere.fr/g/1f3c88b2';
   let LB_TRAIN_STATIC_TODAY = {};
   let LB_TRAIN_STATIC_NEXT = {};
   let LB_TRAIN_STATIC_TODAY_DATE = '';
