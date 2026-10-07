@@ -89,7 +89,7 @@
   };
 
   const rowsToNames = (rows) => uniqueNames((Array.isArray(rows) ? rows : []).map((row) =>
-    row?.name || row?.stop_name || row?.station || row?.stopPoint?.name || ''
+    row?.name || row?.stop_name || row?.station || row?.stop_point?.name || row?.stopPoint?.name || ''
   ));
 
   const chooseLongestTrip = (rows) => {
@@ -112,7 +112,44 @@
     const promise = (async () => {
       let names = [];
 
-      // 1) Parcours officiel déjà utilisé par la fiche train.
+      // Chemin rapide : batch statique ciblé sur ce train.
+      try {
+        const params = new URLSearchParams({ date: todayIso(), trains: trainKey });
+        const response = await fetch(
+          `https://vps.labetaillere.fr/api/train-static-batch?${params.toString()}`,
+          { cache:'default' }
+        );
+        if (response.ok) {
+          const data = await response.json();
+          const row = data?.trains?.[trainKey] || null;
+          names = rowsToNames(row?.stop_times || []);
+        }
+      } catch (error) {
+        console.warn('[SIGNAL stations] batch statique indisponible', error?.message || error);
+      }
+
+      if (names.length >= 2) {
+        routeCache.set(key, names);
+
+        // Le parcours officiel affine ensuite en arrière-plan sans bloquer
+        // l'ouverture de la liste des gares.
+        if (typeof window.lbGetOfficialServicePattern === 'function') {
+          void Promise.resolve()
+            .then(()=> window.lbGetOfficialServicePattern(trainKey, todayIso()))
+            .then((official)=>{
+              const officialNames = rowsToNames(official?.rows);
+              const best = officialNames.length > names.length ? officialNames : names;
+              if (best.length >= 2) {
+                routeCache.set(key, best);
+                applyStops(trainKey, best);
+              }
+            })
+            .catch(()=>{});
+        }
+        return names;
+      }
+
+      // Secours officiel si le batch n'a rien retourné.
       if (typeof window.lbGetOfficialServicePattern === 'function') {
         try {
           const official = await window.lbGetOfficialServicePattern(trainKey, todayIso());
@@ -122,23 +159,22 @@
         }
       }
 
-      // 2) Détail statique léger du train. On le compare systématiquement au
-      // parcours officiel et on conserve la liste la plus complète.
-      try {
-        const url = `https://vps.labetaillere.fr/api/train-static?date=${encodeURIComponent(todayIso())}&train=${encodeURIComponent(trainKey)}`;
-        const response = await fetch(url, { cache: 'no-store' });
-        if (response.ok) {
-          const data = await response.json();
-          const trip = chooseLongestTrip(data?.stop_times || data?.stops || []);
-          const apiNames = rowsToNames(trip);
-          if (apiNames.length > names.length) names = apiNames;
+      // Dernier secours legacy.
+      if (names.length < 2) {
+        try {
+          const url = `https://vps.labetaillere.fr/api/train-static?date=${encodeURIComponent(todayIso())}&train=${encodeURIComponent(trainKey)}`;
+          const response = await fetch(url, { cache: 'default' });
+          if (response.ok) {
+            const data = await response.json();
+            const trip = chooseLongestTrip(data?.stop_times || data?.stops || []);
+            const apiNames = rowsToNames(trip);
+            if (apiNames.length > names.length) names = apiNames;
+          }
+        } catch (error) {
+          console.warn('[SIGNAL stations] détail statique legacy indisponible', error?.message || error);
         }
-      } catch (error) {
-        console.warn('[SIGNAL stations] détail statique indisponible', error?.message || error);
       }
 
-      // Deux arrêts peuvent être légitimes pour certains trains ; on garde donc
-      // toute liste officielle non vide, sans jamais inventer d'arrêt.
       if (names.length >= 2) routeCache.set(key, names);
       return names;
     })().finally(() => inFlight.delete(key));
