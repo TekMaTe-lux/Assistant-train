@@ -76,7 +76,7 @@ window.addEventListener('click', (event) => {
 
   if (window.__lbHomeMajorAlertsReady) return;
 
-  const SIRI_URL = 'https://vps.labetaillere.fr/gtfs/siri_sx_alertes.json';
+  const SIRI_URL = 'https://vps.labetaillere.fr/g/72ab61c9';
   const badge = document.getElementById('homeMajorAlertBadge');
   const countNode = document.getElementById('homeMajorAlertCount');
   const modal = document.getElementById('homeMajorAlertModal');
