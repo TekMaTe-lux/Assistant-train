@@ -58,21 +58,21 @@ test('reinstatement requires a fresh explicit SNCF running status covering every
  bucket.meta.feed_generated_at=new Date().toISOString();bucket.meta.canceled_stops=['Metz'];assert.equal(ctx.getGtfsRunningServiceState('88745',['Luxembourg','Metz']),null);
 });
 test('old SNCF cancellation restores only on confirmed reinstatement and comes back if proof disappears',()=>{
- const cancelledHtml='<span class="deleted">15:57</span>';
- const cell={dataset:{baseTime:'155700',sncfTripCanceled:'1'},innerHTML:cancelledHtml,querySelector:selector=>selector.includes('.deleted')&&cell.innerHTML.includes('deleted')?{}:null};
+ const cancelledHtml='<span class="deleted">15:57<span class="voie-badge">Voie 9</span></span>';
+ const cell={dataset:{baseTime:'155700',sncfTripCanceled:'1'},innerHTML:cancelledHtml,querySelector:selector=>selector==='.voie-badge'&&cell.innerHTML.includes('voie-badge')?{textContent:'Voie 9'}:selector.includes('.deleted')&&cell.innerHTML.includes('deleted')?{}:null};
  const row={dataset:{gare:'Luxembourg'},cells:[{},cell]};
- const icon={textContent:'❌',title:'Train supprimé'};
+ const icon={dataset:{},textContent:'❌',title:'Train supprimé'};
  const header={dataset:{trainNumber:'88745',sncfCanceledStops:'["Luxembourg"]'},querySelector:()=>icon};
  const table={querySelector:()=>({querySelectorAll:()=>[header]}),tBodies:[{rows:[row]}]};
  let confirmed=false;
- const ctx={document:{querySelector:()=>table},console,isGtfsTrainClearlyRunning:()=>true,getGtfsRunningServiceState:()=>confirmed?{status:'ON_TIME',maxDelay:0}:null,resetGtfsRetards:()=>{},ft:()=> '15:57',escapeHtml:x=>x};
+ const ctx={document:{querySelector:()=>table},console,isGtfsTrainClearlyRunning:()=>true,getGtfsRunningServiceState:()=>confirmed?{status:'ON_TIME',maxDelay:0}:null,resetGtfsRetards:()=>{},ft:()=> '15:57',escapeHtml:x=>x,formatClockWithVoie:(clock,voie)=>clock+'<span class="voie-badge">'+voie+'</span>'};
  vm.createContext(ctx);
  const a=core.indexOf('function applyRetardsFromGTFS('),b=core.indexOf('/* ---------- ALERTES ---------- */',a);
  vm.runInContext(core.slice(a,b),ctx);
  ctx.applyRetardsFromGTFS({'88745':{Luxembourg:0}});assert.equal(cell.innerHTML,cancelledHtml);assert.equal(icon.textContent,'❌');
  confirmed=true;
- for(let i=0;i<3;i++)ctx.applyRetardsFromGTFS({'88745':{Luxembourg:0}});
- assert.ok(cell.innerHTML.includes('gtfs-restored'));assert.equal(icon.textContent,'');
+ for(let i=0;i<3;i++){ctx.applyRetardsFromGTFS({'88745':{Luxembourg:0}});assert.ok(cell.innerHTML.includes('voie-badge'));assert.ok(cell.innerHTML.includes('Voie 9'));}
+ assert.ok(cell.innerHTML.includes('gtfs-restored'));assert.equal(icon.textContent,'↺');
  confirmed=false;cell.innerHTML=cancelledHtml;ctx.applyRetardsFromGTFS({'88745':{Luxembourg:0}});
  assert.equal(cell.innerHTML,cancelledHtml);assert.equal(icon.textContent,'❌');
 });
@@ -99,4 +99,12 @@ test('LIVE first paint clears a stale cancellation cause only with the shared ru
  vm.createContext(ctx);vm.runInContext(features.slice(a,b),ctx);
  assert.equal(ctx.extractLiveTrains()[0].statusClass,'ok');assert.equal(ctx.extractLiveTrains()[0].sncfCause,'');
  confirmed=false;assert.equal(ctx.extractLiveTrains()[0].statusClass,'cancel');
+});
+test('LIVE reuses the already received HUB cancellation for an immediate reinstatement label, including delay',()=>{
+ const a=features.indexOf('  function extractLiveTrains()'),b=features.indexOf('  window.extractLiveTrains',a);
+ let cached=true;
+ const ctx={window:{retardsGTFS_RAW:{}},getRawLiveTrainPayload:()=>({trains:{88745:{status:'DELAYED',stops:{Luxembourg:8,Metz:8}}}}),buildSncfCauseIndex:()=>null,normalizeKey:String,getSncfCauseForTrain:()=>'',classifyOfficialLiveDisruption:()=>({statusClass:'',statusLabel:''}),getGtfsRunningServiceState:()=>({status:'DELAYED',maxDelay:8}),getCachedSncfVehicleJourney:()=>cached?{}:null,toYmd:()=> '2026-10-07',extractSncfHubLiveInfo:()=>({statusClass:'cancel',train:{stop_times:[{stop_point:{name:'Luxembourg'}},{stop_point:{name:'Metz'}}]}})};
+ vm.createContext(ctx);vm.runInContext(features.slice(a,b),ctx);
+ const train=ctx.extractLiveTrains()[0];assert.equal(train.statusClass,'delay');assert.equal(train.statusLabel,'Remis en circulation · +8 min');assert.equal(train.reinstated,true);
+ cached=false;assert.equal(ctx.extractLiveTrains()[0].statusLabel,'+8 min');assert.equal(ctx.extractLiveTrains()[0].reinstated,false);
 });

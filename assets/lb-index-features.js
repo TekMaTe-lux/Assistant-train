@@ -589,12 +589,17 @@
         disruptions: payload.disruptions,
         stops: Array.isArray(payload.stop_times) ? payload.stop_times : []
       });
+      const cachedHub = typeof getCachedSncfVehicleJourney === 'function'
+        ? getCachedSncfVehicleJourney(toYmd(), trainNumber) : null;
+      const cachedInfo = cachedHub ? extractSncfHubLiveInfo(cachedHub) : null;
+      const hadCancellation = officialState.statusClass === 'cancel' || cachedInfo?.statusClass === 'cancel';
+      const serviceStops = cachedInfo?.train?.stop_times?.map(stop => stop.stop_point?.name) || stopNames;
       const runningService = typeof getGtfsRunningServiceState === 'function'
-        ? getGtfsRunningServiceState(trainNumber, stopNames) : null;
-      if (officialState.statusClass === 'cancel' && runningService) {
+        ? getGtfsRunningServiceState(trainNumber, serviceStops) : null;
+      if (hadCancellation && runningService) {
         maxDelay = runningService.maxDelay;
         statusClass = maxDelay > 0 ? 'delay' : 'ok';
-        statusLabel = maxDelay > 0 ? `+${maxDelay} min` : 'À l\'heure';
+        statusLabel = maxDelay > 0 ? `Remis en circulation · +${maxDelay} min` : 'Remis en circulation';
         sncfCause = '';
       } else if (officialState.statusClass){
         statusLabel = officialState.statusLabel;
@@ -612,6 +617,7 @@
         to: routeTo,
         statusLabel,
         statusClass,
+        reinstated: hadCancellation && !!runningService,
 		sncfCause,
         maxDelay,
         stops: stopNames,
@@ -1504,9 +1510,10 @@
       // Même preuve de remise en circulation que le tableau et la fiche.
       if (info.statusClass === 'cancel' && runningService) {
         finalInfo.statusClass = runningService.maxDelay > 0 ? 'delay' : 'ok';
-        finalInfo.statusLabel = runningService.maxDelay > 0 ? `+${runningService.maxDelay} min` : 'À l\'heure';
+        finalInfo.statusLabel = runningService.maxDelay > 0 ? `Remis en circulation · +${runningService.maxDelay} min` : 'Remis en circulation';
         finalInfo.maxDelay = runningService.maxDelay;
         finalInfo.sncfCause = '';
+        finalInfo.reinstated = true;
       }
       if (info.statusClass === 'ok' && currentClass !== 'ok') {
         finalInfo.statusClass = currentClass;
@@ -1524,6 +1531,7 @@
         liveTrain.statusLabel = finalInfo.statusLabel || liveTrain.statusLabel;
         liveTrain.maxDelay = Number(finalInfo.maxDelay || 0);
         liveTrain.sncfCause = finalInfo.sncfCause || '';
+        liveTrain.reinstated = !!finalInfo.reinstated;
       }
       const card = document.querySelector(`[data-lb-live-train="${String(num).replace(/"/g, '\"')}"]`);
       if (!card) return;
@@ -1788,7 +1796,10 @@
     route.textContent = train.route;
     if (cause){
       const txt = String(train.sncfCause || '').trim();
-      if (['delay','partial','cancel'].includes(train.statusClass) && txt){
+      if (train.reinstated) {
+        cause.hidden = false;
+        cause.textContent = 'Remis en circulation selon le temps réel SNCF.';
+      } else if (['delay','partial','cancel'].includes(train.statusClass) && txt){
         cause.hidden = false;
         cause.textContent = `${train.statusClass === 'partial' ? 'Suppression partielle' : (train.statusClass === 'cancel' ? 'Suppression' : 'Retard')} : ${txt}`;
       } else {

@@ -333,6 +333,7 @@ async function loadVoiesByTrain({ forceFresh = false, onlyIfChanged = false } = 
       window.voiesByTrainMap = normalizeVoiesPayload(json);
       window.__voiesSource = loadedFrom;
       window.__voiesLastChanged = true;
+      window.dispatchEvent(new CustomEvent('lb:voies-loaded'));
       try {
         const serial = Array.from(window.voiesByTrainMap.entries()).map(([k,m]) => [k, Array.from(m.entries())]);
         lbCacheWrite('voiesByTrainMap', serial);
@@ -5519,6 +5520,13 @@ const SNCF_FRONT_CACHE = new Map();
 const SNCF_FRONT_INFLIGHT = new Map();
 const SNCF_FRONT_TTL_MS = 60 * 1000;
 
+function getCachedSncfVehicleJourney(date, number) {
+  const day = String(date || '').replace(/^(\d{4})(\d{2})(\d{2})$/, '$1-$2-$3');
+  const cached = SNCF_FRONT_CACHE.get(`${day}:${String(number || '').trim()}`);
+  return cached?.data && Date.now() - cached.t < SNCF_FRONT_TTL_MS ? cached.data : null;
+}
+
+
 function parseVpsVehicleJourneyUrl(url) {
   try {
     const absolute = new URL(String(url || '').trim(), window.location.origin);
@@ -5702,6 +5710,7 @@ async function fetchJSON(url, { timeoutMs = 15000, client = 'front-central' } = 
 	window.fetchJSON = fetchJSON;
 	window.fetchVehicleJourneyViaHub = fetchVehicleJourneyViaHub;
 	window.fetchVehicleJourneysBatchViaHub = fetchVehicleJourneysBatchViaHub;
+    window.getCachedSncfVehicleJourney = getCachedSncfVehicleJourney;
 	window.loadFastStaticBatch = loadFastStaticBatch;
 
   // Date par défaut + menus
@@ -8524,8 +8533,9 @@ function resetGtfsRetards(scope) {
     const icon = header.querySelector('.train-state');
     if (stops.length && icon) {
       if (!icon.__sncfState) icon.__sncfState = { text: icon.textContent, title: icon.title };
-      icon.textContent = state ? (state.maxDelay > 0 ? '⏰' : '') : icon.__sncfState.text;
-      icon.title = state ? `Circulation confirmée par le temps réel SNCF${state.maxDelay > 0 ? ' · +' + state.maxDelay + ' min' : ''}` : icon.__sncfState.title;
+      icon.dataset.reinstated = state ? '1' : '0';
+      icon.textContent = state ? (state.maxDelay > 0 ? '⏰' : '↺') : icon.__sncfState.text;
+      icon.title = state ? `Remis en circulation selon le temps réel SNCF${state.maxDelay > 0 ? ' · +' + state.maxDelay + ' min' : ''}` : icon.__sncfState.title;
     }
     return state;
   });
@@ -8597,7 +8607,13 @@ function resetGtfsRetards(scope) {
 
       if (gtfsSaysRunning && Number.isFinite(retardMinutes) && retardMinutes <= 0 && hasSuppression && baseTimeRaw) {
         if (cell.__gtfsOriginalContent == null) cell.__gtfsOriginalContent = cell.innerHTML;
-        cell.innerHTML = `<span class="gtfs-restored">${escapeHtml(ft(baseTimeRaw))}</span>`;
+        // Le changement de statut ne doit pas effacer la voie déjà reçue.
+        const voieBadge = cell.querySelector('.voie-badge');
+        const restoredClock = escapeHtml(ft(baseTimeRaw));
+        const restoredContent = voieBadge
+          ? formatClockWithVoie(restoredClock, voieBadge.textContent.trim())
+          : restoredClock;
+        cell.innerHTML = `<span class="gtfs-restored">${restoredContent}</span>`;
         cell.dataset.gtfsDelayMinutes = '0';
         continue;
       }
@@ -15435,6 +15451,7 @@ if (statsEl){
 
   let liveApplyInProgress = false;
   let liveApplyScheduled = false;
+  window.addEventListener('lb:voies-loaded', scheduleLiveApply);
 
   function applyLiveOverlaysNow(){
     if (liveApplyInProgress) return;
@@ -18365,6 +18382,14 @@ async function loadAffluenceDate(dateStr){
     const alertKey = icon.dataset.alertKey || th.dataset.alertKeyMain || '';
     if (!trainNo) return;
     e.preventDefault();
+    if (icon.dataset.reinstated === '1') {
+      openDetails([{
+        level: 'info', icon: '↺', title: fallback,
+        description: "L'API SNCF conserve une ancienne annonce de suppression. Le flux temps réel SNCF récent indique une circulation et renseigne tous les arrêts du parcours.",
+        source: 'SNCF GTFS-RT / SIRI'
+      }], trainNo, fallback);
+      return;
+    }
     openForKey(alertKey, trainNo, fallback);
   });
 })();
