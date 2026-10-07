@@ -108,3 +108,16 @@ test('LIVE reuses the already received HUB cancellation for an immediate reinsta
  const train=ctx.extractLiveTrains()[0];assert.equal(train.statusClass,'delay');assert.equal(train.statusLabel,'Remis en circulation · +8 min');assert.equal(train.reinstated,true);
  cached=false;assert.equal(ctx.extractLiveTrains()[0].statusLabel,'+8 min');assert.equal(ctx.extractLiveTrains()[0].reinstated,false);
 });
+test('realtime payload supplies Luxembourg platforms immediately without another request or overriding station data',async()=>{
+ const calls=[],events=[];const raw={data:{'TER 88745':{Luxembourg:{platform:'9',delay:0},Bettembourg:{platform:'2',delay:0}}}};
+ const ctx={window:{},Map,Set,Date,console,CustomEvent:class{constructor(type){this.type=type;}},GTFS_RT_USE_CACHED_FIRST:false,GTFS_RT_DATASETS:[{id:'cfl-hafas'}],fetchGtfsDataset:async dataset=>{calls.push(dataset.id);return {...dataset,normalized:{},raw,source:'HAFAS'};},mergeGtfsNormalizedPayloads:()=>({}),persistGtfsRetardsCache:()=>{},tryApplyGtfsToCurrentTable:()=>{},normalizeVoiesTrainKey:x=>String(x).toLowerCase().replace(/^train\s+/,''),};
+ ctx.window.dispatchEvent=e=>events.push(e.type);vm.createContext(ctx);
+ vm.runInContext(block('function normalizeCflVoiesTrainKey(', 'async function loadCflVoiesByTrain('),ctx);
+ vm.runInContext(block('async function loadGtfsRetards(', '// 1er chargement + rafraîchissement intelligent'),ctx);
+ await ctx.loadGtfsRetards();assert.deepEqual(calls,['cfl-hafas']);assert.equal(ctx.window.cflVoiesByTrainMap.get('88745').get('luxembourg'),'9');assert.ok(events.includes('lb:voies-loaded'));
+ ctx.cflVoiesByTrainPromise=null;ctx.HAFAS_PROXY_CANDIDATES=['https://test/rt'];ctx.HAFAS_BY_STATION_CANDIDATES=['https://test/station'];
+ const voieCalls=[];ctx.fetch=async url=>{voieCalls.push(url);return {ok:true,json:async()=>url.endsWith('/station')?{stations:{Luxembourg:{departures:[{train:'TER 88745',platform:'8'}]}}}:raw};};
+ vm.runInContext(block('async function loadCflVoiesByTrain(', 'function getCflVoiesForTrain('),ctx);
+ await ctx.loadCflVoiesByTrain();assert.equal(voieCalls.length,2);assert.equal(ctx.window.cflVoiesByTrainMap.get('88745').get('luxembourg'),'8');
+ const current=ctx.window.cflVoiesByTrainMap;await ctx.loadGtfsRetards();assert.equal(ctx.window.cflVoiesByTrainMap,current);assert.equal(current.get('88745').get('luxembourg'),'8');
+});

@@ -447,7 +447,7 @@ async function loadCflVoiesByTrain({ forceFresh = false, onlyIfChanged = false }
   if (forceFresh) cflVoiesByTrainPromise = null;
   if (cflVoiesByTrainPromise) return cflVoiesByTrainPromise;
 
-  if (!forceFresh && !onlyIfChanged && window.cflVoiesByTrainMap instanceof Map && window.cflVoiesByTrainMap.size) {
+  if (!forceFresh && !onlyIfChanged && window.__cflVoiesSource !== 'realtime-seed' && window.cflVoiesByTrainMap instanceof Map && window.cflVoiesByTrainMap.size) {
     return window.cflVoiesByTrainMap;
   }
 
@@ -494,6 +494,7 @@ async function loadCflVoiesByTrain({ forceFresh = false, onlyIfChanged = false }
       if (merged.size){
         window.cflVoiesByTrainMap = merged;
         window.__cflVoiesSource = sourceByStation || sourceRetards || '';
+        window.dispatchEvent(new CustomEvent('lb:voies-loaded'));
         return window.cflVoiesByTrainMap;
       }
 
@@ -8349,6 +8350,17 @@ const normalized = mergeGtfsNormalizedPayloads(datasetResults.map(r => r.normali
   window.retardsGTFS_RAW = rawPayload;
   window.retardsGTFS = normalized;
   window.retardsGTFS_SOURCE = sourceLabel;
+  // Le flux HAFAS déjà téléchargé contient aussi les voies. Amorcer cette
+  // source dès son arrivée évite d'attendre le premier minuteur des voies.
+  // Les données par gare déjà chargées gardent leur priorité habituelle.
+  if (rawByDataset['cfl-hafas'] && !(window.cflVoiesByTrainMap instanceof Map && window.cflVoiesByTrainMap.size)) {
+    const initialCflVoies = normalizeCflVoiesPayload(rawByDataset['cfl-hafas']);
+    if (initialCflVoies.size) {
+      window.cflVoiesByTrainMap = initialCflVoies;
+      window.__cflVoiesSource = 'realtime-seed';
+      window.dispatchEvent(new CustomEvent('lb:voies-loaded'));
+    }
+  }
   persistGtfsRetardsCache();
   window.__lbGtfsLoadedAt = Date.now();
 
