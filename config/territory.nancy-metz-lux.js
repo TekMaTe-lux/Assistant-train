@@ -90,7 +90,7 @@ window.LB_TERRITORY_CONFIG = Object.freeze({
   if (!document.getElementById('lbTrafficDetailsScript')) {
     const script = document.createElement('script');
     script.id = 'lbTrafficDetailsScript';
-    script.src = './assets/lb-traffic-details-v1.js?v=6';
+    script.src = './assets/lb-traffic-details-v1.js?v=7';
     script.async = false;
     document.head.append(script);
   }
