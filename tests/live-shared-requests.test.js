@@ -35,3 +35,16 @@ test('full cancellation and partial terminus keep distinct stop states',()=>{
  const out=ctx.applyEffectiveServicePattern(partial,{status:'PARTIAL'});
  assert.equal(out[0].isDeleted,false);assert.equal(out[1].isNewTerminus,true);assert.equal(out[2].isDeleted,true);
 });
+test('GTFS zeros cannot erase an explicit SNCF trip cancellation on repeated refresh',()=>{
+ const cancelledHtml='<span class="deleted">15:57</span>';
+ const cell={dataset:{baseTime:'155700',sncfTripCanceled:'1'},innerHTML:cancelledHtml};
+ const row={dataset:{gare:'Luxembourg'},cells:[{},cell]};
+ const table={querySelector:()=>({querySelectorAll:()=>[{dataset:{trainNumber:'88745'}}]}),tBodies:[{rows:[row]}]};
+ const ctx={document:{querySelector:()=>table},console,isGtfsTrainClearlyRunning:()=>true,resetGtfsRetards:()=>{}};
+ vm.createContext(ctx);
+ const a=core.indexOf('function applyRetardsFromGTFS('),b=core.indexOf('/* ---------- ALERTES ---------- */',a);
+ vm.runInContext(core.slice(a,b),ctx);
+ for(let i=0;i<3;i++)ctx.applyRetardsFromGTFS({'88745':{Luxembourg:0}});
+ assert.equal(cell.innerHTML,cancelledHtml);
+ assert.equal(cell.dataset.gtfsDelayMinutes,undefined);
+});

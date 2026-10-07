@@ -6522,7 +6522,7 @@ async function loadFastStaticBatch(date, numbers){
   await Promise.all(Array.from(new Set(list.map(n => LB_FAST_STATIC_PENDING.get(`${day}:${n}`)).filter(Boolean))));
   const trains = {};
   list.forEach(n => { const row = LB_FAST_STATIC_CACHE.get(`${day}:${n}`); if (row) trains[n] = row; });
-  return { date:day, trains, missing:list.filter(n => !trains[n]) };
+  return { date:day, count:Object.keys(trains).length, requested:list.length, trains, missing:list.filter(n => !trains[n]) };
 }
 
 function renderFastStaticPreview(payload, numbers, fixedStops, startName, endName){
@@ -7439,7 +7439,15 @@ const stopHasSchedule = (result, stopName) => {
         }
 
        const baseAttr = base ? ` data-base-time="${base}"` : '';
-        html += `<td${classAttr}${baseAttr}>${content}</td>`;
+        const officialTripCanceled = result.disruptions.some(d => {
+          if (!['NO_SERVICE','CANCELLATION'].includes(d.severity?.effect)) return false;
+          const tripId = result.train?.trip?.id;
+          const linked = (result.train?.disruptions || []).some(link => link.id === d.id);
+          const tripAffected = (d.impacted_objects || []).some(object => tripId && (object.pt_object?.id === tripId || object.pt_object?.trip?.id === tripId));
+          return (linked || tripAffected) && !(d.impacted_objects || []).some(object => object.impacted_stops?.length);
+        });
+        const cancellationAttr = officialTripCanceled ? ' data-sncf-trip-canceled="1"' : '';
+        html += `<td${classAttr}${baseAttr}${cancellationAttr}>${content}</td>`;
       }
 
       html += '</tr>';
@@ -8510,6 +8518,14 @@ function resetGtfsRetards(scope) {
 
       const retardMinutes = retardMinutesValue == null ? null : Number(retardMinutesValue);
       const gtfsSaysRunning = (typeof isGtfsTrainClearlyRunning === 'function') && isGtfsTrainClearlyRunning(perTrain);
+
+      // Une annulation officielle liée à ce voyage reste prioritaire sur les
+      // horaires/retards GTFS encore programmés. La prochaine réponse SNCF
+      // régénère les cellules sans ce marqueur si le voyage est rétabli.
+      if (cell.dataset.sncfTripCanceled === '1') {
+        resetGtfsRetards(cell);
+        continue;
+      }
 
       // IMPORTANT #BER : si GTFS-RT/SIRI dit que le train circule, on écrase les suppressions SNCF/HUB périmées.
       // C'est le cas typique 88505 : API SNCF restée bloquée en suppression partielle, GTFS-RT revenu en DELAYED.
