@@ -5547,7 +5547,8 @@ function parseVpsHubSingleTrainUrl(url) {
 }
 
 async function fetchVehicleJourneyViaHub(date, num, { client = 'front-central', timeoutMs = 15000 } = {}) {
-  const safeDate = String(date || '').trim();
+  const rawDate = String(date || '').replace(/-/g, '').trim();
+  const safeDate = /^\d{8}$/.test(rawDate) ? `${rawDate.slice(0,4)}-${rawDate.slice(4,6)}-${rawDate.slice(6,8)}` : String(date || '').trim();
   const safeNum = String(num || '').trim();
   const safeClient = String(client || 'front-central').trim() || 'front-central';
   const key = `${safeDate}:${safeNum}`;
@@ -5600,52 +5601,43 @@ async function fetchVehicleJourneyViaHub(date, num, { client = 'front-central', 
 }
 
 async function fetchVehicleJourneysBatchViaHub(date, numbers, { client = 'front-tableau-batch', timeoutMs = 15000 } = {}) {
-  const safeDate = String(date || '').trim();
-  const safeClient = String(client || 'front-tableau-batch').trim() || 'front-tableau-batch';
+  const rawDate = String(date || '').replace(/-/g, '').trim();
+  const safeDate = /^\d{8}$/.test(rawDate) ? `${rawDate.slice(0,4)}-${rawDate.slice(4,6)}-${rawDate.slice(6,8)}` : String(date || '').trim();
   const list = Array.from(new Set((numbers || []).map(v => String(v || '').trim()).filter(Boolean)));
-  const results = {};
-  const pending = [];
-  const now = Date.now();
-
-  list.forEach((num) => {
-    const key = `${safeDate}:${num}`;
-    const cached = SNCF_FRONT_CACHE.get(key);
-    if (cached?.data && (now - cached.t) < SNCF_FRONT_TTL_MS) {
-      results[num] = { ok: true, status: 200, data: cached.data, cache: 'FRONT-HIT' };
-    } else {
-      pending.push(num);
-    }
+  const results = {}, pending = [], waiting = [];
+  list.forEach(num => {
+    const key = `${safeDate}:${num}`, cached = SNCF_FRONT_CACHE.get(key);
+    if (cached?.data && Date.now() - cached.t < SNCF_FRONT_TTL_MS) {
+      results[num] = { ok:true, status:200, data:cached.data, cache:'FRONT-HIT' };
+    } else if (SNCF_FRONT_INFLIGHT.has(key)) {
+      waiting.push(SNCF_FRONT_INFLIGHT.get(key).then(result => { results[num] = result; }));
+    } else pending.push(num);
   });
-
-  if (!pending.length) return results;
-
-  const hubUrl = `${VPS_BASE}/sncf/hub?date=${encodeURIComponent(safeDate)}&nums=${encodeURIComponent(pending.join(','))}&client=${encodeURIComponent(safeClient)}`;
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    const response = await fetch(hubUrl, { credentials: 'omit', signal: controller.signal });
-    const hub = await response.json().catch(() => null);
-    if (!response.ok || !hub?.trains) throw new Error(`hub_batch_error_${response.status}`);
-
-    pending.forEach((num) => {
-      const item = hub.trains[num];
-      if (!item) return;
-      results[num] = {
-        ok: !!item.ok,
-        status: item.status || response.status,
-        data: item.data,
-        cache: item.cache || null,
-        hub
-      };
-      if (item.ok && item.data) {
-        SNCF_FRONT_CACHE.set(`${safeDate}:${num}`, { t: Date.now(), data: item.data });
-      }
+  if (pending.length) {
+    const batch = (async () => {
+      const controller = new AbortController(), timer = setTimeout(() => controller.abort(), timeoutMs);
+      try {
+        const params = new URLSearchParams({ date:safeDate, nums:pending.join(','), client:String(client || 'front-tableau-batch') });
+        const response = await fetch(`${VPS_BASE}/sncf/hub?${params}`, { credentials:'omit', signal:controller.signal });
+        const hub = await response.json();
+        if (!response.ok || !hub?.trains) throw new Error(`hub_batch_error_${response.status}`);
+        pending.forEach(num => {
+          const item = hub.trains[num];
+          if (!item) return;
+          results[num] = { ok:!!item.ok, status:item.status || response.status, data:item.data, cache:item.cache || null, hub };
+          if (item.ok && item.data) SNCF_FRONT_CACHE.set(`${safeDate}:${num}`, { t:Date.now(), data:item.data });
+        });
+      } finally { clearTimeout(timer); }
+    })();
+    pending.forEach(num => {
+      const key = `${safeDate}:${num}`;
+      const itemPromise = batch.then(() => results[num]).finally(() => SNCF_FRONT_INFLIGHT.delete(key));
+      SNCF_FRONT_INFLIGHT.set(key, itemPromise);
+      waiting.push(itemPromise);
     });
-    console.debug('[SNCF HUB BATCH]', safeClient, pending.length, hub.summary || '', hub.quota || '');
-    return results;
-  } finally {
-    clearTimeout(timer);
   }
+  await Promise.all(waiting);
+  return results;
 }
 
 // Fetch JSON générique avec garde stricte SNCF :
@@ -6504,15 +6496,33 @@ if (!window.__lbTableLivingEventsBound) {
   }, { passive:true });
 }
 
+const LB_FAST_STATIC_CACHE = new Map();
+const LB_FAST_STATIC_PENDING = new Map();
 async function loadFastStaticBatch(date, numbers){
+  const day = String(date || '').replace(/-/g, '');
   const list = Array.from(new Set((numbers || []).map(v => String(v || '').trim()).filter(v => /^\d{4,6}$/.test(v))));
-  if (!date || !list.length) return null;
-  const params = new URLSearchParams({ date, trains: list.join(',') });
-  const response = await fetch('https://vps.labetaillere.fr/api/train-static-batch?' + params.toString(), {
-    cache: 'default'
-  });
-  if (!response.ok) throw new Error('static_batch_' + response.status);
-  return response.json();
+  if (!/^\d{8}$/.test(day) || !list.length) return null;
+  const missing = list.filter(n => !LB_FAST_STATIC_CACHE.has(`${day}:${n}`) && !LB_FAST_STATIC_PENDING.has(`${day}:${n}`));
+  for (let i = 0; i < missing.length; i += 50) {
+    const chunk = missing.slice(i, i + 50);
+    const params = new URLSearchParams({ date: day, trains: chunk.join(',') });
+    const request = (async () => {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 8000);
+      try {
+        const response = await fetch('https://vps.labetaillere.fr/api/train-static-batch?' + params.toString(), { cache:'default', signal:controller.signal });
+        if (!response.ok) throw new Error('static_batch_' + response.status);
+        const data = await response.json();
+        Object.entries(data?.trains || {}).forEach(([n,row]) => LB_FAST_STATIC_CACHE.set(`${day}:${n}`, row));
+        return data;
+      } finally { clearTimeout(timer); chunk.forEach(n => LB_FAST_STATIC_PENDING.delete(`${day}:${n}`)); }
+    })();
+    chunk.forEach(n => LB_FAST_STATIC_PENDING.set(`${day}:${n}`, request));
+  }
+  await Promise.all(Array.from(new Set(list.map(n => LB_FAST_STATIC_PENDING.get(`${day}:${n}`)).filter(Boolean))));
+  const trains = {};
+  list.forEach(n => { const row = LB_FAST_STATIC_CACHE.get(`${day}:${n}`); if (row) trains[n] = row; });
+  return { date:day, trains, missing:list.filter(n => !trains[n]) };
 }
 
 function renderFastStaticPreview(payload, numbers, fixedStops, startName, endName){
@@ -8289,6 +8299,7 @@ const normalized = mergeGtfsNormalizedPayloads(datasetResults.map(r => r.normali
   window.retardsGTFS = normalized;
   window.retardsGTFS_SOURCE = sourceLabel;
   persistGtfsRetardsCache();
+  window.__lbGtfsLoadedAt = Date.now();
 
   if (normalized && Object.keys(normalized).length === 0) {
     console.warn('[GTFS-RT] Données chargées mais aucun arrêt exploitable trouvé.');

@@ -114,16 +114,10 @@
 
       // Chemin rapide : batch statique ciblé sur ce train.
       try {
-        const params = new URLSearchParams({ date: todayIso(), trains: trainKey });
-        const response = await fetch(
-          `https://vps.labetaillere.fr/api/train-static-batch?${params.toString()}`,
-          { cache:'default' }
-        );
-        if (response.ok) {
-          const data = await response.json();
-          const row = data?.trains?.[trainKey] || null;
-          names = rowsToNames(row?.stop_times || []);
-        }
+        const data = typeof window.loadFastStaticBatch === 'function'
+          ? await window.loadFastStaticBatch(todayIso(), [trainKey])
+          : await fetch(`https://vps.labetaillere.fr/api/train-static-batch?date=${todayIso()}&trains=${trainKey}`, { cache:'default' }).then(response => response.ok ? response.json() : null);
+        names = rowsToNames(data?.trains?.[trainKey]?.stop_times || []);
       } catch (error) {
         console.warn('[SIGNAL stations] batch statique indisponible', error?.message || error);
       }

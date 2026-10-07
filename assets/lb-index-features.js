@@ -1491,6 +1491,7 @@
       const currentDelay = Number(liveTrain?.maxDelay || 0);
       let finalInfo = { ...info };
 
+
       // Priorité identique au tableau :
       // 1) suppression SNCF/HUB prioritaire
       // 2) retard SNCF/HUB si > 0 prioritaire
@@ -1757,7 +1758,9 @@
     if (feedback) feedback.textContent = 'Mode modification: mettez à jour le retard puis publiez.';
   }
 
+  let liveDetailRenderVersion = 0;
   async function renderTrainDetail(trainNumber){
+    const renderVersion = ++liveDetailRenderVersion;
     const key = normalizeKey(trainNumber || COMMUNITY.selectedTrain);
     const title = $id('lbTrainDetailTitle');
     const route = $id('lbTrainDetailRoute');
@@ -1765,6 +1768,10 @@
     const stopsEl = $id('lbTrainDetailStops');
     const train = COMMUNITY.liveTrains.find((it)=> normalizeKey(it.trainNumber) === key);
     if (!title || !route || !stopsEl || !train) return;
+    if (stopsEl.dataset.train !== key) {
+      stopsEl.dataset.train = key;
+      stopsEl.innerHTML = '<div class="lb-live-empty">Chargement des arrêts…</div>';
+    }
     title.textContent = `Fiche ${train.label}`;
     route.textContent = train.route;
     if (cause){
@@ -1787,6 +1794,7 @@
 
     let stops = Array.isArray(train.stops) ? train.stops.filter(Boolean) : [];
     const info = await getLiveTrainStaticInfo(train.trainNumber);
+    if (renderVersion !== liveDetailRenderVersion) return;
     if (info?.stops?.length) stops = info.stops;
     const stopRows = Array.isArray(info?.stopRows) && info.stopRows.length
       ? info.stopRows
@@ -1796,13 +1804,11 @@
       return;
     }
 
-    // Premier rendu immédiat : parcours statique complet + horaires. Le temps
-    // réel et les suppressions officielles enrichissent ensuite sans bloquer.
-    stopsEl.innerHTML = stopRows.map((row)=>`<article class="lb-train-stop-item"><div class="lb-train-stop-head"><div class="lb-train-stop-name">${safeEscape(row?.name || '')}</div><div class="lb-train-stop-time"><span class="actual">${safeEscape(row?.time || '—')}</span></div></div><div class="lb-train-stop-signals"><span class="lb-stop-chip">Actualisation temps réel…</span></div></article>`).join('');
-
-    let officialRows = [];
-    const official = await officialPatternPromise;
-    officialRows = Array.isArray(official?.rows) ? official.rows : [];
+    // Afficher immédiatement le statut déjà connu et les retours voyageurs.
+    // Le parcours officiel enrichit le même rendu sans bloquer les arrêts.
+    const paintStops = (official) => {
+    if (renderVersion !== liveDetailRenderVersion) return;
+    const officialRows = Array.isArray(official?.rows) ? official.rows : [];
   const voiceStopKey = (value)=> String(value || '')
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '')
@@ -1818,7 +1824,7 @@
     stopsEl.innerHTML = stopRows.map((row)=>{
       const stopName = row?.name || '';
       const officialRow = officialByStop.get(voiceStopKey(stopName)) || null;
-      const officialDeleted = !!officialRow?.isDeleted;
+      const officialDeleted = officialRow ? !!officialRow.isDeleted : train.statusClass === 'cancel';
       const officialNewOrigin = !!officialRow?.isNewOrigin;
       const officialNewTerminus = !!officialRow?.isNewTerminus;
       const stopKey = String(stopName || '').toLowerCase();
@@ -1826,7 +1832,8 @@
       const propagatedRaw = propagatedByStop.get(stopKey) || null;
       const propagated = propagatedRaw ? mergeSignalGroup([propagatedRaw])[0] : null;
       const baseTime = String(row?.time || '—');
-	  const gtfsAmendedTime = String(row?.amendedTime || '—');
+      const officialRaw = officialRow?.impact || officialRow?.raw || {};
+      const gtfsAmendedTime = formatGtfsHHMM(officialRaw.amended_departure_time || officialRaw.amended_arrival_time || row?.amendedTime || '') || '—';
       const gtfsDelayFromStop = getGtfsRtDelayForStop(train.trainNumber, stopName);
       const gtfsDelayMin = Number.isFinite(gtfsDelayFromStop) ? gtfsDelayFromStop : Number(row?.delayMin);
       const baseMinutes = hhmmToMinutes(baseTime);
@@ -1906,6 +1913,10 @@
       ` : '';
       return `<article class="lb-train-stop-item"><div class="lb-train-stop-head"><div class="lb-train-stop-name">${safeEscape(stopName)}</div><div class="${timeClass}">${timeHtml}</div></div><div class="lb-train-stop-signals">${chips}</div>${editorHtml}</article>`;
     }).join('');
+    };
+    paintStops(null);
+    const official = await officialPatternPromise;
+    paintStops(official);
   }
 
   function signalTrainOptionsSignature(trains){
@@ -3855,7 +3866,7 @@
 
     const gtfsPromise = (async () => {
       try {
-        if (typeof loadGtfsRetards === 'function') {
+        if (typeof loadGtfsRetards === 'function' && (forceFresh || !window.retardsGTFS || Date.now() - Number(window.__lbGtfsLoadedAt || 0) > 60000)) {
           await loadGtfsRetards({ forceFresh: !!forceFresh, useCachedFirst: !forceFresh });
         }
       } catch (error) {
@@ -3940,6 +3951,22 @@
     const allStopsDeleted = checkedHubRows.length > 0
       && checkedHubRows.every((row) => row.isDeleted);
     let rawStatus = String(extracted?.raw?.status || meta?.status || '').toUpperCase();
+    // Une annulation explicite de CE voyage prime sur des zéros GTFS encore
+    // programmés. Les perturbations de ligne et les suppressions partielles
+    // restent traitées arrêt par arrêt selon la logique existante.
+    const journeyDisruptionIds = new Set((journey?.disruptions || []).map(d => d.id));
+    const tripId = String(journey?.trip?.id || '');
+    const explicitTripCancellation = disruptions.some(disruption => {
+      if (String(disruption?.severity?.effect || '').toUpperCase() !== 'NO_SERVICE') return false;
+      const linked = journeyDisruptionIds.has(disruption.id);
+      const tripAffected = (disruption.impacted_objects || []).some(object => {
+        const pt = object?.pt_object;
+        return tripId && (pt?.id === tripId || pt?.trip?.id === tripId);
+      });
+      const partial = (disruption.impacted_objects || []).some(object => object?.impacted_stops?.length);
+      return (linked || tripAffected) && !partial;
+    });
+    if (explicitTripCancellation) rawStatus = 'CANCELED';
     if (!gtfsClearlyRunning) {
       const statusSaysCanceled = /NO_SERVICE|CANCEL|SUPPR/.test(rawStatus);
       if (!statusSaysCanceled && allStopsDeleted) {
@@ -5357,7 +5384,8 @@
     });
   }
 
-  async function getOfficialServicePattern(numberValue, dateValue) {
+  const officialPatternPending = new Map();
+  async function buildOfficialServicePattern(numberValue, dateValue) {
   const number = normalizeTrainNumber(numberValue);
   const dateIso = /^\d{4}-\d{2}-\d{2}$/.test(String(dateValue || ''))
     ? String(dateValue)
@@ -5366,7 +5394,13 @@
 
   const [liveResult, staticResult] = await Promise.allSettled([
     loadLiveBundle(number, dateIso, false),
-    fetchStaticCandidates(number, dateIso)
+    (async () => {
+      if (typeof window.loadFastStaticBatch !== 'function') return fetchStaticCandidates(number, dateIso);
+      const payload = await window.loadFastStaticBatch(dateIso, [number]);
+      const trip = payload?.trains?.[number];
+      if (!trip?.stop_times?.length) return fetchStaticCandidates(number, dateIso);
+      return [{ tripId:trip.trip_id, rows:trip.stop_times.map(row => ({ ...row, stop_name:row.stop_point?.name, stop_id:row.stop_point?.id })) }];
+    })()
   ]);
   const liveBundle = liveResult.status === 'fulfilled' ? liveResult.value : null;
   const candidates = staticResult.status === 'fulfilled' ? staticResult.value : [];
@@ -5378,6 +5412,14 @@
   rows = applyEffectiveServicePattern(rows, liveBundle);
   return { rows, liveBundle };
 }
+
+  function getOfficialServicePattern(numberValue, dateValue) {
+    const key = `${normalizeTrainNumber(numberValue)}:${String(dateValue || '').replace(/-/g, '')}`;
+    if (officialPatternPending.has(key)) return officialPatternPending.get(key);
+    const promise = buildOfficialServicePattern(numberValue, dateValue).finally(() => officialPatternPending.delete(key));
+    officialPatternPending.set(key, promise);
+    return promise;
+  }
 
   function init() {
     removeLegacyTrainFinder();
