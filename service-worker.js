@@ -1,4 +1,4 @@
-const CACHE_VERSION = 'v96';
+const CACHE_VERSION = 'v97';
 const APP_CACHE = `lbetaillere-app-${CACHE_VERSION}`;
 const STATIC_CACHE = `lbetaillere-static-${CACHE_VERSION}`;
 const DATA_CACHE = `lbetaillere-data-${CACHE_VERSION}`;
@@ -13,10 +13,12 @@ const APP_SHELL = [
   './assets/lb-home-readability-v1.css?v=20261006-5',
   './assets/lb-home-guest-favorites-v1.css?v=20261006-2',
   './assets/lb-home-guest-favorites-v1.js?v=20261006-1',
+  './assets/home-major-alerts.js?v=20261007-liveperf1',
+  './assets/signal-stations-fix.js?v=20261007-liveperf1',
   './',
   './index.html',
   './manifest.webmanifest',
-  './config/territory.nancy-metz-lux.js?v=4',
+  './config/territory.nancy-metz-lux.js?v=11',
   './assets/lb-app-shell-v3.js?v=20261006-account1',
   './assets/lb-legacy.css?v=5',
   './assets/lb-design-system-v3.css?v=10',
@@ -26,7 +28,7 @@ const APP_SHELL = [
   './assets/lb-index-late.css?v=1',
   './assets/lb-home-premium-v2.css?v=1',
   './assets/lb-index-head.js?v=1',
-  './assets/lb-index-core.js?v=20261006-account1',
+  './assets/lb-index-core.js?v=20261007-liveperf1',
   './assets/lb-account-page-v1.js?v=20261006-2',
   './assets/lb-account-page-v1.css?v=20261006-4',
   './assets/lb-grade-thumbs/grade-0.webp',
@@ -39,13 +41,13 @@ const APP_SHELL = [
   './assets/lb-grade-thumbs/grade-7.webp',
 
   './assets/lb-index-home.js?v=2',
-  './assets/lb-index-features.js?v=20261006-push1',
+  './assets/lb-index-features.js?v=20261007-liveperf1',
   './assets/lb-comment-reactions-v1.js?v=20261005-2',
   './assets/lb-comment-reactions-v1.css?v=20261005-3',
   './assets/lb-status-harmony-v1.css?v=1',
   './assets/lb-mobile-v4.js?v=6',
   './assets/lb-traffic-details-v1.css?v=4',
-  './assets/lb-traffic-details-v1.js?v=4',
+  './assets/lb-traffic-details-v1.js?v=7',
   './jeuBETA1.html?v=2',
   './logoText.png',
   './logobetailleresanstexte.png',
