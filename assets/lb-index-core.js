@@ -209,9 +209,9 @@ function resolveVoieByStopOnlyLikeCarte({ voiesMap, stopName, mode = 'dep' }){
 }
 
 const LB_ENDPOINTS = Object.freeze({
-  voiesByTrain: 'https://vps.labetaillere.fr/gtfs/voies_by_train.json',
-  retardsCfl: 'https://vps.labetaillere.fr/gtfs/retards_cfl.json',
-  compotrains: 'https://vps.labetaillere.fr/gtfs/Compotrains.json',
+  voiesByTrain: 'https://vps.labetaillere.fr/g/a0c79a4e',
+  retardsCfl: 'https://vps.labetaillere.fr/g/64e1f2b7',
+  compotrains: 'https://vps.labetaillere.fr/g/81a6d0c3',
   hafasDepartureBoard: 'https://vps.labetaillere.fr/hafas/departureBoard',
   cflStaticBase: 'https://vps.labetaillere.fr/gtfs/static/CFL/',
   // FIX 2026-05-02 : les fichiers GTFS SNCF sont servis par le VPS, pas par GitHub/www.
@@ -707,7 +707,7 @@ async function loadCompoData({ forceFresh = false, background = false } = {}) {
     }
 
     const COMPO_PRIMARY_URL = LB_ENDPOINTS.compotrains;
-    const COMPO_FALLBACK_URL = 'https://raw.githubusercontent.com/TekMaTe-lux/Assistant-train/main/Compotrains.json';
+    const COMPO_FALLBACK_URL = 'https://vps.labetaillere.fr/g/81a6d0c3';
 
     const tryFetchJson = async (url) => {
       const r = await fetch(url, { cache: forceFresh ? 'no-store' : 'default' });
@@ -2239,22 +2239,22 @@ const HAFAS_PROXY_SAME_ORIGIN = (()=>{
 const HAFAS_PROXY_CANDIDATES = [
   LB_ENDPOINTS.retardsCfl,
   HAFAS_PROXY_SAME_ORIGIN,
-  'https://raw.githubusercontent.com/TekMaTe-lux/Assistant-train/main/Assistant-train/retards_cfl.json',
-  'https://cdn.jsdelivr.net/gh/TekMaTe-lux/Assistant-train@main/Assistant-train/retards_cfl.json'
+  'https://vps.labetaillere.fr/g/64e1f2b7',
+  'https://vps.labetaillere.fr/g/64e1f2b7'
 ];
 
 const VOIES_BY_TRAIN_CANDIDATES = [
   LB_ENDPOINTS.voiesByTrain,
   location.origin + location.pathname.replace(/\/[^\/]*$/, '/') + 'voies_by_train.json',
-  'https://raw.githubusercontent.com/TekMaTe-lux/Assistant-train/main/Assistant-train/voies_by_train.json',
-  'https://cdn.jsdelivr.net/gh/TekMaTe-lux/Assistant-train@main/Assistant-train/voies_by_train.json'
+  'https://vps.labetaillere.fr/g/a0c79a4e',
+  'https://vps.labetaillere.fr/g/a0c79a4e'
 ];
 
 const HAFAS_BY_STATION_CANDIDATES = [
-  'https://vps.labetaillere.fr/gtfs/retards_cfl_by_station.json',
+  'https://vps.labetaillere.fr/g/b2d4c8f1',
   location.origin + location.pathname.replace(/\/[^\/]*$/, '/') + 'retards_cfl_by_station.json',
-  'https://raw.githubusercontent.com/TekMaTe-lux/Assistant-train/main/Assistant-train/retards_cfl_by_station.json',
-  'https://cdn.jsdelivr.net/gh/TekMaTe-lux/Assistant-train@main/Assistant-train/retards_cfl_by_station.json'
+  'https://vps.labetaillere.fr/g/b2d4c8f1',
+  'https://vps.labetaillere.fr/g/b2d4c8f1'
 ];
 
 const HAFAS_PROXY_TTL_MS = 110000;
@@ -7870,7 +7870,7 @@ const GTFS_RT_DATASETS = [
     label: 'GTFS-RT Nancy/Metz/Lux',
     filename: 'retards_nancymetzlux.json',
     sources: [
-      'https://vps.labetaillere.fr/gtfs/retards_nancymetzlux.json',
+      'https://vps.labetaillere.fr/g/3a9f71e5',
       new URL('retards_nancymetzlux.json', location.href).href
     ]
   },
@@ -7879,7 +7879,7 @@ const GTFS_RT_DATASETS = [
     label: 'GTFS-RT Carte SNCF (causes)',
     filename: 'retards_carte.json',
     sources: [
-      'https://vps.labetaillere.fr/gtfs/retards_carte.json',
+      'https://vps.labetaillere.fr/g/5c2e18a4',
       new URL('retards_carte.json', location.href).href
     ]
   },
@@ -8595,9 +8595,9 @@ function resetGtfsRetards(scope) {
   if (typeof lbRefreshTableLivingUI === 'function') lbRefreshTableLivingUI();
 }
 /* ---------- ALERTES ---------- */
-const urlAlertes = 'https://vps.labetaillere.fr/gtfs/alertes_sillon_lorrain.json';
-const urlSiriAlertes = 'https://vps.labetaillere.fr/gtfs/siri_sx_alertes.json';
-const urlHafasAlertes = 'https://vps.labetaillere.fr/gtfs/hafas_him_cfl.json';
+const urlAlertes = 'https://vps.labetaillere.fr/g/94f0bd62';
+const urlSiriAlertes = 'https://vps.labetaillere.fr/g/72ab61c9';
+const urlHafasAlertes = 'https://vps.labetaillere.fr/g/d14c83e7';
 const LB_ALERTS_BY_TRAIN = new Map();
 const LB_ALERTS_BY_KEY = new Map();
 const LB_TABLE_DISRUPTIONS_BY_TRAIN = new Map();
