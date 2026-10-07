@@ -14,7 +14,7 @@
   );
 
   const LUX_ARRIVALS_URL =
-    "https://vps.labetaillere.fr/gtfs/retards_cfl_arrivals.json";
+    "https://vps.labetaillere.fr/g/e7a329d6";
   const LUX_ARRIVALS_REFRESH_MS = 120000;
 
   const TRAIN_NUMBER_EQUIVALENCE_GROUPS = [
