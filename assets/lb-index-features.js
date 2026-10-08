@@ -5384,7 +5384,7 @@
 
     try {
       const livePromise = loadLiveBundle(number, dateIso, forceFresh);
-      const staticPromise = fetchStaticCandidates(number, dateIso);
+      const staticPromise = fetchStaticCandidates(number, dateIso).catch((error) => { console.warn('[Fiche Bétaillère] horaires statiques indisponibles', error); return []; });
       const reliabilityPromise = loadReliability(number);
       const affluencePromise = loadAffluence(number, dateIso);
       const supplementaryPromise = loadSupplementaryData(forceFresh)
@@ -5393,18 +5393,19 @@
       // Les données secondaires (composition / voies) ne doivent jamais bloquer
       // l'affichage des horaires, du LIVE et du parcours principal.
       // Priorité au trajet : l'historique et l'affluence ne doivent pas retarder le LIVE.
-      const [liveResult, staticResult] = await Promise.allSettled([
-        livePromise,
-        staticPromise
-      ]);
-
+      // Un parcours LIVE complet est déjà suffisant pour afficher la fiche.
+      // Ne pas l'immobiliser sur la recherche GTFS statique (parfois > 9 s côté navigateur).
+      const liveResult = await Promise.allSettled([livePromise]);
       if (requestId !== state.requestId) return;
-      const liveBundle = liveResult.status === 'fulfilled' ? liveResult.value : null;
-      const candidates = staticResult.status === 'fulfilled' ? staticResult.value : [];
+      const liveBundle = liveResult[0].status === 'fulfilled' ? liveResult[0].value : null;
+      const liveJourneyRows = normalizeJourneyRows(liveBundle);
+      const hasLiveStopTimes = liveJourneyRows.length >= 2 && liveJourneyRows.some((row) => row?.arrival || row?.departure);
+      const staticResult = hasLiveStopTimes ? null : await Promise.allSettled([staticPromise]);
+      if (requestId !== state.requestId) return;
+      const candidates = staticResult?.[0]?.status === 'fulfilled' ? staticResult[0].value : [];
       const reliability = null;
       const affluence = null;
       const chosen = chooseStaticCandidate(candidates, liveBundle, dateIso);
-      const liveJourneyRows = normalizeJourneyRows(liveBundle);
       let rows = liveJourneyRows.length
         ? liveJourneyRows
         : normalizeStaticRows(chosen, liveBundle);
