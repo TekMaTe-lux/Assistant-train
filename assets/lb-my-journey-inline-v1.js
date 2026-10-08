@@ -56,6 +56,7 @@
    try{sessionStorage.setItem('lbmj-selected-kind',kind);}catch(_){}
    // Preserve the existing home-card behaviour (including its complete modal).
  },true);
+ window.addEventListener('lb:my-journey-select',event=>{const kind=event.detail?.kind;if(kind!=='AM'&&kind!=='PM')return;if(!active)sync();if(active)choose(kind);});
  window.addEventListener('hashchange',sync);
  new MutationObserver(()=>{if(!active&&activePage())sync();}).observe(widget,{attributes:true,attributeFilter:['style','class']});
  sync();
