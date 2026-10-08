@@ -31,10 +31,11 @@
     }
     const aff = line.querySelector('details.fav-aff');
     const affBtn = tools.querySelector('[data-tool="affluence"] strong');
-    const affSchema = aff?.querySelector('.fav-aff-schema--compact');
+    // Never read the aggregate text of the train diagram: it contains every wagon percentage.
+    // Keep the detailed diagram in its original component and disclose it only on demand.
     if (affBtn) {
-      const val = txt(affSchema);
-      affBtn.textContent = val && val.length < 25 ? val : aff ? 'Voir détail ⌄' : 'Fiche train ↗';
+      const val = aff ? (aff.open ? 'Masquer ▲' : 'Voir détail ⌄') : 'Fiche train ↗';
+      if (affBtn.textContent !== val) affBtn.textContent = val;
     }
     const reliability = stats.querySelector('.fav-reliability-pct');
     const reliabilityBtn = tools.querySelector('[data-tool="fiabilite"] strong');
