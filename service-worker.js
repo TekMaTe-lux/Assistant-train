@@ -1,4 +1,4 @@
-const CACHE_VERSION = 'v122';
+const CACHE_VERSION = 'v123';
 const APP_CACHE = `lbetaillere-app-${CACHE_VERSION}`;
 const STATIC_CACHE = `lbetaillere-static-${CACHE_VERSION}`;
 const DATA_CACHE = `lbetaillere-data-${CACHE_VERSION}`;
@@ -20,7 +20,7 @@ const APP_SHELL = [
   './manifest.webmanifest',
   './config/territory.nancy-metz-lux.js?v=11',
   './assets/lb-app-shell-v3.js?v=20261006-account1',
-  './assets/lb-legacy.css?v=20261008-history-order-fix',
+  './assets/lb-legacy.css?v=20261008-calendar-countdown2',
   './assets/lb-design-system-v3.css?v=10',
   './assets/lb-mobile-v4.css?v=14',
   './assets/lb-v4-live-preview.css?v=20260831-3',
@@ -41,7 +41,7 @@ const APP_SHELL = [
   './assets/lb-grade-thumbs/grade-7.webp',
 
   './assets/lb-index-home.js?v=2',
-  './assets/lb-index-features.js?v=20261008-journey-countdown1',
+  './assets/lb-index-features.js?v=20261008-calendar-countdown2',
   './assets/lb-comment-reactions-v1.js?v=20261005-2',
   './assets/lb-comment-reactions-v1.css?v=20261005-3',
   './assets/lb-status-harmony-v1.css?v=20261008-profile-events1',
