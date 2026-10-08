@@ -39,7 +39,7 @@ test('full cancellation and partial terminus keep distinct stop states',()=>{
 function runningContext() {
  const ctx={window:{retardsGTFS:{}},Date,console,getGtfsTrainMeta:bucket=>bucket?.meta||{},normalizeStationName:x=>String(x).toLowerCase()};
  vm.createContext(ctx);
- vm.runInContext(block('function getGtfsRunningServiceState(', 'function mergeGtfsNormalizedPayloads('),ctx);
+ vm.runInContext(block('function lbResolveRunningServiceProof(', 'function mergeGtfsNormalizedPayloads('),ctx);
  return ctx;
 }
 test('reinstatement requires a fresh explicit SNCF running status covering every stop',()=>{
@@ -65,7 +65,7 @@ test('old SNCF cancellation restores only on confirmed reinstatement and comes b
  const header={dataset:{trainNumber:'88745',sncfCanceledStops:'["Luxembourg"]'},querySelector:()=>icon};
  const table={querySelector:()=>({querySelectorAll:()=>[header]}),tBodies:[{rows:[row]}]};
  let confirmed=false;
- const ctx={document:{querySelector:()=>table},console,isGtfsTrainClearlyRunning:()=>true,getGtfsRunningServiceState:()=>confirmed?{status:'ON_TIME',maxDelay:0}:null,resetGtfsRetards:()=>{},ft:()=> '15:57',escapeHtml:x=>x,formatClockWithVoie:(clock,voie)=>clock+'<span class="voie-badge">'+voie+'</span>'};
+ const ctx={getGtfsTrainMeta:()=>({}),document:{querySelector:()=>table},console,isGtfsTrainClearlyRunning:()=>true,getGtfsRunningServiceState:()=>confirmed?{status:'ON_TIME',maxDelay:0}:null,resetGtfsRetards:()=>{},ft:()=> '15:57',escapeHtml:x=>x,formatClockWithVoie:(clock,voie)=>clock+'<span class="voie-badge">'+voie+'</span>'};
  vm.createContext(ctx);
  const a=core.indexOf('function applyRetardsFromGTFS('),b=core.indexOf('/* ---------- ALERTES ---------- */',a);
  vm.runInContext(core.slice(a,b),ctx);
@@ -121,3 +121,4 @@ test('realtime payload supplies Luxembourg platforms immediately without another
  await ctx.loadCflVoiesByTrain();assert.equal(voieCalls.length,2);assert.equal(ctx.window.cflVoiesByTrainMap.get('88745').get('luxembourg'),'8');
  const current=ctx.window.cflVoiesByTrainMap;await ctx.loadGtfsRetards();assert.equal(ctx.window.cflVoiesByTrainMap,current);assert.equal(current.get('88745').get('luxembourg'),'8');
 });
+

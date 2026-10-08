@@ -10757,7 +10757,10 @@ function computeTrainDelayInfo(train){
       const keyList = [String(candidate)];
       if (norm != null || norm === 0) keyList.push(String(norm));
       for (const k of keyList){
-        if (sncfDisruptionsByTrain.has(k)) return sncfDisruptionsByTrain.get(k);
+        if (sncfDisruptionsByTrain.has(k)) {
+          if (lbMapHasOldSncfCancellation(train)) return 'Remis en circulation selon le temps réel SNCF';
+          return sncfDisruptionsByTrain.get(k);
+        }
       }
     }
     return null;
@@ -10924,12 +10927,74 @@ function adaptDelayEntryForStop(entry, stopMeta){
     }
   }
 
+
+  /* LB_RUNNING_SERVICE_PROOF_V1_START */
+// Embedded at build time in the app and map: no extra request or timer.
+function lbResolveRunningServiceProof(meta, stops, normalize, now = Date.now()) {
+  const status = String(meta?.status || '').toUpperCase();
+  const source = String(meta?.data_source || '').toLowerCase();
+  if (!['ON_TIME','DELAYED','NO_DELAY'].includes(status)) return null;
+  if (!/gtfs_rt|gtfs-rt|siri/.test(source)) return null;
+  const generated = meta.feed_generated_at;
+  const timestamp = typeof generated === 'number'
+    ? (generated < 1e12 ? generated * 1000 : generated)
+    : Date.parse(generated || '');
+  if (!Number.isFinite(timestamp) || now - timestamp > 5 * 60000 || timestamp > now + 60000) return null;
+  const serviceStops = meta.service_stops;
+  if (!serviceStops || typeof serviceStops !== 'object') return null;
+  const names = Array.isArray(stops) ? stops.filter(Boolean) : [];
+  if (!names.length || (meta.canceled_stops || []).length) return null;
+  const values = new Map(Object.entries(serviceStops).map(([name,value]) => [normalize(name), value]));
+  const delays = names.map(name => {
+    const value = values.get(normalize(name));
+    return value === null || value === undefined || value === '' ? NaN : Number(value);
+  });
+  if (!delays.every(Number.isFinite)) return null;
+  return { status, maxDelay: Math.max(0, ...delays) };
+}
+
+  const lbMapRunningProofCache = new WeakMap();
+  function lbMapRunningServiceState(tripId, seq, numberKey) {
+    const raw = realtimeRawData.gtfs;
+    if (!raw || typeof raw !== 'object' || !seq?.length) return null;
+    const key = String(normalizeTrainNumberKey(numberKey) || numberKey || '');
+    const payload = raw.trains?.[key];
+    if (!payload) return null;
+    const generated = raw.generated_at || raw.generatedAt || raw.updated_at;
+    const stamp = parseGtfsRtTimestamp(generated);
+    const now = Date.now();
+    if (!Number.isFinite(stamp) || now - stamp > 300000 || stamp > now + 60000) return null;
+    let cache = lbMapRunningProofCache.get(raw);
+    if (!cache) { cache = new Map(); lbMapRunningProofCache.set(raw, cache); }
+    const cached = cache.get(tripId);
+    if (cached?.seq === seq) return cached.state;
+    const names = seq.map(stop => stopsById.get(stop.stop_id)?.name);
+    const state = names.every(Boolean) ? lbResolveRunningServiceProof({
+      status: payload.status,
+      data_source: payload.data_source,
+      feed_generated_at: generated,
+      service_stops: payload.stops,
+      canceled_stops: payload.canceled_stops || payload.cancelled_stops || []
+    }, names, normalizeStationName, now) : null;
+    cache.set(tripId, { seq, state });
+    return state;
+  }
+  function lbMapHasOldSncfCancellation(train) {
+    const key = resolveRealtimeNumberKey(train);
+    const seq = stopTimesByTrip.get(train?.id);
+    if (!lbMapRunningServiceState(train?.id, seq, key)) return false;
+    const entries = realtimeSources.sncf.map.get(String(key));
+    return entries instanceof Map && Array.from(entries.values()).some(entry => entry?.value === null);
+  }
+  /* LB_RUNNING_SERVICE_PROOF_V1_END */
+
   function computeRealtimeStopData(tripId, seq, numberKey, options = {}){
     if (!seq || !seq.length){
       realtimeStopDataByTrip.delete(tripId);
       return null;
     }
     const normalizedKey = normalizeTrainNumberKey(numberKey);
+    const runningService = lbMapRunningServiceState(tripId, seq, normalizedKey);
 
     const nationalFullCancelled =
       normalizedKey != null
@@ -11117,6 +11182,9 @@ function adaptDelayEntryForStop(entry, stopMeta){
             findDelayEntryForStop(sourceMap, stopMeta);
 
           if (!candidate) continue;
+          // Same full-route SNCF proof as timetable/LIVE. Other cancellation
+          // authorities (GTFS trip/stop, national, HAFAS HIM) remain intact.
+          if (runningService && normalizedSource === 'sncf' && candidate.value === null) continue;
 
           if (
             normalizedSource === 'gtfs'
@@ -11137,7 +11205,7 @@ function adaptDelayEntryForStop(entry, stopMeta){
         entry = gtfsCancellation;
       }
 
-      if (!entry && combinedFallback){
+      if (!entry && combinedFallback && !runningService){
         entry = findDelayEntryForStop(combinedFallback, stopMeta);
         const entrySource = normalizeRealtimeSourceKey(entry?.sourceKey || entry?.source);
         if (entry && allowedSources.size && entrySource && !allowedSources.has(entrySource)){
@@ -23618,11 +23686,7 @@ async function lbV3ProdFastBoot(){
       else window.addEventListener('lb:map:first-stable-render', schedule, { once:true });
       setTimeout(schedule, 6500);
     });
-    const sncfPromise = loadSncfRealtime({ forceFresh: true }).catch(err => {
-      console.error('[SNCF] échec initial', err);
-      setRealtimeSourceError('sncf', 'indisponibles');
-    });
-    const sncfStatusPromise = loadSncfStatus().catch(err => console.warn('[SNCF] statut initial indisponible', err));
+    // Legacy retards_carte export retired: realtime/cause enrichment uses the shared HUB.
     const gtfsPromise = loadGtfsRetards({ forceFresh: true }).catch(err => {
       console.error('[GTFS-RT] échec initial', err);
       setRealtimeSourceError('gtfs', 'indisponibles');
@@ -23720,24 +23784,6 @@ async function lbV3ProdFastBoot(){
             setRealtimeSourceError('hafas', 'rafraîchissement en échec');
           });
         }, HAFAS_REFRESH_INTERVAL_MS);
-      }
-    });
-    sncfPromise.finally(()=>{
-      if (sncfRefreshTimer == null){
-        sncfRefreshTimer = setInterval(()=>{
-          guardedRefresh(() => loadSncfRealtime({ forceFresh: true })).catch(err => {
-            console.warn('[SNCF] rafraîchissement en échec', err);
-            const hadData = realtimeSources.sncf.lastUpdated != null;
-            setRealtimeSourceError('sncf', hadData ? 'rafraîchissement en échec' : 'indisponibles');
-          });
-        }, SNCF_RT_REFRESH_INTERVAL_MS);
-      }
-    });
-    sncfStatusPromise.finally(()=>{
-      if (sncfStatusRefreshTimer == null){
-        sncfStatusRefreshTimer = setInterval(()=>{
-          guardedRefresh(() => loadSncfStatus()).catch(err => console.warn('[SNCF] statut indisponible', err));
-        }, SNCF_RT_STATUS_REFRESH_INTERVAL_MS);
       }
     });
     tracksPromise.finally(()=>{

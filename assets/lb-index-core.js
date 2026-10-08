@@ -7906,15 +7906,7 @@ const GTFS_RT_DATASETS = [
       new URL('retards_nancymetzlux.json', location.href).href
     ]
   },
-  {
-    id: 'sncf-carte',
-    label: 'GTFS-RT Carte SNCF (causes)',
-    filename: 'retards_carte.json',
-    sources: [
-      'https://vps.labetaillere.fr/g/5c2e18a4',
-      new URL('retards_carte.json', location.href).href
-    ]
-  },
+
   {
     id: 'cfl-hafas',
     label: 'GTFS-RT CFL / HAFAS',
@@ -8031,30 +8023,35 @@ function isGtfsTrainClearlyRunning(bucket) {
 
 // Une remise en circulation totale exige un flux SNCF récent, un statut
 // roulant explicite et chacun des arrêts du parcours (pas seulement CFL).
-function getGtfsRunningServiceState(number, stops) {
-  const bucket = window.retardsGTFS?.[String(number)];
-  const meta = getGtfsTrainMeta(bucket);
-  const status = String(meta.status || '').toUpperCase();
-  const source = String(meta.data_source || '').toLowerCase();
-  if (!bucket || !['ON_TIME','DELAYED','NO_DELAY'].includes(status)) return null;
+// Embedded at build time in the app and map: no extra request or timer.
+function lbResolveRunningServiceProof(meta, stops, normalize, now = Date.now()) {
+  const status = String(meta?.status || '').toUpperCase();
+  const source = String(meta?.data_source || '').toLowerCase();
+  if (!['ON_TIME','DELAYED','NO_DELAY'].includes(status)) return null;
   if (!/gtfs_rt|gtfs-rt|siri/.test(source)) return null;
   const generated = meta.feed_generated_at;
   const timestamp = typeof generated === 'number'
     ? (generated < 1e12 ? generated * 1000 : generated)
     : Date.parse(generated || '');
-  if (!Number.isFinite(timestamp) || Date.now() - timestamp > 5 * 60000 || timestamp > Date.now() + 60000) return null;
+  if (!Number.isFinite(timestamp) || now - timestamp > 5 * 60000 || timestamp > now + 60000) return null;
   const serviceStops = meta.service_stops;
   if (!serviceStops || typeof serviceStops !== 'object') return null;
   const names = Array.isArray(stops) ? stops.filter(Boolean) : [];
   if (!names.length || (meta.canceled_stops || []).length) return null;
-  const normalize = name => typeof normalizeStationName === 'function' ? normalizeStationName(name) : String(name).toLowerCase();
+  const values = new Map(Object.entries(serviceStops).map(([name,value]) => [normalize(name), value]));
   const delays = names.map(name => {
-    const key = Object.keys(serviceStops).find(key => normalize(key) === normalize(name));
-    const value = key === undefined ? null : serviceStops[key];
+    const value = values.get(normalize(name));
     return value === null || value === undefined || value === '' ? NaN : Number(value);
   });
   if (!delays.every(Number.isFinite)) return null;
   return { status, maxDelay: Math.max(0, ...delays) };
+}
+
+function getGtfsRunningServiceState(number, stops) {
+  const bucket = window.retardsGTFS?.[String(number)];
+  if (!bucket) return null;
+  const normalize = name => typeof normalizeStationName === 'function' ? normalizeStationName(name) : String(name).toLowerCase();
+  return lbResolveRunningServiceProof(getGtfsTrainMeta(bucket), stops, normalize);
 }
 
 function mergeGtfsNormalizedPayloads(payloads) {
@@ -8523,7 +8520,34 @@ function resetGtfsRetards(scope) {
       badge.remove();
     }
   });
-}function applyRetardsFromGTFS(data) {
+}
+// Update only the status text: alert children, links and table dimensions survive.
+function lbSyncGtfsTableHeaders(table, data) {
+  for (const header of table.querySelectorAll('th[data-train-number]')) {
+    const icon = header.querySelector('.train-state');
+    const bucket = data?.[header.dataset.trainNumber];
+    if (!icon || !bucket || icon.dataset.reinstated === '1') continue;
+    const meta = getGtfsTrainMeta(bucket);
+    const status = String(meta.status || '').toUpperCase();
+    const full = ['CANCELED','CANCELLED','NO_SERVICE'].includes(status);
+    const partial = !full && (meta.canceled_stops || []).length > 0;
+    const maxDelay = Math.max(0, ...Object.values(bucket).map(Number).filter(Number.isFinite));
+    const textNodes = Array.from(icon.childNodes).filter(node => node.nodeType === 3);
+    if (!icon.__gtfsStatusBase) icon.__gtfsStatusBase = { text:textNodes.map(node=>node.textContent).join(''), title:icon.title };
+    let text = icon.__gtfsStatusBase.text;
+    let title = icon.__gtfsStatusBase.title;
+    if (full) { text = '❌'; title = 'Train supprimé selon le temps réel SNCF'; }
+    else if (partial) { text = '⚠️'; title = 'Suppression partielle selon le temps réel SNCF'; }
+    else if (maxDelay > 0 && !/supprim|suppression|exceptionnel/i.test(title)) {
+      text = '⏰'; title = `Retard · +${Math.round(maxDelay)} min`;
+    }
+    if (!textNodes.length && text) icon.insertBefore(document.createTextNode(text), icon.firstChild);
+    else textNodes.forEach((node,index) => { if (node.textContent !== (index === 0 ? text : '')) node.textContent = index === 0 ? text : ''; });
+    if (icon.title !== title) icon.title = title;
+  }
+}
+
+function applyRetardsFromGTFS(data) {
   const table = document.querySelector("#trainInfo table");
   if (!table) { console.log("⛔ Le tableau n'est pas encore généré !"); return; }
 
@@ -8564,6 +8588,25 @@ function resetGtfsRetards(scope) {
 
       const perTrain = data?.[trainNumber];
       if (!perTrain) { resetGtfsRetards(cell); continue; }
+
+      // Explicit SNCF cancellation wins even before the HUB catches up.
+      const meta = getGtfsTrainMeta(perTrain);
+      const tripCanceled = ['CANCELED','CANCELLED','NO_SERVICE'].includes(String(meta.status || '').toUpperCase());
+      const normalize = name => typeof normalizeStationName === 'function' ? normalizeStationName(name) : String(name).toLowerCase();
+      const stopCanceled = (meta.canceled_stops || []).some(name => normalize(name) === normalize(gare));
+      if ((tripCanceled || stopCanceled) && cell.dataset.baseTime) {
+        if (cell.__gtfsOriginalContent == null) cell.__gtfsOriginalContent = cell.innerHTML;
+        const voie = cell.querySelector('.voie-badge')?.textContent?.trim() || '';
+        const clock = escapeHtml(ft(cell.dataset.baseTime));
+        const content = `<span class="deleted">${voie ? formatClockWithVoie(clock, voie) : clock}</span>`;
+        if (cell.innerHTML !== content) cell.innerHTML = content;
+        cell.dataset.gtfsExplicitCanceled = '1';
+        continue;
+      }
+      if (cell.dataset.gtfsExplicitCanceled === '1') {
+        resetGtfsRetards(cell);
+        delete cell.dataset.gtfsExplicitCanceled;
+      }
 
       let retardMinutesValue = perTrain[gare];
       if (retardMinutesValue == null && typeof normalizeStationName === 'function') {
@@ -8696,6 +8739,7 @@ function resetGtfsRetards(scope) {
       }
     }
   }
+  if (typeof lbSyncGtfsTableHeaders === 'function') lbSyncGtfsTableHeaders(table, data);
   if (typeof lbRefreshTableLivingUI === 'function') lbRefreshTableLivingUI();
 }
 /* ---------- ALERTES ---------- */
@@ -9616,6 +9660,8 @@ async function chargerEtAfficherAlertes() {
         infoWrapper.appendChild(div);
       });
 	  updateDisruptionsSummaryVisibility();
+      const currentTable = document.querySelector('#trainInfo table');
+      if (currentTable && window.retardsGTFS) lbSyncGtfsTableHeaders(currentTable, window.retardsGTFS);
     })
     .catch(err => {
       console.error('Erreur lors du chargement des alertes:', err);
@@ -18648,3 +18694,4 @@ async function loadAffluenceDate(dateStr){
     initTableDateNav();
   }
 })();
+
