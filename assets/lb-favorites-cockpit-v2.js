@@ -63,18 +63,30 @@
   shell.querySelector('.lbfc-live').textContent=liveText||'Consultez la fiche pour le parcours en direct.';
   const reliability=stats?.querySelector('.fav-reliability-pct');
   shell.querySelector('.lbfc-fiab-value').textContent=read(reliability)||'—';
-  // The train composition stays sourced from the existing official profile: never invent a unit count.
-  const type=status?.querySelector('.fav-type-badge, .fav-train-type-badge, .fav-composition, .fav-type-icon');
-  shell.querySelector('.lbfc-comp-value').textContent=read(type)||'Voir composition ↗';
-  const diagram=line?.querySelector('.fav-aff-schema--compact');
-  const target=shell.querySelector('.lbfc-aff-value');
-  const diagramSig=diagram?.innerHTML||'';
-  if(target.dataset.value!==diagramSig){
-   target.dataset.value=diagramSig;
-   target.replaceChildren();
-   if(diagram){const clone=diagram.cloneNode(true);clone.querySelectorAll('script,style').forEach(e=>e.remove());clone.querySelectorAll('*').forEach(e=>{for(const node of Array.from(e.childNodes)){if(node.nodeType===3)node.textContent=node.textContent.replace(/\b\d+(?:[,.]\d+)?\s*%/g,'').trim();}});target.append(clone);}
-   else target.textContent='Non disponible';
+  // Composition: use the exact badge builder shared with existing live train sheets.
+  const compValue=shell.querySelector('.lbfc-comp-value');
+  const compIcon=shell.querySelector('.lbfc-comp-icon');
+  const compSource=typeof window.buildFavTrainTypeBadge==='function' && number!=='—'
+    ? window.buildFavTrainTypeBadge(number) : '';
+  if(compIcon.dataset.signature!==compSource){
+    compIcon.dataset.signature=compSource;compIcon.innerHTML=compSource;
   }
+  compValue.textContent=compSource?'Composition prévue':'Indisponible';
+  // Occupancy: extract the real percentage and carriage diagram from the existing shared data.
+  const aff=typeof window.getAffluenceTrainInfo==='function'&&number!=='—'
+    ? window.getAffluenceTrainInfo(number,kind==='AM'?(window.__lbPreferredAffStation||''):(window.__lbPreferredAffTo||'')):null;
+  const target=shell.querySelector('.lbfc-aff-value');
+  const rawPct=Number(aff?.depPct);
+  const pct=Number.isFinite(rawPct)?Math.max(0,Math.min(100,Math.round(rawPct))):null;
+  const wagon=aff?.schemaHtml||'';
+  const marker=`${number}|${pct}|${wagon}`;
+  if(target.dataset.value!==marker){
+   target.dataset.value=marker;target.replaceChildren();
+   if(pct!==null)target.append(make('strong','lbfc-aff-pct',`${pct} %`));
+   if(wagon){const diagram=make('span','lbfc-aff-diagram');diagram.innerHTML=wagon;target.append(diagram);}
+   if(pct===null&&!wagon)target.textContent='Indisponible';
+  }
+
  }
  const start=()=>{root.classList.add('lbfc-page');['AM','PM'].forEach(build);};
  if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',start,{once:true});else start();
