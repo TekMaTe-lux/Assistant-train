@@ -5392,18 +5392,17 @@
 
       // Les données secondaires (composition / voies) ne doivent jamais bloquer
       // l'affichage des horaires, du LIVE et du parcours principal.
-      const [liveResult, staticResult, reliabilityResult, affluenceResult] = await Promise.allSettled([
+      // Priorité au trajet : l'historique et l'affluence ne doivent pas retarder le LIVE.
+      const [liveResult, staticResult] = await Promise.allSettled([
         livePromise,
-        staticPromise,
-        reliabilityPromise,
-        affluencePromise
+        staticPromise
       ]);
 
       if (requestId !== state.requestId) return;
       const liveBundle = liveResult.status === 'fulfilled' ? liveResult.value : null;
       const candidates = staticResult.status === 'fulfilled' ? staticResult.value : [];
-      const reliability = reliabilityResult.status === 'fulfilled' ? reliabilityResult.value : null;
-      const affluence = affluenceResult.status === 'fulfilled' ? affluenceResult.value : null;
+      const reliability = null;
+      const affluence = null;
       const chosen = chooseStaticCandidate(candidates, liveBundle, dateIso);
       const liveJourneyRows = normalizeJourneyRows(liveBundle);
       let rows = liveJourneyRows.length
@@ -5435,13 +5434,26 @@
       renderReliability(reliability);
       state.lastBundle = { number, dateIso, rows, effectiveRows, liveBundle, reliability, affluence };
 
+      // Enrichissement progressif non bloquant ; ne jamais afficher les résultats d'un ancien train.
+      void reliabilityPromise.then((value) => {
+        if (requestId !== state.requestId) return;
+        state.lastBundle.reliability = value;
+        renderReliability(value);
+      }).catch((error) => console.warn('[Fiche Bétaillère] fiabilité indisponible', error));
+      void affluencePromise.then((value) => {
+        if (requestId !== state.requestId) return;
+        state.lastBundle.affluence = value;
+        renderAffluence(value);
+        renderComposition(number, value);
+      }).catch((error) => console.warn('[Fiche Bétaillère] affluence indisponible', error));
+
       // Quand les données complémentaires finissent plus tard, enrichir la fiche
       // en place sans relancer les appels principaux ni rouvrir le panneau.
       void supplementaryPromise.then(() => {
         if (requestId !== state.requestId || state.trainNumber !== number || state.dateIso !== dateIso) return;
         renderHero(number, dateIso, heroRows, liveBundle);
         renderRoute(number, dateIso, rows, liveBundle);
-        renderComposition(number, affluence);
+        renderComposition(number, state.lastBundle?.affluence || null);
       });
 
       setupProfileEvents(number, dateIso, liveBundle, chosen, requestId, forceFresh);
