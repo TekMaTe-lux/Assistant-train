@@ -4962,8 +4962,30 @@
     } else if (journeyPhase === 'after' && !canceled) {
       nextLabel = `Course terminée · terminus ${last?.name || 'atteint'}${actualArrival !== '—' ? ` à ${actualArrival}` : ''}.`;
     }
+    // Communication uniquement : états normalisés inchangés (LIVE, suppressions, remises en circulation).
+    const delayMinutes = Math.max(0, Math.round(Number(liveBundle?.maxDelay) || 0));
+    const delayed = status.className === 'is-delay';
+    const partial = status.className === 'is-partial';
+    const reinstated = !canceled && !partial && !!(
+      liveBundle?.reinstated || liveBundle?.extracted?.reinstated || liveBundle?.meta?.reinstated
+    );
+    if (reinstated) {
+      const prefix = '🐮 Remise en circulation confirmée !';
+      nextLabel = `${prefix} ${nextLabel}${delayMinutes ? ` · Retard actuel estimé : +${delayMinutes} min.` : ''}`;
+    } else if (partial) {
+      nextLabel = `⚠️ Suppression partielle : seule une partie du parcours est assurée.${delayMinutes ? ` Retard ${journeyPhase === 'before' ? 'annoncé' : 'estimé'} : +${delayMinutes} min.` : ''} ${nextLabel}`;
+    } else if (delayed && delayMinutes > 0) {
+      const lead = journeyPhase === 'before'
+        ? `⏳ Retard annoncé avant départ : +${delayMinutes} min.`
+        : journeyPhase === 'running'
+          ? `🐮 La Bétaillère roule ! Retard LIVE estimé : +${delayMinutes} min.`
+          : `🚆 Course terminée avec un retard estimé de +${delayMinutes} min.`;
+      nextLabel = `${lead} ${nextLabel}`;
+    } else if (canceled) {
+      nextLabel = '🚫 Bétaillère à l’étable : circulation entièrement supprimée. Consultez les perturbations.';
+    }
     // Le calendrier GTFS déjà chargé par les Favoris donne la prochaine occurrence réelle.
-    if ((journeyPhase === 'after' || canceled) && typeof window.lbGetTrainStaticNextPayload === 'function') {
+    if ((journeyPhase === 'after' || canceled) && !partial && !reinstated && typeof window.lbGetTrainStaticNextPayload === 'function') {
       const next = window.lbGetTrainStaticNextPayload(number);
       const nextDate = String(next?.nextServiceDate || '');
       const nextTime = String(next?.train?.stop_times?.[0]?.departure_time || '');
