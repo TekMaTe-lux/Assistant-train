@@ -3807,11 +3807,12 @@
     if (!panel) return;
     // La fiche doit vivre au niveau du body : sinon, depuis Accueil/Favoris,
     // un contexte d'empilement parent peut la maintenir derrière le voile.
-    if (panel.parentElement !== document.body) document.body.appendChild(panel);
+    if (!panel.classList.contains('lbmj-inline') && panel.parentElement !== document.body) document.body.appendChild(panel);
     panel.hidden = false;
     panel.setAttribute('aria-hidden', 'false');
     panel.setAttribute('aria-busy', 'true');
-    document.body.classList.add('lb-train-detail-open');
+    if (!panel.classList.contains('lbmj-inline')) document.body.classList.add('lb-train-detail-open');
+    else document.body.classList.remove('lb-train-detail-open', 'lb-train-detail-from-map');
     updateProfileTitle(number);
     void ensureProfileTitle(number);
     byId('trainDetailDateLabel').textContent = formatDate(dateIso);
