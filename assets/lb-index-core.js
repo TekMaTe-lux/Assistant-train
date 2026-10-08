@@ -11343,30 +11343,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
 ;
 
-const betaModal = document.getElementById("betaModal");
-const betaAcknowledge = document.getElementById("betaAcknowledge");
-const BETA_NOTICE_KEY = "betaNoticeAcknowledged";
-
-// Masquer la pop-up si elle a déjà été validée
-if (localStorage.getItem(BETA_NOTICE_KEY) === "1") {
-  betaModal.style.display = "none";
-}
-
-// Bouton de confirmation
-betaAcknowledge.addEventListener("click", () => {
-  localStorage.setItem(BETA_NOTICE_KEY, "1");
-  betaModal.style.display = "none";
-});
-
-// Accessibilité : fermer avec Échap
-document.addEventListener("keydown", (e) => {
-  if (e.key === "Escape" && betaModal.style.display !== "none") {
-    betaAcknowledge.click();
-  }
-});
-
-;
-
 /* ===== METEO – Bloc unique iOS-safe (remplace tout l'ancien bloc) =====
 
 /* ---- Etat global météo ---- */
