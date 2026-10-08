@@ -4926,21 +4926,41 @@
     }
 
     let nextLabel = `Circulation prévue le ${formatDate(dateIso)}.`;
-    if (dateIso === todayIso() && departure !== '—' && arrival !== '—') {
+    const canceled = status.className === 'is-cancel';
+    if (canceled) {
+      nextLabel = 'Circulation supprimée — consultez les perturbations et les alternatives.';
+    } else if (dateIso === todayIso() && departure !== '—' && arrival !== '—') {
       const nowMinutes = luxembourgNowMinutes();
-      let actualDepartureMinutes = timeToMinutes(actualDeparture);
-      if (Number.isFinite(actualDepartureMinutes) && actualDepartureMinutes < nowMinutes - (12 * 60)) {
-        actualDepartureMinutes += 1440;
-      }
-      if (status.className === 'is-cancel') {
-        nextLabel = 'Cette circulation est annoncée supprimée.';
-      } else if (journeyPhase === 'before' && Number.isFinite(actualDepartureMinutes)) {
-        nextLabel = `Départ dans ${Math.max(0, actualDepartureMinutes - nowMinutes)} min.`;
+      const depMinutes = timeToMinutes(actualDeparture);
+      const arrMinutes = timeToMinutes(actualArrival);
+      const relativeMinutes = (clock, baseline) => {
+        let result = timeToMinutes(clock);
+        if (!Number.isFinite(result)) return NaN;
+        if (Number.isFinite(baseline) && result < baseline - 720) result += 1440;
+        return result;
+      };
+      const fmtDuration = (minutes) => minutes < 60
+        ? `${Math.max(0, Math.ceil(minutes))} min`
+        : `${Math.floor(minutes / 60)} h ${String(Math.max(0, Math.ceil(minutes % 60))).padStart(2, '0')}`;
+      let clockNow = nowMinutes;
+      const endClock = relativeMinutes(actualArrival, depMinutes);
+      if (Number.isFinite(depMinutes) && endClock > 1440 && clockNow < depMinutes && clockNow <= endClock - 1440) clockNow += 1440;
+      if (journeyPhase === 'before' && Number.isFinite(depMinutes)) {
+        const remaining = Math.max(0, depMinutes - clockNow);
+        nextLabel = `Prochain départ de ${first?.name || 'la gare de départ'} à ${actualDeparture} · dans ${fmtDuration(remaining)}${remaining <= 15 ? ' — préparez-vous !' : ''}.`;
       } else if (journeyPhase === 'running') {
-        nextLabel = 'Bétaillère en circulation ou sur le point de partir.';
+        const upcoming = rows.slice(1).map((row, index) => {
+          const live = realtimeAtRow(number, row, liveBundle, index === rows.length - 2);
+          const clock = live.delay > 0 ? live.actual : live.planned;
+          return { name: row.name, time: clock, minute: relativeMinutes(clock, depMinutes) };
+        }).find((stop) => Number.isFinite(stop.minute) && stop.minute >= clockNow);
+        if (upcoming) nextLabel = `Prochain arrêt : ${upcoming.name} à ${upcoming.time} · dans ${fmtDuration(Math.max(0, upcoming.minute - clockNow))}.`;
+        else nextLabel = `En circulation vers ${last?.name || 'le terminus'}${actualArrival !== '—' ? ` · arrivée prévue à ${actualArrival}` : ''}.`;
       } else if (journeyPhase === 'after') {
-        nextLabel = 'Circulation terminée aujourd’hui.';
+        nextLabel = `Course terminée · arrivée à ${last?.name || 'destination'} à ${actualArrival}. Prochaine circulation à consulter dans les horaires.`;
       }
+    } else if (journeyPhase === 'after' && !canceled) {
+      nextLabel = `Course terminée · terminus ${last?.name || 'atteint'}${actualArrival !== '—' ? ` à ${actualArrival}` : ''}.`;
     }
     byId('trainDetailNext').textContent = nextLabel;
     renderDisruption(liveBundle, status);
@@ -5571,6 +5591,14 @@
     window.lbOpenTrainDetail = openTrainProfile;
     window.lbOpenTrainProfile = openTrainProfile;
     window.lbGetOfficialServicePattern = getOfficialServicePattern;
+    // Actualisation locale du décompte, sans nouvelle requête au serveur.
+    window.setInterval(() => {
+      const panel = byId('trainDetailPanel');
+      const bundle = state.lastBundle;
+      if (!bundle || !panel || panel.hidden || !state.trainNumber || bundle.number !== state.trainNumber || bundle.dateIso !== state.dateIso) return;
+      const actualRows = bundle.effectiveRows?.length ? bundle.effectiveRows : bundle.rows;
+      if (actualRows?.length) renderHero(bundle.number, bundle.dateIso, actualRows, bundle.liveBundle);
+    }, 30000);
   }
 
   if (document.readyState === 'loading') {
