@@ -3824,6 +3824,15 @@
     byId('trainDetailDuration').textContent = '—';
     byId('trainDetailPlatform').textContent = 'Voie —';
     byId('trainDetailNext').textContent = 'Récupération des horaires et du temps réel…';
+    if (profileEventsController) profileEventsController.abort();
+    const events = byId('trainDetailEvents');
+    if (events) {
+      events.ontoggle = null;
+      events.open = false;
+      events.hidden = true;
+      delete events.dataset.loading;
+      events.querySelector('.lb-train-profile__events-body').textContent = '';
+    }
     const disruption = byId('trainDetailDisruption');
     if (disruption) {
       disruption.hidden = true;
@@ -4656,6 +4665,101 @@
     }
   }
 
+
+  // Same train-scoped aggregation as the map. No polling or blocking profile load.
+  const profileEventsCache = new Map();
+  let profileEventsController = null;
+
+  function profileEventRows(payload, cause) {
+    const normalize = value => String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+    const seen = new Set();
+    return (Array.isArray(payload?.events) ? payload.events : []).filter(event => {
+      if (!(event?.operational || event?.state === 'upcoming') || !['active', 'upcoming'].includes(event?.state)) return false;
+      const sources = Array.isArray(event.sources) ? event.sources : [];
+      if (!sources.some(source => ['GTFS-RT', 'SIRI-SX', 'HAFAS-CFL', 'API-SNCF', 'SNCF-API'].includes(source))) return false;
+      // The current API cause stays in the original card above the disclosure.
+      if (cause && sources.every(source => ['API-SNCF', 'SNCF-API'].includes(source)) && normalize(event.title) === normalize(cause)) return false;
+      const key = normalize([event.title, event.text || event.detail].join(' ')) + '|' + event.state;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  }
+
+  function profileEventsHTML(payload, cause) {
+    const rows = profileEventRows(payload, cause);
+    if (!rows.length) return '<p>Aucune autre perturbation signalée pour ce train à cette date.</p>';
+    return rows.map(event => {
+      const sources = Array.isArray(event.sources) ? event.sources : [];
+      let title = String(event.title || '').trim();
+      let detail = String(event.text || event.detail || '').trim();
+      if (sources.includes('HAFAS-CFL')) {
+        title = '';
+        detail = detail.replace(/(?:\n|\s)*Veuillez consulter notre recherche horaire afin de suivre votre train en temps réel\.?/gi, '').trim();
+        const parts = detail.split(/\n(?=Alternative\(s\))/i);
+        let cause = String(parts.shift() || '').trim().replace(/^Suite\s+(?:à|au|aux)\s+/i, '').replace(/,\s*ce train\s+(?:circule avec du retard|est supprimé|est supprime)\.?$/i, '').replace(/^(?:un|une)\s+/i, '').replace(/[.\s]+$/, '').trim();
+        if (cause) cause = cause.charAt(0).toUpperCase() + cause.slice(1);
+        detail = [cause, parts.join('\n').trim()].filter(Boolean).join('\n');
+      }
+      if (/^(?:plus\s+d['’]information|information(?:\s+trafic)?|plus\s+d['’]info)\s*:?[\s]*$/i.test(title)) title = '';
+      if (event.state === 'upcoming' && /^travaux en cours[.!]?$/i.test(title)) title = 'Travaux à venir';
+      const labels = [];
+      if (sources.some(source => ['API-SNCF', 'SNCF-API'].includes(source))) labels.push('API SNCF');
+      if (sources.some(source => ['GTFS-RT', 'SIRI-SX'].includes(source))) labels.push('SNCF');
+      if (sources.includes('HAFAS-CFL')) labels.push('CFL');
+      const links = (Array.isArray(event.links) ? event.links : []).map(link => {
+        try {
+          const url = new URL(String(link?.url || ''), 'https://vps.labetaillere.fr/');
+          if (!link?.url || !['http:', 'https:'].includes(url.protocol)) return '';
+          return `<a href="${safe(url.href)}" target="_blank" rel="noopener noreferrer">${safe(link.label || 'En savoir plus')} ↗</a>`;
+        } catch (_) { return ''; }
+      }).filter(Boolean).join(' · ');
+      const level = event.state === 'upcoming' || event.operational === false ? 1 : Math.max(1, Math.min(4, Number(event.severity) || 1));
+      return `<article class="lb-train-profile__event sev${level}">${event.state === 'upcoming' ? '<small>À VENIR</small>' : ''}${title ? `<strong>${safe(title)}</strong>` : ''}${detail ? `<p>${safe(detail)}</p>` : ''}${links ? `<p>${links}</p>` : ''}<small>Source${labels.length > 1 ? 's' : ''} ${safe(labels.join(' + '))}</small></article>`;
+    }).join('');
+  }
+
+  function setupProfileEvents(number, dateIso, liveBundle, chosen, requestId, forceFresh) {
+    const host = byId('trainDetailEvents');
+    if (!host) return;
+    const body = host.querySelector('.lb-train-profile__events-body');
+    const tripId = String(liveBundle?.trainId || chosen?.tripId || chosen?.trip_id || chosen?.id || '');
+    const query = new URLSearchParams({date: dateIso, number, source: 'SNCF', limit: '8'});
+    if (tripId) query.set('trip_id', tripId);
+    const key = query.toString();
+    if (forceFresh) profileEventsCache.delete(key);
+    host.hidden = false;
+    host.ontoggle = async () => {
+      if (!host.open || requestId !== state.requestId || host.dataset.loading === '1') return;
+      const cached = profileEventsCache.get(key);
+      if (cached && Date.now() - cached.loadedAt < 20000) {
+        body.innerHTML = profileEventsHTML(cached.payload, liveBundle?.cause);
+        return;
+      }
+      host.dataset.loading = '1';
+      body.textContent = 'Chargement des informations trafic…';
+      const controller = new AbortController();
+      profileEventsController = controller;
+      const timeout = setTimeout(() => controller.abort(), 10000);
+      try {
+        const response = await fetch(`https://vps.labetaillere.fr/g/c7f290ab?${key}`, {signal: controller.signal});
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const payload = await response.json();
+        if (payload?.ok !== true || !Array.isArray(payload.events)) throw new Error('Réponse trafic invalide');
+        if (requestId !== state.requestId) return;
+        profileEventsCache.set(key, {loadedAt: Date.now(), payload});
+        while (profileEventsCache.size > 30) profileEventsCache.delete(profileEventsCache.keys().next().value);
+        body.innerHTML = profileEventsHTML(payload, liveBundle?.cause);
+      } catch (_) {
+        if (requestId === state.requestId) body.textContent = 'Informations trafic momentanément indisponibles. Refermez puis rouvrez ce volet pour réessayer.';
+      } finally {
+        clearTimeout(timeout);
+        if (profileEventsController === controller) profileEventsController = null;
+        if (requestId === state.requestId) delete host.dataset.loading;
+      }
+    };
+  }
+
   function renderDisruption(liveBundle, status) {
   const host = byId('trainDetailDisruption');
   if (!host) return;
@@ -5339,6 +5443,7 @@
         renderComposition(number, affluence);
       });
 
+      setupProfileEvents(number, dateIso, liveBundle, chosen, requestId, forceFresh);
       setupProfileActions(number, dateIso, !!heroState?.liveActive);
       refreshFavoriteButton();
       void ensureProfileTitle(number);
