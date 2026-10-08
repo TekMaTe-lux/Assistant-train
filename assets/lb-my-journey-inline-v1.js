@@ -9,6 +9,22 @@
  const controls=document.createElement('div');controls.className='lbmj-controls';
  controls.innerHTML='<div class="lbmj-title">Mon trajet <span>LIVE</span></div><div class="lbmj-select"><button type="button" data-kind="AM">☀ Matin</button><button type="button" data-kind="PM">☾ Soir</button></div><p class="lbmj-note">La fiche du train sélectionné, actualisée depuis les mêmes sources LIVE.</p>';
  widget.prepend(holder); widget.prepend(controls);widget.classList.add('lbmj-page');
+ // Only hide redundant green status when there is no useful platform or disruption.
+ const statusLine=panel.querySelector('.lb-train-profile__statusbar');
+ const statusLabel=document.getElementById('trainDetailLiveStatus');
+ const platformLabel=document.getElementById('trainDetailPlatform');
+ const updateStatusLine=()=>{
+   if(!statusLine)return;
+   const status=(statusLabel?.textContent||'').trim().toLowerCase();
+   const platform=(platformLabel?.textContent||'').trim().toLowerCase();
+   const noPlatform=!platform||/non communiqu|voie\s*[—-]\s*$|inconnue/.test(platform);
+   const normalStatus=/à l.heure|a l.heure|ponctuel/.test(status);
+   statusLine.classList.toggle('lbmj-redundant-status',normalStatus&&noPlatform);
+ };
+ if(statusLine){
+   new MutationObserver(updateStatusLine).observe(statusLine,{subtree:true,childList:true,characterData:true});
+   updateStatusLine();
+ }
  const anchor=document.createComment('original train profile mount'); panel.parentNode.insertBefore(anchor,panel);
  let active=false;let selected='';let changing=false;
  const activePage=()=>window.location.hash.replace('#','').toLowerCase()==='favoris' && widget.getBoundingClientRect().width>0;
