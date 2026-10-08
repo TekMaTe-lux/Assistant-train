@@ -4962,6 +4962,26 @@
     } else if (journeyPhase === 'after' && !canceled) {
       nextLabel = `Course terminée · terminus ${last?.name || 'atteint'}${actualArrival !== '—' ? ` à ${actualArrival}` : ''}.`;
     }
+    // Le calendrier GTFS déjà chargé par les Favoris donne la prochaine occurrence réelle.
+    if ((journeyPhase === 'after' || canceled) && typeof window.lbGetTrainStaticNextPayload === 'function') {
+      const next = window.lbGetTrainStaticNextPayload(number);
+      const nextDate = String(next?.nextServiceDate || '');
+      const nextTime = String(next?.train?.stop_times?.[0]?.departure_time || '');
+      if (/^\d{4}-\d{2}-\d{2}$/.test(nextDate) && /^\d{1,2}:\d{2}/.test(nextTime)) {
+        const start = new Date(`${nextDate}T${nextTime.slice(0,5)}:00+02:00`);
+        // DST Europe/Luxembourg : utiliser Intl pour trouver l'offset réel.
+        const formatter = new Intl.DateTimeFormat('en-GB', {timeZone:'Europe/Luxembourg',timeZoneName:'shortOffset'});
+        const offsetName = formatter.formatToParts(new Date(`${nextDate}T12:00:00Z`)).find(p=>p.type==='timeZoneName')?.value || 'GMT+2';
+        const offsetHours = Number(offsetName.match(/GMT([+-]\d+)/)?.[1] || 2);
+        const startLux = new Date(`${nextDate}T${nextTime.slice(0,5)}:00${offsetHours >= 0 ? '+' : '-'}${String(Math.abs(offsetHours)).padStart(2,'0')}:00`);
+        const minutes = Math.ceil((startLux.getTime()-Date.now())/60000);
+        if (Number.isFinite(minutes) && minutes >= 0) {
+          const when = next.nextServiceLabel || formatDate(nextDate);
+          const remaining = minutes < 60 ? `${minutes} min` : minutes < 1440 ? `${Math.floor(minutes/60)} h ${String(minutes%60).padStart(2,'0')}` : `${Math.floor(minutes/1440)} j ${Math.floor((minutes%1440)/60)} h`;
+          nextLabel = `${canceled ? '🚫 Course supprimée.' : '🐮 Terminus atteint !'} Prochaine bétaillère TER ${number} : ${when} à ${nextTime.slice(0,5)} · dans ${remaining}.`;
+        }
+      }
+    }
     byId('trainDetailNext').textContent = nextLabel;
     renderDisruption(liveBundle, status);
     return { status, journeyPhase, liveActive };
@@ -5454,6 +5474,13 @@
       renderAffluence(affluence);
       renderReliability(reliability);
       state.lastBundle = { number, dateIso, rows, effectiveRows, liveBundle, reliability, affluence };
+      if (typeof window.lbLoadTrainStaticToday === 'function' && (heroState?.journeyPhase === 'after' || heroState?.status?.className === 'is-cancel')) {
+        void window.lbLoadTrainStaticToday().then(() => {
+          if (requestId !== state.requestId || !state.lastBundle) return;
+          renderHero(number, dateIso, effectiveRows.length ? effectiveRows : rows, liveBundle);
+        }).catch(() => {});
+      }
+
 
       // Enrichissement progressif non bloquant ; ne jamais afficher les résultats d'un ancien train.
       void reliabilityPromise.then((value) => {
