@@ -31,11 +31,25 @@
     }
     const aff = line.querySelector('details.fav-aff');
     const affBtn = tools.querySelector('[data-tool="affluence"] strong');
-    // Never read the aggregate text of the train diagram: it contains every wagon percentage.
-    // Keep the detailed diagram in its original component and disclose it only on demand.
+    // Reuse the EXISTING schematic (not textContent, which concatenates all carriage percentages).
+    // Copy the real visual and strip labels; the original stays available when expanded.
+    const affSource = aff?.querySelector('.fav-aff-schema--compact');
+    const affTool = tools.querySelector('[data-tool="affluence"]');
+    let preview = affTool.querySelector('.lb-fav-aff-preview');
+    if (!preview) { preview = document.createElement('span'); preview.className = 'lb-fav-aff-preview'; affBtn.before(preview); }
+    const html = affSource?.innerHTML || '';
+    if (preview.dataset.schema !== html) {
+      preview.dataset.schema = html;
+      preview.innerHTML = html;
+      preview.querySelectorAll('script,style,[onload]').forEach(el => el.remove());
+      preview.querySelectorAll('*').forEach(el => {
+        if (!el.children.length && /^\s*[+]?\d+(?:[.,]\d+)?\s*%\s*$/.test(el.textContent || '')) el.textContent = '';
+      });
+    }
+    preview.hidden = !html;
     if (affBtn) {
-      const val = aff ? (aff.open ? 'Masquer ▲' : 'Voir détail ⌄') : 'Fiche train ↗';
-      if (affBtn.textContent !== val) affBtn.textContent = val;
+      const label = aff ? (aff.open ? 'Réduire ⌃' : (html ? 'Détails ⌄' : 'Voir détail ↗')) : '—';
+      if (affBtn.textContent !== label) affBtn.textContent = label;
     }
     const reliability = stats.querySelector('.fav-reliability-pct');
     const reliabilityBtn = tools.querySelector('[data-tool="fiabilite"] strong');
@@ -45,7 +59,16 @@
     }
     const compositionBtn = tools.querySelector('[data-tool="composition"] strong');
     const train = byId('favTrain' + kind)?.querySelector('.fav-train-profile-link');
-    if (compositionBtn) compositionBtn.textContent = train ? 'Voir détail ↗' : '—';
+    if (compositionBtn) compositionBtn.textContent = train ? 'Détails ↗' : '—';
+    const compositionTool = tools.querySelector('[data-tool="composition"]');
+    let compositionPreview = compositionTool.querySelector('.lb-fav-composition-preview');
+    if (!compositionPreview) { compositionPreview = document.createElement('span'); compositionPreview.className = 'lb-fav-composition-preview'; compositionBtn.before(compositionPreview); }
+    const badge = byId('favState'+kind);
+    const icons = badge?.querySelector('.fav-type-badge, .fav-train-type-badge, .fav-composition, .fav-type-icon');
+    const compositionMarkup = icons?.innerHTML || '';
+    if (compositionPreview.dataset.icons !== compositionMarkup) { compositionPreview.dataset.icons = compositionMarkup; compositionPreview.innerHTML = compositionMarkup; }
+    compositionPreview.hidden = !compositionMarkup;
+
     tools.querySelector('[data-tool="fiabilite"]').setAttribute('aria-expanded',String(stats.open));
     tools.querySelector('[data-tool="affluence"]').setAttribute('aria-expanded',String(!!aff?.open));
   }
