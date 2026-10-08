@@ -16370,6 +16370,12 @@ function lbRenderHomeFavPreview(){
   slot.innerHTML = buildRow('AM', am, 'Matin') + buildRow('PM', pm, 'Soir');
 
   const jumpToFav = (k) => {
+    if (window.__lbMyJourneyInline) {
+      try { sessionStorage.setItem('lbmj-selected-kind', k === 'PM' ? 'PM' : 'AM'); } catch (_) {}
+      location.hash = '#favoris';
+      window.dispatchEvent(new CustomEvent('lb:my-journey-select', { detail: { kind: k === 'PM' ? 'PM' : 'AM' } }));
+      return;
+    }
     location.hash = '#favTrainsWidget';
 
     const getTopOffset = () => {
