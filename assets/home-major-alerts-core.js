@@ -759,6 +759,27 @@ window.addEventListener('click', (event) => {
   }
 
   function render(items){
+    // Réconcilier le statut GTFS-RT instantané avec les perturbations SIRI
+    // réellement actives. Une substitution routière confirmée sur le segment
+    // ne peut pas cohabiter avec une carte verte « trafic fluide ».
+    const impact = { north: null, south: null };
+    items.forEach((item) => {
+      const text = item?.text || '';
+      const severe = item?.severity?.rank >= 4;
+      const serviceAffected = severe && (hasSubstitutionImpact(text)
+        || /circulation[^.]{0,80}interromp|aucun train/.test(text));
+      if (!serviceAffected) return;
+      const betweenNorth = /metz.{0,110}luxembourg|luxembourg.{0,110}metz|thionville.{0,110}luxembourg|luxembourg.{0,110}thionville/.test(text);
+      const betweenSouth = /nancy.{0,110}metz|metz.{0,110}nancy/.test(text);
+      const warning = {
+        level: 'red', label: 'TRAVAUX · CARS',
+        detail: 'Substitution routière annoncée par SNCF SIRI, à vérifier dans Info trafic'
+      };
+      if (betweenNorth && !impact.north) impact.north = warning;
+      if (betweenSouth && !impact.south) impact.south = warning;
+    });
+    window.__lbMajorTrafficImpact = impact;
+    window.dispatchEvent(new Event('lb:major-traffic-updated'));
     countNode.textContent = String(items.length);
     const labelNode = document.getElementById('homeMajorAlertLabel');
     if (labelNode) labelNode.textContent = items.length > 1 ? 'ALERTES' : 'ALERTE';

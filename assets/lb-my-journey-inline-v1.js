@@ -40,7 +40,18 @@
  const statusLine=panel.querySelector('.lb-train-profile__statusbar');
  const statusLabel=document.getElementById('trainDetailLiveStatus');
  const platformLabel=document.getElementById('trainDetailPlatform');
+ const alternativeLink=document.createElement('a');
+ alternativeLink.className='lbmj-find-alternative';
+ alternativeLink.href='#search';
+ alternativeLink.textContent='Chercher un autre train →';
+ alternativeLink.hidden=true;
+ if(next)next.insertAdjacentElement('afterend',alternativeLink);
+ const updateAlternative=()=>{
+   const canceled=!!statusLabel && statusLabel.classList.contains('is-cancel');
+   alternativeLink.hidden=!canceled;
+ };
  const updateStatusLine=()=>{
+   updateAlternative();
    if(!statusLine)return;
    const status=(statusLabel?.textContent||'').trim().toLowerCase();
    const platform=(platformLabel?.textContent||'').trim().toLowerCase();

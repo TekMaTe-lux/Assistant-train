@@ -13896,6 +13896,44 @@ function getGtfsDelayForStop(trainNumber, stopName){
     return `${h} h ${r} min`;
   }
 
+  // Une logique légère partagée par Favoris, Accueil et Mon trajet.
+  // Les horaires GTFS sont théoriques, jamais une confirmation de circulation.
+  const lbFavoriteJourneyLogic = Object.freeze({
+    isFutureService(payload, today = luxYmdToday()) {
+      return /^\d{4}-\d{2}-\d{2}$/.test(String(payload?.nextServiceDate || ''))
+        && payload.nextServiceDate > today;
+    },
+    selectUpcoming(candidates, { today = luxYmdToday(), futureOnly = false, excludedDate = '' } = {}) {
+      const items = (Array.isArray(candidates) ? candidates : [])
+        .filter((candidate) => {
+          const day = String(candidate?.day || '');
+          const clock = String(candidate?.clock || '');
+          if (!/^\d{4}-\d{2}-\d{2}$/.test(day)
+            || !/^\d{1,2}:[0-5]\d(?::\d{2})?$/.test(clock)
+            || day === excludedDate) return false;
+          const hour = Number(clock.split(':')[0]);
+          return Number.isFinite(hour) && hour <= 47 && (futureOnly ? day > today : day >= today);
+        })
+        .sort((left, right) => left.day.localeCompare(right.day)
+          || ((Number(left.clock.slice(0,2)) * 60 + Number(left.clock.slice(3,5)))
+            - (Number(right.clock.slice(0,2)) * 60 + Number(right.clock.slice(3,5)))));
+      return items[0] || null;
+    },
+    hasFinished({ now, lastArrival, amendedArrival, announcedDelay = 0, canceled = false }) {
+      if (canceled || !Number.isFinite(now) || !Number.isFinite(lastArrival)) return false;
+      const effective = Number.isFinite(amendedArrival) ? amendedArrival
+        : lastArrival + Math.max(0, Number(announcedDelay) || 0);
+      // Une heure dépassée n'est pas une preuve d'arrivée. Marge de sûreté.
+      return now > effective + 12;
+    },
+    sourceLabel(future) {
+      return future
+        ? 'Horaire théorique GTFS, non confirmé par une source LIVE'
+        : 'Informations SNCF et données temps réel';
+    }
+  });
+  window.lbFavoriteJourneyLogic = lbFavoriteJourneyLogic;
+
   const renderFavCard = (kind, trainId, payload) => {
     const title   = document.getElementById(kind === 'AM' ? 'favTrainAM' : 'favTrainPM');
 	const badgeEl = document.getElementById(kind === 'AM' ? 'favStateAM' : 'favStatePM');
@@ -13964,7 +14002,7 @@ function getGtfsDelayForStop(trainNumber, stopName){
     const depTxt = (plannedDepMin != null) ? minToClock(plannedDepMin) : '—';
     const arrTxt = (plannedArrMin != null) ? minToClock(plannedArrMin) : '—';
 
-    const isFutureService = Boolean(payload?.nextServiceDate && payload.nextServiceDate !== luxYmdToday());
+    const isFutureService = lbFavoriteJourneyLogic.isFutureService(payload);
     const rtStatus = isFutureService ? null : inferRealtimeStatusFromDisruptions(payload);
     const causeText = (payload?.causeText || '').trim();
 
@@ -13983,6 +14021,8 @@ function getGtfsDelayForStop(trainNumber, stopName){
       : buildWidgetStateBadge(widgetState);
     const typeBadge = (window.buildFavTrainTypeBadge ? window.buildFavTrainTypeBadge(trainId) : '');
 	if (badgeEl) badgeEl.innerHTML = `${typeBadge}${stateBadge}`;
+
+    if (badgeEl) badgeEl.title = lbFavoriteJourneyLogic.sourceLabel(isFutureService);
 
     // SUPPRIME
     if (rtStatus === 'canceled') {
@@ -14006,6 +14046,7 @@ function getGtfsDelayForStop(trainNumber, stopName){
         causeEl.innerHTML = `<div class="fav-box fav-box-danger"><div class="fav-box-body">${escapeHtml(causeText)}</div></div>`;
       }
       line.innerHTML = buildFavStopsDetails(payload, trainId, st.now, canceledState, { forceDeleted:true });
+      line.insertAdjacentHTML('beforeend', '<div class="fav-next-train"><a href="#search" class="lb-fav-find-other">Chercher un autre train →</a></div>');
       if (statsEl){
         renderFavStats(kind, trainId).catch(()=>{});
         if (!statsEl.hasAttribute('data-user-opened')) statsEl.open = false;
@@ -14045,9 +14086,13 @@ function getGtfsDelayForStop(trainNumber, stopName){
     meta.innerHTML = `
       <div class="fav-primary-route">${escapeHtml(origin)} → ${escapeHtml(dest)}</div>
       <div class="fav-primary-times">${timesHtml}</div>
-      ${isFutureService ? `<div class="fav-next-service">Prochain : ${escapeHtml(payload.nextServiceLabel || payload.nextServiceDate)}</div>` : ''}
+      ${isFutureService ? `<div class="fav-next-service" title="Horaire théorique GTFS, sous réserve de modifications">Prochain : ${escapeHtml(payload.nextServiceLabel || payload.nextServiceDate)}</div>` : ''}
       ${isPartialAny ? `<div class="fav-mini-alert">Suppression partielle</div>` : ''}
     `;
+
+    if (isFutureService) {
+      meta.querySelector('.fav-next-service')?.append(' · prévu');
+    }
 
     // Cause (1 ligne) — affichée AVANT la barre de progression
     const isDelayed = (maxDelay != null && Number.isFinite(maxDelay) && maxDelay >= 1);
@@ -14243,6 +14288,7 @@ if (statsEl){
   };
 
   let favWidgetTimer = null;
+  let favWidgetGeneration = 0;
 
   function shouldShowFavoritesWidget(){
     if (window.lbIsAuthed !== true) return false;
@@ -14272,9 +14318,10 @@ if (statsEl){
     const announcedDelay = Math.max(0, Number(computeMaxDelayMin(payload, number)) || 0);
     // En l'absence d'heure d'arrivée révisée, ne pas masquer un train encore
     // retardé : marge fondée sur son retard réel annoncé.
-    const safeArrival = last?.amendedMin != null
-      ? effectiveArrival : effectiveArrival + announcedDelay;
-    return Number.isFinite(fallback.now) && fallback.now > safeArrival;
+    return lbFavoriteJourneyLogic.hasFinished({
+      now: fallback.now, lastArrival: effectiveArrival,
+      amendedArrival: last?.amendedMin, announcedDelay
+    });
   };
 
   const lbFavoriteDisplayPayload = async (number, payload) => {
@@ -14287,9 +14334,11 @@ if (statsEl){
       const nextDay = String(next?.nextServiceDate || '');
       const nextDeparture = String(next?.train?.stop_times?.[0]?.departure_time || '');
       // Ne pas réafficher comme "prochain" le train qui vient de terminer.
-      if (!/^\d{4}-\d{2}-\d{2}$/.test(nextDay) ||
-          nextDay <= luxYmdToday() || !/^\d{1,2}:\d{2}/.test(nextDeparture)) return payload;
-      return next;
+      const selected = lbFavoriteJourneyLogic.selectUpcoming(
+        [{ day: nextDay, clock: nextDeparture, payload: next }],
+        { today: luxYmdToday(), futureOnly: true }
+      );
+      return selected?.payload || payload;
     } catch (error) {
       console.warn('[Favoris] prochain service indisponible', error);
       return payload;
@@ -14297,6 +14346,7 @@ if (statsEl){
   };
 
   window.updateFavoriteWidgetFromPrefs = async () => {
+    const generation = ++favWidgetGeneration;
     const root = document.getElementById('favTrainsWidget');
     if (!root) return;
 
@@ -14338,6 +14388,7 @@ if (statsEl){
       lbFavoriteDisplayPayload(favAM, amToday),
       lbFavoriteDisplayPayload(favPM, pmToday)
     ]);
+    if (generation !== favWidgetGeneration) return;
     // Source unique pour l'accueil et les Favoris ; aucun badge ancien
     // ARRIVÉ ne doit rester après la bascule au prochain service.
     renderFavCard('AM', favAM, amShown);
@@ -15928,6 +15979,9 @@ function __lbSetTrafficBadge(el, status){
   el.classList.remove('traffic-pill--loading', 'traffic-pill--green', 'traffic-pill--yellow', 'traffic-pill--orange', 'traffic-pill--red');
   el.classList.add(`traffic-pill--${level}`);
   el.textContent = status?.label || 'Données indisponibles';
+  // Le label de substitution provient de SIRI, le trafic courant de GTFS-RT :
+  // les sources restent identifiables, sans faire passer l'un pour l'autre.
+  el.title = status?.detail || 'État instantané des trains selon GTFS-RT, hors travaux futurs';
   const row = el.closest('.traffic-split-row');
   if (row) {
     row.dataset.trafficLevel = level;
@@ -15957,9 +16011,19 @@ function __lbUpdateHomeTrafficUI(payload){
   const n = __lbPickTrafficLevel(segNorth);
   const s = __lbPickTrafficLevel(segSouth);
 
-  __lbSetTrafficBadge(badgeNorth, n);
-  __lbSetTrafficBadge(badgeSouth, s);
+  window.__lbHomeTrafficLatest = { north:n, south:s };
+  __lbSetTrafficBadge(badgeNorth, window.__lbMajorTrafficImpact?.north || n);
+  __lbSetTrafficBadge(badgeSouth, window.__lbMajorTrafficImpact?.south || s);
 }
+
+window.addEventListener('lb:major-traffic-updated', () => {
+  const last = window.__lbHomeTrafficLatest;
+  if (!last) return;
+  __lbSetTrafficBadge(document.getElementById('homeTrafficBadgeNorth'),
+    window.__lbMajorTrafficImpact?.north || last.north);
+  __lbSetTrafficBadge(document.getElementById('homeTrafficBadgeSouth'),
+    window.__lbMajorTrafficImpact?.south || last.south);
+});
 
 async function updateHomeTrafficStatus(){
   let hadImmediateData = false;
@@ -15987,8 +16051,10 @@ async function updateHomeTrafficStatus(){
     const badgeSouth = document.getElementById('homeTrafficBadgeSouth');
     if (lineNorth) lineNorth.textContent = 'Metz - Lux';
     if (lineSouth) lineSouth.textContent = 'Nancy - Metz';
-    __lbSetTrafficBadge(badgeNorth, { level:'loading', label:'Chargement…' });
-    __lbSetTrafficBadge(badgeSouth, { level:'loading', label:'Chargement…' });
+    __lbSetTrafficBadge(badgeNorth, window.__lbMajorTrafficImpact?.north
+      || { level:'loading', label:'Chargement…' });
+    __lbSetTrafficBadge(badgeSouth, window.__lbMajorTrafficImpact?.south
+      || { level:'loading', label:'Chargement…' });
   }
 }
 
@@ -16406,6 +16472,9 @@ function lbRenderHomeFavPreview(){
     const compoSlot = compoBadge || ((!compoDataReady && trainNumberForCompo)
       ? '<span class="home-fav-compo-loading" aria-hidden="true"><i></i></span>'
       : '');
+    const cancelAlternative = /SUPPRIM|ANNUL|CANCEL/i.test(data.state || '')
+      ? '<a class="lb-home-fav-alternative" href="#search" aria-label="Chercher un autre train">Autres trains →</a>'
+      : '';
 
     return `
       <div class="home-fav-row" data-fav-k="${k}" role="button" tabindex="0" aria-label="Ouvrir favoris ${label}">
@@ -16420,6 +16489,7 @@ function lbRenderHomeFavPreview(){
         </div>
         <div class="home-fav-route">${escapeHtml(parsed.route)}</div>
         <div class="home-fav-time">${parsed.timeHtml}</div>
+        ${cancelAlternative}
       </div>
     `;
   };
@@ -16480,8 +16550,14 @@ function lbRenderHomeFavPreview(){
 
   slot.querySelectorAll('.home-fav-row').forEach(row=>{
     const k = row.getAttribute('data-fav-k');
-    row.addEventListener('click', ()=>jumpToFav(k));
-    row.addEventListener('keydown', (e)=>{ if(e.key==='Enter' || e.key===' '){ e.preventDefault(); jumpToFav(k);} });
+    row.addEventListener('click', (event)=>{
+      if (event.target?.closest?.('.lb-home-fav-alternative')) return;
+      jumpToFav(k);
+    });
+    row.addEventListener('keydown', (e)=>{
+      if (e.target?.closest?.('.lb-home-fav-alternative')) return;
+      if(e.key==='Enter' || e.key===' '){ e.preventDefault(); jumpToFav(k);}
+    });
   });
 }
 

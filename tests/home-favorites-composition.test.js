@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 
-const source = fs.readFileSync(path.resolve(__dirname, '..', 'index.html'), 'utf8');
+const source = fs.readFileSync(path.resolve(__dirname, '..', 'assets/lb-index-core.js'), 'utf8');
 const css = fs.readFileSync(path.resolve(__dirname, '..', 'assets', 'lb-v4-live-preview.css'), 'utf8');
 
 test('home favorites reserve the composition slot before Compotrains is ready', () => {
@@ -16,10 +16,9 @@ test('home favorites reserve the composition slot before Compotrains is ready', 
 });
 
 test('Compotrains starts before background startup and is not fetched twice immediately', () => {
-  const preload = source.indexOf('rel="preload" href="https://vps.labetaillere.fr/gtfs/Compotrains.json"');
   const early = source.indexOf('const LB_COMPO_EARLY_PROMISE =');
   const bgState = source.indexOf('const LB_BG_REFRESH_STATE =');
-  assert.ok(preload > -1, 'Compotrains preload missing');
+  assert.match(source, /LB_COMPO_EARLY_PROMISE = loadCompoData/);
   assert.ok(early > -1 && bgState > -1 && early < bgState, 'early composition hydration must precede background startup');
   const comment = source.indexOf('// Charge d’abord le strict nécessaire');
   const load = source.indexOf("window.addEventListener('load', () => {", Math.max(0, bgState));

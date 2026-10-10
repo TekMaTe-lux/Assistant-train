@@ -4923,8 +4923,14 @@
     if (journeyPhase === 'scheduled' && dateIso > todayIso() && !canceled) {
       addOption(dateIso, departure, formatDate(dateIso));
     }
+    const logic = window.lbFavoriteJourneyLogic;
+    const chosen = logic?.selectUpcoming(options, {
+      today: todayIso(), excludedDate: canceled ? dateIso : ''
+    });
     options.sort((a, b) => a.remaining - b.remaining);
-    const nextRun = options[0];
+    const nextRun = chosen
+      ? options.find((item) => item.day === chosen.day && item.clock === chosen.clock)
+      : (logic ? null : options[0]);
     if (!nextRun) return '';
     const mins = nextRun.remaining;
     const remaining = mins < 60
