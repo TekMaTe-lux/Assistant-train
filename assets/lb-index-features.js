@@ -4878,6 +4878,63 @@
   host.hidden = false;
 }
 
+  // Une fiche affichant une date FUTURE doit aussi donner la prochaine
+  // circulation, même si son état n'est pas "arrivé" comme un train du jour.
+  // Le cache calendrier GTFS est prioritaire ; le parcours daté affiché
+  // sert de repli le temps du chargement. Aucune course n'est inventée.
+  function profileNextServiceNotice(number, dateIso, departure, journeyPhase, canceled) {
+    const options = [];
+    const addOption = (date, time, label) => {
+      const day = String(date || '');
+      const clock = String(time || '');
+      const match = clock.match(/^(\d{1,2}):([0-5]\d)(?::\d{2})?$/);
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(day) || !match) return;
+      const [year, month, dateNumber] = day.split('-').map(Number);
+      const wallUtc = Date.UTC(year, month - 1, dateNumber, Number(match[1]), Number(match[2]));
+      if (!Number.isFinite(wallUtc)) return;
+      // Utiliser l'offset Luxembourg à l'heure de départ (y compris
+      // changement d'heure et horaires GTFS > 24h).
+      let offsetMinutes = 60;
+      try {
+        const offsetFormatter = new Intl.DateTimeFormat('en-GB', {
+          timeZone: 'Europe/Luxembourg', timeZoneName: 'shortOffset'
+        });
+        const offsetName = offsetFormatter.formatToParts(new Date(wallUtc - 3600000))
+          .find((part) => part.type === 'timeZoneName')?.value || '';
+        const matchOffset = offsetName.match(/GMT([+-])(\d{1,2})(?::(\d{2}))?/);
+        if (matchOffset) {
+          offsetMinutes = (matchOffset[1] === '-' ? -1 : 1)
+            * (Number(matchOffset[2]) * 60 + Number(matchOffset[3] || 0));
+        }
+      } catch (_) {}
+      const remaining = Math.ceil(((wallUtc - offsetMinutes * 60000) - Date.now()) / 60000);
+      if (!Number.isFinite(remaining) || remaining < 0) return;
+      options.push({day, clock:clock.slice(0,5), label, remaining});
+    };
+    const next = typeof window.lbGetTrainStaticNextPayload === 'function'
+      ? window.lbGetTrainStaticNextPayload(number) : null;
+    const nextDate = String(next?.nextServiceDate || '');
+    const nextTime = String(next?.train?.stop_times?.[0]?.departure_time || '');
+    // Si SNCF supprime la course affichée, ne pas présenter cette même
+    // occurrence GTFS théorique comme le prochain départ confirmé.
+    if (!canceled || nextDate !== dateIso) {
+      addOption(nextDate, nextTime, next?.nextServiceLabel || formatDate(nextDate));
+    }
+    if (journeyPhase === 'scheduled' && dateIso > todayIso() && !canceled) {
+      addOption(dateIso, departure, formatDate(dateIso));
+    }
+    options.sort((a, b) => a.remaining - b.remaining);
+    const nextRun = options[0];
+    if (!nextRun) return '';
+    const mins = nextRun.remaining;
+    const remaining = mins < 60
+      ? `${mins} min`
+      : mins < 1440
+        ? `${Math.floor(mins / 60)} h ${String(mins % 60).padStart(2, '0')}`
+        : `${Math.floor(mins / 1440)} j ${Math.floor((mins % 1440) / 60)} h`;
+    return `Prochaine bétaillère TER ${number} : ${nextRun.label} à ${nextRun.clock} · dans ${remaining}.`;
+  }
+
   function renderHero(number, dateIso, rows, liveBundle) {
     const first = rows[0] || null;
     const last = rows[rows.length - 1] || null;
@@ -4984,24 +5041,15 @@
     } else if (canceled) {
       nextLabel = '🚫 Bétaillère à l’étable : circulation entièrement supprimée. Consultez les perturbations.';
     }
-    // Le calendrier GTFS déjà chargé par les Favoris donne la prochaine occurrence réelle.
-    if ((journeyPhase === 'after' || canceled) && !partial && !reinstated && typeof window.lbGetTrainStaticNextPayload === 'function') {
-      const next = window.lbGetTrainStaticNextPayload(number);
-      const nextDate = String(next?.nextServiceDate || '');
-      const nextTime = String(next?.train?.stop_times?.[0]?.departure_time || '');
-      if (/^\d{4}-\d{2}-\d{2}$/.test(nextDate) && /^\d{1,2}:\d{2}/.test(nextTime)) {
-        const start = new Date(`${nextDate}T${nextTime.slice(0,5)}:00+02:00`);
-        // DST Europe/Luxembourg : utiliser Intl pour trouver l'offset réel.
-        const formatter = new Intl.DateTimeFormat('en-GB', {timeZone:'Europe/Luxembourg',timeZoneName:'shortOffset'});
-        const offsetName = formatter.formatToParts(new Date(`${nextDate}T12:00:00Z`)).find(p=>p.type==='timeZoneName')?.value || 'GMT+2';
-        const offsetHours = Number(offsetName.match(/GMT([+-]\d+)/)?.[1] || 2);
-        const startLux = new Date(`${nextDate}T${nextTime.slice(0,5)}:00${offsetHours >= 0 ? '+' : '-'}${String(Math.abs(offsetHours)).padStart(2,'0')}:00`);
-        const minutes = Math.ceil((startLux.getTime()-Date.now())/60000);
-        if (Number.isFinite(minutes) && minutes >= 0) {
-          const when = next.nextServiceLabel || formatDate(nextDate);
-          const remaining = minutes < 60 ? `${minutes} min` : minutes < 1440 ? `${Math.floor(minutes/60)} h ${String(minutes%60).padStart(2,'0')}` : `${Math.floor(minutes/1440)} j ${Math.floor((minutes%1440)/60)} h`;
-          nextLabel = `${canceled ? '🚫 Course supprimée.' : '🐮 Terminus atteint !'} Prochaine bétaillère TER ${number} : ${when} à ${nextTime.slice(0,5)} · dans ${remaining}.`;
-        }
+    // Même message pour le prochain train Matin/Soir : la date du calendrier
+    // a aussi un décompte quand la circulation affichée est à venir.
+    if ((journeyPhase === 'after' || journeyPhase === 'scheduled' || canceled) && !partial && !reinstated) {
+      const notice = profileNextServiceNotice(number, dateIso, departure, journeyPhase, canceled);
+      if (notice) {
+        const prefix = canceled ? '🚫 Course supprimée.' : journeyPhase === 'after' ? '🐮 Terminus atteint !' : '🐮';
+        const disruptionLead = delayed && delayMinutes > 0
+          ? `⏳ Retard annoncé : +${delayMinutes} min. ` : '';
+        nextLabel = `${disruptionLead}${prefix} ${notice}`;
       }
     }
     byId('trainDetailNext').textContent = nextLabel;
@@ -5496,7 +5544,9 @@
       renderAffluence(affluence);
       renderReliability(reliability);
       state.lastBundle = { number, dateIso, rows, effectiveRows, liveBundle, reliability, affluence };
-      if (typeof window.lbLoadTrainStaticToday === 'function' && (heroState?.journeyPhase === 'after' || heroState?.status?.className === 'is-cancel')) {
+      if (typeof window.lbLoadTrainStaticToday === 'function' && (
+        heroState?.journeyPhase === 'after' || heroState?.journeyPhase === 'scheduled' || heroState?.status?.className === 'is-cancel'
+      )) {
         void window.lbLoadTrainStaticToday().then(() => {
           if (requestId !== state.requestId || !state.lastBundle) return;
           renderHero(number, dateIso, effectiveRows.length ? effectiveRows : rows, liveBundle);

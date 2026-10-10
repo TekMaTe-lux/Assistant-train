@@ -23,5 +23,5 @@ test('return exactly to previous layout and remove energy effects',()=>{
 test('versioned assets and cache busting preserve the PWA upgrade',()=>{
  assert.match(page,/lb-my-journey-inline-v1\.css\?v=20261010-mini-buttons1/);
  assert.match(page,/lb-my-journey-inline-v1\.js\?v=20261010-mini-buttons1/);
- assert.match(worker,/CACHE_VERSION = 'v130'/);
+ assert.match(worker,/CACHE_VERSION = 'v131'/);
 });
