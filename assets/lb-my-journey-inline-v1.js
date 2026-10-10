@@ -54,6 +54,16 @@
  }
  const anchor=document.createComment('original train profile mount'); panel.parentNode.insertBefore(anchor,panel);
  let active=false;let selected='';let changing=false;
+ // Impulsion visuelle uniquement lors d'une sélection, jamais en continu.
+ const pulseEnergy=()=>{
+   if(window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches)return;
+   widget.classList.remove('lbmj-energy-pulse');
+   void controls.offsetWidth; // redémarre une animation très courte, sur interaction seulement
+   widget.classList.add('lbmj-energy-pulse');
+ };
+ controls.addEventListener('animationend',(event)=>{
+   if(event.animationName==='lbmj-energy-link')widget.classList.remove('lbmj-energy-pulse');
+ });
  const activePage=()=>window.location.hash.replace('#','').toLowerCase()==='favoris' && widget.getBoundingClientRect().width>0;
  const trainOf=kind=>{const el=document.getElementById('favTrain'+kind);return (el?.dataset.trainId||el?.querySelector('[data-train]')?.dataset.train||'').match(/\d{5,6}/)?.[0]||'';};
  const dateOf=kind=>document.getElementById('favTrain'+kind)?.querySelector('[data-service-date]')?.dataset.serviceDate||'';
@@ -83,12 +93,17 @@
  function exit(){
    if(!active)return;active=false;
    if(anchor.parentNode)anchor.parentNode.insertBefore(panel,anchor.nextSibling);
+   widget.classList.remove('lbmj-energy-pulse');
    if(trafficLabel)trafficLabel.textContent=expandedTrafficLabel;
    panel.classList.remove('lbmj-inline');panel.hidden=true;panel.setAttribute('aria-hidden','true');panel.setAttribute('role','dialog');panel.setAttribute('aria-modal','true');
    document.body.classList.remove('lb-train-detail-open','lb-train-detail-from-map');
  }
  function sync(){if(activePage())enter();else exit();}
- controls.querySelectorAll('[data-kind]').forEach(b=>b.addEventListener('click',()=>{try{sessionStorage.setItem('lbmj-selected-kind',b.dataset.kind);}catch(_){}choose(b.dataset.kind);}));
+ controls.querySelectorAll('[data-kind]').forEach(b=>b.addEventListener('click',()=>{
+   if(selected!==b.dataset.kind)pulseEnergy();
+   try{sessionStorage.setItem('lbmj-selected-kind',b.dataset.kind);}catch(_){}
+   choose(b.dataset.kind);
+ }));
  document.addEventListener('click',e=>{
    if(!active)return;
    if(e.target?.closest?.('#trainDetailClose')){e.preventDefault();e.stopPropagation();window.location.hash='#home';}

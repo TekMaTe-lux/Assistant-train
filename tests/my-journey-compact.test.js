@@ -14,7 +14,7 @@ test('Compact single-line Matin/Soir UI replaces redundant title and note',()=>{
   assert.doesNotMatch(ui,/Mon trajet <span>LIVE/);
   assert.doesNotMatch(ui,/Données LIVE du TER/);
   assert.match(css,/\.lbmj-head\{\s*display:flex/);
-  assert.match(css,/\.lbmj-select button\{[\s\S]*?min-height:33px/);
+  assert.match(css,/\.lbmj-select button\{[\s\S]*?min-height:36px/);
   assert.match(css,/\.lbmj-note\[hidden\]\{display:none!important\}/);
 });
 test('Small refresh action retains original button id and trigger',()=>{
