@@ -758,6 +758,51 @@ window.addEventListener('click', (event) => {
     requestAnimationFrame(syncBannerGeometry);
   }
 
+  // Une alerte SIRI active avec substitution a priorite sur le calcul GTFS-RT.
+  // Garde leger (un seul observateur, uniquement si alerte active) contre
+  // les anciens scripts encore presents dans le cache PWA Android.
+  let majorTrafficObserver = null;
+  function syncMajorTrafficBadges(){
+    const impact = window.__lbMajorTrafficImpact || {};
+    [['north', 'homeTrafficBadgeNorth'], ['south', 'homeTrafficBadgeSouth']].forEach(([segment, id]) => {
+      const warning = impact[segment];
+      const el = document.getElementById(id);
+      if (!warning || !el) return;
+      const level = warning.level || 'red';
+      const row = el.closest('.traffic-split-row');
+      if (el.textContent.trim() === warning.label && el.classList.contains(`traffic-pill--${level}`)
+          && el.title === (warning.detail || '')
+          && (!row || (row.dataset.trafficLevel === level && row.classList.contains(`traffic-row--${level}`)))) return;
+      if (typeof window.__lbSetTrafficBadge === 'function') {
+        window.__lbSetTrafficBadge(el, warning);
+      } else {
+        el.classList.remove('traffic-pill--loading', 'traffic-pill--green', 'traffic-pill--yellow', 'traffic-pill--orange', 'traffic-pill--red');
+        el.classList.add(`traffic-pill--${level}`);
+        el.textContent = warning.label;
+        el.title = warning.detail || '';
+        if (row) {
+          row.dataset.trafficLevel = level;
+          row.classList.remove('traffic-row--loading', 'traffic-row--green', 'traffic-row--yellow', 'traffic-row--orange', 'traffic-row--red');
+          row.classList.add(`traffic-row--${level}`);
+          row.setAttribute('aria-label', `${row.querySelector('.traffic-split-line')?.textContent || 'Segment'} : ${warning.label}`);
+        }
+      }
+    });
+  }
+  function keepMajorTrafficBadgePriority(){
+    if (majorTrafficObserver) majorTrafficObserver.disconnect();
+    const impact = window.__lbMajorTrafficImpact;
+    if (!impact?.north && !impact?.south) return;
+    const host = document.getElementById('homeTrafficRows');
+    if (!host) return;
+    if (!majorTrafficObserver) majorTrafficObserver = new MutationObserver(syncMajorTrafficBadges);
+    majorTrafficObserver.observe(host, {
+      subtree: true, childList: true, characterData: true,
+      attributes: true, attributeFilter: ['class', 'title']
+    });
+    syncMajorTrafficBadges();
+  }
+
   function render(items){
     // Réconcilier le statut GTFS-RT instantané avec les perturbations SIRI
     // réellement actives. Une substitution routière confirmée sur le segment
@@ -780,6 +825,7 @@ window.addEventListener('click', (event) => {
     });
     window.__lbMajorTrafficImpact = impact;
     window.dispatchEvent(new Event('lb:major-traffic-updated'));
+    keepMajorTrafficBadgePriority();
     countNode.textContent = String(items.length);
     const labelNode = document.getElementById('homeMajorAlertLabel');
     if (labelNode) labelNode.textContent = items.length > 1 ? 'ALERTES' : 'ALERTE';
