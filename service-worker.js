@@ -1,4 +1,4 @@
-const CACHE_VERSION = 'v129';
+const CACHE_VERSION = 'v130';
 const APP_CACHE = `lbetaillere-app-${CACHE_VERSION}`;
 const STATIC_CACHE = `lbetaillere-static-${CACHE_VERSION}`;
 const DATA_CACHE = `lbetaillere-data-${CACHE_VERSION}`;
@@ -46,8 +46,8 @@ const APP_SHELL = [
   './assets/lb-comment-reactions-v1.css?v=20261005-3',
   './assets/lb-status-harmony-v1.css?v=20261008-profile-events1',
   './assets/lb-favorites-cockpit-v2.css?v=20261008-3',
-  './assets/lb-my-journey-inline-v1.js?v=20261010-energy1',
-  './assets/lb-my-journey-inline-v1.css?v=20261010-energy1',
+  './assets/lb-my-journey-inline-v1.js?v=20261010-mini-buttons1',
+  './assets/lb-my-journey-inline-v1.css?v=20261010-mini-buttons1',
   './assets/lb-mobile-v4.js?v=6',
   './assets/lb-traffic-details-v1.css?v=4',
   './assets/lb-traffic-details-v1.js?v=7',
