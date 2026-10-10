@@ -1,4 +1,4 @@
-const CACHE_VERSION = 'v136';
+const CACHE_VERSION = 'v137';
 const APP_CACHE = `lbetaillere-app-${CACHE_VERSION}`;
 const STATIC_CACHE = `lbetaillere-static-${CACHE_VERSION}`;
 const DATA_CACHE = `lbetaillere-data-${CACHE_VERSION}`;
@@ -11,6 +11,7 @@ const COMMUNITY_REFRESH_MS = 10000;
 
 const APP_SHELL = [
   './assets/lb-home-readability-v1.css?v=20261006-5',
+  './assets/lb-home-punct-premium-v1.css?v=20261010-cockpit1',
   './assets/lb-home-guest-favorites-v1.css?v=20261006-2',
   './assets/lb-home-guest-favorites-v1.js?v=20261006-1',
   './assets/home-major-alerts.js?v=20261010-major-ticker2',
