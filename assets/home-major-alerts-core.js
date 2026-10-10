@@ -68,6 +68,7 @@ window.addEventListener('click', (event) => {
   if (close || backdrop) {
     window.__lbMajorAlertSuppressOpenUntil = Date.now() + 650;
   }
+  document.getElementById('lbMajorAlertBanner')?.classList.toggle('is-paused', !!trigger);
   setHomeMajorAlertModal(!!trigger);
 }, true);
 
@@ -103,335 +104,166 @@ window.addEventListener('click', (event) => {
       style.id = 'lb-major-alert-banner-style';
       style.textContent = `
         #lbMajorAlertBanner[hidden] { display:none !important; }
-
         #lbMajorAlertBanner {
-          --alarm:#ff3f57;
-          --alarm-soft:#ff8b99;
+          --alarm:#ff405c;
+          --alarm-soft:#ff9baa;
+          --lb-ticker-gap:34px;
+          --lb-ticker-duration:24s;
           position:fixed;
           left:0;
           right:0;
           top:var(--lb-major-banner-top,72px);
           z-index:12950;
           overflow:hidden;
-          padding:0 max(14px,env(safe-area-inset-right)) 0 max(14px,env(safe-area-inset-left));
-          border-top:1px solid rgba(255,67,91,.18);
-          border-bottom:1px solid rgba(255,67,91,.68);
-          background:
-            linear-gradient(90deg,rgba(73,7,20,.985) 0%,rgba(47,8,18,.975) 46%,rgba(20,10,16,.965) 100%);
-          box-shadow:
-            0 10px 28px rgba(0,0,0,.30),
-            0 0 26px rgba(255,48,72,.08),
-            inset 0 -1px rgba(255,255,255,.03);
-          -webkit-backdrop-filter:blur(15px) saturate(132%);
-          backdrop-filter:blur(15px) saturate(132%);
+          padding:0 max(12px,env(safe-area-inset-right)) 0 max(12px,env(safe-area-inset-left));
+          border-block:1px solid rgba(255,66,95,.32);
+          background:linear-gradient(90deg,#3d0d19 0%,#240d15 60%,#180b11 100%);
+          box-shadow:0 8px 22px rgba(0,0,0,.26),inset 0 -1px rgba(255,255,255,.03);
+          -webkit-backdrop-filter:blur(12px);
+          backdrop-filter:blur(12px);
         }
-
-        #lbMajorAlertBanner::after {
-          content:"";
-          position:absolute;
-          top:0;
-          bottom:0;
-          left:0;
-          width:34%;
-          pointer-events:none;
-          background:linear-gradient(90deg,rgba(255,48,74,.055),transparent 82%);
-        }
-
         #lbMajorAlertBanner[data-level="warning"] {
-          --alarm:#ffba3a;
-          --alarm-soft:#ffd88a;
-          border-top-color:rgba(255,186,58,.13);
-          border-bottom-color:rgba(255,186,58,.56);
-          background:linear-gradient(90deg,rgba(69,40,6,.985),rgba(46,28,8,.975) 46%,rgba(21,15,9,.965));
+          --alarm:#ffb44b;
+          --alarm-soft:#ffe0a7;
+          border-block-color:rgba(255,177,67,.32);
+          background:linear-gradient(90deg,#44300e 0%,#2a1b10 60%,#17120c);
         }
         .lb-major-alert-banner__inner {
-          position:relative;
-          z-index:1;
-          min-height:48px;
+          width:100%;
           max-width:1240px;
           margin:0 auto;
+          min-height:39px;
           display:grid;
-          grid-template-columns:22px minmax(0,1fr) auto;
+          grid-template-columns:28px minmax(0,1fr) auto;
+          gap:10px;
           align-items:center;
-          gap:9px;
-          padding:4px 0 4px 6px;
+          padding:3px 0;
         }
-
         .lb-major-alert-banner__icon {
-          position:relative;
-          width:22px;
-          height:22px;
+          width:27px;
+          height:27px;
           display:grid;
           place-items:center;
-          border:0;
-          border-radius:0;
-          background:transparent;
+          flex-shrink:0;
           color:var(--alarm);
-          font:900 14px/1 "Orbitron",system-ui,sans-serif;
-          text-shadow:0 0 11px color-mix(in srgb,var(--alarm) 48%,transparent);
-          box-shadow:none;
+          filter:drop-shadow(0 0 4px color-mix(in srgb,var(--alarm) 42%,transparent));
         }
-        .lb-major-alert-banner__icon::before {
-          content:"";
-          position:absolute;
-          width:5px;
-          height:5px;
-          border-radius:50%;
-          background:var(--alarm);
-          box-shadow:
-            0 0 0 4px color-mix(in srgb,var(--alarm) 9%,transparent),
-            0 0 12px color-mix(in srgb,var(--alarm) 45%,transparent);
-          opacity:.95;
-          transform:translate(-6px,-6px);
-        }
-
-        .lb-major-alert-banner__content {
-          min-width:0;
-          display:grid;
-          align-content:center;
-          gap:2px;
-        }
-
-        .lb-major-alert-banner__eyebrow {
-          display:flex;
-          align-items:center;
-          gap:6px;
-          min-width:0;
-          color:var(--alarm);
-          font:900 .51rem/1 "Orbitron",system-ui,sans-serif;
-          letter-spacing:.085em;
-          text-transform:uppercase;
-          white-space:nowrap;
-          text-shadow:0 0 12px color-mix(in srgb,var(--alarm) 16%,transparent);
-        }
-        .lb-major-alert-banner__eyebrow::after {
-          content:"";
-          width:18px;
-          height:1px;
-          background:linear-gradient(90deg,color-mix(in srgb,var(--alarm) 65%,transparent),transparent);
-          flex:0 0 auto;
-        }
-
-        .lb-major-alert-banner__title {
-          min-width:0;
-          overflow:hidden;
-          text-overflow:ellipsis;
-          white-space:nowrap;
-          color:#fff;
-          font:800 .82rem/1.02 "Rajdhani",system-ui,sans-serif;
-          letter-spacing:.005em;
-        }
-
-        .lb-major-alert-banner__text {
-          min-width:0;
-          overflow:hidden;
-          text-overflow:ellipsis;
-          white-space:nowrap;
-          color:#f1dfe3;
-          font:700 .65rem/1.04 "Rajdhani",system-ui,sans-serif;
-          letter-spacing:.01em;
-          opacity:.90;
-        }
-
-        .lb-major-alert-banner__actions {
-          display:flex;
-          align-items:center;
-          gap:9px;
-          flex:0 0 auto;
-        }
-
-        .lb-major-alert-banner__more {
-          -webkit-tap-highlight-color:transparent;
-          touch-action:manipulation;
-          appearance:none;
+        .lb-major-alert-banner__icon svg { display:block; width:100%; height:100%; }
+        .lb-major-alert-banner__ticker {
           position:relative;
+          min-width:0;
+          overflow:hidden;
+          white-space:nowrap;
+          -webkit-mask-image:linear-gradient(90deg,transparent,#000 12px,#000 calc(100% - 12px),transparent);
+          mask-image:linear-gradient(90deg,transparent,#000 12px,#000 calc(100% - 12px),transparent);
+        }
+        .lb-major-alert-banner__track {
+          display:flex;
+          align-items:center;
+          gap:var(--lb-ticker-gap);
+          width:max-content;
+          animation:lbMajorTicker var(--lb-ticker-duration) linear infinite;
+          will-change:transform;
+        }
+        .lb-major-alert-banner__repeat {
+          display:block;
+          flex:0 0 auto;
+          white-space:nowrap;
+          font:800 .92rem/1.2 "Rajdhani",system-ui,sans-serif;
+          letter-spacing:.008em;
+          color:#fff5f5;
+          text-shadow:0 0 8px rgba(255,102,126,.12);
+        }
+        @keyframes lbMajorTicker {
+          from { transform:translate3d(0,0,0); }
+          to { transform:translate3d(calc(-50% - 17px),0,0); }
+        }
+        #lbMajorAlertBanner.is-paused .lb-major-alert-banner__track,
+        .lb-major-alert-banner__ticker:hover .lb-major-alert-banner__track,
+        .lb-major-alert-banner__ticker:focus-within .lb-major-alert-banner__track {
+          animation-play-state:paused;
+        }
+        .lb-major-alert-banner__actions {
+          flex:0 0 auto;
+          display:flex;
+          align-items:center;
+          gap:8px;
+        }
+        .lb-major-alert-banner__more {
           border:0;
-          padding:3px 1px;
+          padding:5px 0;
           background:transparent;
           color:var(--alarm-soft);
-          font:800 .66rem/1 "Rajdhani",system-ui,sans-serif;
-          letter-spacing:.02em;
+          font:800 .73rem/1 "Rajdhani",system-ui,sans-serif;
+          letter-spacing:.01em;
           white-space:nowrap;
           cursor:pointer;
-          transition:color .15s ease,transform .15s ease;
+          touch-action:manipulation;
         }
         .lb-major-alert-banner__more::after {
-          content:"›";
-          display:inline-block;
-          margin-left:5px;
+          content:" ›";
+          font-size:1.1em;
           color:var(--alarm);
-          font-size:.95em;
-          transform:translateY(.2px);
         }
-        .lb-major-alert-banner__more:hover {
-          color:#fff;
-          transform:translateX(1px);
-        }
-        .lb-major-alert-banner__more:focus-visible {
-          outline:1px solid color-mix(in srgb,var(--alarm) 55%,transparent);
-          outline-offset:3px;
-          border-radius:4px;
-        }
-
-        .lb-major-alert-banner__close {
-          -webkit-tap-highlight-color:transparent;
-          touch-action:manipulation;
+        #lbMajorAlertBanner .lb-major-alert-banner__close {
           appearance:none;
-          width:21px;
-          height:21px;
-          min-width:21px;
-          min-height:21px;
           display:grid;
           place-items:center;
-          margin:0;
+          width:30px !important;
+          height:30px !important;
+          min-width:30px !important;
+          min-height:30px !important;
+          max-width:30px !important;
+          max-height:30px !important;
           padding:0;
+          margin:0;
           border:0;
           border-radius:7px;
           background:transparent;
-          color:rgba(255,213,219,.64);
-          font:600 9px/1 system-ui,sans-serif;
+          color:rgba(255,223,228,.72);
+          font:600 17px/1 system-ui,sans-serif !important;
           cursor:pointer;
-          box-shadow:none;
-          transition:background .15s ease,color .15s ease;
+          touch-action:manipulation;
         }
-        .lb-major-alert-banner__close:hover {
-          background:rgba(255,73,98,.09);
-          color:#fff;
-        }
+        .lb-major-alert-banner__close:hover { color:#fff; background:rgba(255,73,98,.1); }
+        .lb-major-alert-banner__more:hover { color:#fff; }
+        .lb-major-alert-banner__more:focus-visible,
         .lb-major-alert-banner__close:focus-visible {
-          outline:1px solid color-mix(in srgb,var(--alarm) 50%,transparent);
+          outline:2px solid var(--alarm);
           outline-offset:2px;
         }
-
-        #lbMajorAlertSpacer {
-          height:0;
-          transition:height .16s ease;
-          pointer-events:none;
-        }
-        body.lb-major-alert-banner-visible #lbMajorAlertSpacer {
-          height:var(--lb-major-banner-height,48px);
-        }
-
+        #lbMajorAlertSpacer { height:0; pointer-events:none; }
+        body.lb-major-alert-banner-visible #lbMajorAlertSpacer { height:var(--lb-major-banner-height,41px); }
         @media (max-width:700px) {
           #lbMajorAlertBanner {
-            padding-left:max(8px,env(safe-area-inset-left));
-            padding-right:max(8px,env(safe-area-inset-right));
+            padding-left:max(7px,env(safe-area-inset-left));
+            padding-right:max(7px,env(safe-area-inset-right));
           }
-
           .lb-major-alert-banner__inner {
-            min-height:44px;
-            grid-template-columns:20px minmax(0,1fr) auto;
-            gap:7px;
-            padding:3px 0 3px 5px;
+            min-height:36px;
+            grid-template-columns:25px minmax(0,1fr) auto;
+            gap:6px;
+            padding:3px 0;
           }
-
-          .lb-major-alert-banner__icon {
-            width:20px;
-            height:20px;
-            font-size:12px;
-          }
-          .lb-major-alert-banner__icon::before {
-            width:4px;
-            height:4px;
-            transform:translate(-5px,-5px);
-            box-shadow:
-              0 0 0 3px color-mix(in srgb,var(--alarm) 9%,transparent),
-              0 0 10px color-mix(in srgb,var(--alarm) 42%,transparent);
-          }
-
-          .lb-major-alert-banner__content {
-            gap:1px;
-          }
-
-          .lb-major-alert-banner__eyebrow {
-            font-size:.43rem;
-            letter-spacing:.07em;
-            gap:5px;
-          }
-          .lb-major-alert-banner__eyebrow::after {
-            width:12px;
-          }
-
-          .lb-major-alert-banner__title {
-            font-size:.73rem;
-            line-height:1.02;
-          }
-
-          .lb-major-alert-banner__text {
-            font-size:.58rem;
-            line-height:1.05;
-          }
-
-          .lb-major-alert-banner__actions {
-            gap:5px;
-          }
-
-          .lb-major-alert-banner__more {
-            padding:4px 0;
-            font-size:.60rem;
-          }
-          .lb-major-alert-banner__more::after {
-            margin-left:3px;
-          }
-
-          .lb-major-alert-banner__close {
-            width:19px;
-            height:19px;
-            min-width:19px;
-            min-height:19px;
-            border-radius:6px;
-            font-size:8px;
-          }
-
-          body.lb-major-alert-banner-visible #lbMajorAlertSpacer {
-            height:var(--lb-major-banner-height,44px);
-          }
+          .lb-major-alert-banner__icon { width:24px; height:24px; }
+          .lb-major-alert-banner__repeat { font-size:.85rem; }
+          .lb-major-alert-banner__actions { gap:5px; }
+          .lb-major-alert-banner__more { font-size:.69rem; }
+          #lbMajorAlertBanner .lb-major-alert-banner__close { width:30px !important; min-width:30px !important; min-height:30px !important; height:30px !important; max-width:30px !important; max-height:30px !important; font-size:17px !important; }
+          body.lb-major-alert-banner-visible #lbMajorAlertSpacer { height:var(--lb-major-banner-height,38px); }
         }
-
-        @media (max-width:390px) {
-          .lb-major-alert-banner__inner {
-            grid-template-columns:22px minmax(0,1fr) auto;
-            gap:7px;
-          }
-          .lb-major-alert-banner__icon {
-            width:22px;
-            height:22px;
-            font-size:13px;
-          }
-          .lb-major-alert-banner__eyebrow { font-size:.45rem; }
-          .lb-major-alert-banner__title { font-size:.76rem; }
-          .lb-major-alert-banner__text { font-size:.61rem; }
-          .lb-major-alert-banner__more { font-size:.60rem; }
-          .lb-major-alert-banner__close {
-            width:21px;
-            height:21px;
-            min-width:21px;
-            min-height:21px;
-          }
-        }
-
-        @keyframes lbAlarmPulse {
-          0%,100% { opacity:.86; }
-          50% { opacity:1; }
-        }
-        @keyframes lbAlarmBang {
-          0%,100% { transform:scale(1); opacity:.90; }
-          50% { transform:scale(1.08); opacity:1; }
-        }
-        #lbMajorAlertBanner[data-level="critical"] .lb-major-alert-banner__icon::before {
-          animation:lbAlarmPulse 1.6s ease-in-out infinite;
+        @keyframes lbTickerAlarmGlow {
+          0%,100% { filter:drop-shadow(0 0 3px color-mix(in srgb,var(--alarm) 35%,transparent)); }
+          50% { filter:drop-shadow(0 0 7px color-mix(in srgb,var(--alarm) 60%,transparent)); }
         }
         #lbMajorAlertBanner[data-level="critical"] .lb-major-alert-banner__icon {
-          animation:lbAlarmBang 2.4s ease-in-out infinite;
-          transform-origin:center;
+          animation:lbTickerAlarmGlow 3.4s ease-in-out infinite;
         }
-
         @media (prefers-reduced-motion:reduce) {
-          #lbMajorAlertSpacer { transition:none; }
-          .lb-major-alert-banner__more,
-          .lb-major-alert-banner__close { transition:none; }
-          #lbMajorAlertBanner .lb-major-alert-banner__icon,
-          #lbMajorAlertBanner .lb-major-alert-banner__icon::before { animation:none !important; }
+          .lb-major-alert-banner__track { animation:none !important; width:100%; will-change:auto; }
+          .lb-major-alert-banner__repeat:first-child { overflow:hidden; text-overflow:ellipsis; max-width:100%; }
+          .lb-major-alert-banner__repeat:last-child { display:none; }
+          .lb-major-alert-banner__icon { animation:none !important; }
         }
       `;
       document.head.appendChild(style);
@@ -446,15 +278,18 @@ window.addEventListener('click', (event) => {
       banner.setAttribute('aria-live', 'polite');
       banner.innerHTML = `
         <div class="lb-major-alert-banner__inner">
-          <span class="lb-major-alert-banner__icon" id="lbMajorAlertBannerIcon" aria-hidden="true">⚠️</span>
-          <div class="lb-major-alert-banner__content">
-            <strong class="lb-major-alert-banner__eyebrow" id="lbMajorAlertBannerEyebrow">PERTURBATION MAJEURE</strong>
-            <span class="lb-major-alert-banner__title" id="lbMajorAlertBannerTitle" hidden></span>
-            <span class="lb-major-alert-banner__text" id="lbMajorAlertBannerText"></span>
+          <span class="lb-major-alert-banner__icon" aria-hidden="true">
+            <svg viewBox="0 0 32 32" focusable="false" aria-hidden="true"><path d="M14.3 4.4c.75-1.35 2.65-1.35 3.4 0l12.15 21.1c.77 1.34-.19 3.02-1.73 3.02H3.88c-1.54 0-2.5-1.68-1.73-3.02L14.3 4.4Z" fill="currentColor"/><path d="M16 11v8" fill="none" stroke="#2c0d16" stroke-width="3" stroke-linecap="round"/><circle cx="16" cy="23.2" r="1.7" fill="#2c0d16"/></svg>
+          </span>
+          <div class="lb-major-alert-banner__ticker" id="lbMajorAlertBannerTicker" aria-label="Alerte de circulation">
+            <div class="lb-major-alert-banner__track" aria-hidden="true">
+              <span class="lb-major-alert-banner__repeat" id="lbMajorAlertBannerText"></span>
+              <span class="lb-major-alert-banner__repeat" id="lbMajorAlertBannerEcho"></span>
+            </div>
           </div>
           <div class="lb-major-alert-banner__actions">
             <button class="lb-major-alert-banner__more" id="lbMajorAlertBannerOpen" type="button">Plus d’infos</button>
-            <button class="lb-major-alert-banner__close" id="lbMajorAlertBannerClose" type="button" aria-label="Masquer ce bandeau"><span aria-hidden="true">✕</span></button>
+            <button class="lb-major-alert-banner__close" id="lbMajorAlertBannerClose" type="button" aria-label="Masquer ce bandeau"><span aria-hidden="true">×</span></button>
           </div>
         </div>`;
 
@@ -474,10 +309,9 @@ window.addEventListener('click', (event) => {
   };
 
   const banner = ensureBannerUi();
-  const bannerIcon = document.getElementById('lbMajorAlertBannerIcon');
-  const bannerEyebrow = document.getElementById('lbMajorAlertBannerEyebrow');
-  const bannerTitle = document.getElementById('lbMajorAlertBannerTitle');
   const bannerText = document.getElementById('lbMajorAlertBannerText');
+  const bannerEcho = document.getElementById('lbMajorAlertBannerEcho');
+  const bannerTicker = document.getElementById('lbMajorAlertBannerTicker');
   const bannerOpen = document.getElementById('lbMajorAlertBannerOpen');
   const bannerClose = document.getElementById('lbMajorAlertBannerClose');
 
@@ -711,6 +545,21 @@ window.addEventListener('click', (event) => {
     return '';
   }
 
+  function tickerMessageFor(item){
+    const rawTitle = bannerTitleFor(item).replace(/[.!?\s]+$/g, '').trim();
+    const text = item?.text || '';
+    const works = /travaux|chantier|maintenance/.test(text);
+    const substitution = hasSubstitutionImpact(text);
+    const severity = item?.severity?.label || 'Trafic perturbé';
+    const title = rawTitle && !/^(information trafic|perturbations? majeures?|info trafic)$/i.test(rawTitle)
+      ? rawTitle : (works ? 'Travaux en cours' : severity);
+    const message = [title];
+    if (substitution && !/autocars?|cars?|bus (?:de )?substitution/i.test(title)) message.push('Cars de substitution');
+    const route = routeLabelForBanner(item);
+    if (route && !title.toLowerCase().includes(route.toLowerCase())) message.push(route);
+    return message.join(' · ');
+  }
+
   function renderBanner(items, strongest){
     if (!banner) return;
     if (!Array.isArray(items) || items.length === 0) {
@@ -727,7 +576,6 @@ window.addEventListener('click', (event) => {
       || normalize(item?.situation?.summary || item?.situation?.description || '')
     ).filter(Boolean).sort();
     currentBannerSignature = ids.join('|');
-
     if (dismissedBannerSignature && dismissedBannerSignature === currentBannerSignature) {
       banner.hidden = true;
       document.body.classList.remove('lb-major-alert-banner-visible');
@@ -735,27 +583,24 @@ window.addEventListener('click', (event) => {
       return;
     }
 
-    const first = items[0];
-    const severity = first?.severity || strongest || { key:'critical', icon:'⚠️', label:'Perturbation majeure' };
-    const route = routeLabelForBanner(first);
-    const title = bannerTitleFor(first);
-    const firstLabel = route ? `${severity.label} — ${route}` : severity.label;
-    const suffix = items.length > 1 ? ` + ${items.length - 1} autre${items.length > 2 ? 's' : ''}` : '';
-
-    banner.dataset.level = strongest?.key || severity.key || 'critical';
-    if (bannerIcon) {
-      const level = strongest?.key || severity.key || 'critical';
-      bannerIcon.textContent = (level === 'critical' || level === 'warning' || level === 'delay') ? '!' : '•';
+    banner.dataset.level = strongest?.key || items[0]?.severity?.key || 'critical';
+    const messages = items.slice(0,4).map(tickerMessageFor).filter(Boolean);
+    if (items.length > 4) messages.push(`+ ${items.length - 4} autres alertes`);
+    const text = messages.join('  ◆  ');
+    if (bannerText && bannerEcho && bannerText.textContent !== text) {
+      bannerText.textContent = text;
+      bannerEcho.textContent = text;
     }
-    if (bannerEyebrow) bannerEyebrow.textContent = items.length > 1 ? `${items.length} PERTURBATIONS MAJEURES` : 'PERTURBATION MAJEURE';
-    if (bannerTitle) {
-      bannerTitle.textContent = title;
-      bannerTitle.hidden = !title;
-    }
-    if (bannerText) bannerText.textContent = `${firstLabel}${suffix}`;
+    if (bannerTicker) bannerTicker.setAttribute('aria-label', messages.join('. '));
     banner.hidden = false;
     document.body.classList.add('lb-major-alert-banner-visible');
-    requestAnimationFrame(syncBannerGeometry);
+    requestAnimationFrame(() => {
+      if (banner.hidden) return;
+      // Une seule mesure à chaque nouvelle réponse SIRI : animation CSS ensuite.
+      const width = bannerText?.getBoundingClientRect().width || 650;
+      banner.style.setProperty('--lb-ticker-duration', `${Math.max(17, Math.min(95, Math.round((width + 34) / 33)))}s`);
+      syncBannerGeometry();
+    });
   }
 
   // Une alerte SIRI active avec substitution a priorite sur le calcul GTFS-RT.
@@ -886,6 +731,7 @@ window.addEventListener('click', (event) => {
   }
 
   function openModal(){
+    banner.classList.add('is-paused');
     if (modal.parentElement !== document.body) document.body.appendChild(modal);
     modal.classList.add('is-open');
     modal.style.display = 'flex';
@@ -896,6 +742,7 @@ window.addEventListener('click', (event) => {
   }
 
   function closeModal(){
+    banner.classList.remove('is-paused');
     window.__lbMajorAlertSuppressOpenUntil = Date.now() + 650;
     modal.classList.remove('is-open');
     modal.style.removeProperty('display');
@@ -918,6 +765,7 @@ window.addEventListener('click', (event) => {
     event.preventDefault();
     event.stopPropagation();
     dismissedBannerSignature = currentBannerSignature || '';
+    banner.classList.remove('is-paused');
     banner.hidden = true;
     document.body.classList.remove('lb-major-alert-banner-visible');
     document.documentElement.style.removeProperty('--lb-major-banner-height');
@@ -961,3 +809,5 @@ window.addEventListener('click', (event) => {
       console.warn('[accueil] alertes majeures indisponibles :', error);
     });
 })();
+
+[executed on device: vps-73fa43e3 (dd8da704-7554-4245-92a8-8a25751a2ca2)]
