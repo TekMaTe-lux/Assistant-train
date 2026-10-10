@@ -7,8 +7,35 @@
  if(!widget || !panel) return;
  const holder=document.createElement('div'); holder.className='lbmj-holder';
  const controls=document.createElement('div');controls.className='lbmj-controls';
- controls.innerHTML='<div class="lbmj-title">Mon trajet <span>LIVE</span></div><div class="lbmj-select"><button type="button" data-kind="AM">☀ Matin</button><button type="button" data-kind="PM">☾ Soir</button></div><p class="lbmj-note">La fiche du train sélectionné, actualisée depuis les mêmes sources LIVE.</p>';
+ controls.innerHTML='<div class="lbmj-head"><strong class="lbmj-title">Mon trajet</strong><div class="lbmj-select" role="group" aria-label="Choisir son trajet"><button type="button" data-kind="AM">☀ Matin</button><button type="button" data-kind="PM">☾ Soir</button></div></div><p class="lbmj-note" role="status" aria-live="polite" hidden></p>';
+ const note=controls.querySelector('.lbmj-note');
+ const setNote=(text)=>{note.textContent=text||'';note.hidden=!text;};
  widget.prepend(holder); widget.prepend(controls);widget.classList.add('lbmj-page');
+ // Pure presentation: hide only the redundant scheduled-day sentence, never
+ // countdowns, cancellations, delays or other actionable train messages.
+ const next=document.getElementById('trainDetailNext');
+ const updateNext=()=>{
+   if(!next)return;
+   const text=(next.textContent||'').trim();
+   next.classList.toggle('lbmj-next-redundant',/^circulation pr[eé]vue le\b/i.test(text));
+ };
+ if(next){
+   new MutationObserver(updateNext).observe(next,{childList:true,subtree:true,characterData:true});
+   updateNext();
+ }
+ // A missing track number isn't useful information. Keep real tracks, next-stop
+ // and cancellation notes intact. This is DOM-only, no extra data request.
+ const stops=document.getElementById('trainDetailStops');
+ const trimEmptyTracks=()=>stops?.querySelectorAll('.lb-train-profile__stop-name > span')
+   .forEach(node=>node.classList.toggle('lbmj-meta-unavailable',
+     (node.textContent||'').trim().toLowerCase()==='voie non communiquée'));
+ if(stops){
+   new MutationObserver(trimEmptyTracks).observe(stops,{childList:true,subtree:true});
+   trimEmptyTracks();
+ }
+ const trafficSummary=panel.querySelector('#trainDetailEvents summary');
+ const trafficLabel=trafficSummary?.firstChild?.nodeType===3?trafficSummary.firstChild:null;
+ const expandedTrafficLabel=trafficLabel?.textContent||'';
  // Only hide redundant green status when there is no useful platform or disruption.
  const statusLine=panel.querySelector('.lb-train-profile__statusbar');
  const statusLabel=document.getElementById('trainDetailLiveStatus');
@@ -34,16 +61,19 @@
    if(!active)return;
    selected=kind;controls.querySelectorAll('[data-kind]').forEach(b=>{const is=b.dataset.kind===kind;b.classList.toggle('is-active',is);b.setAttribute('aria-pressed',String(is));});
    const number=trainOf(kind);const date=dateOf(kind);
-   if(!number){controls.querySelector('.lbmj-note').textContent='Sélectionne un train favori dans tes préférences.';panel.hidden=true;return;}
-   controls.querySelector('.lbmj-note').textContent='Synchronisation de la fiche TER '+number+'…';
+   if(!number){setNote('Choisis ton train dans les préférences.');panel.hidden=true;return;}
+   setNote('');
    if(typeof window.lbOpenTrainProfile==='function'){
      changing=true;panel.hidden=false;panel.removeAttribute('aria-modal');panel.setAttribute('role','region');panel.setAttribute('aria-hidden','false');
-     Promise.resolve(window.lbOpenTrainProfile(number,date,{origin:'favorites'})).catch(()=>{}).finally(()=>{changing=false;if(active)controls.querySelector('.lbmj-note').textContent='Données LIVE du TER '+number;});
-   }
+     Promise.resolve(window.lbOpenTrainProfile(number,date,{origin:'favorites'}))
+       .catch(()=>{if(active&&selected===kind)setNote('Impossible de charger ce trajet.');})
+       .finally(()=>{changing=false;});
+   }else setNote('Fiche indisponible pour le moment.');
  };
  function enter(){
    if(active)return;
    active=true;holder.appendChild(panel);
+   if(trafficLabel)trafficLabel.textContent='Info trafic ';
    panel.classList.add('lbmj-inline');panel.hidden=false;panel.setAttribute('role','region');panel.removeAttribute('aria-modal');panel.setAttribute('aria-hidden','false');
    document.body.classList.remove('lb-train-detail-open','lb-train-detail-from-map');
    // The latest train chosen from the home screen has precedence when available.
@@ -53,6 +83,7 @@
  function exit(){
    if(!active)return;active=false;
    if(anchor.parentNode)anchor.parentNode.insertBefore(panel,anchor.nextSibling);
+   if(trafficLabel)trafficLabel.textContent=expandedTrafficLabel;
    panel.classList.remove('lbmj-inline');panel.hidden=true;panel.setAttribute('aria-hidden','true');panel.setAttribute('role','dialog');panel.setAttribute('aria-modal','true');
    document.body.classList.remove('lb-train-detail-open','lb-train-detail-from-map');
  }
