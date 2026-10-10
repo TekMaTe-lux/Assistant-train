@@ -678,14 +678,29 @@
   }
 
   async function fetchHomeOverview(range){
-    var path = '/api/stats/beta/overview?from=' + encodeURIComponent(range.from) + '&to=' + encodeURIComponent(range.to);
-    var urls = [HOME_STATS_ORIGIN + path, path];
+    // Les anneaux utilisent seulement la synthese; meme archive et memes regles.
+    // Repli sur l'ancienne API si la synthese est temporairement indisponible.
+    var query = '?from=' + encodeURIComponent(range.from) + '&to=' + encodeURIComponent(range.to);
+    var base = '/api/stats/beta/';
+    var paths = ['dashboard' + query, 'overview' + query];
+    var urls = [
+      HOME_STATS_ORIGIN + base + paths[0],
+      HOME_STATS_ORIGIN + base + paths[1],
+      base + paths[0],
+      base + paths[1]
+    ];
     var lastError = null;
     for (var i = 0; i < urls.length; i++){
       try{
         var response = await fetch(urls[i], { credentials:'include', cache:'no-store' });
         if (!response.ok) throw new Error('HTTP ' + response.status);
-        return await response.json();
+        var payload = await response.json();
+        if (urls[i].includes('/dashboard?')) {
+          if (!payload || payload.ok === false || !Number.isFinite(Number(payload.total_trains))
+              || !Number.isFinite(Number(payload.punctuality_rate))) throw new Error('Synthese invalide');
+          return { dashboard:payload };
+        }
+        return payload;
       }catch(error){
         lastError = error;
       }
@@ -782,7 +797,7 @@
   }
 
   document.addEventListener('DOMContentLoaded', function(){ applyHomePunctualityVisual(); loadHomePunctualityChart(); });
-  window.addEventListener('load', loadHomePunctualityChart);
+  window.addEventListener('load', function(){ loadHomePunctualityChart(); });
   setTimeout(loadHomePunctualityChart, 250);
   setTimeout(loadHomePunctualityChart, 1200);
   window.loadHomePunctualityChart = loadHomePunctualityChart;

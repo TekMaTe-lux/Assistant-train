@@ -16012,7 +16012,10 @@ function __lbUpdateHomeTrafficUI(payload){
   const s = __lbPickTrafficLevel(segSouth);
 
   window.__lbHomeTrafficLatest = { north:n, south:s };
-  __lbSetTrafficBadge(badgeNorth, window.__lbMajorTrafficImpact?.north || n);
+  // Ne pas montrer un faux "Trafic fluide" avant le retour de SIRI travaux/cars.
+  // Même un objet vide indique que les alertes ont été vérifiées.
+  if (window.__lbMajorTrafficImpact !== undefined)
+    __lbSetTrafficBadge(badgeNorth, window.__lbMajorTrafficImpact?.north || n);
   __lbSetTrafficBadge(badgeSouth, window.__lbMajorTrafficImpact?.south || s);
 }
 
@@ -16039,7 +16042,8 @@ async function updateHomeTrafficStatus(){
   }catch(_){}
 
   try{
-    const dataset = (window.GTFS_RT_DATASETS || []).find(d => d.id === 'sncf-nml');
+    const datasets = window.GTFS_RT_DATASETS || (typeof GTFS_RT_DATASETS !== 'undefined' ? GTFS_RT_DATASETS : []);
+    const dataset = datasets.find(d => d.id === 'sncf-nml');
     if (!dataset) throw new Error('Dataset sncf-nml introuvable');
     const result = await fetchGtfsDataset(dataset, { forceFresh: false });
     __lbUpdateHomeTrafficUI({ raw: result?.raw, normalized: result?.normalized });
@@ -16071,10 +16075,15 @@ window.addEventListener('gtfsrt:loaded', (ev)=>{
     }
   }catch{}
 });
-window.addEventListener('load', ()=>{
-  // un petit update immédiat (ne casse rien si GTFS pas encore prêt)
-  setTimeout(()=>{ updateHomeTrafficStatus(); }, 400);
-});
+// Script defer : démarrer le GTFS dès que le script est prêt, sans attendre
+// les images, la carte, les widgets ou window.load. Rafraîchissement GTFS inchangé.
+updateHomeTrafficStatus();
+// En cas d'indisponibilité SIRI, ne pas bloquer indéfiniment le badge Nord.
+setTimeout(() => {
+  if (window.__lbMajorTrafficImpact !== undefined) return;
+  const last = window.__lbHomeTrafficLatest;
+  if (last) __lbSetTrafficBadge(document.getElementById('homeTrafficBadgeNorth'), last.north);
+}, 4200);
 
 
 
