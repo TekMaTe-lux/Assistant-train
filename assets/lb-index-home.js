@@ -542,6 +542,7 @@
   var homePunctualityRequest = null;
   var homePunctualityLoadedKey = '';
   var homePunctualityLastValues = null;
+  var homePunctLastAttemptAt = 0;
   var HOME_RING_REST_COLOR = 'rgba(125,217,255,0.18)';
   var HOME_STATS_ORIGIN = 'https://vps.labetaillere.fr';
   var HOME_PUNCT_CACHE_KEY = 'lb_home_overview_punctuality_v2';
@@ -600,9 +601,11 @@
 
   function setDonutValue(ring, pct, label, total){
     if (!ring) return;
-    var value = Number(pct);
-    var valid = Number.isFinite(value);
-    value = valid ? Math.max(0, Math.min(100, value)) : 0;
+    // Ne pas transformer null en 0 %. Un jour sans trains archivés
+    // n'est pas une journée de ponctualité nulle.
+    var valid = pct !== null && pct !== undefined && pct !== ''
+      && Number.isFinite(Number(pct)) && Number.isFinite(Number(total)) && Number(total) > 0;
+    var value = valid ? Math.max(0, Math.min(100, Number(pct))) : 0;
     var ringColor = valid ? homeColorForPunctuality(value) : '#668b95';
     ring.style.setProperty('--lb-home-punct-pct', (valid ? value : 0) + '%');
     ring.style.setProperty('--lb-home-punct-color', ringColor);
@@ -620,7 +623,7 @@
 
     var description = valid
       ? 'Ponctualité ' + label + ' : ' + value.toLocaleString('fr-FR', { maximumFractionDigits: 1 }) + ' %, ' + Number(total || 0).toLocaleString('fr-FR') + ' circulations observées'
-      : 'Ponctualité ' + label + ' indisponible';
+      : 'Ponctualité ' + label + ' : données en attente de consolidation';
     ring.setAttribute('aria-label', description);
     if (ring.parentElement) ring.parentElement.title = description;
   }
@@ -696,8 +699,11 @@
       if (!cached || cached.key !== key) return null;
       var thirty = cached.thirty;
       var yesterday = cached.yesterday;
-      if (!overviewMetric({ cards:{ total_trains:thirty && thirty.total, punctuality_rate:thirty && thirty.pct } })) return null;
-      if (!overviewMetric({ cards:{ total_trains:yesterday && yesterday.total, punctuality_rate:yesterday && yesterday.pct } })) return null;
+      // Un résultat partiel reste utile : J-30 peut être disponible alors
+      // que l'archive de J-1 n'a pas encore été consolidée.
+      thirty = overviewMetric({ cards:{ total_trains:thirty && thirty.total, punctuality_rate:thirty && thirty.pct } });
+      yesterday = overviewMetric({ cards:{ total_trains:yesterday && yesterday.total, punctuality_rate:yesterday && yesterday.pct } });
+      if (!thirty && !yesterday) return null;
       return { thirty:thirty, yesterday:yesterday };
     }catch(e){
       return null;
@@ -716,7 +722,8 @@
   }
 
   async function loadHomePunctualityChart(force){
-    if (homePunctualityRequest && !force) return homePunctualityRequest;
+    if (homePunctualityRequest) return homePunctualityRequest;
+    homePunctLastAttemptAt = Date.now();
     var ranges = homeRanges();
     var key = ranges.thirty.from + '_' + ranges.thirty.to;
     if (!force && homePunctualityLoadedKey === key) return homePunctualityLastValues;
@@ -724,19 +731,25 @@
     if (cached) {
       homePunctualityLastValues = cached;
       renderHomePunctualityCharts(cached.thirty, cached.yesterday);
+    } else {
+      renderHomePunctualityCharts(null, null);
     }
 
     homePunctualityRequest = (async function(){
       try{
-        var payloads = await Promise.all([
+        // Les deux périodes sont indépendantes : le manque d'archive à J-1
+        // ne doit jamais faire disparaître le calcul réel de J-30.
+        var results = await Promise.allSettled([
           fetchHomeOverview(ranges.thirty),
           fetchHomeOverview(ranges.yesterday)
         ]);
         var values = {
-          thirty:overviewMetric(payloads[0]),
-          yesterday:overviewMetric(payloads[1])
+          thirty:results[0].status === 'fulfilled' ? overviewMetric(results[0].value) : null,
+          yesterday:results[1].status === 'fulfilled' ? overviewMetric(results[1].value) : null
         };
-        if (!values.thirty || !values.yesterday) throw new Error('Ponctualité invalide');
+        if (!values.thirty && cached?.thirty) values.thirty = cached.thirty;
+        if (!values.yesterday && cached?.yesterday) values.yesterday = cached.yesterday;
+        if (!values.thirty && !values.yesterday) throw new Error('Aucune statistique consolidée');
         writeHomePunctualityCache(key, values);
         homePunctualityLastValues = values;
         renderHomePunctualityCharts(values.thirty, values.yesterday);
@@ -773,6 +786,14 @@
   setTimeout(loadHomePunctualityChart, 250);
   setTimeout(loadHomePunctualityChart, 1200);
   window.loadHomePunctualityChart = loadHomePunctualityChart;
+  // Relance uniquement en revenant dans la PWA si une archive manquait.
+  // Pas de polling, donc aucun trafic réseau supplémentaire en arrière-plan.
+  document.addEventListener('visibilitychange', function(){
+    if (document.visibilityState !== 'visible') return;
+    if (!homePunctualityLoadedKey || Date.now() - homePunctLastAttemptAt < 10 * 60 * 1000) return;
+    if (homePunctualityLastValues?.thirty && homePunctualityLastValues?.yesterday) return;
+    loadHomePunctualityChart(true).catch(function(){});
+  });
 })();
 
 ;
