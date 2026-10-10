@@ -14252,6 +14252,50 @@ if (statsEl){
     return hash === '#favoris' || hash === '#favtrainswidget';
   }
 
+  // Favoris matin et soir : même règle. Tant que la circulation du jour peut
+  // encore rouler (y compris retardée) ou qu'elle est supprimée, on garde SNCF.
+  // Une fois l'arrivée effective passée, on passe au prochain service GTFS.
+  // Le cache statique est partagé avec le LIVE, sans nouvelle source réseau.
+  const lbFavoriteHasEndedToday = (number, payload) => {
+    if (!payload?.train?.stop_times?.length || payload.nextServiceDate) return false;
+    // Ne jamais camoufler une suppression du jour sous la prochaine course.
+    if (inferRealtimeStatusFromDisruptions(payload) === 'canceled') return false;
+    let rows = [];
+    try {
+      const fullRows = buildFavStopRows(payload, number);
+      rows = Array.isArray(fullRows) ? fullRows.filter(row => !row.isDeleted) : [];
+    } catch (_) { return false; } // données incomplètes : conserver le LIVE
+    const last = rows[rows.length - 1];
+    const fallback = computeWidgetState(payload.train);
+    const effectiveArrival = last?.amendedMin ?? last?.plannedMin ?? fallback.arrLast;
+    if (!Number.isFinite(effectiveArrival)) return false;
+    const announcedDelay = Math.max(0, Number(computeMaxDelayMin(payload, number)) || 0);
+    // En l'absence d'heure d'arrivée révisée, ne pas masquer un train encore
+    // retardé : marge fondée sur son retard réel annoncé.
+    const safeArrival = last?.amendedMin != null
+      ? effectiveArrival : effectiveArrival + announcedDelay;
+    return Number.isFinite(fallback.now) && fallback.now > safeArrival;
+  };
+
+  const lbFavoriteDisplayPayload = async (number, payload) => {
+    if (!number || !lbFavoriteHasEndedToday(number, payload)) return payload;
+    if (typeof window.lbLoadTrainStaticToday !== 'function' ||
+        typeof window.lbGetTrainStaticNextPayload !== 'function') return payload;
+    try {
+      await window.lbLoadTrainStaticToday(); // cache + requête mutualisée AM/PM
+      const next = window.lbGetTrainStaticNextPayload(number);
+      const nextDay = String(next?.nextServiceDate || '');
+      const nextDeparture = String(next?.train?.stop_times?.[0]?.departure_time || '');
+      // Ne pas réafficher comme "prochain" le train qui vient de terminer.
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(nextDay) ||
+          nextDay <= luxYmdToday() || !/^\d{1,2}:\d{2}/.test(nextDeparture)) return payload;
+      return next;
+    } catch (error) {
+      console.warn('[Favoris] prochain service indisponible', error);
+      return payload;
+    }
+  };
+
   window.updateFavoriteWidgetFromPrefs = async () => {
     const root = document.getElementById('favTrainsWidget');
     if (!root) return;
@@ -14288,8 +14332,16 @@ if (statsEl){
       favPM ? fetchTrainToday(favPM) : Promise.resolve({ error: null })
     ]);
 
-    renderFavCard('AM', favAM, amRes.status === 'fulfilled' ? amRes.value : { error: 'Erreur API' });
-    renderFavCard('PM', favPM, pmRes.status === 'fulfilled' ? pmRes.value : { error: 'Erreur API' });
+    const amToday = amRes.status === 'fulfilled' ? amRes.value : { error: 'Erreur API' };
+    const pmToday = pmRes.status === 'fulfilled' ? pmRes.value : { error: 'Erreur API' };
+    const [amShown, pmShown] = await Promise.all([
+      lbFavoriteDisplayPayload(favAM, amToday),
+      lbFavoriteDisplayPayload(favPM, pmToday)
+    ]);
+    // Source unique pour l'accueil et les Favoris ; aucun badge ancien
+    // ARRIVÉ ne doit rester après la bascule au prochain service.
+    renderFavCard('AM', favAM, amShown);
+    renderFavCard('PM', favPM, pmShown);
 
     try{ if (typeof lbRenderHomeFavPreview==='function') lbRenderHomeFavPreview(); }catch(e){}
 
@@ -16237,6 +16289,11 @@ function lbRenderHomeFavPreview(){
 
   const renderBadge = (stateTxt) => {
     const key = toStateKey(stateTxt);
+    // "PROCHAIN" indique une autre journée que celle en cours. On ne le
+    // traduit plus en "À VENIR" qui suggère à tort un train du jour.
+    if (/PROCHAIN/i.test(stateTxt || '')) {
+      return '<span class="fav-state-badge fav-state-before">PROCHAIN</span>';
+    }
     try{
       if (typeof buildWidgetStateBadge === 'function') return buildWidgetStateBadge(key);
     }catch(e){}
