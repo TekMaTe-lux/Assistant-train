@@ -564,13 +564,25 @@ window.addEventListener('click', (event) => {
     return corridorPlacesIn(text).length < 2;
   };
 
+  // Une substitution par autocars avec circulation réellement perturbée est
+  // majeure, même si le chantier est programmé. Le mot "travaux" seul ne l'est pas.
+  const hasSubstitutionImpact = (text) =>
+    /(?:autocars?|cars?|bus) (?:de|d') (?:substitution|remplacement)|trains?[^.]{0,100}remplac[^.]{0,60}(?:autocars?|cars?|bus)/.test(text)
+    && /circulation[^.]{0,120}perturbee|trains?[^.]{0,100}(?:supprim|remplac)|(?:service|trafic)[^.]{0,80}(?:reduit|modifie|perturbe)/.test(text);
+
   const hasMajorImpact = (text) =>
-    /(tous les trains[^.]{0,90}(supprim|remplac)|interruption (totale|des circulations)|circulation[^.]{0,80}(interromp|tres perturbee|très perturbée)|aucun train|nombreuses suppressions|remplac[ée]s? par des cars|forts? retards?|retards? importants?)/.test(text);
+    /(tous les trains[^.]{0,90}(supprim|remplac)|interruption (totale|des circulations)|circulation[^.]{0,80}(interromp|tres perturbee|très perturbée)|aucun train|nombreuses suppressions|remplac[ée]s? par des cars|forts? retards?|retards? importants?)/.test(text)
+    || hasSubstitutionImpact(text);
 
   // Même hiérarchie et mêmes couleurs que les cartes de l'onglet Perturbations.
   const severityFor = (text) => {
     if (/(tous les trains[^.]{0,100}supprim|interruption totale|aucun train|circulation[^.]{0,80}interromp)/.test(text)) {
       return { key: 'critical', icon: '❌', label: 'Circulation interrompue', rank: 5 };
+    }
+    if (hasSubstitutionImpact(text)) {
+      // Rouge : substitution routière + fort impact, sans prétendre que
+      // TOUS les trains sont remplacés si la source SNCF ne l'indique pas.
+      return { key: 'critical', icon: '🚌', label: 'Trafic très perturbé · Cars de substitution', rank: 5 };
     }
     if (/circulation[^.]{0,100}perturbee/.test(text) && /suppressions?/.test(text)) {
       return { key: 'critical', icon: '⚠️', label: 'Service perturbé', rank: 5 };
@@ -622,11 +634,11 @@ window.addEventListener('click', (event) => {
       text,
       corridorTrains,
       severity: severityFor(text),
-      // Les broadcasts SIRI peuvent publier le même incident une fois en scope
-      // général puis une seconde fois avec les trains affectés. La description
-      // est plus stable que le détail : on neutralise seulement le préfixe
-      // régional pour fusionner ces vrais doublons sans masquer deux incidents.
-      fingerprint: normalize(situation?.description || situation?.detail || situation?.summary || '')
+      // SIRI : scope général et scope vehicleJourney peuvent avoir des descriptions
+      // courtes différentes, mais le même détail opérationnel (à la ponctuation près).
+      // Priorité au détail complet : il garde trajet + dates et évite de fusionner
+      // deux chantiers distincts partageant un titre générique "Travaux en cours".
+      fingerprint: normalize(situation?.detail || situation?.description || situation?.summary || '')
         .replace(/^lorraine\s*:\s*/, '')
         .replace(/[^a-z0-9]+/g, ' ')
         .trim()
