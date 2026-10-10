@@ -809,5 +809,3 @@ window.addEventListener('click', (event) => {
       console.warn('[accueil] alertes majeures indisponibles :', error);
     });
 })();
-
-[executed on device: vps-73fa43e3 (dd8da704-7554-4245-92a8-8a25751a2ca2)]
