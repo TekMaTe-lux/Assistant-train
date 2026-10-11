@@ -122,3 +122,19 @@ test('realtime payload supplies Luxembourg platforms immediately without another
  const current=ctx.window.cflVoiesByTrainMap;await ctx.loadGtfsRetards();assert.equal(ctx.window.cflVoiesByTrainMap,current);assert.equal(current.get('88745').get('luxembourg'),'8');
 });
 
+
+test('LIVE can hydrate route times directly from the already fetched SNCF HUB journey',()=>{
+ const a=features.indexOf('  function buildLiveRouteInfoFromHub('),b=features.indexOf('  async function hydrateLiveSncfViaHub(',a);
+ assert.notEqual(a,-1);assert.notEqual(b,-1);
+ const ctx={formatGtfsHHMM:raw=>{const d=String(raw||'').replace(/\D/g,'');return d?d.slice(0,2)+':'+d.slice(2,4):'—';}};
+ vm.createContext(ctx);vm.runInContext(features.slice(a,b),ctx);
+ const info=ctx.buildLiveRouteInfoFromHub({stop_times:[
+   {stop_point:{name:'Nancy'},departure_time:'125000'},
+   {stop_point:{name:'Pont-à-Mousson'},arrival_time:'130600',departure_time:'130700'},
+   {stop_point:{name:'Metz'},arrival_time:'132800'}
+ ]});
+ assert.equal(info.departure,'12:50');assert.equal(info.arrival,'13:28');
+ assert.equal(info.origin,'Nancy');assert.equal(info.destination,'Metz');
+ assert.deepEqual(Array.from(info.stops),['Nancy','Pont-à-Mousson','Metz']);
+ assert.equal(info.source,'sncf_hub');
+});

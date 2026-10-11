@@ -1465,6 +1465,36 @@
     };
   }
 
+  function buildLiveRouteInfoFromHub(train){
+    const rows = Array.isArray(train?.stop_times) ? train.stop_times : [];
+    if (rows.length < 2) return null;
+    const stopRows = rows.map((stop)=>{
+      const name = String(stop?.stop_point?.name || stop?.stop_name || stop?.name || '').trim();
+      const planned = stop?.base_departure_time || stop?.base_arrival_time || stop?.departure_time || stop?.arrival_time || '';
+      const amended = stop?.amended_departure_time || stop?.amended_arrival_time || '';
+      return {
+        name,
+        time: formatGtfsHHMM(planned),
+        amendedTime: formatGtfsHHMM(amended),
+        delayMin: Number.isFinite(Number(stop?.delay_minutes)) ? Number(stop.delay_minutes) : null
+      };
+    }).filter((stop)=> stop.name);
+    if (stopRows.length < 2) return null;
+    const first = stopRows[0];
+    const last = stopRows[stopRows.length - 1];
+    return {
+      departure:first.time || '—',
+      arrival:last.time || '—',
+      trainType:'',
+      stops:stopRows.map((stop)=> stop.name),
+      stopRows,
+      origin:first.name,
+      destination:last.name,
+      summaryOnly:false,
+      source:'sncf_hub'
+    };
+  }
+
   async function hydrateLiveSncfViaHub(sourceTrains){
     const trains = Array.isArray(sourceTrains) ? sourceTrains : [];
     if (!trains.length) return;
@@ -1500,6 +1530,29 @@
       if (!response?.ok || !response?.data) return;
       const info = extractSncfHubLiveInfo(response.data);
       const liveTrain = COMMUNITY.liveTrains.find((it)=> normalizeKey(it?.trainNumber) === num);
+
+      // Le HUB SNCF contient déjà les horaires et les arrêts. Il répond en général
+      // bien avant le batch GTFS statique : on l'utilise immédiatement pour le
+      // premier affichage du LIVE, sans lancer aucune requête supplémentaire.
+      const hubRouteInfo = buildLiveRouteInfoFromHub(info.train);
+      if (hubRouteInfo){
+        const cacheKey = `${num}_${day}`;
+        const cachedRouteInfo = COMMUNITY.staticInfoCache.get(cacheKey) || null;
+        const cachedHasTimes = !!cachedRouteInfo
+          && cachedRouteInfo.departure && cachedRouteInfo.departure !== '—'
+          && cachedRouteInfo.arrival && cachedRouteInfo.arrival !== '—';
+        const routeInfo = cachedHasTimes ? cachedRouteInfo : hubRouteInfo;
+        if (!cachedHasTimes) COMMUNITY.staticInfoCache.set(cacheKey, hubRouteInfo);
+        if (liveTrain && (!Array.isArray(liveTrain.stops) || liveTrain.stops.length < 2)) {
+          liveTrain.stops = hubRouteInfo.stops.slice();
+          liveTrain.from = hubRouteInfo.origin || liveTrain.from;
+          liveTrain.to = hubRouteInfo.destination || liveTrain.to;
+          liveTrain.route = `${liveTrain.from} → ${liveTrain.to}`;
+        }
+        const routeNode = document.querySelector(`[data-lb-train-route-line="${num}"]`);
+        if (routeNode) routeNode.innerHTML = buildLiveRouteLineHtml(liveTrain || { from:hubRouteInfo.origin, to:hubRouteInfo.destination }, routeInfo);
+      }
+
       const currentClass = liveTrain?.statusClass || 'ok';
       const currentDelay = Number(liveTrain?.maxDelay || 0);
       let finalInfo = { ...info };
