@@ -63,7 +63,32 @@
       const directs=(data.directs||[]).filter(t=>candidate(t,favNo,earliest)).sort((a,b)=>a.arrMin-b.arrMin||a.depMin-b.depMin);
       const direct=directs[0];
       // Un changement n'est proposé que s'il donne un vrai avantage à l'arrivée.
-      const transfers=(data.transfers||[]).filter(t=>{
+      // Complément : le classement global de l'API peut omettre un bon trajet via Metz.
+      // Deux recherches ciblées, uniquement à l'ouverture du panneau (pas au chargement de la page).
+      let viaMetz = [];
+      if(normalize(route.from)!=='metz' && normalize(route.to)!=='metz'){
+        try {
+          const legParams = (from,to) => new URLSearchParams({from,to,date,start:'00:00',end:'23:59',includeCfl:'1'});
+          const [r1,r2]=await Promise.all([
+            fetch(API+'?'+legParams(route.from,'Metz'),{cache:'no-store'}),
+            fetch(API+'?'+legParams('Metz',route.to),{cache:'no-store'})
+          ]);
+          if(r1.ok && r2.ok){
+            const [left,right]=await Promise.all([r1.json(),r2.json()]);
+            const first=(left.directs||[]).filter(t=>candidate(t,favNo,earliest));
+            const second=(right.directs||[]).filter(t=>candidate(t,favNo,earliest));
+            for(const a of first){
+              for(const b of second){
+                const wait=b.depMin-a.arrMin;
+                if(wait>=10&&wait<=45&&a.tripId!==b.tripId&&(!direct||b.arrMin<=direct.arrMin-12)){
+                  viaMetz.push({first:a,second:b});
+                }
+              }
+            }
+          }
+        }catch(_){ /* L'itinéraire direct reste disponible. */ }
+      }
+      const transfers=[...(data.transfers||[]),...viaMetz].filter(t=>{
         const a=t.first,b=t.second;
         if(!candidate(a,favNo,earliest)||!candidate(b,favNo,earliest))return false;
         if(normalize(a.to)!==normalize(b.from)||normalize(a.from)!==normalize(route.from)||normalize(b.to)!==normalize(route.to))return false;
