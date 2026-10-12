@@ -1,0 +1,94 @@
+name: APK test La Bétaillère (PWA en direct)
+on:
+  push:
+    branches: [android-pwa-test-20261012]
+    paths:
+      - ".github/workflows/android-pwa-test.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  android-preview:
+    name: Construire APK de test
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Initialiser le projet Capacitor dans un dossier temporaire
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/labetaillere-mobile/www"
+          cd "$RUNNER_TEMP/labetaillere-mobile"
+          npm init -y
+          npm install --no-audit --no-fund @capacitor/core@7 @capacitor/android@7 @capacitor/cli@7
+          echo '<!doctype html><html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"></head><body>La Bétaillère</body></html>' > www/index.html
+          cat > capacitor.config.json <<'JSON'
+          {
+            "appId": "fr.labetaillere.berpreview",
+            "appName": "La Bétaillère",
+            "webDir": "www",
+            "server": {
+              "url": "https://www.labetaillere.fr",
+              "cleartext": false
+            }
+          }
+          JSON
+          npx cap add android
+          npx cap sync android
+          echo "PROJECT_DIR=$RUNNER_TEMP/labetaillere-mobile" >> "$GITHUB_ENV"
+
+      - name: Icône du projet
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsSL --retry 3 -o "$RUNNER_TEMP/ber-icon.png" "https://raw.githubusercontent.com/TekMaTe-lux/Assistant-train/main/icon-512.png"
+          python3 -m pip install --quiet --break-system-packages Pillow
+          python3 - <<'PY'
+          import os
+          from PIL import Image
+          home = os.environ["RUNNER_TEMP"] + "/labetaillere-mobile/android/app/src/main/res"
+          im = Image.open(os.environ["RUNNER_TEMP"] + "/ber-icon.png").convert("RGBA")
+          for suffix, px in [('mdpi',48),('hdpi',72),('xhdpi',96),('xxhdpi',144),('xxxhdpi',192)]:
+              dest = os.path.join(home, 'mipmap-'+suffix)
+              os.makedirs(dest, exist_ok=True)
+              bg = Image.new('RGBA', (px,px), '#06131f')
+              logo = im.copy()
+              logo.thumbnail((int(px*.86),int(px*.86)),Image.Resampling.LANCZOS)
+              bg.alpha_composite(logo, ((px-logo.width)//2,(px-logo.height)//2))
+              for name in ('ic_launcher.png','ic_launcher_round.png','ic_launcher_foreground.png'):
+                  bg.save(os.path.join(dest,name))
+          PY
+
+      - name: Compiler l'APK Android de test
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$PROJECT_DIR/android"
+          chmod +x ./gradlew
+          ./gradlew --no-daemon --console=plain assembleDebug
+          cp app/build/outputs/apk/debug/app-debug.apk "$GITHUB_WORKSPACE/labetaillere-android-test.apk"
+          ls -lh "$GITHUB_WORKSPACE/labetaillere-android-test.apk"
+
+      - name: Publier l'APK en artefact privé du workflow
+        uses: actions/upload-artifact@v4
+        with:
+          name: labetaillere-android-test
+          path: labetaillere-android-test.apk
+          retention-days: 7
+          if-no-files-found: error
