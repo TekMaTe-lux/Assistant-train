@@ -80,7 +80,7 @@
     // Limit the search to the useful upcoming window; do not scan a full day.
     const begin=Math.max(0,earliest-5),end=Math.min(1439,earliest+240);
     const hhmm=n=>String(Math.floor(n/60)).padStart(2,'0')+':'+String(n%60).padStart(2,'0');
-    const qs=new URLSearchParams({from:route.from,to:route.to,date,start:hhmm(begin),end:hhmm(end),includeCfl:'1',allowTransfers:'1',minTransfer:'10',maxTransfer:'45',transferLimit:'12'});
+    const qs=new URLSearchParams({from:route.from,to:route.to,date,start:hhmm(begin),end:hhmm(end),includeCfl:'1',allowTransfers:'1',betterTransfers:'1',minTransfer:'10',maxTransfer:'45',transferLimit:'12'});
     try {
       const data=await cachedSearch(qs);
       if(seq!==requestSeq||!modal||modal.hidden)return;
