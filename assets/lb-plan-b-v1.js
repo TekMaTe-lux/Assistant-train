@@ -108,6 +108,15 @@
       if(modal&&!modal.hidden)out().innerHTML=markup;
     } catch(e){if(modal&&!modal.hidden)out().innerHTML='<h3>'+escape(route.from)+' → '+escape(route.to)+'</h3><p class="lbpb-note">Recherche momentanément indisponible. Consulte le tableau des départs.</p>';}
   }
+  // Reuse the same Plan B flow from the full favorite-train profile.
+  window.lbOpenPlanBForFavorite = function(kind) {
+    if (kind !== 'AM' && kind !== 'PM') return false;
+    const row = Array.from(slot.querySelectorAll('.home-fav-row[data-fav-k]'))
+      .find(item => item.dataset.favK === kind);
+    if (!row) return false;
+    openPlan(kind, row);
+    return true;
+  };
   function decorate(){
     slot.querySelectorAll('.home-fav-row[data-fav-k]').forEach(row=>{
       const kind=row.dataset.favK;
