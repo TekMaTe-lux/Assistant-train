@@ -76,7 +76,20 @@
     }
     throw lastErr || new Error('range indisponible');
   }
-  async function ensure30DayPunctuality(){
+  // Plusieurs événements de démarrage appellent la ponctualité simultanément.
+  // Une seule opération réellement effectuée, mais toutes les relances
+  // conservent la même promesse et les mêmes repli/cache/statistiques.
+  let home30DayPending = null;
+  function ensure30DayPunctuality(){
+    if (home30DayPending) return home30DayPending;
+    const task = compute30DayPunctuality();
+    home30DayPending = task;
+    void task.finally(() => {
+      if (home30DayPending === task) home30DayPending = null;
+    }).catch(() => {});
+    return task;
+  }
+  async function compute30DayPunctuality(){
     const fallbackTo = dateMinusDays(luxTodayISO(), 1);
     const fallbackFrom = dateMinusDays(fallbackTo, 29);
     const period = (typeof getLastDaysRange === 'function')
