@@ -1,4 +1,4 @@
-const CACHE_VERSION = 'v140';
+const CACHE_VERSION = 'v141';
 const APP_CACHE = `lbetaillere-app-${CACHE_VERSION}`;
 const STATIC_CACHE = `lbetaillere-static-${CACHE_VERSION}`;
 const DATA_CACHE = `lbetaillere-data-${CACHE_VERSION}`;
@@ -20,15 +20,15 @@ const APP_SHELL = [
   './index.html',
   './manifest.webmanifest',
   './config/territory.nancy-metz-lux.js?v=11',
-  './assets/lb-app-shell-v3.js?v=20261006-account1',
+  './assets/lb-app-shell-v3.js?v=20261013-filter-choice1',
   './assets/lb-legacy.css?v=20261010-unified-favs1',
   './assets/lb-design-system-v3.css?v=10',
-  './assets/lb-mobile-v4.css?v=14',
+  './assets/lb-mobile-v4.css?v=16',
   './assets/lb-v4-live-preview.css?v=20260831-3',
-  './assets/lb-index-inline.css?v=1',
-  './assets/lb-index-late.css?v=1',
+  './assets/lb-index-inline.css?v=20260921-2',
+  './assets/lb-index-late.css?v=20260924-tabbar1',
   './assets/lb-home-premium-v2.css?v=1',
-  './assets/lb-index-head.js?v=1',
+  './assets/lb-index-head.js?v=20260924-networktoast2',
   './assets/lb-index-core.js?v=20261011-home-fast1',
   './assets/lb-account-page-v1.js?v=20261006-2',
   './assets/lb-account-page-v1.css?v=20261006-4',
@@ -42,14 +42,14 @@ const APP_SHELL = [
   './assets/lb-grade-thumbs/grade-7.webp',
 
   './assets/lb-index-home.js?v=20261011-home-fast1',
-  './assets/lb-index-features.js?v=20261011-live-fast1',
+  './assets/lb-index-features.js?v=20261013-pwa-cache1',
   './assets/lb-comment-reactions-v1.js?v=20261005-2',
   './assets/lb-comment-reactions-v1.css?v=20261005-3',
   './assets/lb-status-harmony-v1.css?v=20261008-profile-events1',
   './assets/lb-favorites-cockpit-v2.css?v=20261008-3',
-  './assets/lb-my-journey-inline-v1.js?v=20261010-unified-favs1',
+  './assets/lb-my-journey-inline-v1.js?v=20261013-profile-planb2',
   './assets/lb-my-journey-inline-v1.css?v=20261010-mini-buttons1',
-  './assets/lb-mobile-v4.js?v=6',
+  './assets/lb-mobile-v4.js?v=20261007-data1',
   './assets/lb-traffic-details-v1.css?v=4',
   './assets/lb-traffic-details-v1.js?v=7',
   './jeuBETA1.html?v=2',
