@@ -287,7 +287,9 @@ async function transitNetworkFirst(request) {
   const cache = await caches.open(TRANSIT_CACHE);
   const key = canonicalDataKey(request);
   try {
-    const response = await fetchWithTimeout(request, 2200);
+    // Une API ferroviaire lente ne signifie pas que le navigateur est hors ligne.
+    // Laisser une marge suffisante avant de consulter le cache de secours.
+    const response = await fetchWithTimeout(request, 5500);
     const usable = await transitResponseUsable(url, response);
     if (usable) {
       const cachedAt = Date.now();
