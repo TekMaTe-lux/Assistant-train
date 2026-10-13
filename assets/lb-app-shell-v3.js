@@ -560,11 +560,7 @@ if (
   }
 
   function syncCflToggle() {
-    if (!selectedUsesCfl()) return;
-    const toggle = document.getElementById('includeCFLStatic');
-    const transfers = document.getElementById('allowTransfer');
-    if (toggle) toggle.checked = true;
-    if (transfers) transfers.checked = true;
+    // Respect the user's explicit choice. Station selection must never enable optional filters.
   }
 
   function hookSearchUi() {
