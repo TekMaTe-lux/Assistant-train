@@ -16,7 +16,7 @@
   load('./assets/home-major-alerts-core.js?v=20261010-major-ticker2', 'lb-home-major-alert-core');
 
   // Pont gare dynamique Luxembourg -> fiche train #BER.
-  load('./assets/lux-train-sheet.js?v=20260826-1', 'lb-lux-train-sheet');
+  load('./assets/lux-train-sheet.js?v=20261013-cfl-allalerts2', 'lb-lux-train-sheet');
 
   // Signalement LIVE : toujours proposer le parcours complet, jamais seulement l'origine/destination.
   // La logique de signalement voyageur reste séparée et n'est pas modifiée ci-dessous.
