@@ -15,13 +15,35 @@
   const escape = s => String(s ?? '').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   const number = s => (String(s||'').match(/\b\d{4,6}\b/)||[])[0]||'';
   const bestDate = () => dateYmd();
-  let modal, previousFocus;\n  const searchCache=new Map();\n  let requestSeq=0;\n  function trainLink(t){\n    const no=number(t?.train);\n    return no?'<button type="button" class="lbpb-train-link" data-lbpb-train="'+escape(no)+'" aria-label="Ouvrir la fiche du train '+escape(no)+'">Fiche TER '+escape(no)+' →</button>':'';\n  }\n  function cachedSearch(query){\n    const key=query.toString(), now=Date.now(), item=searchCache.get(key);\n    if(item && now-item.at<45000) return item.promise;\n    const promise=fetch(API+'?'+key,{cache:'no-store'}).then(r=>{if(!r.ok)throw Error('API '+r.status);return r.json();});\n    searchCache.set(key,{at:now,promise});\n    promise.catch(()=>{if(searchCache.get(key)?.promise===promise)searchCache.delete(key);});\n    if(searchCache.size>12)searchCache.delete(searchCache.keys().next().value);\n    return promise;\n  }
+  let modal, previousFocus;
+  const searchCache=new Map();
+  let requestSeq=0;
+  function trainLink(t){
+    const no=number(t?.train);
+    return no?'<button type="button" class="lbpb-train-link" data-lbpb-train="'+escape(no)+'" aria-label="Ouvrir la fiche du train '+escape(no)+'">Fiche TER '+escape(no)+' →</button>':'';
+  }
+  function cachedSearch(query){
+    const key=query.toString(), now=Date.now(), item=searchCache.get(key);
+    if(item && now-item.at<45000) return item.promise;
+    const promise=fetch(API+'?'+key,{cache:'no-store'}).then(r=>{if(!r.ok)throw Error('API '+r.status);return r.json();});
+    searchCache.set(key,{at:now,promise});
+    promise.catch(()=>{if(searchCache.get(key)?.promise===promise)searchCache.delete(key);});
+    if(searchCache.size>12)searchCache.delete(searchCache.keys().next().value);
+    return promise;
+  }
   function showModal() {
     if (!modal) {
       modal=document.createElement('div');modal.className='lbpb-backdrop';
       modal.innerHTML='<section class="lbpb-dialog" role="dialog" aria-modal="true" aria-label="Plan B ferroviaire"><header><span>🐂 PLAN B · LA BÉTAILLÈRE</span><button type="button" class="lbpb-close" aria-label="Fermer">✕</button></header><div class="lbpb-content" aria-live="polite"></div></section>';
       document.body.append(modal);
-      modal.querySelector('.lbpb-close').addEventListener('click',closeModal);\n      modal.addEventListener('click',e=>{\n        const btn=e.target.closest('[data-lbpb-train]');if(!btn)return;\n        e.preventDefault();e.stopPropagation();\n        const open=window.lbOpenTrainProfile||window.lbOpenTrainDetail;\n        if(typeof open==='function'){const train=btn.dataset.lbpbTrain;closeModal();Promise.resolve(open.call(window,train,new Date().toLocaleDateString('en-CA',{timeZone:'Europe/Luxembourg'}),{origin:'plan-b'})).catch(console.error);}\n        else btn.textContent='Fiche momentanément indisponible';\n      });
+      modal.querySelector('.lbpb-close').addEventListener('click',closeModal);
+      modal.addEventListener('click',e=>{
+        const btn=e.target.closest('[data-lbpb-train]');if(!btn)return;
+        e.preventDefault();e.stopPropagation();
+        const open=window.lbOpenTrainProfile||window.lbOpenTrainDetail;
+        if(typeof open==='function'){const train=btn.dataset.lbpbTrain;closeModal();Promise.resolve(open.call(window,train,new Date().toLocaleDateString('en-CA',{timeZone:'Europe/Luxembourg'}),{origin:'plan-b'})).catch(console.error);}
+        else btn.textContent='Fiche momentanément indisponible';
+      });
       modal.addEventListener('click',e=>{if(e.target===modal)closeModal();});
     }
     previousFocus=document.activeElement;modal.hidden=false;document.body.classList.add('lbpb-open');modal.querySelector('.lbpb-close').focus();
