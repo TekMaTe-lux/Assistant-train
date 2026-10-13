@@ -144,7 +144,18 @@
     if (stops) stops.innerHTML = '<div class="lb-train-profile__empty">Chargement du parcours CFL…</div>';
 
     const disruption = el('trainDetailDisruption');
-    if (disruption) disruption.textContent = 'Aucune perturbation CFL détaillée dans cette fiche.';
+    if (disruption) {
+      disruption.hidden = true;
+      disruption.textContent = '';
+    }
+    const traffic = el('trainDetailEvents');
+    if (traffic) {
+      traffic.hidden = true;
+      traffic.open = false;
+      traffic.ontoggle = null;
+      const content = traffic.querySelector('.lb-train-profile__events-body');
+      if (content) content.textContent = '';
+    }
 
     const drawing = el('trainDetailDrawing');
     if (drawing) drawing.innerHTML = '';
@@ -275,6 +286,56 @@
     console.error('[Gare Luxembourg] fiche CFL impossible', error);
   }
 
+  // Même agrégation train/date que la carte et les fiches SNCF.
+  // Chargement secondaire : aucune influence sur les horaires HAFAS/CFL.
+  async function loadCflTrafficEvents(number, dateIso, sequence) {
+    const details = el('trainDetailEvents');
+    const body = details?.querySelector('.lb-train-profile__events-body');
+    if (!details || !body) return;
+    const query = new URLSearchParams({ date:dateIso, number, source:'CFL', limit:'30' });
+    const isCurrent = () => sequence === requestSeq &&
+      el('trainDetailPanel')?.dataset.lbProvider === 'cfl';
+    try {
+      const response = await fetch(`${VPS_ORIGIN}/g/c7f290ab?${query}`, {
+        method:'GET', cache:'no-store', credentials:'omit'
+      });
+      if (!response.ok) throw new Error('Flux perturbations CFL indisponible');
+      const data = await response.json();
+      if (!isCurrent()) return;
+      if (data?.ok !== true || !Array.isArray(data.events)) throw new Error('Flux CFL invalide');
+      const seen = new Set();
+      const relevant = data.events.filter(event => {
+        if (event?.state !== 'active' && event?.state !== 'upcoming') return false;
+        if (!event?.operational && event?.state !== 'upcoming') return false;
+        const sources = Array.isArray(event.sources) ? event.sources : [];
+        if (!sources.some(x => ['HAFAS-CFL','SIRI-SX','GTFS-RT','API-SNCF','SNCF-API'].includes(x))) return false;
+        const key = [event.title,event.text || event.detail,event.state].map(x =>
+          String(x || '').toLowerCase().replace(/\\s+/g,' ').trim()).join('|');
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+      if (!relevant.length) return;
+      body.innerHTML = relevant.map(event => {
+        const sources = event.sources || [];
+        const level = event.state === 'upcoming' ? 1 :
+          Math.max(1, Math.min(4, Number(event.severity) || 1));
+        const title = String(event.title || '').trim();
+        const detail = String(event.text || event.detail || '').trim();
+        const provenance = [
+          sources.includes('HAFAS-CFL') ? 'CFL' : '',
+          sources.some(x => ['GTFS-RT','SIRI-SX','API-SNCF','SNCF-API'].includes(x)) ? 'SNCF' : ''
+        ].filter(Boolean).join(' + ');
+        return `<article class="lb-train-profile__event sev${level}">${event.state === 'upcoming' ? '<small>À VENIR</small>' : ''}${title ? `<strong>${esc(title)}</strong>` : ''}${detail ? `<p>${esc(detail)}</p>` : ''}<small>Source ${esc(provenance || 'trafic ferroviaire')}</small></article>`;
+      }).join('');
+      details.hidden = false;
+      details.open = true;
+    } catch (_) {
+      // Une panne de la source perturbations ne modifie jamais l'état CFL.
+      // Ne pas afficher un faux « aucune perturbation ».
+    }
+  }
+
   async function openCfl(payload){
     const numberMatch = String(payload?.trainNumber || '').match(/\d{3,6}/);
     if (!numberMatch) return;
@@ -293,6 +354,7 @@
     const seq = ++requestSeq;
 
     resetCflPanel(payload, number, type, dateIso);
+    void loadCflTrafficEvents(number, dateIso, seq);
 
     try {
       if (!planned) throw new Error('Horaire planifié Luxembourg absent');
