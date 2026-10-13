@@ -4787,7 +4787,7 @@
     // s'affichent, sans imposer un clic et sans retarder son parcours LIVE.
     host.hidden = true;
     const showPayload = (payload) => {
-      if (requestId !== state.requestId) return;
+      if (requestId !== state.requestId || byId('trainDetailPanel')?.dataset.lbProvider === 'cfl') return;
       const rows = profileEventRows(payload, liveBundle?.cause);
       if (!rows.length) {
         body.textContent = '';
