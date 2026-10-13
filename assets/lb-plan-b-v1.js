@@ -15,13 +15,13 @@
   const escape = s => String(s ?? '').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   const number = s => (String(s||'').match(/\b\d{4,6}\b/)||[])[0]||'';
   const bestDate = () => dateYmd();
-  let modal, previousFocus;
+  let modal, previousFocus;\n  const searchCache=new Map();\n  let requestSeq=0;\n  function trainLink(t){\n    const no=number(t?.train);\n    return no?'<button type="button" class="lbpb-train-link" data-lbpb-train="'+escape(no)+'" aria-label="Ouvrir la fiche du train '+escape(no)+'">Fiche TER '+escape(no)+' →</button>':'';\n  }\n  function cachedSearch(query){\n    const key=query.toString(), now=Date.now(), item=searchCache.get(key);\n    if(item && now-item.at<45000) return item.promise;\n    const promise=fetch(API+'?'+key,{cache:'no-store'}).then(r=>{if(!r.ok)throw Error('API '+r.status);return r.json();});\n    searchCache.set(key,{at:now,promise});\n    promise.catch(()=>{if(searchCache.get(key)?.promise===promise)searchCache.delete(key);});\n    if(searchCache.size>12)searchCache.delete(searchCache.keys().next().value);\n    return promise;\n  }
   function showModal() {
     if (!modal) {
       modal=document.createElement('div');modal.className='lbpb-backdrop';
       modal.innerHTML='<section class="lbpb-dialog" role="dialog" aria-modal="true" aria-label="Plan B ferroviaire"><header><span>🐂 PLAN B · LA BÉTAILLÈRE</span><button type="button" class="lbpb-close" aria-label="Fermer">✕</button></header><div class="lbpb-content" aria-live="polite"></div></section>';
       document.body.append(modal);
-      modal.querySelector('.lbpb-close').addEventListener('click',closeModal);
+      modal.querySelector('.lbpb-close').addEventListener('click',closeModal);\n      modal.addEventListener('click',e=>{\n        const btn=e.target.closest('[data-lbpb-train]');if(!btn)return;\n        e.preventDefault();e.stopPropagation();\n        const open=window.lbOpenTrainProfile||window.lbOpenTrainDetail;\n        if(typeof open==='function'){const train=btn.dataset.lbpbTrain;closeModal();Promise.resolve(open.call(window,train,new Date().toLocaleDateString('en-CA',{timeZone:'Europe/Luxembourg'}),{origin:'plan-b'})).catch(console.error);}\n        else btn.textContent='Fiche momentanément indisponible';\n      });
       modal.addEventListener('click',e=>{if(e.target===modal)closeModal();});
     }
     previousFocus=document.activeElement;modal.hidden=false;document.body.classList.add('lbpb-open');modal.querySelector('.lbpb-close').focus();
@@ -44,7 +44,7 @@
     return t && t.train && String(t.train)!==excluded && Number.isFinite(t.depMin) && Number.isFinite(t.arrMin) && t.depMin>=earliest && t.arrMin>t.depMin && !t.endpointFallback;
   }
   function renderTrip(t,label,extra) {
-    return '<article class="lbpb-trip"><div class="lbpb-triphead"><strong>'+escape(label)+'</strong><span>'+escape(extra||'')+'</span></div><div class="lbpb-hours">'+escape(t.dep)+' → '+escape(t.arr)+'</div><div class="lbpb-leg">'+escape(t.train)+' · '+escape(t.from)+' → '+escape(t.to)+'</div></article>';
+    return '<article class="lbpb-trip"><div class="lbpb-triphead"><strong>'+escape(label)+'</strong><span>'+escape(extra||'')+'</span></div><div class="lbpb-hours">'+escape(t.dep)+' → '+escape(t.arr)+'</div><div class="lbpb-leg">'+escape(t.train)+' · '+escape(t.from)+' → '+escape(t.to)+'</div>'+trainLink(t)+'</article>';
   }
   async function openPlan(kind,row) {
     const route=routeFor(kind,row);
@@ -53,41 +53,18 @@
     if(!route||!route.from||!route.to||normalize(route.from)===normalize(route.to)){out().textContent='Trajet indisponible : origine ou destination introuvable.';return;}
     const favNo=number(document.getElementById('favTrain'+kind)?.textContent||row.querySelector('.home-fav-train-no')?.textContent);
     out().innerHTML='<h3>'+escape(route.from)+' → '+escape(route.to)+'</h3><p class="lbpb-note">Recherche des prochains itinéraires…</p>';
+    const seq=++requestSeq;
     const date=bestDate(), earliest=nowMin()+4;
-    const qs=new URLSearchParams({from:route.from,to:route.to,date,start:'00:00',end:'23:59',includeCfl:'1',allowTransfers:'1',minTransfer:'10',maxTransfer:'45',transferLimit:'50'});
+    // Limit the search to the useful upcoming window; do not scan a full day.
+    const begin=Math.max(0,earliest-5),end=Math.min(1439,earliest+240);
+    const hhmm=n=>String(Math.floor(n/60)).padStart(2,'0')+':'+String(n%60).padStart(2,'0');
+    const qs=new URLSearchParams({from:route.from,to:route.to,date,start:hhmm(begin),end:hhmm(end),includeCfl:'1',allowTransfers:'1',minTransfer:'10',maxTransfer:'45',transferLimit:'12'});
     try {
-      const controller=new AbortController();const timeout=setTimeout(()=>controller.abort(),9000);
-      let response;try{response=await fetch(API+'?'+qs,{signal:controller.signal,cache:'no-store'});}finally{clearTimeout(timeout);}
-      if(!response.ok) throw Error('API '+response.status);
-      const data=await response.json();
+      const data=await cachedSearch(qs);
+      if(seq!==requestSeq||!modal||modal.hidden)return;
       const directs=(data.directs||[]).filter(t=>candidate(t,favNo,earliest)).sort((a,b)=>a.arrMin-b.arrMin||a.depMin-b.depMin);
       const direct=directs[0];
-      // Un changement n'est proposé que s'il donne un vrai avantage à l'arrivée.
-      // Complément : le classement global de l'API peut omettre un bon trajet via Metz.
-      // Deux recherches ciblées, uniquement à l'ouverture du panneau (pas au chargement de la page).
-      let viaMetz = [];
-      if(normalize(route.from)!=='metz' && normalize(route.to)!=='metz'){
-        try {
-          const legParams = (from,to) => new URLSearchParams({from,to,date,start:'00:00',end:'23:59',includeCfl:'1'});
-          const [r1,r2]=await Promise.all([
-            fetch(API+'?'+legParams(route.from,'Metz'),{cache:'no-store'}),
-            fetch(API+'?'+legParams('Metz',route.to),{cache:'no-store'})
-          ]);
-          if(r1.ok && r2.ok){
-            const [left,right]=await Promise.all([r1.json(),r2.json()]);
-            const first=(left.directs||[]).filter(t=>candidate(t,favNo,earliest));
-            const second=(right.directs||[]).filter(t=>candidate(t,favNo,earliest));
-            for(const a of first){
-              for(const b of second){
-                const wait=b.depMin-a.arrMin;
-                if(wait>=10&&wait<=45&&a.tripId!==b.tripId&&(!direct||b.arrMin<=direct.arrMin-12)){
-                  viaMetz.push({first:a,second:b});
-                }
-              }
-            }
-          }
-        }catch(_){ /* L'itinéraire direct reste disponible. */ }
-      }
+      const viaMetz=[];
       const transfers=[...(data.transfers||[]),...viaMetz].filter(t=>{
         const a=t.first,b=t.second;
         if(!candidate(a,favNo,earliest)||!candidate(b,favNo,earliest))return false;
@@ -100,7 +77,7 @@
       const transfer=transfers[0];
       let markup='<h3>'+escape(route.from)+' → '+escape(route.to)+'</h3>';
       if(transfer && (!direct||transfer.second.arrMin<direct.arrMin)){
-        markup+='<article class="lbpb-trip"><div class="lbpb-triphead"><strong>Arriver plus tôt · 1 correspondance</strong><span>Via '+escape(transfer.first.to)+'</span></div><div class="lbpb-hours">'+escape(transfer.first.dep)+' → '+escape(transfer.second.arr)+'</div><div class="lbpb-leg">'+escape(transfer.first.train)+' · '+escape(transfer.first.from)+' → '+escape(transfer.first.to)+'</div><div class="lbpb-change">'+(transfer.second.depMin-transfer.first.arrMin)+' min de correspondance</div><div class="lbpb-leg">'+escape(transfer.second.train)+' · '+escape(transfer.second.from)+' → '+escape(transfer.second.to)+'</div></article>';
+        markup+='<article class="lbpb-trip"><div class="lbpb-triphead"><strong>Arriver plus tôt · 1 correspondance</strong><span>Via '+escape(transfer.first.to)+'</span></div><div class="lbpb-hours">'+escape(transfer.first.dep)+' → '+escape(transfer.second.arr)+'</div><div class="lbpb-leg">'+escape(transfer.first.train)+' · '+escape(transfer.first.from)+' → '+escape(transfer.first.to)+'</div>'+trainLink(transfer.first)+'<div class="lbpb-change">'+(transfer.second.depMin-transfer.first.arrMin)+' min de correspondance</div><div class="lbpb-leg">'+escape(transfer.second.train)+' · '+escape(transfer.second.from)+' → '+escape(transfer.second.to)+'</div></article>';
       }
       if(direct)markup+=renderTrip(direct,transfer?'Autre option · Direct':'Prochain direct','Sans correspondance');
       if(!direct&&transfer)markup+='<p class="lbpb-note">Vérifie les deux trains et la correspondance avant de partir.</p>';
