@@ -41,7 +41,7 @@ const action=document.getElementById('btnProposer');
 if(proposals&&action){
  const control=document.createElement('div');
  control.className='lb-more-trains';
- control.innerHTML='<span>Besoin de plus de trains ?</span><button type="button" data-add="120">+2 h</button><button type="button" data-add="240">+4 h</button>';
+ control.innerHTML='<span>Afficher davantage de trains</span><button type="button" data-add="60">+ 1 h</button>';
  proposals.appendChild(control);
  control.addEventListener('click',event=>{
    const button=event.target.closest('button[data-add]');
