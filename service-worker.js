@@ -1,4 +1,4 @@
-const CACHE_VERSION = 'v142';
+const CACHE_VERSION = 'v143';
 const APP_CACHE = `lbetaillere-app-${CACHE_VERSION}`;
 const STATIC_CACHE = `lbetaillere-static-${CACHE_VERSION}`;
 const DATA_CACHE = `lbetaillere-data-${CACHE_VERSION}`;
@@ -42,7 +42,7 @@ const APP_SHELL = [
   './assets/lb-grade-thumbs/grade-7.webp',
 
   './assets/lb-index-home.js?v=20261011-home-fast1',
-  './assets/lb-index-features.js?v=20261013-sw-reuse1',
+  './assets/lb-index-features.js?v=20261013-freshnav1',
   './assets/lb-comment-reactions-v1.js?v=20261005-2',
   './assets/lb-comment-reactions-v1.css?v=20261005-3',
   './assets/lb-status-harmony-v1.css?v=20261008-profile-events1',
@@ -115,11 +115,11 @@ self.addEventListener('activate', (event) => {
   );
 });
 
-async function fetchWithTimeout(request, timeout = 5000) {
+async function fetchWithTimeout(request, timeout = 5000, options = {}) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeout);
   try {
-    return await fetch(request, { signal: controller.signal });
+    return await fetch(request, { ...options, signal: controller.signal });
   } finally {
     clearTimeout(timer);
   }
@@ -135,7 +135,9 @@ async function navigationNetworkFirst(request) {
     requestUrl.pathname === rootUrl.pathname;
 
   try {
-    const response = await fetchWithTimeout(request, 1600);
+    // A cached HTTP response can hide a freshly deployed home page for 10 min.
+    // Revalidate only navigations; LIVE requests retain their own cache policy.
+    const response = await fetchWithTimeout(request, 1600, { cache: 'no-cache' });
     if (response?.ok) {
       const writes = [cache.put(request, response.clone())];
       if (isAppEntry) writes.push(cache.put('./index.html', response.clone()));
