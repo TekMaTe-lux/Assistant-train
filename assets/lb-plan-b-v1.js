@@ -34,7 +34,7 @@
   function showModal() {
     if (!modal) {
       modal=document.createElement('div');modal.className='lbpb-backdrop';
-      modal.innerHTML='<section class="lbpb-dialog" role="dialog" aria-modal="true" aria-label="Plan B ferroviaire"><header><span>🐂 PLAN B · LA BÉTAILLÈRE</span><button type="button" class="lbpb-close" aria-label="Fermer">✕</button></header><div class="lbpb-content" aria-live="polite"></div></section>';
+      modal.innerHTML='<section class="lbpb-dialog" role="dialog" aria-modal="true" aria-label="Plan B ferroviaire"><header><span>🐂 PLAN B · LA BÉTAILLÈRE</span><button type="button" class="lbpb-close tron-close-button" aria-label="Fermer">✕</button></header><div class="lbpb-content" aria-live="polite"></div></section>';
       document.body.append(modal);
       modal.querySelector('.lbpb-close').addEventListener('click',closeModal);
       modal.addEventListener('click',e=>{
