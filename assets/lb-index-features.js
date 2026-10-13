@@ -4778,46 +4778,78 @@
     if (!host) return;
     const body = host.querySelector('.lb-train-profile__events-body');
     const tripId = String(liveBundle?.trainId || chosen?.tripId || chosen?.trip_id || chosen?.id || '');
-    const query = new URLSearchParams({date: dateIso, number, source: 'SNCF', limit: '8'});
+    const query = new URLSearchParams({date: dateIso, number, source: 'SNCF', limit: '30'});
     if (tripId) query.set('trip_id', tripId);
     const key = query.toString();
     if (forceFresh) profileEventsCache.delete(key);
-    host.hidden = false;
-    host.ontoggle = async () => {
-      if (!host.open || requestId !== state.requestId || host.dataset.loading === '1') return;
-      const cached = profileEventsCache.get(key);
-      if (cached && Date.now() - cached.loadedAt < 20000) {
-        body.innerHTML = profileEventsHTML(cached.payload, liveBundle?.cause);
+    // Les fiches utilisent exactement le flux d'événements train de la carte.
+    // Préchargement non bloquant : seuls les textes réellement liés à ce train
+    // s'affichent, sans imposer un clic et sans retarder son parcours LIVE.
+    host.hidden = true;
+    const showPayload = (payload) => {
+      if (requestId !== state.requestId) return;
+      const rows = profileEventRows(payload, liveBundle?.cause);
+      if (!rows.length) {
+        body.textContent = '';
+        host.hidden = true;
+        host.open = false;
         return;
       }
+      body.innerHTML = profileEventsHTML(payload, liveBundle?.cause);
+      host.hidden = false;
+      host.open = true;
+    };
+    let pending = null;
+    const fetchEvents = () => {
+      if (requestId !== state.requestId || pending) return pending;
+      const cached = profileEventsCache.get(key);
+      if (cached && Date.now() - cached.loadedAt < 20000) {
+        showPayload(cached.payload);
+        return Promise.resolve();
+      }
       host.dataset.loading = '1';
-      body.textContent = 'Chargement des informations trafic…';
       const controller = new AbortController();
       profileEventsController = controller;
       const timeout = setTimeout(() => controller.abort(), 10000);
-      try {
-        const response = await fetch(`https://vps.labetaillere.fr/g/c7f290ab?${key}`, {signal: controller.signal});
-        if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        const payload = await response.json();
-        if (payload?.ok !== true || !Array.isArray(payload.events)) throw new Error('Réponse trafic invalide');
-        if (requestId !== state.requestId) return;
-        profileEventsCache.set(key, {loadedAt: Date.now(), payload});
-        while (profileEventsCache.size > 30) profileEventsCache.delete(profileEventsCache.keys().next().value);
-        body.innerHTML = profileEventsHTML(payload, liveBundle?.cause);
-      } catch (_) {
-        if (requestId === state.requestId) body.textContent = 'Informations trafic momentanément indisponibles. Refermez puis rouvrez ce volet pour réessayer.';
-      } finally {
-        clearTimeout(timeout);
-        if (profileEventsController === controller) profileEventsController = null;
-        if (requestId === state.requestId) delete host.dataset.loading;
-      }
+      pending = fetch(`https://vps.labetaillere.fr/g/c7f290ab?${key}`, {signal: controller.signal})
+        .then(async (response) => {
+          if (!response.ok) throw new Error(`HTTP ${response.status}`);
+          const payload = await response.json();
+          if (payload?.ok !== true || !Array.isArray(payload.events)) throw new Error('Réponse trafic invalide');
+          if (requestId !== state.requestId) return;
+          profileEventsCache.set(key, {loadedAt: Date.now(), payload});
+          while (profileEventsCache.size > 30) profileEventsCache.delete(profileEventsCache.keys().next().value);
+          showPayload(payload);
+        })
+        .catch(() => {
+          if (requestId !== state.requestId) return;
+          // L'absence temporaire du flux ne doit jamais masquer la cause SNCF,
+          // ni être interprétée comme une absence réelle de perturbation.
+          body.textContent = 'Informations trafic momentanément indisponibles. Touchez pour réessayer.';
+          host.hidden = false;
+          host.open = false;
+        })
+        .finally(() => {
+          clearTimeout(timeout);
+          if (profileEventsController === controller) profileEventsController = null;
+          if (requestId === state.requestId) delete host.dataset.loading;
+          pending = null;
+        });
+      return pending;
     };
+    host.ontoggle = () => {
+      if (host.open && !host.hidden && requestId === state.requestId && !host.dataset.loading) void fetchEvents();
+    };
+    // L'utilisateur n'a plus besoin d'ouvrir le volet pour voir les textes.
+    void fetchEvents();
   }
 
   function renderDisruption(liveBundle, status) {
   const host = byId('trainDetailDisruption');
   if (!host) return;
   const cause = String(liveBundle?.cause || '').trim();
+  const allCauses = uniqueTexts([cause, ...(Array.isArray(liveBundle?.causes) ? liveBundle.causes : [])])
+    .filter(Boolean);
   const isDisrupted = ['is-delay', 'is-cancel', 'is-partial'].includes(status?.className);
   const hide = () => {
     host.hidden = true;
@@ -4894,7 +4926,7 @@
     details.push(`Terminus exceptionnel ${partialDetails.effectiveDestination} : circulation supprimée entre ${partialDetails.effectiveDestination} et ${partialDetails.scheduledDestination}.`);
   }
 
-  if (!cause && !details.length) {
+  if (!allCauses.length && !details.length) {
     hide();
     return;
   }
@@ -4924,7 +4956,7 @@
         <strong>${safe(heading)}</strong>
         ${liveBundle.causeSource ? `<span>Source ${safe(liveBundle.causeSource)}</span>` : ''}
       </div>
-      ${cause ? `<p><strong>${safe(cause)}</strong></p>` : ''}
+      ${allCauses.map((line, index) => `<p>${index === 0 ? `<strong>${safe(line)}</strong>` : safe(line)}</p>`).join('')}
       ${detailsHtml}
     </div>
   `;
