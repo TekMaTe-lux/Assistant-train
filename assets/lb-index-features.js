@@ -5149,10 +5149,14 @@
       source.innerHTML = '<i></i> ARRIVÉ';
     } else if (journeyPhase === 'before') {
       source.className = 'lb-train-profile__source is-upcoming';
-      source.innerHTML = '<i></i> À VENIR';
+      source.innerHTML = liveBundle?.canonicalCflFallback
+        ? '<i></i> À VENIR · CFL / HAFAS'
+        : '<i></i> À VENIR';
     } else if (liveActive) {
       source.className = 'lb-train-profile__source';
-      source.innerHTML = '<i></i> LIVE SNCF / CFL';
+      source.innerHTML = liveBundle?.canonicalCflFallback
+        ? '<i></i> LIVE CFL / HAFAS'
+        : '<i></i> LIVE SNCF / CFL';
     } else {
       source.className = 'lb-train-profile__source is-static';
       source.innerHTML = '<i></i> HORAIRES PROGRAMMÉS';
@@ -5782,6 +5786,9 @@
       byId('trainDetailPath').textContent = 'Parcours indisponible';
       byId('trainDetailCompo').textContent = '—';
       byId('trainDetailCompoMeta').textContent = 'Composition indisponible sans circulation vérifiée.';
+      byId('trainDetailDrawing').className = 'lb-train-profile__drawing';
+      byId('trainDetailDrawing').innerHTML = '';
+      byId('trainDetailCompoStats').innerHTML = '<span><b>—</b> UNITÉ</span><span><b>—</b> VOITURES</span><span><b>—</b> PLACES ENV.</span>';
       byId('trainDetailAffluenceDetails').textContent = 'Non disponible.';
       byId('trainDetailReliabilityDetails').textContent = 'Non disponible pour cette circulation.';
       byId('trainDetailMessage').textContent = message;
