@@ -45,6 +45,14 @@
  alternativeLink.href='#search';
  alternativeLink.textContent='Chercher un autre train →';
  alternativeLink.hidden=true;
+ alternativeLink.addEventListener('click',event=>{
+   const kind=selected;
+   if(typeof window.lbOpenPlanBForFavorite==='function' && window.lbOpenPlanBForFavorite(kind)){
+     event.preventDefault();
+     event.stopPropagation();
+   }
+   // Fallback: original #search navigation when Plan B is unavailable.
+ });
  if(next)next.insertAdjacentElement('afterend',alternativeLink);
  const updateAlternative=()=>{
    const canceled=!!statusLabel && statusLabel.classList.contains('is-cancel');
