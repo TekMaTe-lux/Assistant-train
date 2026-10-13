@@ -3029,7 +3029,7 @@
 (() => {
   if ('serviceWorker' in navigator) {
     window.addEventListener('load', () => {
-      navigator.serviceWorker.register('./service-worker.js?v=27').catch((err) => {
+      navigator.serviceWorker.register('./service-worker.js?v=28').catch((err) => {
         console.warn('[PWA] Service worker non enregistré', err);
       });
     });
