@@ -4134,6 +4134,81 @@
     };
   }
 
+  // Repli strictement limité aux courses CFL connues dans le LIVE canonique,
+  // lorsque SNCF/hub et l'index SNCF ne contiennent aucun parcours.
+  // Ex. 88512 : le GTFS CFL connaît Thionville → Luxembourg, absent de l'index SNCF.
+  async function loadCflCanonicalFallback(number, dateIso) {
+    try {
+      const engine = window.lbCanonicalV4;
+      if (!engine || typeof engine.refresh !== 'function' || typeof engine.getTrain !== 'function') return null;
+      let train = engine.getTrain(number, dateIso, true);
+      if (!train) {
+        await engine.refresh();
+        train = engine.getTrain(number, dateIso, true);
+      }
+      if (!train || String(train.number) !== number ||
+          train.serviceDate !== dateIso ||
+          String(train.operator).toUpperCase() !== 'CFL' ||
+          train.timetable?.matched !== true ||
+          !Array.isArray(train.stops) || train.stops.length < 2) return null;
+
+      // La liste canonique peut être rangée par provenance et non par trajet.
+      // L'ordre et les heures viennent donc UNIQUEMENT du GTFS CFL daté.
+      const destination = String(train.destination?.name || '');
+      const destinationKey = normalizeStopKey(destination);
+      const destinationStop = train.stops.find(stop => normalizeStopKey(stop?.name) === destinationKey);
+      const arrival = destinationStop?.arrival?.planned ||
+        destinationStop?.arrival?.realtime || '';
+      const at = String(arrival).match(/^(\d{1,2}):(\d{2})/);
+      if (!at) return null;
+      const params = new URLSearchParams({
+        date: dateIso, number, mode: 'arr', time: `${at[1]}:${at[2]}`,
+        place: String(train.origin?.name || '')
+      });
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 8000);
+      let response;
+      try {
+        response = await fetch(`https://vps.labetaillere.fr/api/cfl-trip?${params}`, {
+          cache: 'no-store', credentials: 'omit', signal: controller.signal
+        });
+      } finally { clearTimeout(timer); }
+      if (!response.ok) return null;
+      const payload = await response.json();
+      const match = payload?.match;
+      const stops = Array.isArray(match?.stops) ? match.stops : [];
+      if (payload?.ok !== true || String(match.number) !== number ||
+          String(match.tripId) !== String(train.timetable?.tripId) ||
+          stops.length < 2) return null;
+      const rows = stops.map((stop, index) => ({
+        name: String(stop.name || '').trim(),
+        arrival: formatTime(stop.arrival),
+        departure: formatTime(stop.departure),
+        sequence: Number(stop.sequence ?? index),
+        raw: { stop_point: { id: stop.stopId, name: stop.name } }
+      })).filter(row => row.name);
+      if (rows.length < 2 || rows[0].arrival === '—' && rows[0].departure === '—' ||
+          rows[rows.length - 1].arrival === '—') return null;
+      const fresh = train.realtimePresenceFresh === true &&
+        Number.isFinite(Date.parse(train.updatedAt)) &&
+        Date.now() - Date.parse(train.updatedAt) < 10 * 60 * 1000 &&
+        Date.now() >= Date.parse(train.updatedAt);
+      const status = train.cancelled ? 'CANCELED' :
+        train.partial ? 'PARTIAL' :
+        Number(train.delayMinutes) > 0 ? 'DELAYED' : 'ON_TIME';
+      const liveBundle = fresh ? {
+        number, status, maxDelay: Math.max(0, Number(train.delayMinutes) || 0),
+        stops: rows.map(row => row.name), trainId: String(match.tripId),
+        canonicalCflFallback: true, canonicalTrain: train, impacted: {},
+        canceledStopKeys: new Set()
+      } : null;
+      return { rows, liveBundle };
+    } catch (error) {
+      console.warn('[Fiche Bétaillère] repli GTFS CFL indisponible', error);
+      return null;
+    }
+  }
+
   async function fetchStaticCandidates(number, dateIso) {
     const params = new URLSearchParams({
       date: String(dateIso || '').replace(/-/g, ''),
@@ -4580,6 +4655,16 @@
     const fallbackPlanned = isLast
       ? (row?.arrival || row?.departure || '—')
       : (row?.departure || row?.arrival || '—');
+    if (liveBundle?.canonicalCflFallback) {
+      const station = normalizeStopKey(String(row?.name || '').replace(/,?\s*gare(?:\s+centrale)?\s*$/i, ''));
+      const match = (liveBundle.canonicalTrain?.stops || []).find(stop =>
+        normalizeStopKey(stop?.name) === station);
+      const leg = isLast ? match?.arrival : (match?.departure || match?.arrival);
+      const fresh = leg?.fresh === true && match?.realtimeKnown === true;
+      const delay = fresh ? Math.max(0, Number(leg.delayMinutes) || 0) : 0;
+      const actual = fresh && leg?.realtime ? formatTime(leg.realtime) : fallbackPlanned;
+      return { planned:fallbackPlanned, actual, delay, source: fresh ? 'CFL/HAFAS' : '' };
+    }
     // Une heure SNCF amendée est plus précise qu'un simple décalage GTFS-RT.
     // Une heure SNCF amendée reste prioritaire sur un simple décalage GTFS-RT.
     const sncf = sncfRealtimeAtRow(row, liveBundle, isLast);
@@ -4778,7 +4863,7 @@
     if (!host) return;
     const body = host.querySelector('.lb-train-profile__events-body');
     const tripId = String(liveBundle?.trainId || chosen?.tripId || chosen?.trip_id || chosen?.id || '');
-    const query = new URLSearchParams({date: dateIso, number, source: 'SNCF', limit: '30'});
+    const query = new URLSearchParams({date: dateIso, number, source: liveBundle?.canonicalCflFallback ? 'CFL' : 'SNCF', limit: '30'});
     if (tripId) query.set('trip_id', tripId);
     const key = query.toString();
     if (forceFresh) profileEventsCache.delete(key);
@@ -5598,7 +5683,7 @@
       // Ne pas l'immobiliser sur la recherche GTFS statique (parfois > 9 s côté navigateur).
       const liveResult = await Promise.allSettled([livePromise]);
       if (requestId !== state.requestId) return;
-      const liveBundle = liveResult[0].status === 'fulfilled' ? liveResult[0].value : null;
+      let liveBundle = liveResult[0].status === 'fulfilled' ? liveResult[0].value : null;
       const liveJourneyRows = normalizeJourneyRows(liveBundle);
       const hasLiveStopTimes = liveJourneyRows.length >= 2 && liveJourneyRows.some((row) => row?.arrival || row?.departure);
       const staticResult = hasLiveStopTimes ? null : await Promise.allSettled([staticPromise]);
@@ -5611,6 +5696,15 @@
         ? liveJourneyRows
         : normalizeStaticRows(chosen, liveBundle);
       rows = applyEffectiveServicePattern(rows, liveBundle);
+
+      if (!rows.length) {
+        const alternative = await loadCflCanonicalFallback(number, dateIso);
+        if (requestId !== state.requestId) return;
+        if (alternative) {
+          rows = alternative.rows;
+          liveBundle = alternative.liveBundle;
+        }
+      }
 
       if (!rows.length && liveBundle?.stops?.length) {
         rows = liveBundle.stops.map((name, index) => ({
@@ -5682,6 +5776,14 @@
       byId('trainDetailPanel').setAttribute('aria-busy', 'false');
       byId('trainDetailSourceState').className = 'lb-train-profile__source is-error';
       byId('trainDetailSourceState').innerHTML = '<i></i> DONNÉES INDISPONIBLES';
+      byId('trainDetailLiveStatus').className = 'lb-train-profile__status is-unknown';
+      byId('trainDetailLiveStatus').innerHTML = '<i></i> NON CONFIRMÉ';
+      byId('trainDetailNext').textContent = 'Aucun parcours vérifié pour cette date.';
+      byId('trainDetailPath').textContent = 'Parcours indisponible';
+      byId('trainDetailCompo').textContent = '—';
+      byId('trainDetailCompoMeta').textContent = 'Composition indisponible sans circulation vérifiée.';
+      byId('trainDetailAffluenceDetails').textContent = 'Non disponible.';
+      byId('trainDetailReliabilityDetails').textContent = 'Non disponible pour cette circulation.';
       byId('trainDetailMessage').textContent = message;
       byId('trainDetailMessage').classList.add('is-error');
       byId('trainDetailStops').innerHTML = `<div class="lb-train-profile__empty">${safe(message)}</div>`;
