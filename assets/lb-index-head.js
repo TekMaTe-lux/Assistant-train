@@ -18,6 +18,8 @@
     const apiHost = host === 'vps.labetaillere.fr';
     if (apiHost || ownHost) {
       if (path === '/api/me') return 3000;
+      // Identical daily summary requested by multiple widgets; short read-only reuse.
+      if (path === '/api/ber/daily') return 900;
       if (path === '/api/ranking') return 4000;
       if (path === '/api/stats/beta/overview') return 5000;
       if (path === '/api/community/presence') return 1200;
