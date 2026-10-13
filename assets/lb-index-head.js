@@ -323,7 +323,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (stale) {
       showTransient(
         badge,
-        `🕘 Réseau instable · données ${stale.label} de ${staleTime}`,
+        `🕘 Données ${stale.label} en cache · ${staleTime}`,
         'stale:' + stale.label,
         3200
       );
