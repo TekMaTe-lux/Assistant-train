@@ -666,7 +666,7 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  if (sameOrigin && /\\.(?:js|mjs|css)$/i.test(url.pathname) && url.searchParams.has('v')) {
+  if (sameOrigin && ['.js','.mjs','.css'].some(ext => url.pathname.endsWith(ext)) && url.searchParams.has('v')) {
     event.respondWith(versionedAssetCacheFirst(request));
     return;
   }
