@@ -110,14 +110,32 @@
     } catch(e){if(modal&&!modal.hidden)out().innerHTML='<h3>'+escape(route.from)+' → '+escape(route.to)+'</h3><p class="lbpb-note">Recherche momentanément indisponible. Consulte le tableau des départs.</p>';}
   }
   function decorate(){
-    slot.querySelectorAll('.home-fav-row').forEach(row=>{
+    slot.querySelectorAll('.home-fav-row[data-fav-k]').forEach(row=>{
       const kind=row.dataset.favK;
-      const link=row.querySelector('.lb-home-fav-alternative');
-      if(!link||!kind||!isCancelled(kind,row))return;
-      if(link.dataset.lbpbAttached==='1')return;
-      link.dataset.lbpbAttached='1';link.textContent='🐂 PLAN B →';link.setAttribute('href','#');link.setAttribute('aria-label','Voir les prochains trajets possibles');
-      link.addEventListener('click',event=>{event.preventDefault();event.stopPropagation();openPlan(kind,row);});
-      link.addEventListener('keydown',event=>event.stopPropagation());
+      const canceled=isCancelled(kind,row);
+      const oldLink=row.querySelector('.lb-home-fav-alternative');
+      let button=row.querySelector('.lbpb-fav-action');
+      row.classList.toggle('lbpb-fav-cancelled',canceled);
+      if(!canceled){
+        button?.remove();
+        return;
+      }
+      // The original overlay link is never used on canceled favorites.
+      if(oldLink){oldLink.hidden=true;oldLink.setAttribute('aria-hidden','true');oldLink.tabIndex=-1;}
+      if(button)return;
+      button=document.createElement('button');
+      button.type='button';
+      button.className='lbpb-fav-action';
+      button.textContent='🐂 PLAN B →';
+      button.setAttribute('aria-label','Plan B : chercher un autre trajet après la suppression');
+      button.addEventListener('click',event=>{
+        event.preventDefault();
+        event.stopPropagation();
+        openPlan(kind,row);
+      });
+      button.addEventListener('pointerdown',event=>event.stopPropagation());
+      button.addEventListener('keydown',event=>event.stopPropagation());
+      row.appendChild(button);
     });
   }
   let queued=false;
