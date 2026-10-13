@@ -79,7 +79,7 @@ function cacheIndividually(cacheName, requests) {
           const url = new URL(request, self.registration.scope);
           const reusable = url.origin === self.location.origin
             && url.searchParams.has('v')
-            && /\\.(?:js|css|svg|webp|png|jpg|jpeg)$/.test(url.pathname);
+            && /\.(?:js|css|svg|webp|png|jpg|jpeg)$/.test(url.pathname);
           if (reusable) {
             const prior = await caches.match(request, { ignoreSearch: false });
             if (prior && prior.ok) {
