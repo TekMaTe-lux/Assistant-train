@@ -1,4 +1,4 @@
-const CACHE_VERSION = 'v141';
+const CACHE_VERSION = 'v142';
 const APP_CACHE = `lbetaillere-app-${CACHE_VERSION}`;
 const STATIC_CACHE = `lbetaillere-static-${CACHE_VERSION}`;
 const DATA_CACHE = `lbetaillere-data-${CACHE_VERSION}`;
@@ -28,7 +28,7 @@ const APP_SHELL = [
   './assets/lb-index-inline.css?v=20260921-2',
   './assets/lb-index-late.css?v=20260924-tabbar1',
   './assets/lb-home-premium-v2.css?v=1',
-  './assets/lb-index-head.js?v=20260924-networktoast2',
+  './assets/lb-index-head.js?v=20261013-daily-dedupe1',
   './assets/lb-index-core.js?v=20261011-home-fast1',
   './assets/lb-account-page-v1.js?v=20261006-2',
   './assets/lb-account-page-v1.css?v=20261006-4',
@@ -42,7 +42,7 @@ const APP_SHELL = [
   './assets/lb-grade-thumbs/grade-7.webp',
 
   './assets/lb-index-home.js?v=20261011-home-fast1',
-  './assets/lb-index-features.js?v=20261013-pwa-cache1',
+  './assets/lb-index-features.js?v=20261013-sw-reuse1',
   './assets/lb-comment-reactions-v1.js?v=20261005-2',
   './assets/lb-comment-reactions-v1.css?v=20261005-3',
   './assets/lb-status-harmony-v1.css?v=20261008-profile-events1',
@@ -69,11 +69,27 @@ const APP_SHELL = [
 ];
 
 function cacheIndividually(cacheName, requests) {
+  // During upgrades, keep existing versioned static assets instead of fetching
+  // the same bytes again. Unversioned files and changed versions always refresh.
+  // Preserves the full offline shell; only the source of identical assets changes.
   return caches.open(cacheName).then((cache) =>
     Promise.allSettled(
-      requests.map((request) =>
-        cache.add(request).catch(() => undefined)
-      )
+      requests.map(async (request) => {
+        try {
+          const url = new URL(request, self.registration.scope);
+          const reusable = url.origin === self.location.origin
+            && url.searchParams.has('v')
+            && /\\.(?:js|css|svg|webp|png|jpg|jpeg)$/.test(url.pathname);
+          if (reusable) {
+            const prior = await caches.match(request, { ignoreSearch: false });
+            if (prior && prior.ok) {
+              await cache.put(request, prior);
+              return;
+            }
+          }
+          await cache.add(request);
+        } catch (_) { /* One missing optional asset must not block installation. */ }
+      })
     )
   );
 }
