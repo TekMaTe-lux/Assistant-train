@@ -1,4 +1,4 @@
-const CACHE_VERSION = 'v146';
+const CACHE_VERSION = 'v147';
 const APP_CACHE = `lbetaillere-app-${CACHE_VERSION}`;
 const STATIC_CACHE = `lbetaillere-static-${CACHE_VERSION}`;
 const DATA_CACHE = `lbetaillere-data-${CACHE_VERSION}`;
@@ -42,7 +42,7 @@ const APP_SHELL = [
   './assets/lb-grade-thumbs/grade-7.webp',
 
   './assets/lb-index-home.js?v=20261011-home-fast1',
-  './assets/lb-index-features.js?v=20261013-cflfallback88512-1',
+  './assets/lb-index-features.js?v=20261013-static-cachefirst1',
   './assets/lb-comment-reactions-v1.js?v=20261005-2',
   './assets/lb-comment-reactions-v1.css?v=20261005-3',
   './assets/lb-status-harmony-v1.css?v=20261008-profile-events1',
@@ -563,6 +563,21 @@ async function uiStyleNetworkFirst(request) {
   return (await cache.match(request, { ignoreSearch: true })) || Response.error();
 }
 
+// Versioned JS/CSS cannot change at the same URL by deployment convention.
+// Use one cached copy per version; unversioned assets still revalidate.
+async function versionedAssetCacheFirst(request) {
+  const cache = await caches.open(STATIC_CACHE);
+  const cached = await cache.match(request, { ignoreSearch: false }) ||
+    await (async () => {
+      const shell = await caches.open(APP_CACHE);
+      return shell.match(request, { ignoreSearch: false });
+    })();
+  if (cached?.ok) return cached;
+  const response = await fetch(request);
+  if (response?.ok) await cache.put(request, response.clone()).catch(() => {});
+  return response;
+}
+
 function isStaticAsset(url) {
   return /\.(?:css|js|mjs|png|jpe?g|gif|webp|svg|ico|woff2?|mp3)$/i.test(url.pathname);
 }
@@ -648,6 +663,11 @@ self.addEventListener('fetch', (event) => {
 
   if (sameOrigin && isUiStyle(url)) {
     event.respondWith(uiStyleNetworkFirst(request));
+    return;
+  }
+
+  if (sameOrigin && /\\.(?:js|mjs|css)$/i.test(url.pathname) && url.searchParams.has('v')) {
+    event.respondWith(versionedAssetCacheFirst(request));
     return;
   }
 
