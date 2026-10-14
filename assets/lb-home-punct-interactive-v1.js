@@ -218,36 +218,104 @@
   }
 
   function lineSvg(rows) {
-    const data = rows.filter((row) => Number.isFinite(Number(row?.punctuality_rate))).slice(-7);
+    const data = rows.filter((row) =>
+      row && row.punctuality_rate != null &&
+      Number.isFinite(Number(row.punctuality_rate))
+    ).slice(-7);
     if (!data.length) return '<div class="lb-punct-detail-loading">Tendance indisponible</div>';
 
     const width = 320;
-    const height = 64;
-    const padX = 16;
-    const padY = 10;
-    const min = Math.max(0, Math.min(...data.map((row) => Number(row.punctuality_rate))) - 8);
-    const max = Math.min(100, Math.max(...data.map((row) => Number(row.punctuality_rate))) + 8);
+    const height = 92;
+    const padX = 24;
+    const plotTop = 22;
+    const plotHeight = 41;
+    const rates = data.map((row) => Number(row.punctuality_rate));
+    const min = Math.max(0, Math.min(...rates) - 8);
+    const max = Math.min(100, Math.max(...rates) + 8);
     const span = Math.max(10, max - min);
     const xStep = data.length > 1 ? (width - padX * 2) / (data.length - 1) : 0;
-    const point = (row, index) => {
-      const x = padX + index * xStep;
-      const y = padY + (max - Number(row.punctuality_rate)) / span * (height - padY * 2);
-      return { x, y };
-    };
-    const points = data.map(point);
-    const path = points.map((p, index) => (index ? 'L' : 'M') + p.x.toFixed(1) + ' ' + p.y.toFixed(1)).join(' ');
+    const points = data.map((row, index) => ({
+      x: padX + index * xStep,
+      y: plotTop + (max - rates[index]) / span * plotHeight
+    }));
+    const path = points.map((p, index) =>
+      (index ? 'L' : 'M') + p.x.toFixed(1) + ' ' + p.y.toFixed(1)
+    ).join(' ');
     const circles = points.map((p, index) => {
-      const value = Math.round(Number(data[index].punctuality_rate));
-      return '<circle class="lb-punct-point" cx="' + p.x.toFixed(1) + '" cy="' + p.y.toFixed(1) + '" r="3"><title>' + value + ' %</title></circle>';
+      const date = String(data[index].date || '');
+      const iso = /^\d{4}-\d{2}-\d{2}$/.test(date) ? date : '';
+      const day = iso ? fmtDate(iso) : 'Jour ' + (index + 1);
+      const pct = fmtPct(rates[index], 1);
+      const label = day + ' : ' + pct;
+      const x = p.x.toFixed(1);
+      const y = p.y.toFixed(1);
+      return '<g class="lb-punct-day" data-punct-point-index="' + index +
+        '" data-punct-x="' + x + '" data-punct-y="' + y +
+        '" role="button" tabindex="0" aria-label="' + label + '">' +
+        '<circle class="lb-punct-point-target" cx="' + x + '" cy="' + y + '" r="13"></circle>' +
+        '<circle class="lb-punct-point" cx="' + x + '" cy="' + y + '" r="3.4"></circle>' +
+        '<text class="lb-punct-point-value" x="' + x +
+        '" y="' + (p.y - 9).toFixed(1) + '" text-anchor="middle">' + pct + '</text>' +
+        '<title>' + label + '</title></g>';
     }).join('');
     const labels = points.map((p, index) => {
       const date = String(data[index].date || '').slice(5);
-      return '<text x="' + p.x.toFixed(1) + '" y="63" text-anchor="middle">' + date + '</text>';
+      const safeDate = /^\d{2}-\d{2}$/.test(date) ? date : '—';
+      return '<text class="lb-punct-date-label" x="' + p.x.toFixed(1) +
+        '" y="86" text-anchor="middle">' + safeDate + '</text>';
     }).join('');
-    return '<svg class="lb-punct-trend-svg" viewBox="0 0 320 68" role="img" aria-label="Évolution de la ponctualité sur les 7 derniers jours">' +
-      '<line class="lb-punct-grid" x1="16" y1="32" x2="304" y2="32"></line>' +
+    return '<div class="lb-punct-trend-chart">' +
+      '<svg class="lb-punct-trend-svg" viewBox="0 0 ' + width + ' ' + height +
+      '" role="group" aria-label="Évolution de la ponctualité sur les 7 derniers jours, valeurs par jour affichées">' +
+      '<line class="lb-punct-grid" x1="24" y1="45" x2="296" y2="45"></line>' +
       '<path class="lb-punct-line" d="' + path + '"></path>' +
-      circles + labels + '</svg>';
+      circles + labels + '</svg>' +
+      '<output class="lb-punct-trend-tooltip" data-punct-trend-tooltip aria-live="polite" hidden></output>' +
+      '</div>';
+  }
+
+  // Une seule délégation d'événements, valable après chaque mise à jour du SVG.
+  // Pointer events : souris, stylet, et toucher sans bloquer le défilement du modal.
+  function bindTrendInteractions(dialog) {
+    const host = dialog.querySelector('[data-punct-trend]');
+    if (!host || host.dataset.trendEventsBound === '1') return;
+    host.dataset.trendEventsBound = '1';
+
+    function clearPoint() {
+      host.querySelector('.lb-punct-day.is-active')?.classList.remove('is-active');
+      const tooltip = host.querySelector('[data-punct-trend-tooltip]');
+      if (tooltip) tooltip.hidden = true;
+    }
+
+    function showPoint(target) {
+      const node = target?.closest?.('[data-punct-point-index]');
+      if (!node || !host.contains(node)) return;
+      const tooltip = host.querySelector('[data-punct-trend-tooltip]');
+      if (!tooltip) return;
+      const previous = host.querySelector('.lb-punct-day.is-active');
+      if (previous && previous !== node) previous.classList.remove('is-active');
+      node.classList.add('is-active');
+      tooltip.textContent = node.getAttribute('aria-label') || '';
+      const x = Number(node.getAttribute('data-punct-x'));
+      const y = Number(node.getAttribute('data-punct-y'));
+      if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+      // La bulle reste dans la largeur du graphique et ne masque pas la date.
+      tooltip.style.left = Math.max(23, Math.min(77, x / 320 * 100)) + '%';
+      tooltip.style.top = (y < 43 ? Math.min(74, y + 13) : Math.max(0, y - 34)) / 92 * 100 + '%';
+      tooltip.hidden = false;
+    }
+
+    host.addEventListener('pointerover', (event) => showPoint(event.target));
+    host.addEventListener('pointerdown', (event) => showPoint(event.target));
+    host.addEventListener('focusin', (event) => showPoint(event.target));
+    host.addEventListener('pointerout', (event) => {
+      if (event.pointerType !== 'mouse' && event.pointerType !== 'pen') return;
+      const point = event.target?.closest?.('[data-punct-point-index]');
+      if (point && (!event.relatedTarget || !point.contains(event.relatedTarget))) clearPoint();
+    });
+    host.addEventListener('focusout', (event) => {
+      if (!host.contains(event.relatedTarget)) clearPoint();
+    });
   }
 
   function renderDetail(detail, period, mode) {
@@ -307,6 +375,7 @@
 
     const trendRows = Array.isArray(detail.payload.daily) ? detail.payload.daily.slice(-7) : [];
     dialog.querySelector('[data-punct-trend]').innerHTML = lineSvg(trendRows);
+    bindTrendInteractions(dialog);
     const trendRange = dialog.querySelector('[data-punct-trend-range]');
     if (trendRows.length) {
       trendRange.textContent = String(trendRows[0]?.date || '').slice(5) + ' → ' + String(trendRows[trendRows.length - 1]?.date || '').slice(5);
