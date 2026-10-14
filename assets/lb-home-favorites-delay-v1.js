@@ -88,6 +88,8 @@ html[data-lb-v4-live="1"] body.lb-v3 #home #homeFavSlot .home-fav-row.is-cancell
       .normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase();
     if (
       !sourceState.includes('PROCHAIN') &&
+      !/(SUPPRIM|ANNUL|CANCEL|PARTIEL|PARTIAL)/.test(sourceState) &&
+      !document.getElementById(`favCard${key}`)?.classList.contains('is-canceled') &&
       (sourceState.includes('A VENIR') || sourceState.includes('AVENIR'))
     ) {
       return todayServiceLabel();
