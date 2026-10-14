@@ -5,7 +5,6 @@
   let mode = "loading";
   let profile = null;
   let ticket = null;
-  let pending = null;
   let isOpen = false;
   let resumeGame = false;
   let hooks = {};
@@ -96,7 +95,7 @@
   list.id="gameRankingList";
   const footer = tag("p","game-ranking-footer","");
   footer.id="gameRankingFooter";
-  const close = makeButton("Fermer","dialog-button","",null);
+  const close = makeButton("Fermer","dialog-button",closeRanking);
   close.id="gameRankingClose";
   close.addEventListener("click",closeRanking);
   panel.append(title,note,mine,list,footer,close);
@@ -131,7 +130,7 @@
       });
     }
     mine.textContent = data.me
-      ? "🐮 Ta place : #" + data.me.rank + " · " + data.me.best_score + " point(s)"
+      ? "🐮 Ta place : #" + data.me.rank + " · " + data.me.best_score + " bétail(s)"
       : "Joue en étant connecté pour rejoindre le classement.";
     footer.textContent = data.total_players + " joueur(s) classé(s) · Top " + data.ranking.length;
   }
