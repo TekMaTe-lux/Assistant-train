@@ -114,7 +114,7 @@ window.LB_TERRITORY_CONFIG = Object.freeze({
   if (!document.getElementById('lbHomeFavDelayScript')) {
     const script = document.createElement('script');
     script.id = 'lbHomeFavDelayScript';
-    script.src = './assets/lb-home-favorites-delay-v1.js?v=20260901-1';
+    script.src = './assets/lb-home-favorites-delay-v1.js?v=20261014-countdown1';
     script.async = false;
     document.head.append(script);
   }
