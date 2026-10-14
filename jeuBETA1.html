@@ -991,8 +991,25 @@
 
       const COLS = 20;
       const ROWS = 20;
-      const BASE_STEP = 200;
-      const MIN_STEP = 58;
+      const BASE_STEP = 220;
+      const MIN_STEP = 128;
+      const MAX_BOARD_CELLS = COLS * ROWS;
+      /* BER_SNAKE_RAIL_CHAOS_V1 — progression plafonnée, tous les événements
+       * réutilisent le tick existant, aucun timer ni réseau supplémentaire. */
+      const RAIL_LEVELS = [
+        {name:"TER pépère",label:"Le bon vieux temps",at:0,score:0,step:220,cow:0,fret:0,tgv:0},
+        {name:"Vaches en balade",label:"Passage à niveau occupé… par des vaches !",at:25000,score:4,step:210,cow:22000,fret:0,tgv:0},
+        {name:"Fret surprise",label:"Marchandises sur la voie : le fret a la priorité.",at:65000,score:9,step:200,cow:17000,fret:30000,tgv:0},
+        {name:"TGV prioritaire",label:"Attention, TGV prioritaire ! Comme toujours…",at:110000,score:15,step:188,cow:16000,fret:27000,tgv:34000},
+        {name:"Réseau étranger",label:"Incident sur réseau étranger : bingo !",at:170000,score:23,step:177,cow:14000,fret:25000,tgv:28000},
+        {name:"CHAOS FERROVIAIRE",label:"Chaos ferroviaire : bienvenue sur la L90 !",at:240000,score:33,step:164,cow:12000,fret:22000,tgv:23000},
+        {name:"MODE EXTRÊME",label:"Mode extrême : puisse le sort nous être favorable !",at:330000,score:48,step:150,cow:11000,fret:19000,tgv:19000}
+      ];
+      const EVENT_WORDS = {
+        cow:["Traversée de vaches : le troupeau ne badgera pas !","Vaches sur les voies : le TER attend son tour…","Attention, bovins non autorisés à quai !"],
+        fret:["Train de fret : le charbon passe avant le frontalier !","Marchandises prioritaires, voyageurs patients.","Fret en approche : livraison express de retards !"],
+        tgv:["TGV prioritaire ! Le petit TER se pousse.","La grande vitesse vient semer le bazar !","TGV en approche : encore un droit de passage royal !"]
+      };
       const LEGACY_HIGHSCORE_KEY = "highscore";
       const HIGHSCORE_KEY = "lbJeuBetaHighscoreV2";
 
@@ -1000,6 +1017,7 @@
       const ctx = canvas.getContext("2d", { alpha: false });
       const boardCard = document.getElementById("boardCard");
       const boardStatus = document.getElementById("boardStatus");
+      const levelBadge = document.getElementById("gameLevelBadge");
       const scoreEl = document.getElementById("score");
       const highscoreEl = document.getElementById("highscore");
       const timerEl = document.getElementById("timer");
@@ -1058,6 +1076,11 @@
           oranges: [],
           cows: [],
           tgvs: [],
+          frets: [],
+          pendingWaves: [],
+          level: 0,
+          lastWaveAt: -99999,
+          lastFretSpawn: 0,
           started: false,
           stopped: true,
           paused: false,
@@ -1107,6 +1130,14 @@
         scoreEl.textContent = String(state.score);
         highscoreEl.textContent = String(state.highscore);
         timerEl.textContent = formatTime(elapsedMilliseconds());
+        if (levelBadge) {
+          const phase = RAIL_LEVELS[state.level] || RAIL_LEVELS[0];
+          const text = "N" + (state.level+1) + " · " + phase.name;
+          if (levelBadge.textContent !== text) levelBadge.textContent = text;
+          levelBadge.title = phase.label;
+          levelBadge.classList.toggle("is-chaos",state.level >= 5);
+          levelBadge.classList.toggle("is-extreme",state.level >= 6);
+        }
       }
 
       function fitCanvas() {
@@ -1245,29 +1276,47 @@
           || state.oranges.some((item) => samePosition(item, position))
           || state.cows.some((band) => band.some((item) => samePosition(item, position)))
           || state.tgvs.some((convoy) => convoy.segments.some((item) => samePosition(item, position)))
+          || state.frets.some((convoy) => convoy.segments.some((item) => samePosition(item, position)))
           || (includeBetail && samePosition(state.betail, position));
       }
 
-      function randomFreePosition() {
-        for (let attempt = 0; attempt < 600; attempt += 1) {
-          const position = {
-            x: Math.floor(Math.random() * COLS),
-            y: Math.floor(Math.random() * ROWS)
-          };
-          if (!occupied(position)) return position;
+      /* Réservoir uniforme sur les 400 cases : jamais de faux (1,1) occupé. */
+      function randomFreePosition(avoidStart = false) {
+        let chosen = null, count = 0;
+        for (let y = 0; y < ROWS; y++) {
+          for (let x = 0; x < COLS; x++) {
+            const p = {x,y};
+            if (occupied(p)) continue;
+            if (avoidStart && Math.abs(y - 10) <= 1 && x >= 9 && x <= 14) continue;
+            if (Math.random() * ++count < 1) chosen = p;
+          }
         }
-        return { x: 1, y: 1 };
+        return chosen;
       }
 
       function placeStaticHazards() {
         state.suppressions = [];
         state.oranges = [];
-        for (let i = 0; i < 10; i += 1) state.suppressions.push(randomFreePosition());
-        for (let i = 0; i < 5; i += 1) state.oranges.push(randomFreePosition());
+        for (let i = 0; i < 5; i++) {
+          const next = randomFreePosition(true);
+          if (next) state.suppressions.push(next);
+        }
+        for (let i = 0; i < 3; i++) {
+          const next = randomFreePosition(true);
+          if (next) state.oranges.push(next);
+        }
       }
 
       function generateBetail() {
         state.betail = randomFreePosition();
+        // La locomotive occupe une case : 399 bétails maximum par plateau.
+        // Atteindre les 400 cases occupées vaut le bonus symbolique final.
+        if (!state.betail && state.train.length >= MAX_BOARD_CELLS) {
+          state.score = MAX_BOARD_CELLS;
+          state.highscore = Math.max(state.highscore,state.score);
+          saveHighscore(state.highscore);
+          endGame("GRAND CHELEM ! 400 cases remplies : le TER le plus long de l'histoire !");
+        }
       }
 
       function showStatus(message, duration = 1600) {
