@@ -1332,40 +1332,136 @@
         } catch (_) {}
       }
 
-      function spawnCows() {
-        const size = Math.floor(Math.random() * 4) + 1;
-        const startY = Math.floor(Math.random() * Math.max(1, ROWS - size));
-        state.cows.push(Array.from({ length: size }, (_, index) => ({ x: COLS, y: startY + index })));
+      function currentLevel(elapsed) {
+        let level = 0;
+        // Temps OU score : les bons joueurs accèdent plus vite aux défis.
+        for (let i = 1; i < RAIL_LEVELS.length; i++) {
+          if (elapsed >= RAIL_LEVELS[i].at || state.score >= RAIL_LEVELS[i].score) level = i;
+        }
+        return level;
       }
 
-      function spawnTgv() {
-        const length = Math.floor(Math.random() * 3) + 4;
-        const y = Math.floor(Math.random() * ROWS);
-        state.tgvs.push({
-          segments: Array.from({ length }, (_, index) => ({ x: COLS + index, y }))
-        });
-        showStatus("TGV prioritaire en approche", 1200);
+      function rebalanceStaticHazards() {
+        // Les obstacles cèdent de la place au convoi quand il grandit.
+        const score = state.score;
+        let target = 5 + Math.min(5, state.level);
+        if (score >= 155) target = 0;
+        else if (score >= 125) target = Math.min(target,2);
+        else if (score >= 100) target = Math.min(target,4);
+        else if (score >= 75) target = Math.min(target,6);
+        else if (score >= 50) target = Math.min(target,8);
+        while (state.suppressions.length > target) state.suppressions.pop();
+        while (state.suppressions.length < target) {
+          const p = randomFreePosition(true);
+          if (!p) break;
+          state.suppressions.push(p);
+        }
+        const orangeTarget = score >= 135 ? 0 : score >= 90 ? 1 : 3;
+        while (state.oranges.length > orangeTarget) state.oranges.pop();
+      }
+
+      function updateLevel(elapsed) {
+        const next = currentLevel(elapsed);
+        if (next > state.level) {
+          state.level = next;
+          state.levelChangedAt = elapsed;
+          showStatus("NIVEAU " + (next + 1) + " · " + RAIL_LEVELS[next].label, 2600);
+          vibrate([30,50,30]);
+          rebalanceStaticHazards();
+          updateHud();
+        }
+      }
+
+      // Une voie annoncée doit rester évitable : aucune rame déjà sur la voie
+      // et aucun bétail dans le couloir prévu.
+      function findSafeWaveLane(size) {
+        const lanes = [];
+        for (let y=0; y<=ROWS-size; y++) {
+          let safe = true;
+          for (let j=0; j<size && safe; j++) {
+            const row = y+j;
+            if (state.betail?.y === row
+              || state.train.some(p => p.y === row)
+              || state.cows.some(b => b.some(p => p.y === row))
+              || state.tgvs.some(c => c.segments.some(p => p.y === row))
+              || state.frets.some(c => c.segments.some(p => p.y === row))
+              || state.pendingWaves.some(w => row >= w.y && row < w.y+w.size)) safe = false;
+          }
+          if (safe) lanes.push(y);
+        }
+        return lanes.length ? lanes[Math.floor(Math.random()*lanes.length)] : null;
+      }
+
+      function warnWave(type, elapsed) {
+        const size = type === "cow" ? 1 + Math.floor(Math.random()*3) : 1;
+        const y = findSafeWaveLane(size);
+        if (y === null) return false;
+        const lead = type === "fret" ? 7 + Math.floor(Math.random()*3)
+          : type === "tgv" ? 4 + Math.floor(Math.random()*3) : size;
+        state.pendingWaves.push({type,y,size,length:lead,due:elapsed+1400});
+        state.lastWaveAt=elapsed;
+        const comments=EVENT_WORDS[type];
+        showStatus(comments[Math.floor(Math.random()*comments.length)],1600);
+        return true;
+      }
+
+      function releaseWave(wave) {
+        // Si le joueur est entré sur la voie depuis l'avertissement,
+        // abandonner l'événement au lieu de faire apparaître un obstacle dessus.
+        const laneSafe = Array.from({length:wave.size},(_,i)=>wave.y+i)
+          .every(y=>!state.train.some(p=>p.y===y));
+        if (!laneSafe) return;
+        if (wave.type==="cow") {
+          state.cows.push(Array.from({length:wave.size},(_,i)=>({x:COLS,y:wave.y+i})));
+        } else {
+          const convoy = {segments:Array.from({length:wave.length},(_,i)=>({x:COLS+i,y:wave.y}))};
+          (wave.type==="fret" ? state.frets : state.tgvs).push(convoy);
+        }
       }
 
       function updateMovingHazards(elapsed) {
-        const cowInterval = Math.max(3000, 60000 - Math.floor(elapsed / 60000) * 1000);
-        if (elapsed >= 15000 && elapsed - state.lastCowSpawn >= cowInterval) {
-          spawnCows();
-          state.lastCowSpawn = elapsed;
+        updateLevel(elapsed);
+        const phase = RAIL_LEVELS[state.level];
+
+        state.cows.forEach(b => b.forEach(p => {p.x--; }));
+        state.cows = state.cows.filter(b => b.some(p=>p.x>=0));
+        for (const list of [state.frets,state.tgvs]) {
+          list.forEach(c=>c.segments.forEach(p=>{p.x--;}));
+          for(let i=list.length-1;i>=0;i--){
+            if(!list[i].segments.some(p=>p.x>=0)) list.splice(i,1);
+          }
+        }
+        // Le danger mobile peut venir sur le joueur : on détecte aussi
+        // la collision provoquée par les trains adverses en mouvement.
+        if (state.cows.some(b=>b.some(p=>state.train.some(t=>samePosition(t,p))))
+          || state.tgvs.some(c=>c.segments.some(p=>state.train.some(t=>samePosition(t,p))))
+          || state.frets.some(c=>c.segments.some(p=>state.train.some(t=>samePosition(t,p))))) {
+          endGame("Collision sur les voies : même la priorité n'a pas suffi !");
+          return;
         }
 
-        if (elapsed >= 90000) {
-          const tgvInterval = Math.max(4500, 12000 - Math.floor((elapsed - 90000) / 45000) * 1500);
-          if (elapsed - state.lastTgvSpawn >= tgvInterval) {
-            spawnTgv();
-            state.lastTgvSpawn = elapsed;
+        for(let i=state.pendingWaves.length-1;i>=0;i--){
+          if(elapsed>=state.pendingWaves[i].due){
+            releaseWave(state.pendingWaves[i]);
+            state.pendingWaves.splice(i,1);
           }
         }
 
-        state.cows.forEach((band) => band.forEach((position) => { position.x -= 1; }));
-        state.cows = state.cows.filter((band) => band.some((position) => position.x >= 0));
-        state.tgvs.forEach((convoy) => convoy.segments.forEach((position) => { position.x -= 1; }));
-        state.tgvs = state.tgvs.filter((convoy) => convoy.segments.some((position) => position.x >= -6));
+        const active=state.cows.length+state.frets.length+state.tgvs.length+state.pendingWaves.length;
+        const maxActive=state.level>=5?3:2;
+        if(state.level===0 || active>=maxActive || elapsed-state.lastWaveAt<3600
+          || elapsed-state.levelChangedAt<2000) return;
+        // Une seule annonce à la fois, avec une fenêtre de réaction.
+        for (const [type,interval,key] of [
+          ["cow",phase.cow,"lastCowSpawn"],
+          ["fret",phase.fret,"lastFretSpawn"],
+          ["tgv",phase.tgv,"lastTgvSpawn"]
+        ]) {
+          if(interval && elapsed-state[key]>=interval && warnWave(type,elapsed)){
+            state[key]=elapsed;
+            break;
+          }
+        }
       }
 
       function isOpposite(a, b) {
@@ -1391,12 +1487,15 @@
         vibrate();
       }
 
-      function collisionReason(head) {
-        if (state.train.some((position) => samePosition(position, head))) return "Votre rame s’est repliée sur elle-même.";
-        if (state.cows.some((band) => band.some((position) => samePosition(position, head)))) return "Votre TER a rencontré un troupeau sur la voie.";
-        if (state.tgvs.some((convoy) => convoy.segments.some((position) => samePosition(position, head)))) return "Collision avec un TGV prioritaire.";
-        if (state.suppressions.some((position) => samePosition(position, head))) {
-          return suppressionMessages[Math.floor(Math.random() * suppressionMessages.length)];
+      function collisionReason(head, willGrow = false) {
+        // La dernière case se libère ce tick si on ne ramasse pas de bétail.
+        const body = willGrow ? state.train : state.train.slice(0,-1);
+        if (body.some(p=>samePosition(p,head))) return "Le TER s'est replié sur lui-même. Même la SNCF n'avait pas prévu ça !";
+        if (state.cows.some(b=>b.some(p=>samePosition(p,head)))) return "Votre TER a rencontré des vaches sur la voie.";
+        if (state.tgvs.some(c=>c.segments.some(p=>samePosition(p,head)))) return "TGV prioritaire : la correspondance a mal tourné.";
+        if (state.frets.some(c=>c.segments.some(p=>samePosition(p,head)))) return "Train de fret : les marchandises sont arrivées avant vous !";
+        if (state.suppressions.some(p=>samePosition(p,head))) {
+          return suppressionMessages[Math.floor(Math.random()*suppressionMessages.length)];
         }
         return "";
       }
@@ -1410,7 +1509,8 @@
           y: (state.train[0].y + state.direction.y + ROWS) % ROWS
         };
 
-        const reason = collisionReason(head);
+        const willGrow = samePosition(head,state.betail);
+        const reason = collisionReason(head,willGrow);
         if (reason) {
           endGame(reason);
           return;
@@ -1418,23 +1518,27 @@
 
         state.train.unshift(head);
 
-        if (samePosition(head, state.betail)) {
-          state.score += 1;
+        if (willGrow) {
+          state.score = Math.min(MAX_BOARD_CELLS,state.score+1);
           if (state.score > state.highscore) {
-            state.highscore = state.score;
+            state.highscore=state.score;
             saveHighscore(state.highscore);
           }
+          // Prioriser la place libre avant de générer le prochain bétail.
+          rebalanceStaticHazards();
           generateBetail();
-          showStatus("+1 bétail embarqué", 900);
+          if (state.stopped) return;
+          showStatus("+1 bétail embarqué · " + state.train.length + " cases de TER",900);
           vibrate(18);
         } else {
           state.train.pop();
         }
 
-        if (state.oranges.some((position) => samePosition(position, head))) {
-          state.speedEffect = Math.random() < .5 ? -105 : 115;
-          state.speedEffectUntil = now + 2000;
-          showStatus(state.speedEffect < 0 ? "Voie libre : accélération" : "Ralentissement inopiné", 1500);
+        if (state.oranges.some(p=>samePosition(p,head))) {
+          // Variation légère, jamais x2 : lisible au pouce.
+          state.speedEffect = Math.random()<.5 ? -23 : 28;
+          state.speedEffectUntil = now+1500;
+          showStatus(state.speedEffect<0?"Voie libre : petit coup d'accélérateur !":"Ralentissement : freinage en douceur.",1300);
         }
 
         if (state.speedEffectUntil && now >= state.speedEffectUntil) {
@@ -1443,6 +1547,7 @@
         }
 
         updateMovingHazards(elapsedMilliseconds(now));
+        if (state.stopped) return;
         updateHud();
       }
 
@@ -1451,7 +1556,8 @@
           state.speedEffect = 0;
           state.speedEffectUntil = 0;
         }
-        return Math.max(MIN_STEP, BASE_STEP + state.speedEffect);
+        const base=RAIL_LEVELS[state.level]?.step || BASE_STEP;
+        return Math.max(MIN_STEP,base+state.speedEffect);
       }
 
       function gameLoop(now) {
@@ -1536,7 +1642,10 @@
         state.stopped = false;
         state.startedAt = performance.now();
         state.lastCowSpawn = 0;
-        state.lastTgvSpawn = 90000 - 12000;
+        state.lastFretSpawn = 0;
+        state.lastTgvSpawn = 0;
+        state.lastWaveAt=-99999;
+        state.levelChangedAt=-99999;
 
         placeStaticHazards();
         generateBetail();
