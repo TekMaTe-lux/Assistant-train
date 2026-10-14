@@ -18285,7 +18285,7 @@ async function loadAffluenceDate(dateStr){
   const tabs = Array.from(nav.querySelectorAll('[data-loisirs-view]'));
   const onLoisirsTab = () => ['#loisirs', '#divertissement', '#multimedia'].includes(location.hash || '');
 
-  const gameUrl = '/jeuBETA1.html?v=2';
+  const gameUrl = '/jeuBETA1.html?v=20261014-mobile-fullscreen3';
   let gameLoaded = false;
   let currentLoisirsView = 'multimedia';
 
@@ -18411,7 +18411,7 @@ async function loadAffluenceDate(dateStr){
       }
       setJeuActive(true);
       if (jeuSection) jeuSection.style.display = 'block';
-      const mobile = window.matchMedia && window.matchMedia('(max-width: 768px)').matches;
+      const mobile = window.matchMedia && window.matchMedia('(max-width: 960px), (pointer: coarse)').matches;
       setJeuFullscreen(!!mobile);
 	  if (typeof syncCarteFullscreenMode === 'function') syncCarteFullscreenMode();
     }
