@@ -338,10 +338,10 @@ html[data-lb-v4-live="1"] body.lb-v3 #home #homeFavSlot .home-fav-row.is-cancell
     route.replaceChildren(origin, destination);
   }
 
-  /* HOME_FAVORITES_LIVE_PROGRESS_V1
-   * La fiche Favoris calcule déjà son avancement et son état SNCF/CFL.
-   * L'accueil reprend ce pourcentage : aucun fetch, aucune seconde horloge,
-   * aucun ajout de hauteur ou modification des cartes / du Plan B.
+  /* HOME_FAVORITES_LIVE_PROGRESS_V2 — zéro surcouche.
+   * La barre est déjà tracée par le background de .home-fav-route.
+   * On ajuste UNIQUEMENT sa couleur jusqu'au pourcentage calculé par Favoris.
+   * Aucun élément, aucun point, aucune requête ni hauteur supplémentaires.
    */
   function readExistingFavoriteProgress(kind) {
     const line = document.getElementById('favLine' + kind);
@@ -357,41 +357,31 @@ html[data-lb-v4-live="1"] body.lb-v3 #home #homeFavSlot .home-fav-row.is-cancell
     if (kind !== 'AM' && kind !== 'PM') return;
     const route = q('.home-fav-route', card);
     if (!route) return;
+    // Nettoyage défensif de l'ancienne surcouche en cas de mise à jour en place.
+    q('.lb-home-fav-live-progress', route)?.remove();
 
-    const sourceState = clean(document.getElementById('favState' + kind)?.textContent)
+    const state = clean(document.getElementById('favState' + kind)?.textContent)
       .normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase();
-    const cancelled = /SUPPRIM|ANNUL|CANCEL|NO[_ -]?SERVICE/.test(sourceState)
+    const cancelled = /SUPPRIM|ANNUL|CANCEL|NO[_ -]?SERVICE/.test(state)
       || card.classList.contains('is-cancelled')
       || !!document.getElementById('favCard' + kind)?.classList.contains('is-canceled')
       || !!document.getElementById('favMeta' + kind)?.querySelector('.fav-mini-alert');
-    const isLive = /\bLIVE\b|EN COURS|EN ROUTE/.test(sourceState);
-    const isArrived = /ARRIV|TERMIN/.test(sourceState);
-    const progress = (!cancelled && (isLive || isArrived))
+    const isLive = /\bLIVE\b|EN COURS|EN ROUTE/.test(state);
+    const isArrived = /ARRIV|TERMIN/.test(state);
+    const pct = !cancelled && (isLive || isArrived)
       ? (isArrived ? 100 : readExistingFavoriteProgress(kind))
       : null;
-
-    let layer = q('.lb-home-fav-live-progress', route);
-    if (progress == null) {
-      layer?.remove();
+    if (pct == null) {
       route.classList.remove('lb-home-fav-live-active', 'lb-home-fav-live-arrived');
+      route.style.removeProperty('--lb-home-fav-progress');
       return;
     }
-
-    if (!layer) {
-      layer = document.createElement('span');
-      layer.className = 'lb-home-fav-live-progress';
-      layer.setAttribute('aria-hidden', 'true');
-      layer.innerHTML = '<span class="lb-home-fav-live-fill"></span><span class="lb-home-fav-live-head"></span>';
-      route.append(layer);
+    const value = pct.toFixed(2) + '%';
+    if (route.style.getPropertyValue('--lb-home-fav-progress') !== value) {
+      route.style.setProperty('--lb-home-fav-progress', value);
     }
     route.classList.toggle('lb-home-fav-live-active', isLive);
     route.classList.toggle('lb-home-fav-live-arrived', isArrived);
-    const pct = progress.toFixed(2);
-    if (layer.dataset.pct !== pct) {
-      layer.dataset.pct = pct;
-      layer.querySelector('.lb-home-fav-live-fill').style.transform = 'scaleX(' + (progress / 100) + ')';
-      layer.querySelector('.lb-home-fav-live-head').style.left = pct + '%';
-    }
   }
 
   function improveCard(card) {
@@ -446,7 +436,7 @@ html[data-lb-v4-live="1"] body.lb-v3 #home #homeFavSlot .home-fav-row.is-cancell
     if (!slot || !slot.getClientRects().length) return;
     qa('.home-fav-row', slot).forEach((card) => {
       if (q('.lb-home-fav-next-service', card)) improveNextService(card);
-      if (q('.lb-home-fav-live-progress', card)) improveLiveProgress(card);
+      if (q('.home-fav-route.lb-home-fav-live-active, .home-fav-route.lb-home-fav-live-arrived', card)) improveLiveProgress(card);
     });
   }
   window.setInterval(refreshExistingCountdowns, 60000);
