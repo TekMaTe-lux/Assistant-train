@@ -18285,7 +18285,7 @@ async function loadAffluenceDate(dateStr){
   const tabs = Array.from(nav.querySelectorAll('[data-loisirs-view]'));
   const onLoisirsTab = () => ['#loisirs', '#divertissement', '#multimedia'].includes(location.hash || '');
 
-  const gameUrl = '/jeuBETA1.html?v=20261014-mobile-fullscreen3';
+  const gameUrl = '/jeuBETA1.html?v=20261014-centered-pad4';
   let gameLoaded = false;
   let currentLoisirsView = 'multimedia';
 
