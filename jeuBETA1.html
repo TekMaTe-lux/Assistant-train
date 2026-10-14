@@ -1005,13 +1005,13 @@
       <ul>
         <li>Récupérez le bétail lumineux pour allonger votre rame et marquer des points.</li>
         <li>Évitez les cases rouges, votre propre rame, les vaches et les TGV prioritaires.</li>
-        <li>Les cases orange accélèrent ou ralentissent brièvement votre train.</li>
+        <li>Les cases orange déclenchent un TURBO de 2,6 secondes : environ 70 % plus rapide !</li>
         <li>Les bords du plateau communiquent : sortir d’un côté vous fait revenir de l’autre.</li>
         <li>7 niveaux du TER pépère au CHAOS FERROVIAIRE et au MODE EXTRÊME. La vitesse augmente doucement avec le temps ou le score.</li>
         <li>Traversées de vaches, trains de fret (avec arrêt imprévu, puis redémarrage) et TGV prioritaires : une voie clignote avant chaque passage.</li>
         <li>Plus le convoi devient long, plus il risque de se croiser. Les obstacles statiques se retirent progressivement pour permettre de remplir le plateau.</li>
         <li>400 cases au maximum : la locomotive et 399 bétails. Atteindre la capacité totale donne un bonus de victoire à 400 !</li>
-        <li>Les cases orange provoquent un petit coup d’accélérateur ou un ralentissement bref. La partie se met en pause si vous quittez l’écran.</li>
+        <li>Le TURBO orange augmente fortement la vitesse, sans la modifier dans les virages. La partie se met en pause si vous quittez l’écran.</li>
       </ul>
       <div class="legend" aria-label="Légende">
         <span class="legend-item"><i class="legend-color" style="background:#35e7ff"></i>Votre TER</span>
@@ -1038,6 +1038,10 @@
       const ROWS = 20;
       const BASE_STEP = 220;
       const MIN_STEP = 128;
+      // Les surprises orange sont volontairement dangereuses même au niveau extrême.
+      const ORANGE_TURBO_FACTOR = 0.58; // Intervalle réduit de 42 % => environ +72 % de vitesse.
+      const ORANGE_TURBO_MS = 2600;
+      const ORANGE_TURBO_MIN_STEP = 86;
       const MAX_BOARD_CELLS = COLS * ROWS;
       /* BER_SNAKE_RAIL_CHAOS_V1 — progression plafonnée, tous les événements
        * réutilisent le tick existant, aucun timer ni réseau supplémentaire. */
@@ -1139,7 +1143,6 @@
           pausedDuration: 0,
           lastCowSpawn: 0,
           lastTgvSpawn: 0,
-          speedEffect: 0,
           speedEffectUntil: 0
         };
       }
@@ -1669,15 +1672,10 @@
         }
 
         if (state.oranges.some(p=>samePosition(p,head))) {
-          // Variation légère, jamais x2 : lisible au pouce.
-          state.speedEffect = Math.random()<.5 ? -23 : 28;
-          state.speedEffectUntil = now+1500;
-          showStatus(state.speedEffect<0?"Voie libre : petit coup d'accélérateur !":"Ralentissement : freinage en douceur.",1300);
-        }
-
-        if (state.speedEffectUntil && now >= state.speedEffectUntil) {
-          state.speedEffect = 0;
-          state.speedEffectUntil = 0;
+          // Toujours une accélération. Temps de JEU : pause et onglet caché
+          // ne doivent pas écourter les 2,6 secondes du bonus dangereux.
+          state.speedEffectUntil = elapsedMilliseconds(now) + ORANGE_TURBO_MS;
+          showStatus("⚡ SURVITESSE ! +70 % pendant 2,6 s", 1900);
         }
 
         updateMovingHazards(elapsedMilliseconds(now));
@@ -1693,12 +1691,14 @@
       }
 
       function currentStep(now) {
-        if (state.speedEffectUntil && now >= state.speedEffectUntil) {
-          state.speedEffect = 0;
+        const base = RAIL_LEVELS[state.level]?.step || BASE_STEP;
+        if (state.speedEffectUntil) {
+          if (elapsedMilliseconds(now) < state.speedEffectUntil) {
+            return Math.max(ORANGE_TURBO_MIN_STEP, Math.round(base * ORANGE_TURBO_FACTOR));
+          }
           state.speedEffectUntil = 0;
         }
-        const base=RAIL_LEVELS[state.level]?.step || BASE_STEP;
-        return Math.max(MIN_STEP,base+state.speedEffect);
+        return Math.max(MIN_STEP, base);
       }
 
       function gameLoop(now) {
