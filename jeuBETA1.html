@@ -329,7 +329,8 @@
       font-weight: 900;
       border-radius: 10px;
       background: linear-gradient(150deg, rgba(21, 82, 108, .96), rgba(5, 29, 47, .98));
-      transition: background .09s ease, border-color .09s ease, box-shadow .09s ease;
+      /* Pas d'animation CSS sur les touches : le GPU reste dédié au plateau. */
+      transition: none;
       touch-action: none;
     }
 
@@ -343,7 +344,7 @@
       border-radius: 2px 0 0 0;
       transform: rotate(45deg);
       content: "";
-      filter: drop-shadow(0 0 5px rgba(53, 231, 255, .35));
+      /* Pas de filtre GPU recomposé à chaque appui tactile. */
     }
 
     .direction-button[data-direction="right"]::before { transform: rotate(135deg); }
@@ -353,8 +354,15 @@
     .direction-button:active, .direction-button.is-pressed {
       transform: none;
       border-color: #88f0ff;
-      background: linear-gradient(150deg, #167a99, #0b4562);
-      box-shadow: inset 0 0 8px rgba(136, 240, 255, .24), 0 0 11px rgba(53, 231, 255, .23);
+      background: linear-gradient(150deg, rgba(21, 82, 108, .96), rgba(5, 29, 47, .98));
+      box-shadow: none;
+    }
+
+    @media (hover: none), (pointer: coarse) {
+      .direction-button:hover {
+        background: linear-gradient(150deg, rgba(21, 82, 108, .96), rgba(5, 29, 47, .98));
+        box-shadow: none;
+      }
     }
 
     [data-direction="up"] {
@@ -1079,6 +1087,8 @@
 
       let cssBoardSize = 320;
       let cellSize = cssBoardSize / COLS;
+      let renderPixelRatio = 0;
+      let pausedVisualPhase = 0;
       let rafId = 0;
       // Horloge de déplacement absolue : les commandes n'interviennent jamais dans le rythme.
       let lastMoveAt = 0;
@@ -1086,8 +1096,7 @@
       let timerInterval = 0;
       let statusTimeout = 0;
       let pointerStart = null;
-      let previousTrain = null; // Position avant le dernier déplacement logique, pour le rendu fluide.
-      // La phase d'affichage vient directement des timestamps du moteur.
+      // Le corps suit le segment devant lui, la tête avance vers la prochaine case.
       let resumeAfterRules = false;
       let muted = false;
 
@@ -1181,22 +1190,31 @@
         }
       }
 
+      function currentRenderProgress(now = performance.now()) {
+        if (!lastMoveAt || !nextMoveAt) return 0;
+        if (state.paused) return pausedVisualPhase;
+        return Math.max(0, Math.min(1, (now - lastMoveAt) / Math.max(1, nextMoveAt - lastMoveAt)));
+      }
+
       function fitCanvas() {
         const bounds = boardCard.getBoundingClientRect();
         if (!bounds.width || !bounds.height) return;
         const inset = 12;
         let nextSize = Math.floor((Math.min(bounds.width, bounds.height) - inset) / COLS) * COLS;
         nextSize = Math.max(COLS * 5, nextSize);
+        const ratio = Math.min(window.devicePixelRatio || 1, 2);
+        // Les ResizeObserver et visualViewport peuvent se déclencher après un tap.
+        // Ne jamais réinitialiser le canvas s'il n'a pas changé de taille.
+        if (nextSize === cssBoardSize && ratio === renderPixelRatio && canvas.width === Math.round(nextSize * ratio)) return;
         cssBoardSize = nextSize;
         cellSize = cssBoardSize / COLS;
-
-        const ratio = Math.min(window.devicePixelRatio || 1, 2);
+        renderPixelRatio = ratio;
         canvas.style.width = `${cssBoardSize}px`;
         canvas.style.height = `${cssBoardSize}px`;
         canvas.width = Math.round(cssBoardSize * ratio);
         canvas.height = Math.round(cssBoardSize * ratio);
         ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
-        draw();
+        draw(currentRenderProgress());
       }
 
       function roundedRect(x, y, width, height, radius) {
@@ -1235,7 +1253,7 @@
         ctx.fill();
       }
 
-      function draw(phase = 1) {
+      function draw(phase = 0) {
         if (!ctx || !cssBoardSize) return;
         drawGrid();
 
@@ -1312,21 +1330,24 @@
           });
         });
 
-        // Interpolation uniquement graphique : cases, obstacles, collisions et scores restent inchangés.
+        // Le visuel suit le tick en cours, PAS le précédent. Ainsi la tête
+        // atteint le coin au tick suivant et tourne sans attendre un tick de plus.
         const t = Math.max(0, Math.min(1, phase));
         state.train.forEach((position, index) => {
           const color = index === 0 ? "#35e7ff" : `hsl(${193 + Math.min(index, 12)}, 78%, ${46 - Math.min(index, 12)}%)`;
-          const from = previousTrain && previousTrain[index];
-          let visual = position;
-          if (from && t < 1 && !state.stopped) {
-            let dx = position.x - from.x;
-            let dy = position.y - from.y;
-            if (dx > COLS / 2) dx -= COLS;
-            if (dx < -COLS / 2) dx += COLS;
-            if (dy > ROWS / 2) dy -= ROWS;
-            if (dy < -ROWS / 2) dy += ROWS;
-            visual = { x: from.x + dx * t, y: from.y + dy * t };
-          }
+          const next = index === 0
+            ? {x: position.x + state.direction.x, y: position.y + state.direction.y}
+            : state.train[index - 1];
+          let dx = next.x - position.x;
+          let dy = next.y - position.y;
+          if (dx > COLS / 2) dx -= COLS;
+          if (dx < -COLS / 2) dx += COLS;
+          if (dy > ROWS / 2) dy -= ROWS;
+          if (dy < -ROWS / 2) dy += ROWS;
+          const visual = {
+            x: position.x + dx * t,
+            y: position.y + dy * t
+          };
           // À la sortie d'un bord, la rame doit réapparaître sans saut sur l'autre bord.
           const tiles = [visual];
           if (visual.x < 0) tiles.push({ x: visual.x + COLS, y: visual.y });
@@ -1616,7 +1637,7 @@
       function updateGame(now) {
         if (!state.started || state.stopped || state.paused) return;
 
-        if (state.directionQueue.length) state.direction = state.directionQueue.shift();
+        // Le mouvement en cours conserve sa direction jusqu'au prochain coin.
         const head = {
           x: (state.train[0].x + state.direction.x + COLS) % COLS,
           y: (state.train[0].y + state.direction.y + ROWS) % ROWS
@@ -1629,7 +1650,6 @@
           return;
         }
 
-        previousTrain = state.train.slice();
         state.train.unshift(head);
 
         if (willGrow) {
@@ -1666,6 +1686,9 @@
           generateBetail();
           if (state.stopped) return;
         }
+        // La nouvelle direction concerne uniquement le segment qui démarre
+        // maintenant : elle est visible immédiatement au coin du plateau.
+        if (state.directionQueue.length) state.direction = state.directionQueue.shift();
         updateHud();
       }
 
@@ -1705,13 +1728,11 @@
           if (guard === 6 && now >= nextMoveAt && !state.stopped) {
             lastMoveAt = now;
             nextMoveAt = now + currentStep(now);
-            previousTrain = state.train.slice();
+            // Ne pas téléporter le train en cas de réveil de l'onglet.
           }
         }
 
-        const duration = Math.max(1, nextMoveAt - lastMoveAt);
-        const progress = state.paused ? 1 : Math.max(0, Math.min(1, (now - lastMoveAt) / duration));
-        draw(progress);
+        draw(currentRenderProgress(now));
         if (!state.stopped) rafId = requestAnimationFrame(gameLoop);
       }
 
@@ -1741,14 +1762,18 @@
         state.paused = nextPaused;
 
         if (nextPaused) {
+          pausedVisualPhase = lastMoveAt && nextMoveAt
+            ? Math.max(0, Math.min(1, (performance.now() - lastMoveAt) / Math.max(1, nextMoveAt - lastMoveAt)))
+            : 0;
           state.pausedAt = performance.now();
           stopAudio(false);
         } else {
-          state.pausedDuration += performance.now() - state.pausedAt;
+          const now = performance.now();
+          state.pausedDuration += now - state.pausedAt;
           state.pausedAt = 0;
-          lastMoveAt = 0;
-          nextMoveAt = 0;
-          previousTrain = state.train.slice();
+          const step = currentStep(now);
+          lastMoveAt = now - pausedVisualPhase * step;
+          nextMoveAt = lastMoveAt + step;
           playAudio();
           canvas.focus({ preventScroll: true });
         }
@@ -1765,7 +1790,7 @@
         const previousHighscore = window.lbSnakeAccount?.isAccount()
           ? readHighscore() : Math.max(state.highscore || 0, readHighscore());
         state = createInitialState();
-        previousTrain = null;
+        pausedVisualPhase = 0;
         state.highscore = previousHighscore;
         state.train = [{ x: 10, y: 10 }];
         state.direction = { x: 1, y: 0 };
