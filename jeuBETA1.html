@@ -1000,7 +1000,7 @@
         <li>Les cases orange accélèrent ou ralentissent brièvement votre train.</li>
         <li>Les bords du plateau communiquent : sortir d’un côté vous fait revenir de l’autre.</li>
         <li>7 niveaux du TER pépère au CHAOS FERROVIAIRE et au MODE EXTRÊME. La vitesse augmente doucement avec le temps ou le score.</li>
-        <li>Traversées de vaches, trains de fret et TGV prioritaires : une voie clignote avant chaque passage.</li>
+        <li>Traversées de vaches, trains de fret (avec arrêt imprévu, puis redémarrage) et TGV prioritaires : une voie clignote avant chaque passage.</li>
         <li>Plus le convoi devient long, plus il risque de se croiser. Les obstacles statiques se retirent progressivement pour permettre de remplir le plateau.</li>
         <li>400 cases au maximum : la locomotive et 399 bétails. Atteindre la capacité totale donne un bonus de victoire à 400 !</li>
         <li>Les cases orange provoquent un petit coup d’accélérateur ou un ralentissement bref. La partie se met en pause si vous quittez l’écran.</li>
@@ -1080,13 +1080,14 @@
       let cssBoardSize = 320;
       let cellSize = cssBoardSize / COLS;
       let rafId = 0;
-      let previousFrame = 0;
-      let accumulator = 0;
+      // Horloge de déplacement absolue : les commandes n'interviennent jamais dans le rythme.
+      let lastMoveAt = 0;
+      let nextMoveAt = 0;
       let timerInterval = 0;
       let statusTimeout = 0;
       let pointerStart = null;
       let previousTrain = null; // Position avant le dernier déplacement logique, pour le rendu fluide.
-      let stepForAccumulator = 0;
+      // La phase d'affichage vient directement des timestamps du moteur.
       let resumeAfterRules = false;
       let muted = false;
 
@@ -1507,6 +1508,13 @@
           state.cows.push(Array.from({length:wave.size},(_,i)=>({x:COLS,y:wave.y+i})));
         } else {
           const convoy = {segments:Array.from({length:wave.length},(_,i)=>({x:COLS+i,y:wave.y}))};
+          if (wave.type === "fret") {
+            // Chaque convoi de marchandises s'immobilise une fois au milieu du plateau,
+            // puis repart : aucun timer supplémentaire et aucune variation du TER.
+            convoy.stopAt = 9 + Math.floor(Math.random() * 4);
+            convoy.stoppedUntil = 0;
+            convoy.hasStopped = false;
+          }
           (wave.type==="fret" ? state.frets : state.tgvs).push(convoy);
         }
       }
@@ -1517,10 +1525,23 @@
 
         state.cows.forEach(b => b.forEach(p => {p.x--; }));
         state.cows = state.cows.filter(b => b.some(p=>p.x>=0));
+        state.frets.forEach(convoy => {
+          if (convoy.stoppedUntil) {
+            if (elapsed < convoy.stoppedUntil) return; // Immobilisé sur la voie.
+            convoy.stoppedUntil = 0;
+            showStatus("Le fret repart ! La voie est toujours occupée…", 1400);
+          }
+          convoy.segments.forEach(p => { p.x--; });
+          if (!convoy.hasStopped && convoy.segments[0].x <= convoy.stopAt) {
+            convoy.hasStopped = true;
+            convoy.stoppedUntil = elapsed + 1900 + Math.floor(Math.random() * 1600);
+            showStatus("Fret à l'arrêt : incident inopiné sur les marchandises !", 1700);
+          }
+        });
+        state.tgvs.forEach(c => c.segments.forEach(p => { p.x--; }));
         for (const list of [state.frets,state.tgvs]) {
-          list.forEach(c=>c.segments.forEach(p=>{p.x--;}));
-          for(let i=list.length-1;i>=0;i--){
-            if(!list[i].segments.some(p=>p.x>=0)) list.splice(i,1);
+          for (let i=list.length-1; i>=0; i--) {
+            if (!list[i].segments.some(p=>p.x>=0)) list.splice(i,1);
           }
         }
         // Le danger mobile peut venir sur le joueur : on détecte aussi
@@ -1662,42 +1683,42 @@
           rafId = 0;
           return;
         }
-
-        if (!previousFrame) previousFrame = now;
-        const frameDelta = Math.min(500, now - previousFrame);
-        previousFrame = now;
+        if (!nextMoveAt) {
+          lastMoveAt = now;
+          nextMoveAt = now + currentStep(now);
+        }
 
         if (!state.paused) {
-          accumulator += frameDelta;
           let guard = 0;
-          const step = currentStep(now);
-          // Les événements de vitesse ne doivent pas réinitialiser la progression visuelle.
-          if (stepForAccumulator && step !== stepForAccumulator) {
-            accumulator *= step / stepForAccumulator;
-          }
-          stepForAccumulator = step;
-          while (accumulator >= step && guard < 4) {
-            updateGame(now);
-            accumulator -= step;
-            guard += 1;
+          // Les mouvements se produisent à cadence absolue, même si des images
+          // sont perdues. Une flèche ne retarde ni ne redémarre l'horloge.
+          while (now >= nextMoveAt && guard < 6) {
+            const tickTime = nextMoveAt;
+            updateGame(tickTime);
+            lastMoveAt = tickTime;
+            nextMoveAt = tickTime + currentStep(tickTime);
+            guard++;
             if (state.stopped) break;
+          }
+          // Cas exceptionnel : retour d'une mise en veille sans événement visibilitychange.
+          // On évite de rejouer plusieurs secondes de collisions d'un coup.
+          if (guard === 6 && now >= nextMoveAt && !state.stopped) {
+            lastMoveAt = now;
+            nextMoveAt = now + currentStep(now);
+            previousTrain = state.train.slice();
           }
         }
 
-        const nextStep = currentStep(now);
-        if (stepForAccumulator && nextStep !== stepForAccumulator) {
-          accumulator *= nextStep / stepForAccumulator;
-          stepForAccumulator = nextStep;
-        }
-        draw(state.paused ? 1 : Math.min(1, accumulator / nextStep));
+        const duration = Math.max(1, nextMoveAt - lastMoveAt);
+        const progress = state.paused ? 1 : Math.max(0, Math.min(1, (now - lastMoveAt) / duration));
+        draw(progress);
         if (!state.stopped) rafId = requestAnimationFrame(gameLoop);
       }
 
       function startLoop() {
         if (rafId) cancelAnimationFrame(rafId);
-        previousFrame = 0;
-        accumulator = 0;
-        stepForAccumulator = 0;
+        lastMoveAt = 0;
+        nextMoveAt = 0;
         rafId = requestAnimationFrame(gameLoop);
       }
 
@@ -1725,9 +1746,8 @@
         } else {
           state.pausedDuration += performance.now() - state.pausedAt;
           state.pausedAt = 0;
-          previousFrame = 0;
-          accumulator = 0;
-          stepForAccumulator = 0;
+          lastMoveAt = 0;
+          nextMoveAt = 0;
           previousTrain = state.train.slice();
           playAudio();
           canvas.focus({ preventScroll: true });
