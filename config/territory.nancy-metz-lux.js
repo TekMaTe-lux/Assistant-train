@@ -107,14 +107,14 @@ window.LB_TERRITORY_CONFIG = Object.freeze({
     const stylesheet = document.createElement('link');
     stylesheet.id = 'lbHomeFavDelayStyles';
     stylesheet.rel = 'stylesheet';
-    stylesheet.href = './assets/lb-home-favorites-delay-v1.css?v=20261014-live-progress1';
+    stylesheet.href = './assets/lb-home-favorites-delay-v1.css?v=20261014-native-progress2';
     document.head.append(stylesheet);
   }
 
   if (!document.getElementById('lbHomeFavDelayScript')) {
     const script = document.createElement('script');
     script.id = 'lbHomeFavDelayScript';
-    script.src = './assets/lb-home-favorites-delay-v1.js?v=20261014-live-progress1';
+    script.src = './assets/lb-home-favorites-delay-v1.js?v=20261014-native-progress2';
     script.async = false;
     document.head.append(script);
   }
