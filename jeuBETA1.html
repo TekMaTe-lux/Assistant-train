@@ -821,6 +821,58 @@
       .controls-dock { gap: 4px; padding: 5px 6px; }
     }
 
+
+    /* GAME_SNAKE_ACCOUNT_LEADERBOARD_V1 — classement sans agrandir le plateau. */
+    .game-ranking-trophy {
+      flex:0 0 auto; width:30px; height:28px; display:inline-grid;place-items:center;
+      padding:0; border:1px solid rgba(74,228,251,.4);
+      border-radius:9px;background:rgba(14,54,72,.82);color:#fff;
+      cursor:pointer;touch-action:manipulation;font-size:1rem;
+    }
+    .game-ranking-trophy:active {background:rgba(25,111,135,.88)}
+    .game-account-badge{display:none}
+    .game-account-status,.game-account-result{
+      margin:12px auto 2px !important;color:#b4eaf1 !important;
+      font-size:.83rem !important;line-height:1.28 !important;
+    }
+    .game-ranking-dialog {
+      display:flex; flex-direction:column;
+      max-height:min(82dvh,650px); overflow:hidden;
+      padding:clamp(13px,3vw,24px);
+    }
+    .game-ranking-intro {margin-top:7px !important;font-size:.8rem !important}
+    .game-ranking-me {
+      margin:12px 0 7px; padding:8px 10px;
+      border:1px solid rgba(78,232,250,.28);border-radius:10px;
+      background:rgba(29,94,114,.17);color:#dcfff9;
+      font:750 .89rem/1.25 Rajdhani,system-ui,sans-serif;
+    }
+    .game-ranking-list {
+      min-height:90px;max-height:42dvh; overflow-y:auto; overscroll-behavior:contain;
+      margin:4px 0 6px;padding:0;list-style:none;text-align:left;
+      scrollbar-width:thin;scrollbar-color:#24798b #071824;
+    }
+    .game-ranking-row {
+      display:grid;grid-template-columns:44px minmax(0,1fr) 48px;
+      align-items:center;gap:7px;margin:0 0 5px;padding:7px 9px;
+      border:1px solid rgba(89,173,198,.2);border-radius:9px;
+      background:rgba(8,35,51,.68);font:700 .92rem/1.2 Rajdhani,system-ui,sans-serif;
+    }
+    .game-ranking-row.is-me{border-color:rgba(202,255,66,.72);background:rgba(116,141,31,.14)}
+    .game-ranking-row:nth-child(1) .game-ranking-rank {color:#ffd85b}
+    .game-ranking-row:nth-child(2) .game-ranking-rank {color:#b8d9ec}
+    .game-ranking-row:nth-child(3) .game-ranking-rank {color:#ecb88c}
+    .game-ranking-rank{color:#7ce9f4}
+    .game-ranking-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    .game-ranking-score{color:#bafaff;text-align:right;font-variant-numeric:tabular-nums}
+    .game-ranking-empty{padding:20px 12px;text-align:center;color:#b2c9d1}
+    .game-ranking-footer{margin:3px 0 10px !important;font-size:.79rem !important}
+    .game-ranking-dialog>.dialog-button {align-self:center}
+    @media(max-width:370px) {
+      .game-ranking-trophy{width:27px;height:27px}
+      .game-hud{gap:4px !important;padding:4px 6px !important}
+    }
+
     @media (prefers-reduced-motion: reduce) {
       *,
       *::before,
@@ -931,6 +983,7 @@
     <source src="./Tek%27Ma%27Te%20-%20Power%20of%20the%20SNCF%20jingle.mp3" type="audio/mpeg">
   </audio>
 
+  <script src="./assets/lb-game-snake-account-v1.js?v=20261014-game-ranking1"></script>
   <script>
     (() => {
       "use strict";
@@ -1018,12 +1071,18 @@
       }
 
       function readHighscore() {
-        const current = Number.parseInt(localStorage.getItem(HIGHSCORE_KEY) || "0", 10) || 0;
-        const legacy = Number.parseInt(localStorage.getItem(LEGACY_HIGHSCORE_KEY) || "0", 10) || 0;
-        return Math.max(current, legacy);
+        const accountBest = window.lbSnakeAccount?.accountRecord();
+        if (accountBest != null && Number.isFinite(Number(accountBest))) return Math.max(0, Number(accountBest));
+        try {
+          const current = Number.parseInt(localStorage.getItem(HIGHSCORE_KEY) || "0", 10) || 0;
+          const legacy = Number.parseInt(localStorage.getItem(LEGACY_HIGHSCORE_KEY) || "0", 10) || 0;
+          return Math.max(current, legacy);
+        } catch (_) { return 0; }
       }
 
       function saveHighscore(value) {
+        // Les records connectés ne sont validés que par l'API en fin de partie.
+        if (window.lbSnakeAccount?.isAccount()) return;
         try {
           localStorage.setItem(HIGHSCORE_KEY, String(value));
           localStorage.setItem(LEGACY_HIGHSCORE_KEY, String(value));
@@ -1417,7 +1476,8 @@
       }
 
       function resetGame() {
-        const previousHighscore = Math.max(state.highscore || 0, readHighscore());
+        const previousHighscore = window.lbSnakeAccount?.isAccount()
+          ? readHighscore() : Math.max(state.highscore || 0, readHighscore());
         state = createInitialState();
         state.highscore = previousHighscore;
         state.train = [{ x: 10, y: 10 }];
@@ -1453,6 +1513,7 @@
         document.getElementById("finalScore").textContent = String(state.score);
         document.getElementById("finalTime").textContent = formatTime(elapsedMilliseconds());
         gameOverOverlay.hidden = false;
+        window.lbSnakeAccount?.afterEnd(state.score);
         restartBtn.focus();
         vibrate([35, 35, 65]);
       }
@@ -1597,12 +1658,24 @@
         pointerStart = null;
       });
 
-      startBtn.addEventListener("click", () => {
-        startOverlay.hidden = true;
-        resetGame();
-      });
-
-      restartBtn.addEventListener("click", resetGame);
+      let launchingGame = false;
+      async function launchGame() {
+        if (launchingGame) return;
+        launchingGame = true;
+        startBtn.disabled = true;
+        restartBtn.disabled = true;
+        try {
+          await window.lbSnakeAccount?.beforeStart();
+          startOverlay.hidden = true;
+          resetGame();
+        } finally {
+          launchingGame = false;
+          startBtn.disabled = false;
+          restartBtn.disabled = false;
+        }
+      }
+      startBtn.addEventListener("click",launchGame);
+      restartBtn.addEventListener("click",launchGame);
       pauseBtn.addEventListener("click", togglePause);
       rulesBtn.addEventListener("click", openRules);
       startRulesBtn.addEventListener("click", openRules);
@@ -1654,6 +1727,16 @@
       window.visualViewport?.addEventListener("resize", () => requestAnimationFrame(fitCanvas));
       window.addEventListener("orientationchange", () => window.setTimeout(fitCanvas, 180));
 
+      window.lbSnakeAccount?.init({
+        onAccountRecord(best) {
+          if (!state.started || state.stopped) {
+            state.highscore = best == null ? readHighscore() : best;
+            updateHud();
+          }
+        },
+        isRunning: () => state.started && !state.stopped && !state.paused,
+        pause: (value) => setPaused(value, false)
+      });
       state.highscore = readHighscore();
       highscoreEl.textContent = String(state.highscore);
       updateSoundButton();
