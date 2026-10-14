@@ -187,6 +187,7 @@
     ticket=null;
     await (ready || refresh());
     // Si la session vient d'expirer, continuer le jeu sans annoncer de sauvegarde.
+    if (mode!=="account") await refresh();
     if (mode!=="account") return;
     try {
       const result=await request("/start",{body:{}});
