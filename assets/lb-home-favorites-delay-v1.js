@@ -84,7 +84,8 @@ html[data-lb-v4-live="1"] body.lb-v3 #home #homeFavSlot .home-fav-row.is-cancell
     const explicit = clean(q('.fav-next-service', meta)?.textContent);
     if (explicit) return explicit;
 
-    const sourceState = clean(document.getElementById(`favState${key}`)?.textContent).toUpperCase();
+    const sourceState = clean(document.getElementById(`favState${key}`)?.textContent)
+      .normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase();
     if (
       !sourceState.includes('PROCHAIN') &&
       (sourceState.includes('A VENIR') || sourceState.includes('AVENIR'))
@@ -148,11 +149,41 @@ html[data-lb-v4-live="1"] body.lb-v3 #home #homeFavSlot .home-fav-row.is-cancell
     `;
   }
 
+  /* Réutilise la ligne « Aujourd’hui » déjà présente : aucun nouveau bloc.
+   * Calcul local uniquement à partir de l'heure de départ affichée (LIVE si connue).
+   * Ne jamais transformer PROCHAIN/J+1, une suppression, ou un état ambigu.
+   */
+  function countdownForToday(card, currentText) {
+    if (!/^Aujourd[’']hui\b/i.test(currentText)) return '';
+    const key = clean(card?.getAttribute('data-fav-k')).toUpperCase();
+    const state = clean(document.getElementById(`favState${key}`)?.textContent)
+      .normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase();
+    if ((!state.includes('A VENIR') && !state.includes('AVENIR')) ||
+        /PROCHAIN|SUPPRIM|ANNUL|CANCEL|PARTIEL|PARTIAL/.test(state) ||
+        card.classList.contains('is-cancelled')) return '';
+    const meta = document.getElementById(`favMeta${key}`);
+    if (q('.fav-next-service', meta)) return ''; // J+1 ou autre service non LIVE
+    const departure = minuteOfDay(q('.lb-home-fav-time-departure .lb-home-fav-time-clock', card)?.textContent);
+    if (departure == null) return '';
+    let now;
+    try {
+      const parts = new Intl.DateTimeFormat('en-GB', {
+        timeZone: 'Europe/Paris', hour: '2-digit', minute: '2-digit', hourCycle: 'h23'
+      }).formatToParts(new Date());
+      const values = Object.fromEntries(parts.map(part => [part.type, part.value]));
+      now = Number(values.hour) * 60 + Number(values.minute);
+    } catch (_) { return ''; }
+    const remaining = departure - now;
+    if (remaining < 0 || remaining > 180) return '';
+    return remaining === 0 ? 'Départ prévu maintenant' : `Départ dans ${remaining} min`;
+  }
+
   function improveNextService(card) {
     const host = q('.home-fav-time', card);
     if (!host) return;
 
-    const text = readNextService(card);
+    const originalText = readNextService(card);
+    const text = countdownForToday(card, originalText) || originalText;
     let line = q('.lb-home-fav-next-service', host);
 
     if (!text) {
@@ -347,6 +378,20 @@ html[data-lb-v4-live="1"] body.lb-v3 #home #homeFavSlot .home-fav-row.is-cancell
     }
     return true;
   }
+
+  // Un seul minuteur léger pour les deux favoris, sans requête et sans rendu global.
+  // Après retour à l'onglet, les décomptes se synchronisent immédiatement.
+  function refreshExistingCountdowns() {
+    if (document.hidden) return;
+    const slot = document.getElementById('homeFavSlot');
+    if (!slot || !slot.getClientRects().length) return;
+    qa('.home-fav-row', slot).forEach((card) => {
+      if (q('.lb-home-fav-next-service', card)) improveNextService(card);
+    });
+  }
+  window.setInterval(refreshExistingCountdowns, 60000);
+  document.addEventListener('visibilitychange', refreshExistingCountdowns);
+  window.addEventListener('focus', refreshExistingCountdowns);
 
   function start() {
     if (attach()) return;
