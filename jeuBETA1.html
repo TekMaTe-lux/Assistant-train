@@ -1256,12 +1256,12 @@
       <span class="dialog-badge">Briefing avant départ</span>
       <h2 id="rulesTitle">Règles express</h2>
       <ul>
-        <li>Ramassez le bétail lumineux : votre TER s’allonge et vous marquez des points.</li>
-        <li>Évitez les suppressions rouges, votre propre rame et les obstacles mobiles.</li>
-        <li>Case orange : au hasard, +72 % ou −35 % de vitesse pendant 2,6 secondes.</li>
-        <li>Vaches : seule la locomotive peut être percutée. Longer ou croiser une vache avec les wagons est autorisé. Attention aux TGV et aux frets !</li>
-        <li>Les bords communiquent. Sept niveaux vous mènent au chaos ferroviaire !</li>
-        <li>Plus votre TER s’allonge, plus les obstacles fixes se retirent. Bonus final à 400 cases !</li>
+        <li>Récupérez le bétail et allongez votre TER.</li>
+        <li>Évitez les suppressions rouges et votre propre rame.</li>
+        <li>Les cases orange réservent une surprise de vitesse.</li>
+        <li>Vaches, frets et TGV : protégez votre locomotive !</li>
+        <li>Les wagons peuvent croiser les obstacles mobiles sans vous faire perdre.</li>
+        <li>Les bords communiquent. Plus vous tenez, plus le chaos augmente !</li>
       </ul>
       <div class="legend" aria-label="Légende">
         <span class="legend-item"><i class="legend-color" style="background:#35e7ff"></i>Votre TER</span>
@@ -1691,6 +1691,14 @@
         return !!head && state.cows.some(band => band.some(cow => samePosition(cow, head)));
       }
 
+      // COLLISION_TRAINS_LOCOMOTIVE_V2 : les frets et TGV, même à l'arrêt,
+      // ne provoquent une défaite qu'au contact de la locomotive du TER.
+      // Le corps du serpent (wagons) ne déclenche pas de collision mobile.
+      function trainTouchesLocomotive(head = state.train[0]) {
+        return !!head && (state.tgvs.some(c => c.segments.some(p => samePosition(p,head)))
+          || state.frets.some(c => c.segments.some(p => samePosition(p,head))));
+      }
+
       function occupied(position, includeBetail = true) {
         return state.train.some((item) => samePosition(item, position))
           || state.suppressions.some((item) => samePosition(item, position))
@@ -1915,11 +1923,10 @@
           endGame("La vache a touché la locomotive : arrêt d'urgence !");
           return;
         }
-        // En revanche, le contact d'un TGV ou d'un fret avec n'importe
-        // quelle voiture reste une collision ferroviaire.
-        if (state.tgvs.some(c=>c.segments.some(p=>state.train.some(t=>samePosition(t,p))))
-          || state.frets.some(c=>c.segments.some(p=>state.train.some(t=>samePosition(t,p))))) {
-          endGame("Collision sur les voies : même la priorité n'a pas suffi !");
+        // Le passage d'un fret ou TGV sur un wagon n'est pas fatal :
+        // seule la même case que la locomotive provoque la collision.
+        if (trainTouchesLocomotive()) {
+          endGame("Votre locomotive a percuté un autre train : terminus !");
           return;
         }
 
@@ -1975,8 +1982,9 @@
         const body = willGrow ? state.train : state.train.slice(0,-1);
         if (body.some(p=>samePosition(p,head))) return "Le TER s'est replié sur lui-même. Même la SNCF n'avait pas prévu ça !";
         if (cowTouchesLocomotive(head)) return "La locomotive a rencontré une vache sur la voie.";
-        if (state.tgvs.some(c=>c.segments.some(p=>samePosition(p,head)))) return "TGV prioritaire : la correspondance a mal tourné.";
-        if (state.frets.some(c=>c.segments.some(p=>samePosition(p,head)))) return "Train de fret : les marchandises sont arrivées avant vous !";
+        // TER qui rejoint un train immobile ou en circulation : collision
+        // uniquement si sa prochaine locomotive occupe la même case.
+        if (trainTouchesLocomotive(head)) return "Locomotive contre train : correspondance au terminus !";
         if (state.suppressions.some(p=>samePosition(p,head))) {
           return nextSuppressionMessage();
         }
