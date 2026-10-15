@@ -18411,8 +18411,9 @@ async function loadAffluenceDate(dateStr){
       }
       setJeuActive(true);
       if (jeuSection) jeuSection.style.display = 'block';
-      const mobile = window.matchMedia && window.matchMedia('(max-width: 960px), (pointer: coarse)').matches;
-      setJeuFullscreen(!!mobile);
+      // Le jeu est immersif sur ordinateur aussi : plus de plateau rogné par
+      // l'iframe à 70vh et les barres du site. Quitter restaure les menus.
+      setJeuFullscreen(true);
 	  if (typeof syncCarteFullscreenMode === 'function') syncCarteFullscreenMode();
     }
   }
