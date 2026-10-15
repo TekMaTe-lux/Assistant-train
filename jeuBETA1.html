@@ -1598,9 +1598,14 @@
       }
 
       function updateHud() {
-        scoreEl.textContent = String(state.score);
-        highscoreEl.textContent = String(state.highscore);
-        timerEl.textContent = formatTime(elapsedMilliseconds());
+        // Éviter les mutations DOM inutiles à chaque tick et les recalculs
+        // de mise en page associés, surtout sur les appareils mobiles.
+        const scoreText=String(state.score);
+        const recordText=String(state.highscore);
+        const timeText=formatTime(elapsedMilliseconds());
+        if (scoreEl.textContent !== scoreText) scoreEl.textContent=scoreText;
+        if (highscoreEl.textContent !== recordText) highscoreEl.textContent=recordText;
+        if (timerEl.textContent !== timeText) timerEl.textContent=timeText;
         if (levelBadge) {
           const phase = RAIL_LEVELS[state.level] || RAIL_LEVELS[0];
           const text = "N" + (state.level+1) + " · " + phase.name;
@@ -2432,7 +2437,9 @@
       }
 
       function gameLoop(now) {
-        if (!state.started || state.stopped) {
+        // Pas de boucle graphique en pause : dessiner 60 fois par seconde un
+        // plateau immobile consomme batterie et CPU pour rien sur téléphone.
+        if (!state.started || state.stopped || state.paused) {
           rafId = 0;
           return;
         }
@@ -2522,6 +2529,16 @@
 
         setPauseButton();
         snakePauseLayer.hidden = !nextPaused;
+        if (nextPaused) {
+          // Le dernier état du plateau reste visible sous l'écran de pause.
+          if (rafId) cancelAnimationFrame(rafId);
+          rafId=0;
+          draw(pausedVisualPhase);
+        } else if (!rafId) {
+          // Relancer le rendu sans réinitialiser le temps du prochain tick,
+          // donc sans accélération ni saut au moment de la reprise.
+          rafId=requestAnimationFrame(gameLoop);
+        }
         if (announce) showStatus(nextPaused ? "Partie en pause" : "C’est reparti", 900);
       }
 
