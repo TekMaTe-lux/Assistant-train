@@ -1,4 +1,4 @@
-const CACHE_VERSION = 'v155';
+const CACHE_VERSION = 'v156';
 const APP_CACHE = `lbetaillere-app-${CACHE_VERSION}`;
 const STATIC_CACHE = `lbetaillere-static-${CACHE_VERSION}`;
 const DATA_CACHE = `lbetaillere-data-${CACHE_VERSION}`;
@@ -52,7 +52,8 @@ const APP_SHELL = [
   './assets/lb-mobile-v4.js?v=20261007-data1',
   './assets/lb-traffic-details-v1.css?v=4',
   './assets/lb-traffic-details-v1.js?v=7',
-  './jeuBETA1.html?v=20261015-arcade-rouge-equilibre-v13',
+  './jeuBETA1.html?v=20261015-pause-offline-v14',
+  './assets/lb-game-snake-account-v1.js?v=20261015-pause-offline-v14',
   './logoText.png',
   './logobetailleresanstexte.png',
   './logobetaillere2026trans.png',
@@ -145,11 +146,11 @@ async function navigationNetworkFirst(request) {
     }
     return response;
   } catch (_) {
-    return (
-      (await cache.match(request, { ignoreSearch: true })) ||
-      (await cache.match('./index.html', { ignoreSearch: true })) ||
-      Response.error()
-    );
+    const offlinePage=await cache.match(request,{ignoreSearch:true});
+    if (offlinePage) return offlinePage;
+    // Ne jamais renvoyer l'accueil HTML pour une URL de jeu.
+    if (requestUrl.pathname.endsWith('/jeuBETA1.html')) return Response.error();
+    return (await cache.match('./index.html',{ignoreSearch:true})) || Response.error();
   }
 }
 

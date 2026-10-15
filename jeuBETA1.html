@@ -1136,6 +1136,18 @@
       .utility-buttons {gap:5px;}
       .utility-button {min-height:35px;padding:4px 7px;}
     }
+    /* SNAKE_PERSISTENT_PAUSE_V14 */
+    .snake-pause-layer[hidden]{display:none!important}
+    .snake-pause-layer{position:absolute;inset:0;z-index:18;display:grid;place-items:center;
+      padding:16px;background:rgba(1,10,23,.65);border-radius:18px}
+    .snake-pause-card{display:flex;flex-direction:column;align-items:center;gap:12px;
+      width:min(100%,310px);padding:22px 16px;border:1px solid rgba(62,226,249,.7);border-radius:19px;
+      background:linear-gradient(150deg,#0d354c,#041622);color:#e7faff;
+      box-shadow:0 12px 36px rgba(0,0,0,.4);text-align:center}
+    .snake-pause-card strong{font:900 clamp(1.2rem,5vw,1.65rem) Rajdhani,"Segoe UI",sans-serif}
+    .snake-pause-card span{color:#bad9e6;font-size:.85rem;line-height:1.35}
+    .snake-pause-card button{width:100%;font-size:1.08rem;min-height:52px;
+      background:linear-gradient(110deg,#42e8ee,#11b1e9);color:#052b43;border:1px solid #92faff}
   </style>
 </head>
 <body>
@@ -1154,6 +1166,13 @@
       <section id="boardCard" class="board-card" aria-label="Plateau du jeu">
         <canvas id="gameCanvas" width="400" height="400" tabindex="0" aria-label="Plateau. Utilisez les flèches, ZQSD, WASD ou glissez sur le plateau."></canvas>
         <div id="boardStatus" class="board-status" role="status"></div>
+        <div id="snakePauseLayer" class="snake-pause-layer" hidden>
+          <div class="snake-pause-card">
+            <strong>Votre TER vous attend</strong>
+            <span>Partie conservée pendant votre visite du site.</span>
+            <button id="snakeResumeBtn" class="dialog-button" type="button">▶ Reprendre</button>
+          </div>
+        </div>
         <div id="gameLevelBadge" class="game-level-badge" title="Niveau de difficulté">N1 · TER pépère</div>
       </section>
 
@@ -1262,7 +1281,7 @@
     <source src="./Tek%27Ma%27Te%20-%20Power%20of%20the%20SNCF%20jingle.mp3" type="audio/mpeg">
   </audio>
 
-  <script src="./assets/lb-game-snake-account-v1.js?v=20261014-game-ranking1"></script>
+  <script src="./assets/lb-game-snake-account-v1.js?v=20261015-pause-offline-v14"></script>
   <script>
     (() => {
       "use strict";
@@ -1310,6 +1329,8 @@
       const highscoreEl = document.getElementById("highscore");
       const timerEl = document.getElementById("timer");
       const pauseBtn = document.getElementById("pauseBtn");
+      const snakePauseLayer = document.getElementById("snakePauseLayer");
+      const snakeResumeBtn = document.getElementById("snakeResumeBtn");
       const pauseIcon = document.getElementById("pauseIcon");
       const pauseLabel = document.getElementById("pauseLabel");
       const rulesBtn = document.getElementById("rulesBtn");
@@ -2273,12 +2294,22 @@
         }
 
         setPauseButton();
+        snakePauseLayer.hidden = !nextPaused;
         if (announce) showStatus(nextPaused ? "Partie en pause" : "C’est reparti", 900);
       }
 
       function togglePause() {
         setPaused(!state.paused);
       }
+      snakeResumeBtn.addEventListener('click',()=>setPaused(false));
+      window.lbGameSuspend=()=>{
+        if (state.started && !state.stopped && !state.paused) setPaused(true,false);
+        else stopAudio(false);
+        return state.started && !state.stopped;
+      };
+      window.lbGameResumeFromSite=()=>{
+        if (state.started && !state.stopped && state.paused) setPaused(false,false);
+      };
 
       function resetGame() {
         const previousHighscore = window.lbSnakeAccount?.isAccount()
@@ -2300,6 +2331,7 @@
         placeStaticHazards();
         generateBetail();
         gameOverOverlay.hidden = true;
+        snakePauseLayer.hidden = true;
         pauseBtn.disabled = false;
         setPauseButton();
         updateHud();
@@ -2322,6 +2354,7 @@
         document.getElementById("finalScore").textContent = String(state.score);
         document.getElementById("finalTime").textContent = formatTime(elapsedMilliseconds());
         gameOverOverlay.hidden = false;
+        snakePauseLayer.hidden = true;
         window.lbSnakeAccount?.afterEnd(state.score);
         restartBtn.focus();
         vibrate([35, 35, 65]);
@@ -2495,7 +2528,7 @@
       });
 
       function leaveGame() {
-        stopAudio(true);
+        stopAudio(false);
         if (state.started && !state.stopped && !state.paused) setPaused(true, false);
         try {
           if (window.parent && window.parent !== window) {
@@ -2513,9 +2546,9 @@
       window.addEventListener("message", (event) => {
         const data = event && event.data;
         if (!data) return;
-        if (data.type === "lb:game:stop-audio") {
-          stopAudio(true);
-          if (state.started && !state.stopped && !state.paused) setPaused(true, false);
+        if (event.origin !== window.location.origin) return;
+        if (data.type === "lb:game:pause" || data.type === "lb:game:stop-audio") {
+          window.lbGameSuspend();
         }
         if (data.type === "lb:game:focus") canvas.focus({ preventScroll: true });
       });

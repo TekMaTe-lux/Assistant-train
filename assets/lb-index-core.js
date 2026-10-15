@@ -9714,7 +9714,7 @@ if (btnJeu){
     if (typeof window.lbOpenLoisirsView === "function") {
       window.lbOpenLoisirsView("jeu");
     } else {
-      window.location.href = "/jeuBETA1.html?v=20261015-arcade-rouge-equilibre-v13";
+      window.location.href = "/jeuBETA1.html?v=20261015-pause-offline-v14";
     }
   });
 }
@@ -18285,7 +18285,7 @@ async function loadAffluenceDate(dateStr){
   const tabs = Array.from(nav.querySelectorAll('[data-loisirs-view]'));
   const onLoisirsTab = () => ['#loisirs', '#divertissement', '#multimedia'].includes(location.hash || '');
 
-  const gameUrl = '/jeuBETA1.html?v=20261015-arcade-rouge-equilibre-v13';
+  const gameUrl = '/jeuBETA1.html?v=20261015-pause-offline-v14';
   let gameLoaded = false;
   let currentLoisirsView = 'multimedia';
 
@@ -18357,34 +18357,37 @@ async function loadAffluenceDate(dateStr){
     if (!active && jeuSection) jeuSection.style.display = 'none';
   }
 
-  function stopEmbeddedGame(){
-    if (!jeuFrame) return;
+  // PRESERVE_SNAKE_SESSION_V14 : masquer le jeu sans détruire son iframe.
+  const gameResumePill=document.createElement('button');
+  gameResumePill.type='button';
+  gameResumePill.className='lb-snake-resume-pill';
+  gameResumePill.textContent='▶ Reprendre le jeu';
+  gameResumePill.hidden=true;
+  document.body.append(gameResumePill);
+
+  function pauseEmbeddedGame(){
+    if (!jeuFrame?.dataset.loaded) return;
     try {
-      const w = jeuFrame.contentWindow;
-      const d = jeuFrame.contentDocument;
-      const audio = d && d.getElementById ? d.getElementById('gameMusic') : null;
-      if (audio && typeof audio.pause === 'function') {
-        audio.pause();
-        try { audio.currentTime = 0; } catch(_) {}
-      }
-      if (w && typeof w.postMessage === 'function') {
-        w.postMessage({ type: 'lb:game:stop-audio' }, '*');
-      }
-    } catch(e) {}
-    try {
-      jeuFrame.src = 'about:blank';
-      jeuFrame.removeAttribute('data-loaded');
-    } catch(e) {}
-    gameLoaded = false;
-    if (jeuFallbackLink) jeuFallbackLink.style.display = 'none';
+      const doc=jeuFrame.contentDocument;
+      const playing=!!(doc?.getElementById('startOverlay')?.hidden && doc?.getElementById('gameOverOverlay')?.hidden);
+      const w=jeuFrame.contentWindow;
+      if (typeof w?.lbGameSuspend==='function') w.lbGameSuspend();
+      else w?.postMessage({type:'lb:game:pause'},location.origin);
+      if (playing) gameResumePill.hidden=false;
+    } catch (_) {}
   }
+  gameResumePill.addEventListener('click',()=>{
+    if(location.hash!=='#divertissement') location.hash='divertissement';
+    openView('jeu',{scroll:false});
+    try {jeuFrame.contentWindow?.lbGameResumeFromSite?.();} catch (_) {}
+  });
 
   function openView(view, opts = {}){
     activate(view);
     if (view === 'multimedia'){
       setJeuActive(false);
       setJeuFullscreen(false);
-      stopEmbeddedGame();
+      pauseEmbeddedGame();
       if ((location.hash || '') !== '#multimedia') location.hash = 'multimedia';
       if (opts.scroll !== false) requestAnimationFrame(() => multimediaSection.scrollIntoView({ behavior: 'smooth', block: 'start' }));
       return;
@@ -18392,7 +18395,7 @@ async function loadAffluenceDate(dateStr){
     if (view === 'bingo'){
       setJeuActive(false);
       setJeuFullscreen(false);
-      stopEmbeddedGame();
+      pauseEmbeddedGame();
       if ((location.hash || '') !== '#divertissement') location.hash = 'divertissement';
       showBingoModal();
       return;
@@ -18409,6 +18412,7 @@ async function loadAffluenceDate(dateStr){
           if (!gameLoaded && jeuFallbackLink) jeuFallbackLink.style.display = 'inline-flex';
         }, 3000);
       }
+      gameResumePill.hidden=true;
       setJeuActive(true);
       if (jeuSection) jeuSection.style.display = 'block';
       // Le jeu est immersif sur ordinateur aussi : plus de plateau rogné par
@@ -18426,7 +18430,7 @@ async function loadAffluenceDate(dateStr){
     if (!show) {
       setJeuActive(false);
       setJeuFullscreen(false);
-      stopEmbeddedGame();
+      pauseEmbeddedGame();
       hideBingoModal();
       currentLoisirsView = 'multimedia';
       return;
@@ -18437,13 +18441,13 @@ async function loadAffluenceDate(dateStr){
       currentLoisirsView = 'multimedia';
       setJeuActive(false);
       setJeuFullscreen(false);
-      stopEmbeddedGame();
+      pauseEmbeddedGame();
     } else if (currentLoisirsView === 'jeu') {
       setJeuActive(true);
     } else {
       setJeuActive(false);
       setJeuFullscreen(false);
-      stopEmbeddedGame();
+      pauseEmbeddedGame();
       currentLoisirsView = 'bingo';
     }
     activate(currentLoisirsView);
@@ -18456,11 +18460,13 @@ async function loadAffluenceDate(dateStr){
 
   window.lbOpenLoisirsView = openView;
   window.addEventListener('message', (ev) => {
-    const d = ev && ev.data;
+    const d=ev?.data;
     if (!d || d.type !== 'lb:loisirs:return') return;
-    if ((location.hash || '') !== '#loisirs') location.hash = 'loisirs';
-    openView('multimedia', { scroll: true });
-	stopEmbeddedGame();
+    if (ev.source !== jeuFrame?.contentWindow || ev.origin !== location.origin) return;
+    pauseEmbeddedGame();
+    setJeuActive(false);
+    setJeuFullscreen(false);
+    if (location.hash !== '#home') location.hash='home';
   });
 
   loisirsLink.addEventListener('click', (e) => {
@@ -18478,7 +18484,7 @@ async function loadAffluenceDate(dateStr){
         document.body.classList.remove('loisirs-view-nav-visible');
         setJeuActive(false);
         setJeuFullscreen(false);
-		stopEmbeddedGame();
+		pauseEmbeddedGame();
         hideBingoModal();
 		currentLoisirsView = 'multimedia';
       }

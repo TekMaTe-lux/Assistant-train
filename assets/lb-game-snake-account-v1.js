@@ -2,6 +2,7 @@
 (() => {
   "use strict";
   const ROOT = "https://vps.labetaillere.fr/api/game/snake";
+  const OFFLINE_BEST_KEY = 'lbJeuBetaHighscoreV2';
   let mode = "loading";
   let profile = null;
   let ticket = null;
@@ -11,6 +12,7 @@
   const byId = (id) => document.getElementById(id);
 
   async function request(path, opts = {}) {
+    if (navigator.onLine === false) throw new Error('offline');
     const ctrl = new AbortController();
     const stop = window.setTimeout(() => ctrl.abort(), 5500);
     try {
@@ -185,6 +187,9 @@
 
   async function beforeStart() {
     ticket=null;
+    if (navigator.onLine === false) {
+      mode='offline';profile=null;renderStatus();return;
+    }
     await (ready || refresh());
     // Si la session vient d'expirer, continuer le jeu sans annoncer de sauvegarde.
     if (mode!=="account") await refresh();
@@ -200,12 +205,25 @@
     }
   }
 
+  function saveUnrankedLocalScore(score) {
+    try {
+      const previous=Math.max(0,parseInt(localStorage.getItem(OFFLINE_BEST_KEY)||'0',10)||0);
+      const best=Math.max(previous,score);
+      localStorage.setItem(OFFLINE_BEST_KEY,String(best));
+      return best;
+    } catch (_) { return score; }
+  }
+
   async function afterEnd(score) {
     const activeTicket=ticket;
     ticket=null;
     const result=byId("gameAccountResult");
     if (result) result.textContent=activeTicket?"Enregistrement du score…":statusMessage();
-    if (!activeTicket) return;
+    if (!activeTicket) {
+      const best=saveUnrankedLocalScore(score);
+      if (result) result.textContent="✓ Partie enregistrée sur cet appareil · record local "+best+" (non classé)";
+      return;
+    }
     try {
       const data=await request("/finish",{body:{ticket:activeTicket,score}});
       if (mode==="account" && profile) {
@@ -216,9 +234,14 @@
         hooks.onAccountRecord?.(data.best_score);
       }
       if (result) result.textContent="✓ Score enregistré sur ton compte · record : "+data.best_score;
-    } catch (_) {
-      if (result) result.textContent="Score non enregistré : connexion indisponible ou résultat refusé.";
-      await refresh();
+    } catch (err) {
+      if (navigator.onLine===false || !err.status) {
+        const best=saveUnrankedLocalScore(score);
+        if (result) result.textContent="✓ Connexion perdue : record local "+best+" conservé (non classé)";
+      } else if (result) {
+        result.textContent="Score refusé par le serveur : record du classement inchangé.";
+      }
+      if (navigator.onLine !== false) await refresh();
     }
   }
 
