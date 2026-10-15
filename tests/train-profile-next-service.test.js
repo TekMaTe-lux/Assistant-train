@@ -23,6 +23,9 @@ function notice({now=observedNow, payload=null, number='88501', serviceDate='202
     todayIso:()=>new Intl.DateTimeFormat('en-CA',{timeZone:'Europe/Luxembourg',year:'numeric',month:'2-digit',day:'2-digit'}).format(new MockDate()),
     formatDate:(s)=>s
   });
+  const helperStart = source.indexOf('  const displayClock =');
+  const helperEnd = source.indexOf('  const addMinutes =', helperStart);
+  vm.runInContext(source.slice(helperStart, helperEnd), ctx);
   vm.runInContext(rules,ctx);
   return ctx.profileNextServiceNotice(number,serviceDate,departure,phase,canceled);
 }
@@ -59,7 +62,7 @@ test('winter clock offset is respected for Luxembourg October 26',()=>{
 });
 test('GTFS hours after midnight are supported for an overnight train',()=>{
   const afterMidnight=notice({serviceDate:'2026-10-11',departure:'25:20'});
-  assert.match(afterMidnight,/25:20/);
+  assert.match(afterMidnight,/01:20 \(J\+1\)/);
   assert.match(afterMidnight,/dans 1 j 3 h/);
 });
 test('async calendar hydration covers scheduled favorites and avoids new endpoints',()=>{
@@ -70,4 +73,12 @@ test('async calendar hydration covers scheduled favorites and avoids new endpoin
   const compact = fs.readFileSync(path.join(root,'assets/lb-my-journey-inline-v1.js'),'utf8');
   assert.match(compact,/lbmj-next-redundant/);
   assert.doesNotMatch('🐮 '+notice(),/^circulation pr[eé]vue le/i);
+});
+
+test('24:24 becomes 00:24 on screen without changing GTFS service-day arithmetic',()=>{
+  const ctx=vm.createContext({});
+  const from=source.indexOf('  const displayClock ='),to=source.indexOf('  const addMinutes =',from);
+  vm.runInContext(source.slice(from,to),ctx);
+  assert.equal(vm.runInContext("displayClock('24:24')",ctx),'00:24');
+  assert.equal(vm.runInContext("timeToMinutes('24:24')",ctx),1464);
 });
