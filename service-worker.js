@@ -1,4 +1,4 @@
-const CACHE_VERSION = 'v170';
+const CACHE_VERSION = 'v171';
 const APP_CACHE = `lbetaillere-app-${CACHE_VERSION}`;
 const STATIC_CACHE = `lbetaillere-static-${CACHE_VERSION}`;
 const DATA_CACHE = `lbetaillere-data-${CACHE_VERSION}`;
@@ -14,8 +14,8 @@ const APP_SHELL = [
   './assets/lb-home-punct-premium-v1.css?v=20261010-cockpit1',
   './assets/lb-home-guest-favorites-v1.css?v=20261006-2',
   './assets/lb-home-guest-favorites-v1.js?v=20261006-1',
-  './assets/lb-home-station-board-v2.css?v=20261015-2',
-  './assets/lb-home-station-board-v2.js?v=20261015-2',
+  './assets/lb-home-station-board-v3.css?v=20261015-3',
+  './assets/lb-home-station-board-v3.js?v=20261015-3',
   './assets/lb-home-en-gare-position-v1.css?v=20261015-1',
   './assets/lb-home-en-gare-position-v1.js?v=20261015-1',
   './assets/home-major-alerts.js?v=20261013-cfl-allalerts2',
