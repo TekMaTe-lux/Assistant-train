@@ -3596,6 +3596,15 @@
     const normalized = digits.padStart(4, '0');
     return `${normalized.slice(0, 2)}:${normalized.slice(2, 4)}`;
   };
+  // GTFS conserve les heures 24:xx / 25:xx pour le jour de service.
+  // Ne convertir en heure civile QUE lors de l'affichage (calculs inchangés).
+  const displayClock = (value) => {
+    const raw = String(value == null ? '' : value).trim();
+    const match = raw.match(/^(\d{1,3}):([0-5]\d)(?::\d{2})?$/);
+    return match
+      ? `${String(Number(match[1]) % 24).padStart(2, '0')}:${match[2]}`
+      : (raw || '—');
+  };
   const timeToMinutes = (value) => {
     const match = String(value || '').match(/^(\d{1,2}):(\d{2})$/);
     if (!match) return null;
@@ -4210,6 +4219,37 @@
   }
 
   async function fetchStaticCandidates(number, dateIso) {
+    // Index GTFS pré-généré : toutes les gares en un appel court, identique
+    // aux données de la carte. L'API détaillée historique reste en secours.
+    try {
+      let payload = null;
+      if (typeof window.loadFastStaticBatch === 'function') {
+        payload = await window.loadFastStaticBatch(dateIso, [number]);
+      } else {
+        const params = new URLSearchParams({
+          date: String(dateIso || '').replace(/-/g, ''),
+          trains: number
+        });
+        const response = await fetch(`https://vps.labetaillere.fr/api/train-static-batch?${params}`, {
+          cache: 'default'
+        });
+        if (response.ok) payload = await response.json();
+      }
+      const trip = payload?.trains?.[number];
+      if (Array.isArray(trip?.stop_times) && trip.stop_times.length >= 2) {
+        return [{
+          tripId: String(trip.trip_id || ''),
+          rows: trip.stop_times.map((stop, index) => ({
+            ...stop,
+            stop_name: stop.stop_point?.name || stop.stop_name || stop.name || '',
+            stop_id: stop.stop_point?.id || stop.stop_id || '',
+            stop_sequence: Number(stop.stop_sequence ?? index)
+          })).sort((a, b) => a.stop_sequence - b.stop_sequence)
+        }];
+      }
+    } catch (error) {
+      console.warn('[Fiche Bétaillère] index statique rapide indisponible, repli API train', error);
+    }
     const params = new URLSearchParams({
       date: String(dateIso || '').replace(/-/g, ''),
       train: number
@@ -4779,13 +4819,15 @@
 
   function renderHeroTime(element, realtime, canceled) {
     if (!element) return;
-    const planned = realtime?.planned || '—';
-    const actual = realtime?.actual || planned;
+    const plannedRaw = realtime?.planned || '—';
+    const actualRaw = realtime?.actual || plannedRaw;
+    const planned = displayClock(plannedRaw);
+    const actual = displayClock(actualRaw);
     const delayed = !canceled
       && Number(realtime?.delay || 0) > 0
       && planned !== '—'
       && actual !== '—'
-      && actual !== planned;
+      && actualRaw !== plannedRaw;
 
     element.classList.toggle('is-delay', delayed);
     element.classList.toggle('is-cancel', !!canceled);
@@ -5108,7 +5150,8 @@
       : mins < 1440
         ? `${Math.floor(mins / 60)} h ${String(mins % 60).padStart(2, '0')}`
         : `${Math.floor(mins / 1440)} j ${Math.floor((mins % 1440) / 60)} h`;
-    return `Prochaine bétaillère TER ${number} : ${nextRun.label} à ${nextRun.clock} · dans ${remaining}.`;
+    const dayShift = Math.floor((timeToMinutes(nextRun.clock) || 0) / 1440);
+    return `Prochaine bétaillère TER ${number} : ${nextRun.label} à ${displayClock(nextRun.clock)}${dayShift ? ` (J+${dayShift})` : ''} · dans ${remaining}.`;
   }
 
   function renderHero(number, dateIso, rows, liveBundle) {
@@ -5131,7 +5174,14 @@
     renderHeroTime(byId('trainDetailDeparture'), departureLive, status.className === 'is-cancel');
     renderHeroTime(byId('trainDetailArrival'), arrivalLive, status.className === 'is-cancel');
     byId('trainDetailOrigin').textContent = first?.name || liveBundle?.extracted?.from || '—';
-    byId('trainDetailDestination').textContent = last?.name || liveBundle?.extracted?.to || '—';
+    // Date du service conservée ; le terminus est explicitement signalé J+1.
+    const departureMinutes = timeToMinutes(departure);
+    const arrivalMinutes = timeToMinutes(arrival);
+    const arrivalDayShift = Number.isFinite(departureMinutes) && Number.isFinite(arrivalMinutes)
+      ? (arrivalMinutes >= 1440 ? Math.floor(arrivalMinutes / 1440) : (arrivalMinutes < departureMinutes ? 1 : 0))
+      : 0;
+    byId('trainDetailDestination').textContent =
+      `${last?.name || liveBundle?.extracted?.to || '—'}${arrivalDayShift ? ` · J+${arrivalDayShift}` : ''}`;
     byId('trainDetailDuration').textContent = durationLabel(departure, arrival);
     byId('trainDetailPlatform').textContent = firstPlatform || 'Voie non communiquée';
     byId('trainDetailLiveStatus').className = `lb-train-profile__status ${status.className}`;
@@ -5184,20 +5234,20 @@
       if (Number.isFinite(depMinutes) && endClock > 1440 && clockNow < depMinutes && clockNow <= endClock - 1440) clockNow += 1440;
       if (journeyPhase === 'before' && Number.isFinite(depMinutes)) {
         const remaining = Math.max(0, depMinutes - clockNow);
-        nextLabel = `Prochain départ de ${first?.name || 'la gare de départ'} à ${actualDeparture} · dans ${fmtDuration(remaining)}${remaining <= 15 ? ' — préparez-vous !' : ''}.`;
+        nextLabel = `Prochain départ de ${first?.name || 'la gare de départ'} à ${displayClock(actualDeparture)} · dans ${fmtDuration(remaining)}${remaining <= 15 ? ' — préparez-vous !' : ''}.`;
       } else if (journeyPhase === 'running') {
         const upcoming = rows.slice(1).map((row, index) => {
           const live = realtimeAtRow(number, row, liveBundle, index === rows.length - 2);
           const clock = live.delay > 0 ? live.actual : live.planned;
           return { name: row.name, time: clock, minute: relativeMinutes(clock, depMinutes) };
         }).find((stop) => Number.isFinite(stop.minute) && stop.minute >= clockNow);
-        if (upcoming) nextLabel = `Prochain arrêt : ${upcoming.name} à ${upcoming.time} · dans ${fmtDuration(Math.max(0, upcoming.minute - clockNow))}.`;
-        else nextLabel = `En circulation vers ${last?.name || 'le terminus'}${actualArrival !== '—' ? ` · arrivée prévue à ${actualArrival}` : ''}.`;
+        if (upcoming) nextLabel = `Prochain arrêt : ${upcoming.name} à ${displayClock(upcoming.time)} · dans ${fmtDuration(Math.max(0, upcoming.minute - clockNow))}.`;
+        else nextLabel = `En circulation vers ${last?.name || 'le terminus'}${actualArrival !== '—' ? ` · arrivée prévue à ${displayClock(actualArrival)}` : ''}.`;
       } else if (journeyPhase === 'after') {
-        nextLabel = `Course terminée · arrivée à ${last?.name || 'destination'} à ${actualArrival}. Prochaine circulation à consulter dans les horaires.`;
+        nextLabel = `Course terminée · arrivée à ${last?.name || 'destination'} à ${displayClock(actualArrival)}. Prochaine circulation à consulter dans les horaires.`;
       }
     } else if (journeyPhase === 'after' && !canceled) {
-      nextLabel = `Course terminée · terminus ${last?.name || 'atteint'}${actualArrival !== '—' ? ` à ${actualArrival}` : ''}.`;
+      nextLabel = `Course terminée · terminus ${last?.name || 'atteint'}${actualArrival !== '—' ? ` à ${displayClock(actualArrival)}` : ''}.`;
     }
     // Communication uniquement : états normalisés inchangés (LIVE, suppressions, remises en circulation).
     const delayMinutes = Math.max(0, Math.round(Number(liveBundle?.maxDelay) || 0));
@@ -5292,10 +5342,10 @@
       if (row.passed) classes.push('is-passed');
       if (row.index === firstUpcoming && firstUpcoming > 0) classes.push('is-current');
       const timeHtml = row.canceled
-        ? `<b>${safe(row.planned)}</b>`
+        ? `<b>${safe(displayClock(row.planned))}</b>`
         : (row.delay > 0
-          ? `<s>${safe(row.planned)}</s><b>${safe(row.actual)}</b>`
-          : `<b>${safe(row.planned)}</b>`);
+          ? `<s>${safe(displayClock(row.planned))}</s><b>${safe(displayClock(row.actual))}</b>`
+          : `<b>${safe(displayClock(row.planned))}</b>`);
       const delayLabel = row.canceled
         ? 'SUPPRIMÉ'
         : (row.isNewOrigin
@@ -5680,6 +5730,43 @@
       const supplementaryPromise = loadSupplementaryData(forceFresh)
         .catch((error) => console.warn('[Fiche Bétaillère] données complémentaires indisponibles', error));
 
+      // Les informations déjà obtenues s'affichent immédiatement : le hub SNCF
+      // et les statistiques ne doivent pas maintenir toute la fiche en attente.
+      let mainRendered = false;
+      let latestReliability = null;
+      let latestAffluence = null;
+      void staticPromise.then((candidates) => {
+        if (requestId !== state.requestId || mainRendered) return;
+        const chosen = chooseStaticCandidate(candidates, null, dateIso);
+        const rows = normalizeStaticRows(chosen, null);
+        if (!rows.length) return;
+        renderHero(number, dateIso, rows, null);
+        renderRoute(number, dateIso, rows, null);
+        renderComposition(number, latestAffluence);
+        if (dateIso === todayIso()) {
+          const source = byId('trainDetailSourceState');
+          source.className = 'lb-train-profile__source is-loading';
+          source.innerHTML = '<i></i> HORAIRES · LIVE EN COURS';
+        }
+      }).catch((error) => console.warn('[Fiche Bétaillère] aperçu rapide indisponible', error));
+      void reliabilityPromise.then((value) => {
+        if (requestId !== state.requestId) return;
+        latestReliability = value;
+        if (state.lastBundle?.number === number && state.lastBundle?.dateIso === dateIso) {
+          state.lastBundle.reliability = value;
+        }
+        renderReliability(value);
+      }).catch((error) => console.warn('[Fiche Bétaillère] fiabilité indisponible', error));
+      void affluencePromise.then((value) => {
+        if (requestId !== state.requestId) return;
+        latestAffluence = value;
+        if (state.lastBundle?.number === number && state.lastBundle?.dateIso === dateIso) {
+          state.lastBundle.affluence = value;
+        }
+        renderAffluence(value);
+        renderComposition(number, value);
+      }).catch((error) => console.warn('[Fiche Bétaillère] affluence indisponible', error));
+
       // Les données secondaires (composition / voies) ne doivent jamais bloquer
       // l'affichage des horaires, du LIVE et du parcours principal.
       // Priorité au trajet : l'historique et l'affluence ne doivent pas retarder le LIVE.
@@ -5693,8 +5780,8 @@
       const staticResult = hasLiveStopTimes ? null : await Promise.allSettled([staticPromise]);
       if (requestId !== state.requestId) return;
       const candidates = staticResult?.[0]?.status === 'fulfilled' ? staticResult[0].value : [];
-      const reliability = null;
-      const affluence = null;
+      const reliability = latestReliability;
+      const affluence = latestAffluence;
       const chosen = chooseStaticCandidate(candidates, liveBundle, dateIso);
       let rows = liveJourneyRows.length
         ? liveJourneyRows
@@ -5723,6 +5810,7 @@
         throw new Error(`Aucune circulation ${number} trouvée dans les horaires disponibles.`);
       }
 
+      mainRendered = true;
       // Le bandeau décrit le trajet réellement assuré ; la timeline conserve
       // également le tronçon théorique supprimé pour l'expliquer visuellement.
       const effectiveRows = rows.filter((row) => !row.isDeleted);
@@ -5742,19 +5830,6 @@
         }).catch(() => {});
       }
 
-
-      // Enrichissement progressif non bloquant ; ne jamais afficher les résultats d'un ancien train.
-      void reliabilityPromise.then((value) => {
-        if (requestId !== state.requestId) return;
-        state.lastBundle.reliability = value;
-        renderReliability(value);
-      }).catch((error) => console.warn('[Fiche Bétaillère] fiabilité indisponible', error));
-      void affluencePromise.then((value) => {
-        if (requestId !== state.requestId) return;
-        state.lastBundle.affluence = value;
-        renderAffluence(value);
-        renderComposition(number, value);
-      }).catch((error) => console.warn('[Fiche Bétaillère] affluence indisponible', error));
 
       // Quand les données complémentaires finissent plus tard, enrichir la fiche
       // en place sans relancer les appels principaux ni rouvrir le panneau.
