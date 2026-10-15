@@ -1,4 +1,4 @@
-const CACHE_VERSION = 'v156';
+const CACHE_VERSION = 'v157';
 const APP_CACHE = `lbetaillere-app-${CACHE_VERSION}`;
 const STATIC_CACHE = `lbetaillere-static-${CACHE_VERSION}`;
 const DATA_CACHE = `lbetaillere-data-${CACHE_VERSION}`;
@@ -52,7 +52,7 @@ const APP_SHELL = [
   './assets/lb-mobile-v4.js?v=20261007-data1',
   './assets/lb-traffic-details-v1.css?v=4',
   './assets/lb-traffic-details-v1.js?v=7',
-  './jeuBETA1.html?v=20261015-pause-offline-v14',
+  './jeuBETA1.html?v=20261015-arcade-plaisir-v15',
   './assets/lb-game-snake-account-v1.js?v=20261015-pause-offline-v14',
   './logoText.png',
   './logobetailleresanstexte.png',

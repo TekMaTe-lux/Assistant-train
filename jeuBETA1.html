@@ -1136,6 +1136,31 @@
       .utility-buttons {gap:5px;}
       .utility-button {min-height:35px;padding:4px 7px;}
     }
+    /* BER_JOYFUL_ARCADE_V15 : un seul overlay, aucun élément par point collecté. */
+    .game-celebration[hidden] {display:none!important}
+    .game-celebration {position:absolute;top:15%;left:50%;z-index:5;display:flex;
+      flex-direction:column;align-items:center;gap:3px;width:max-content;
+      max-width:calc(100% - 24px);padding:10px 18px;text-align:center;pointer-events:none;
+      transform:translateX(-50%);border:1px solid rgba(203,255,69,.66);border-radius:15px;
+      color:#f3ffce;background:rgba(4,24,33,.92);
+      box-shadow:0 0 0 3px rgba(184,255,42,.10),0 9px 30px rgba(0,0,0,.3);
+      animation:berAwardIn .24s ease-out both;}
+    .game-celebration.is-level {border-color:#49eaff;color:#d9fdff;
+      box-shadow:0 0 0 3px rgba(53,231,255,.10),0 8px 25px rgba(0,0,0,.29)}
+    .game-celebration-title {font:900 clamp(1.05rem,3.3vw,1.5rem)/1.1 Rajdhani,"Segoe UI",sans-serif;
+      letter-spacing:.05em}
+    .game-celebration-sub {font:750 clamp(.69rem,2.2vw,.9rem)/1.15 Rajdhani,"Segoe UI",sans-serif;
+      color:#c0dce8}
+    #score.is-scoring {animation:berScorePop .36s ease-out}
+    .run-verdict {max-width:340px;margin:11px auto 3px!important;
+      padding:10px 12px;border-radius:12px;border:1px solid rgba(64,215,243,.22);
+      background:rgba(5,37,55,.55);color:#d4eef6!important;
+      font-size:clamp(.8rem,3.2vw,.93rem)!important;line-height:1.35!important}
+    @keyframes berAwardIn{from{opacity:0;transform:translate(-50%,9px) scale(.96)}
+      to{opacity:1;transform:translate(-50%,0) scale(1)}}
+    @keyframes berScorePop{0%{color:#d6ff6c;transform:scale(1.33)}
+      100%{color:var(--game-cyan);transform:scale(1)}}
+    @media (prefers-reduced-motion:reduce){.game-celebration,#score.is-scoring{animation:none!important}}
     /* SNAKE_PERSISTENT_PAUSE_V14 */
     .snake-pause-layer[hidden]{display:none!important}
     .snake-pause-layer{position:absolute;inset:0;z-index:18;display:grid;place-items:center;
@@ -1166,6 +1191,10 @@
       <section id="boardCard" class="board-card" aria-label="Plateau du jeu">
         <canvas id="gameCanvas" width="400" height="400" tabindex="0" aria-label="Plateau. Utilisez les flèches, ZQSD, WASD ou glissez sur le plateau."></canvas>
         <div id="boardStatus" class="board-status" role="status"></div>
+        <div id="gameCelebration" class="game-celebration" aria-live="off" hidden>
+          <span id="gameCelebrationTitle" class="game-celebration-title"></span>
+          <span id="gameCelebrationSub" class="game-celebration-sub"></span>
+        </div>
         <div id="snakePauseLayer" class="snake-pause-layer" hidden>
           <div class="snake-pause-card">
             <strong>Votre TER vous attend</strong>
@@ -1246,6 +1275,7 @@
       <h2 id="gameOverTitle">Terminus&nbsp;!</h2>
       <p id="gameOverReason"></p>
       <div class="result-stats"><div><span>Score</span><strong id="finalScore">0</strong></div><div><span>Temps</span><strong id="finalTime">00:00</strong></div></div>
+      <p id="runVerdict" class="run-verdict" aria-live="polite"></p>
       <div class="dialog-actions">
         <button id="restartBtn" class="dialog-button" type="button">↻ Rejouer</button>
         <button id="returnBtn" class="dialog-button secondary" type="button">← Retour</button>
@@ -1324,6 +1354,10 @@
       const ctx = canvas.getContext("2d", { alpha: false });
       const boardCard = document.getElementById("boardCard");
       const boardStatus = document.getElementById("boardStatus");
+      const gameCelebration = document.getElementById("gameCelebration");
+      const gameCelebrationTitle = document.getElementById("gameCelebrationTitle");
+      const gameCelebrationSub = document.getElementById("gameCelebrationSub");
+      const runVerdict = document.getElementById("runVerdict");
       const levelBadge = document.getElementById("gameLevelBadge");
       const scoreEl = document.getElementById("score");
       const highscoreEl = document.getElementById("highscore");
@@ -1363,6 +1397,9 @@
       // Le corps suit le segment devant lui, la tête avance vers la prochaine case.
       let resumeAfterRules = false;
       let muted = false;
+      let celebrationTimer = 0;
+      let effectAudioContext = null;
+      let lastEffectAt = 0;
 
       let state = createInitialState();
 
@@ -1463,7 +1500,12 @@
           lastCowSpawn: 0,
           lastTgvSpawn: 0,
           speedEffectMode: null,
-          speedEffectUntil: 0
+          speedEffectUntil: 0,
+          previousRecord: 0,
+          recordCelebrated: false,
+          pickupChain: 0,
+          lastPickupAt: -999999,
+          pickupSpark: null
         };
       }
 
@@ -1735,6 +1777,20 @@
             }
           }
         });
+        // Étincelle dessinée APRÈS la rame, visible sans ajout de timer de rendu.
+        // Particules sur le plateau existant : sans animation DOM ni deuxième RAF.
+        if (state.pickupSpark && state.started && !state.stopped) {
+          const now=elapsedMilliseconds();
+          const age=now-state.pickupSpark.at;
+          if (age>=0 && age<560) {
+            const p=state.pickupSpark.position,fade=1-age/560;
+            const centerX=(p.x+.5)*cellSize,centerY=(p.y+.5)*cellSize;
+            const radius=cellSize*(.26+age/560*.44);
+            ctx.strokeStyle=`rgba(207,255,88,${(.75*fade).toFixed(3)})`;
+            ctx.lineWidth=Math.max(1.3,cellSize*.075*fade);
+            ctx.beginPath();ctx.arc(centerX,centerY,radius,0,Math.PI*2);ctx.stroke();
+          }
+        }
       }
 
       function samePosition(a, b) {
@@ -1826,6 +1882,75 @@
         statusTimeout = window.setTimeout(() => boardStatus.classList.remove("is-visible"), duration);
       }
 
+      // Micro-récompenses visuelles et sonores : aucun bonus de points fictif,
+      // aucune modification de la cadence du TER et pas de son si désactivé.
+      function playSuccessNotes(major=false) {
+        if (muted || !state.started || state.paused || state.stopped) return;
+        const AudioCtor=window.AudioContext || window.webkitAudioContext;
+        if (!AudioCtor) return;
+        const time=performance.now();
+        if(time-lastEffectAt<500) return;
+        lastEffectAt=time;
+        try {
+          if (!effectAudioContext) effectAudioContext=new AudioCtor();
+          if (effectAudioContext.state !== 'running') effectAudioContext.resume().catch(()=>{});
+          const t=effectAudioContext.currentTime;
+          (major?[587.33,783.99,987.77]:[587.33,783.99]).forEach((pitch,i)=>{
+            const oscillator=effectAudioContext.createOscillator();
+            const volume=effectAudioContext.createGain();
+            oscillator.type='sine';oscillator.frequency.setValueAtTime(pitch,t+i*.09);
+            volume.gain.setValueAtTime(.0001,t+i*.09);
+            volume.gain.exponentialRampToValueAtTime(.035,t+i*.09+.018);
+            volume.gain.exponentialRampToValueAtTime(.0001,t+i*.09+.14);
+            oscillator.connect(volume);volume.connect(effectAudioContext.destination);
+            oscillator.start(t+i*.09);oscillator.stop(t+i*.09+.16);
+          });
+        } catch (_) {} // Jeu jouable même si l'audio système est indisponible.
+      }
+      function hideCelebration() {
+        clearTimeout(celebrationTimer);
+        gameCelebration.hidden=true;
+        gameCelebration.classList.remove('is-level');
+      }
+      function celebrate(title,subtitle='',kind='milestone',duration=1450) {
+        clearTimeout(celebrationTimer);
+        gameCelebrationTitle.textContent=title;
+        gameCelebrationSub.textContent=subtitle;
+        gameCelebration.classList.toggle('is-level',kind==='level');
+        gameCelebration.hidden=false;
+        celebrationTimer=setTimeout(hideCelebration,duration);
+        playSuccessNotes(kind==='level' || kind==='record');
+      }
+      function rewardPickup(head,now) {
+        const elapsed=elapsedMilliseconds(now);
+        state.pickupSpark={position:{...head},at:elapsed};
+        state.pickupChain=elapsed-state.lastPickupAt<=12000?state.pickupChain+1:1;
+        state.lastPickupAt=elapsed;
+        // Animation uniquement pour la valeur qui change, jamais sur les touches.
+        scoreEl.classList.remove('is-scoring');
+        void scoreEl.offsetWidth;
+        scoreEl.classList.add('is-scoring');
+        const points=state.score;
+        if (!state.recordCelebrated && state.previousRecord>=3 && points>state.previousRecord) {
+          state.recordCelebrated=true;
+          celebrate(window.lbSnakeAccount?.isAccount()?'Record en vue !':'NOUVEAU RECORD !',
+            window.lbSnakeAccount?.isAccount()?'À valider à la fin de la partie':'Le TER vient de dépasser son meilleur score','record',1650);
+        } else if ([5,10,20,35,50,75,100,150,200,300].includes(points)) {
+          const label=points<20?'Le TER prend de l’ampleur !':points<75?'Convoi impressionnant !':'TER de légende !';
+          celebrate(points+' BÉTAILS !',label,'milestone',1550);
+        } else if (state.pickupChain===3 && points>3) {
+          celebrate('EMBARQUEMENTS EN CHAÎNE !','Trois bétails récupérés sans traîner','streak',1200);
+        }
+      }
+      function runVerdictText(score) {
+        if(score===0) return 'Contrôle de départ : le TER est resté au dépôt. Nouvelle tentative ?';
+        if(score<5) return 'Première circulation effectuée. La L90 vous réserve encore quelques surprises.';
+        if(score<15) return 'Service assuré malgré les aléas : le régulateur apprécie.';
+        if(score<35) return 'Belle maîtrise du sillon lorrain. Même à Metz, ça commence à se remarquer.';
+        if(score<75) return 'Convoi remarquable ! La ponctualité officielle demande une vérification.';
+        if(score<150) return 'Record de sang-froid : les frontaliers applaudissent depuis le quai.';
+        return 'TER LÉGENDAIRE ! Même le chaos ferroviaire a demandé une pause.';
+      }
       function vibrate(duration = 8) {
         try {
           if (navigator.vibrate) navigator.vibrate(duration);
@@ -1956,7 +2081,10 @@
           state.level = next;
           state.levelChangedAt = elapsed;
           showStatus("NIVEAU " + (next + 1) + " · " + RAIL_LEVELS[next].label, 2600);
-          vibrate([30,50,30]);
+          // Un palier ou record obtenu sur le même tick reste prioritaire :
+          // le badge de niveau et le message d'état annoncent le nouveau niveau.
+          if (gameCelebration.hidden) celebrate('NIVEAU '+(next+1),RAIL_LEVELS[next].name+' · '+RAIL_LEVELS[next].label,'level',1900);
+          vibrate([18,28,18]);
           rebalanceStaticHazards();
           updateHud();
         }
@@ -2176,7 +2304,9 @@
           generateBetail();
           if (state.stopped) return;
           showStatus("+1 bétail embarqué · " + state.train.length + " cases de TER",900);
-          vibrate(18);
+          rewardPickup(head,now);
+          // Très léger retour haptique pour la collecte, jamais au changement de direction.
+          vibrate(10);
         } else {
           state.train.pop();
         }
@@ -2317,6 +2447,10 @@
         state = createInitialState();
         pausedVisualPhase = 0;
         state.highscore = previousHighscore;
+        state.previousRecord=previousHighscore;
+        hideCelebration();
+        scoreEl.classList.remove('is-scoring');
+        runVerdict.textContent='';
         state.train = [{ x: 10, y: 10 }];
         state.direction = { x: 1, y: 0 };
         state.started = true;
@@ -2353,6 +2487,8 @@
         document.getElementById("gameOverReason").textContent = reason;
         document.getElementById("finalScore").textContent = String(state.score);
         document.getElementById("finalTime").textContent = formatTime(elapsedMilliseconds());
+        runVerdict.textContent=runVerdictText(state.score);
+        hideCelebration();
         gameOverOverlay.hidden = false;
         snakePauseLayer.hidden = true;
         window.lbSnakeAccount?.afterEnd(state.score);
