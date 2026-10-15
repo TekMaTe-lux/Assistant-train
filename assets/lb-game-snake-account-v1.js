@@ -9,6 +9,10 @@
   let isOpen = false;
   let resumeGame = false;
   let hooks = {};
+  // Limiter les vérifications de profil en cas de connexion instable :
+  // aucun second timeout juste après un premier échec.
+  let lastAccountRefreshAt = 0;
+  window.addEventListener("online", () => { lastAccountRefreshAt = 0; });
   const byId = (id) => document.getElementById(id);
 
   async function request(path, opts = {}) {
@@ -58,6 +62,7 @@
     if (badge) badge.textContent = mode === "account" ? "Record lié au compte" : "Record sur cet appareil";
   }
   async function refresh() {
+    lastAccountRefreshAt = Date.now();
     try {
       const data = await request("/me");
       profile = data;
@@ -191,8 +196,10 @@
       mode='offline';profile=null;renderStatus();return;
     }
     await (ready || refresh());
-    // Si la session vient d'expirer, continuer le jeu sans annoncer de sauvegarde.
-    if (mode!=="account") await refresh();
+    // Une seule tentative si l'API est lente : relancer une vérification
+    // seulement si la précédente date de plus de 12 secondes, pour détecter
+    // une connexion ouverte depuis le dernier essai.
+    if (mode!=="account" && Date.now()-lastAccountRefreshAt>=12000) await refresh();
     if (mode!=="account") return;
     try {
       const result=await request("/start",{body:{}});
