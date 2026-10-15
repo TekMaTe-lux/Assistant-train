@@ -9714,7 +9714,7 @@ if (btnJeu){
     if (typeof window.lbOpenLoisirsView === "function") {
       window.lbOpenLoisirsView("jeu");
     } else {
-      window.location.href = "/jeuBETA1.html?v=20261015-arcade-menu-v5";
+      window.location.href = "/jeuBETA1.html?v=20261015-desktop-fret-v6";
     }
   });
 }
@@ -18285,7 +18285,7 @@ async function loadAffluenceDate(dateStr){
   const tabs = Array.from(nav.querySelectorAll('[data-loisirs-view]'));
   const onLoisirsTab = () => ['#loisirs', '#divertissement', '#multimedia'].includes(location.hash || '');
 
-  const gameUrl = '/jeuBETA1.html?v=20261015-arcade-menu-v5';
+  const gameUrl = '/jeuBETA1.html?v=20261015-desktop-fret-v6';
   let gameLoaded = false;
   let currentLoisirsView = 'multimedia';
 
