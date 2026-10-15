@@ -9714,7 +9714,7 @@ if (btnJeu){
     if (typeof window.lbOpenLoisirsView === "function") {
       window.lbOpenLoisirsView("jeu");
     } else {
-      window.location.href = "/jeuBETA1.html?v=20261015-pn-rectangles-v12";
+      window.location.href = "/jeuBETA1.html?v=20261015-arcade-rouge-equilibre-v13";
     }
   });
 }
@@ -18285,7 +18285,7 @@ async function loadAffluenceDate(dateStr){
   const tabs = Array.from(nav.querySelectorAll('[data-loisirs-view]'));
   const onLoisirsTab = () => ['#loisirs', '#divertissement', '#multimedia'].includes(location.hash || '');
 
-  const gameUrl = '/jeuBETA1.html?v=20261015-pn-rectangles-v12';
+  const gameUrl = '/jeuBETA1.html?v=20261015-arcade-rouge-equilibre-v13';
   let gameLoaded = false;
   let currentLoisirsView = 'multimedia';
 
