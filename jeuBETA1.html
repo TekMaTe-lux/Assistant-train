@@ -1259,7 +1259,7 @@
         <li>Ramassez le bétail lumineux : votre TER s’allonge et vous marquez des points.</li>
         <li>Évitez les suppressions rouges, votre propre rame et les obstacles mobiles.</li>
         <li>Case orange : au hasard, +72 % ou −35 % de vitesse pendant 2,6 secondes.</li>
-        <li>Vaches et TGV déboulent sur les voies. Le fret, plus lent, arrive de côté ou du haut et peut s'arrêter puis repartir.</li>
+        <li>Vaches : seule la locomotive peut être percutée. Longer ou croiser une vache avec les wagons est autorisé. Attention aux TGV et aux frets !</li>
         <li>Les bords communiquent. Sept niveaux vous mènent au chaos ferroviaire !</li>
         <li>Plus votre TER s’allonge, plus les obstacles fixes se retirent. Bonus final à 400 cases !</li>
       </ul>
@@ -1630,6 +1630,13 @@
         return a && b && a.x === b.x && a.y === b.y;
       }
 
+      // COLLISION_VACHES_LOCOMOTIVE_V1 : seul un recouvrement de la case
+      // locomotive/vache entraîne la perte. Aucune collision avec les wagons
+      // du TER, ni lorsqu'une vache passe sur la case voisine.
+      function cowTouchesLocomotive(head = state.train[0]) {
+        return !!head && state.cows.some(band => band.some(cow => samePosition(cow, head)));
+      }
+
       function occupied(position, includeBetail = true) {
         return state.train.some((item) => samePosition(item, position))
           || state.suppressions.some((item) => samePosition(item, position))
@@ -1848,10 +1855,15 @@
               ? p.y < ROWS : p.x >= 0)) list.splice(i,1);
           }
         }
-        // Le danger mobile peut venir sur le joueur : on détecte aussi
-        // la collision provoquée par les trains adverses en mouvement.
-        if (state.cows.some(b=>b.some(p=>state.train.some(t=>samePosition(t,p))))
-          || state.tgvs.some(c=>c.segments.some(p=>state.train.some(t=>samePosition(t,p))))
+        // Vaches : seule la locomotive peut provoquer un Game Over.
+        // La rame peut longer un troupeau ou le laisser croiser ses wagons.
+        if (cowTouchesLocomotive()) {
+          endGame("La vache a touché la locomotive : arrêt d'urgence !");
+          return;
+        }
+        // En revanche, le contact d'un TGV ou d'un fret avec n'importe
+        // quelle voiture reste une collision ferroviaire.
+        if (state.tgvs.some(c=>c.segments.some(p=>state.train.some(t=>samePosition(t,p))))
           || state.frets.some(c=>c.segments.some(p=>state.train.some(t=>samePosition(t,p))))) {
           endGame("Collision sur les voies : même la priorité n'a pas suffi !");
           return;
@@ -1908,7 +1920,7 @@
         // La dernière case se libère ce tick si on ne ramasse pas de bétail.
         const body = willGrow ? state.train : state.train.slice(0,-1);
         if (body.some(p=>samePosition(p,head))) return "Le TER s'est replié sur lui-même. Même la SNCF n'avait pas prévu ça !";
-        if (state.cows.some(b=>b.some(p=>samePosition(p,head)))) return "Votre TER a rencontré des vaches sur la voie.";
+        if (cowTouchesLocomotive(head)) return "La locomotive a rencontré une vache sur la voie.";
         if (state.tgvs.some(c=>c.segments.some(p=>samePosition(p,head)))) return "TGV prioritaire : la correspondance a mal tourné.";
         if (state.frets.some(c=>c.segments.some(p=>samePosition(p,head)))) return "Train de fret : les marchandises sont arrivées avant vous !";
         if (state.suppressions.some(p=>samePosition(p,head))) {
