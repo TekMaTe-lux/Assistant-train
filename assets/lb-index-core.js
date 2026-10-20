@@ -10893,10 +10893,22 @@ document.addEventListener('DOMContentLoaded', () => {
     if(!toggle||!panel)return;
     toggle.setAttribute('aria-expanded',String(open));panel.hidden=!open;
     if(open){
+      // Choix automatique au premier affichage, heure LOCALE de la ligne
+      // Nancy-Metz-Luxembourg, indépendante du fuseau du téléphone/PC.
+      const today=luxDateIso();
       const date=byId('statsV2LookupDate');
+      const time=byId('statsV2LookupTime');
       if(date){
-        if(!date.value)date.value=dateAdd(luxDateIso(),-1);
-        date.max=dateAdd(luxDateIso(),-1);
+        date.max=today;
+        if(!date.value)date.value=today;
+      }
+      if(time && !time.value){
+        const parts=new Intl.DateTimeFormat('fr-FR',{
+          timeZone:'Europe/Luxembourg',hour:'2-digit',minute:'2-digit',hourCycle:'h23'
+        }).formatToParts(new Date());
+        const hour=parts.find(p=>p.type==='hour')?.value||'00';
+        const minute=parts.find(p=>p.type==='minute')?.value||'00';
+        time.value=hour+':'+minute;
       }
     }else ++lookupRequestId;
   }
@@ -10932,8 +10944,8 @@ document.addEventListener('DOMContentLoaded', () => {
     if(!origin||!dest||origin.toLocaleLowerCase('fr')===dest.toLocaleLowerCase('fr')){
       setLookupMessage('Indique deux gares différentes pour retrouver ton train.');return;
     }
-    if(!/^[0-9]{4}-[0-9]{2}-[0-9]{2}$/.test(date)||date>dateAdd(luxDateIso(),-1)){
-      setLookupMessage('Choisis une date de circulation terminée.');return;
+    if(!/^[0-9]{4}-[0-9]{2}-[0-9]{2}$/.test(date)||date>luxDateIso()){
+      setLookupMessage('Choisis aujourd’hui ou une date passée.');return;
     }
     if(time&&!/^([01][0-9]|2[0-3]):[0-5][0-9]$/.test(time)){
       setLookupMessage('Vérifie ton heure de départ.');return;
