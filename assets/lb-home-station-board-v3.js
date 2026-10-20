@@ -5,7 +5,7 @@ if(window.__lbStationBoardInit)return;
 window.__lbStationBoardInit=true;
 var URL_STATIC='https://vps.labetaillere.fr/map-v2/z/41a9d7f2';
 var URL_LIVE='https://vps.labetaillere.fr/map-v2/z/77a13c5e';
-var S={open:false,mode:'dep',station:'Nancy',staticData:null,staticLoading:null,live:null,liveAt:0,byStation:new Map(),stations:[],stationChoices:[],limit:8,token:0,lastFocus:null,userPicked:false,exact:null,exactKey:'',bridgeFrame:null,bridgeTarget:null,bridgeTimer:null,bridgeToken:0};
+var S={open:false,mode:'dep',station:'Nancy',staticData:null,staticLoading:null,live:null,liveLoading:null,liveAt:0,byStation:new Map(),stations:[],stationChoices:[],limit:8,token:0,lastFocus:null,userPicked:false,exact:null,exactKey:'',bridgeFrame:null,bridgeTarget:null,bridgeTimer:null,bridgeToken:0,lastMarkup:null};
 var priority=['Nancy','Metz','Thionville','Luxembourg','Hagondange','Bettembourg','Pont-à-Mousson','Hettange-Grande','Howald','Uckange'];
 function norm(s){return String(s||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().replace(/[^a-z0-9]+/g,' ').trim().replace(/ gare centrale$/,'');}
 function friendly(s){return String(s||'').trim().replace(/^Luxembourg, Gare Centrale$/i,'Luxembourg').replace(/^Luxembourg,?\s+Gare$/i,'Luxembourg').replace(/^Howald, Gare$/i,'Howald').replace(/^Bettembourg,?\s+Gare$/i,'Bettembourg');}
@@ -61,13 +61,19 @@ async function loadStatic(){
 }
 async function loadLive(){
  if(S.live&&Date.now()-S.liveAt<45000)return;
- try{
-  var c=new AbortController(),timer=setTimeout(function(){c.abort();},5000);
-  var r;try{r=await fetch(URL_LIVE,{mode:'cors',cache:'no-store',signal:c.signal});}finally{clearTimeout(timer);}
-  if(!r.ok)return;
-  var j=await r.json();if(!Array.isArray(j.trains))return;
-  S.live=new Map(j.trains.map(function(t){return [String(t.tripId),t];}));S.liveAt=Date.now();
- }catch(_){/* les horaires restent affichés comme prévus */}
+ if(S.liveLoading)return S.liveLoading;
+ S.liveLoading=(async function(){
+  try{
+   var controller=new AbortController(),timer=setTimeout(function(){controller.abort();},5000),response;
+   try{response=await fetch(URL_LIVE,{mode:'cors',cache:'no-store',signal:controller.signal});}
+   finally{clearTimeout(timer);}
+   if(!response.ok)return;
+   var json=await response.json();if(!Array.isArray(json.trains))return;
+   S.live=new Map(json.trains.map(function(t){return [String(t.tripId),t];}));
+   S.liveAt=Date.now();
+  }catch(_){/* Le tableau statique reste utilisable hors temps réel. */}
+ })();
+ try{await S.liveLoading;}finally{S.liveLoading=null;}
 }
 function track(row){
  try{
@@ -110,7 +116,11 @@ function getRows(){
 }
 function draw(rows,cached){
  var host=document.getElementById('lbBoardRows'),more=document.getElementById('lbBoardMore');
- if(!rows.length){host.innerHTML='<p class="lb-board-wait">Aucun autre train prévu pour cette gare.</p>';more.hidden=true;return;}
+ if(!rows.length){
+  var empty='<p class="lb-board-wait">Aucun autre train prévu pour cette gare.</p>';
+  if(host.innerHTML!==empty)host.innerHTML=empty;
+  S.lastMarkup=empty;more.hidden=true;return;
+ }
  var heading=S.mode==='dep'?'DÉPARTS':'ARRIVÉES';
  var col=S.mode==='dep'?'DESTINATION':'PROVENANCE';
  var html='<div class="lb-gare-table-top"><b>'+heading+'</b><time id="lbBoardClock">'+new Date().toLocaleTimeString('fr-FR',{timeZone:'Europe/Paris'})+'</time></div>'+
@@ -133,7 +143,16 @@ function draw(rows,cached){
    '<td class="lb-gare-clock-cell">'+timeText+'<small class="lb-gare-status '+statusClass+'">'+clean(status)+'</small></td>'+
    '<td class="lb-gare-actions"><div class="lb-gare-actions-inner">'+voie+details+'</div></td></tr>';
  });
- host.innerHTML=html+'</tbody></table>';
+ var markup=html+'</tbody></table>';
+ // L'horloge qui avance ne nécessite pas un remplacement de tout le tableau.
+ var stable=markup.replace(/(<time id="lbBoardClock">)[^<]*(<\/time>)/,'$1$2');
+ if(S.lastMarkup===stable&&host.querySelector('.lb-gare-table')){
+  var clockLabel=host.querySelector('#lbBoardClock');
+  if(clockLabel)clockLabel.textContent=new Date().toLocaleTimeString('fr-FR',{timeZone:'Europe/Paris'});
+ }else{
+  host.innerHTML=markup;
+  S.lastMarkup=stable;
+ }
  more.hidden=rows.length<=S.limit;more.textContent='Plus de trains';
 }
 function render(){
@@ -153,7 +172,11 @@ function render(){
 }
 async function refresh(){
  var ticket=++S.token;render();
- try{await loadStatic();if(!S.open||ticket!==S.token)return;render();await loadLive();if(S.open&&ticket===S.token)render();}
+ try{
+  // Attendre les données statiques et LIVE ensemble ; un rendu seulement.
+  await Promise.all([loadStatic(),loadLive()]);
+  if(S.open&&ticket===S.token)render();
+ }
  catch(_){if(!S.open||ticket!==S.token)return;var old=getCached();if(old){draw(old.rows,true);src('Hors ligne · dernières données du '+new Date(old.at).toLocaleString('fr-FR'));}
  else{document.getElementById('lbBoardRows').innerHTML='<p class="lb-board-wait">Horaires indisponibles. Réessaie quand la connexion revient.</p>';src('Impossible de récupérer les horaires');}}
 }
@@ -216,7 +239,7 @@ function onExactResponse(event){
    category:r.category,mode:S.mode,origin:r.place,dest:r.place,
    imminent:!!r.isImminent,trainId:r.trainId,exact:true};
  });
- S.limit=8;render();
+ render();
 }
 
 /* Compte BER : gare aller = départ du matin, gare retour = départ du soir.
