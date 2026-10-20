@@ -10951,7 +10951,13 @@ document.addEventListener('DOMContentLoaded', () => {
     if(button)button.disabled=true;
     setLookupMessage('Recherche des horaires SNCF…');
     try{
-      const payload=await apiJson('/api/search-static?'+params.toString());
+      // API horaires publique : pas de cookies de session, CORS * côté VPS.
+      // Le client statistiques générique utilise credentials:include et échoue ici.
+      const response=await fetch(API_ORIGIN+'/api/search-static?'+params.toString(),{
+        method:'GET',mode:'cors',credentials:'omit',cache:'no-store'
+      });
+      if(!response.ok)throw new Error('HTTP '+response.status);
+      const payload=await response.json();
       if(id!==lookupRequestId||byId('statsV2LookupPanel')?.hidden)return;
       if(payload?.ok!==true)throw new Error('Données horaires indisponibles');
       const results=(Array.isArray(payload.directs)?payload.directs:payload.results||[])
