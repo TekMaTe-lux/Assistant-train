@@ -11593,8 +11593,12 @@ document.addEventListener('DOMContentLoaded', () => {
   byId('statsV2LookupToggle')?.addEventListener('click',()=>setTrainLookupOpen(true,'stats'));
   byId('tableauTrainLookupToggle')?.addEventListener('click',()=>setTrainLookupOpen(true,'search'));
   byId('lbTrainFinderClose')?.addEventListener('click',()=>setTrainLookupOpen(false));
+  trainFinderModal?.addEventListener('cancel',event=>{
+    // Fermeture immédiate par Échap : état et attributs ARIA synchronisés.
+    event.preventDefault();
+    setTrainLookupOpen(false);
+  });
   trainFinderModal?.addEventListener('close',()=>{
-    // Échap du navigateur : vider aussi l'état interne et les requêtes anciennes.
     if(!byId('statsV2LookupPanel')?.hidden)setTrainLookupOpen(false);
   });
   trainFinderModal?.addEventListener('click',event=>{
