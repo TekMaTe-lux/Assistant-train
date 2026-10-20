@@ -10881,6 +10881,92 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }
 
+
+  // Réutilise l'index horaire SNCF du VPS, sans aucun chargement au démarrage.
+  let lookupRequestId=0,lookupRunning=false;
+  function setLookupMessage(value){
+    const el=byId('statsV2LookupMessage');
+    if(el)el.textContent=String(value||'');
+  }
+  function setTrainLookupOpen(open){
+    const toggle=byId('statsV2LookupToggle'),panel=byId('statsV2LookupPanel');
+    if(!toggle||!panel)return;
+    toggle.setAttribute('aria-expanded',String(open));panel.hidden=!open;
+    if(open){
+      const date=byId('statsV2LookupDate');
+      if(date){
+        if(!date.value)date.value=dateAdd(luxDateIso(),-1);
+        date.max=dateAdd(luxDateIso(),-1);
+      }
+    }else ++lookupRequestId;
+  }
+  function renderTrainLookupResults(data,hasTime){
+    const host=byId('statsV2LookupResults');
+    if(!host)return;
+    const seen=new Set(),records=[];
+    for(const item of data){
+      const train=String(item?.train||item?.numero||'').trim();
+      const dep=String(item?.dep||''),arr=String(item?.arr||'');
+      if(!/^[0-9]{4,6}$/.test(train)||!/^([01]?[0-9]|2[0-3]):[0-5][0-9]$/.test(dep))continue;
+      const key=train+'_'+dep;
+      if(seen.has(key))continue;
+      seen.add(key);records.push({train,dep,arr});
+      if(records.length>=28)break;
+    }
+    host.innerHTML=records.map(item=>
+      '<button class="stats-v2__lookup-result" type="button" data-stats-train-lookup="'+escapeHtml(item.train)+'">'+
+      '<span class="stats-v2__lookup-schedule"><strong>'+escapeHtml(item.dep)+'</strong><small>→ '+escapeHtml(item.arr)+'</small></span>'+
+      '<span class="stats-v2__lookup-number"><strong>TER '+escapeHtml(item.train)+'</strong><small>SNCF · horaire théorique</small></span>'+
+      '<span class="stats-v2__lookup-action">Analyser ↗</span></button>'
+    ).join('');
+    if(records.length)setLookupMessage(records.length+' train(s) trouvé(s). Sélectionne celui qui correspond à ton trajet.');
+    else setLookupMessage('Aucun train direct SNCF trouvé. Vérifie le trajet, la date ou essaie un autre horaire.');
+  }
+  async function searchTrainByRoute(){
+    if(lookupRunning)return;
+    const origin=String(byId('statsV2LookupFrom')?.value||'').trim();
+    const dest=String(byId('statsV2LookupTo')?.value||'').trim();
+    const date=String(byId('statsV2LookupDate')?.value||'');
+    const time=String(byId('statsV2LookupTime')?.value||'');
+    byId('statsV2LookupResults')?.replaceChildren();
+    if(!origin||!dest||origin.toLocaleLowerCase('fr')===dest.toLocaleLowerCase('fr')){
+      setLookupMessage('Indique deux gares différentes pour retrouver ton train.');return;
+    }
+    if(!/^[0-9]{4}-[0-9]{2}-[0-9]{2}$/.test(date)||date>dateAdd(luxDateIso(),-1)){
+      setLookupMessage('Choisis une date de circulation terminée.');return;
+    }
+    if(time&&!/^([01][0-9]|2[0-3]):[0-5][0-9]$/.test(time)){
+      setLookupMessage('Vérifie ton heure de départ.');return;
+    }
+    const minutes=time?Number(time.slice(0,2))*60+Number(time.slice(3,5)):null;
+    const lo=minutes==null?0:Math.max(0,minutes-90);
+    const hi=minutes==null?1439:Math.min(1439,minutes+90);
+    const hhmm=n=>String(Math.floor(n/60)).padStart(2,'0')+':'+String(n%60).padStart(2,'0');
+    const params=new URLSearchParams({
+      from:origin,to:dest,date:date.replace(/-/g,''),
+      start:hhmm(lo),end:hhmm(hi),includeCfl:'0',allowTransfers:'0'
+    });
+    const id=++lookupRequestId,button=byId('statsV2LookupSearch');
+    lookupRunning=true;
+    if(button)button.disabled=true;
+    setLookupMessage('Recherche des horaires SNCF…');
+    try{
+      const payload=await apiJson('/api/search-static?'+params.toString());
+      if(id!==lookupRequestId||byId('statsV2LookupPanel')?.hidden)return;
+      if(payload?.ok!==true)throw new Error('Données horaires indisponibles');
+      const results=(Array.isArray(payload.directs)?payload.directs:payload.results||[])
+        .filter(item=>item?.source==='sncf');
+      if(minutes!=null)results.sort((a,b)=>Math.abs(Number(a.depMin)-minutes)-Math.abs(Number(b.depMin)-minutes)||Number(a.depMin)-Number(b.depMin));
+      else results.sort((a,b)=>Number(a.depMin)-Number(b.depMin));
+      renderTrainLookupResults(results,minutes!=null);
+    }catch(error){
+      if(id===lookupRequestId)setLookupMessage('Recherche momentanément indisponible. '+(error?.message||''));
+    }finally{
+      lookupRunning=false;
+      if(button)button.disabled=false;
+    }
+  }
+
   async function runTrain(){
     const train = normalizeTrain(byId('statsV2TrainInput')?.value || settings.favoriteTrain);
     const stop = String(byId('statsV2TrainStop')?.value || '').trim();
@@ -11268,7 +11354,12 @@ document.addEventListener('DOMContentLoaded', () => {
       if (field && (force || !field.value)) field.value = value || '';
     };
     setDefault('statsV2TrainInput', settings.favoriteTrain || FALLBACK_TRAIN);
-    setDefault('statsV2TrainStop', settings.favoriteStop || FALLBACK_STOP);
+    // Historique train = retard du parcours complet par défaut.
+    // Aucune gare du compte ne doit modifier silencieusement cette analyse.
+    if (force && !hasTargetInteracted) {
+      const field = byId('statsV2TrainStop');
+      if (field) field.value = '';
+    }
     setDefault('statsV2StopInput', settings.favoriteStop || FALLBACK_STOP);
     if (compareKind === 'train' || compareKind === 'stop') renderCompareInputs();
   }
@@ -11462,6 +11553,29 @@ document.addEventListener('DOMContentLoaded', () => {
     setEvolutionDetail(evolutionToggle.getAttribute('aria-expanded') !== 'true');
   });
   byId('statsV2ApplyRange')?.addEventListener('click', () => setPeriod('custom', { user: true, loadCustom: true }));
+
+  byId('statsV2LookupToggle')?.addEventListener('click',()=>{
+    setTrainLookupOpen(byId('statsV2LookupToggle')?.getAttribute('aria-expanded')!=='true');
+  });
+  byId('statsV2LookupSearch')?.addEventListener('click',searchTrainByRoute);
+  ['statsV2LookupFrom','statsV2LookupTo','statsV2LookupTime'].forEach(id=>{
+    byId(id)?.addEventListener('keydown',event=>{
+      if(event.key==='Enter'){event.preventDefault();searchTrainByRoute();}
+    });
+  });
+  byId('statsV2LookupResults')?.addEventListener('click',event=>{
+    const button=event.target.closest('[data-stats-train-lookup]');
+    if(!button)return;
+    const train=normalizeTrain(button.dataset.statsTrainLookup);
+    if(!train)return;
+    hasTargetInteracted=true;
+    byId('statsV2TrainInput').value=train;
+    byId('statsV2TrainStop').value=''; // pas de gare implicite
+    setTrainLookupOpen(false);
+    runTrain();
+    byId('statsV2TrainPanel')?.scrollIntoView({behavior:'smooth',block:'start'});
+  });
+
   byId('statsV2TrainRun')?.addEventListener('click', runTrain);
   byId('statsV2StopRun')?.addEventListener('click', runStop);
   ['statsV2TrainInput', 'statsV2TrainStop', 'statsV2StopInput'].forEach((id) => {
