@@ -8,7 +8,7 @@ var URL_LIVE='https://vps.labetaillere.fr/map-v2/z/77a13c5e';
 var S={open:false,mode:'dep',station:'Nancy',staticData:null,staticLoading:null,live:null,liveAt:0,byStation:new Map(),stations:[],stationChoices:[],limit:8,token:0,lastFocus:null,userPicked:false,exact:null,exactKey:'',bridgeFrame:null,bridgeTarget:null,bridgeTimer:null,bridgeToken:0};
 var priority=['Nancy','Metz','Thionville','Luxembourg','Hagondange','Bettembourg','Pont-à-Mousson','Hettange-Grande','Howald','Uckange'];
 function norm(s){return String(s||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().replace(/[^a-z0-9]+/g,' ').trim().replace(/ gare centrale$/,'');}
-function friendly(s){return String(s||'').trim().replace(/^Luxembourg, Gare Centrale$/i,'Luxembourg').replace(/^Howald, Gare$/i,'Howald').replace(/^Bettembourg,?\s+Gare$/i,'Bettembourg');}
+function friendly(s){return String(s||'').trim().replace(/^Luxembourg, Gare Centrale$/i,'Luxembourg').replace(/^Luxembourg,?\s+Gare$/i,'Luxembourg').replace(/^Howald, Gare$/i,'Howald').replace(/^Bettembourg,?\s+Gare$/i,'Bettembourg');}
 function clean(s){return String(s==null?'':s).replace(/[&<>"']/g,function(x){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[x];});}
 function clock(sec){var min=Math.floor(sec/60);return String((Math.floor(min/60)%24+24)%24).padStart(2,'0')+':'+String((min%60+60)%60).padStart(2,'0');}
 function nowParis(){var d=Object.fromEntries(new Intl.DateTimeFormat('en-GB',{timeZone:'Europe/Paris',year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit',hourCycle:'h23'}).formatToParts(new Date()).filter(function(p){return p.type!=='literal';}).map(function(p){return [p.type,Number(p.value)];}));return {y:d.year,m:d.month,d:d.day,sec:d.hour*3600+d.minute*60+d.second};}
@@ -361,6 +361,34 @@ function init(){
   var train=e.target.closest('[data-lb-board-train]');if(train){var num=train.dataset.lbBoardTrain,date=train.dataset.lbBoardDate;close();if(typeof window.lbOpenTrainDetail==='function')window.lbOpenTrainDetail(num,date);return;}
   if(e.target.closest('#lbBoardMore')){S.limit+=8;render();}
  });
+ /* iOS/Android : quand le clavier est ouvert, le premier clic natif peut
+    seulement retirer le focus du champ. Valider au touchend (avant le click),
+    sans gêner le défilement du sélecteur par glissement. */
+ var stationResults=wrap.querySelector('#lbBoardStationResults'),pendingStationTouch=null;
+ stationResults.addEventListener('touchstart',function(e){
+  if(e.touches.length!==1){pendingStationTouch=null;return;}
+  var button=e.target.closest('[data-lb-board-station-choice]');
+  if(!button){pendingStationTouch=null;return;}
+  var finger=e.touches[0];
+  pendingStationTouch={name:button.dataset.lbBoardStationChoice,x:finger.clientX,y:finger.clientY};
+ },{passive:true});
+ stationResults.addEventListener('touchmove',function(e){
+  if(!pendingStationTouch||e.touches.length!==1)return;
+  var finger=e.touches[0];
+  if(Math.abs(finger.clientX-pendingStationTouch.x)>12||Math.abs(finger.clientY-pendingStationTouch.y)>12)pendingStationTouch=null;
+ },{passive:true});
+ stationResults.addEventListener('touchcancel',function(){pendingStationTouch=null;},{passive:true});
+ stationResults.addEventListener('touchend',function(e){
+  var tap=pendingStationTouch;pendingStationTouch=null;
+  if(!tap||e.changedTouches.length!==1)return;
+  var finger=e.changedTouches[0];
+  if(Math.abs(finger.clientX-tap.x)>12||Math.abs(finger.clientY-tap.y)>12)return;
+  var option=e.target.closest('[data-lb-board-station-choice]');
+  if(!option||norm(option.dataset.lbBoardStationChoice)!==norm(tap.name))return;
+  e.preventDefault(); // Pas de clic fantôme et sélection avant la fermeture du clavier
+  e.stopPropagation();
+  choose(tap.name,true);
+ },{passive:false});
  var stationSearch=wrap.querySelector('#lbBoardStationSearch');
  stationSearch.addEventListener('input',renderStationOptions);
  stationSearch.addEventListener('keydown',function(e){
