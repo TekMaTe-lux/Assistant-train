@@ -5,7 +5,7 @@ if(window.__lbStationBoardInit)return;
 window.__lbStationBoardInit=true;
 var URL_STATIC='https://vps.labetaillere.fr/map-v2/z/41a9d7f2';
 var URL_LIVE='https://vps.labetaillere.fr/map-v2/z/77a13c5e';
-var S={open:false,mode:'dep',station:'Nancy',staticData:null,staticLoading:null,live:null,liveAt:0,byStation:new Map(),stations:[],limit:8,token:0,lastFocus:null,userPicked:false,exact:null,exactKey:'',bridgeFrame:null,bridgeTarget:null,bridgeTimer:null,bridgeToken:0};
+var S={open:false,mode:'dep',station:'Nancy',staticData:null,staticLoading:null,live:null,liveAt:0,byStation:new Map(),stations:[],stationChoices:[],limit:8,token:0,lastFocus:null,userPicked:false,exact:null,exactKey:'',bridgeFrame:null,bridgeTarget:null,bridgeTimer:null,bridgeToken:0};
 var priority=['Nancy','Metz','Thionville','Luxembourg','Hagondange','Bettembourg','Pont-à-Mousson','Hettange-Grande','Howald','Uckange'];
 function norm(s){return String(s||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().replace(/[^a-z0-9]+/g,' ').trim().replace(/ gare centrale$/,'');}
 function friendly(s){return String(s||'').replace(/^Luxembourg, Gare Centrale$/i,'Luxembourg').replace(/^Howald, Gare$/i,'Howald').replace(/^Bettembourg, Gare$/i,'Bettembourg');}
@@ -246,14 +246,54 @@ function renderChoices(){
    button.setAttribute('aria-label',(when==='morning'?'Gare du matin : ':'Gare du soir : ')+name);
   });
  }
- var list=document.getElementById('lbBoardStationList');
- if(!list)return;
  var seen=new Set(),all=[];
  [favorites.morning,favorites.evening].concat(priority,S.stations).forEach(function(name){
   if(!name||seen.has(norm(name)))return;
   seen.add(norm(name));all.push(name);
  });
- list.replaceChildren(...all.map(function(name){var option=document.createElement('option');option.value=name;return option;}));
+ S.stationChoices=all;
+ renderStationOptions();
+}
+/* Les boutons sélectionnent immédiatement la gare sur mobile.
+ * Ouvrir la liste ne donne pas le focus au champ et n'ouvre pas le clavier. */
+function renderStationOptions(){
+ var host=document.getElementById('lbBoardStationResults');
+ var input=document.getElementById('lbBoardStationSearch');
+ var hint=document.getElementById('lbBoardStationHint');
+ if(!host||!input)return;
+ var query=norm(input.value);
+ var matches=S.stationChoices.filter(function(name){return norm(name).includes(query);});
+ if(query)matches.sort(function(a,b){
+  return Number(!norm(a).startsWith(query))-Number(!norm(b).startsWith(query));
+ });
+ var shown=matches.slice(0,query?24:15);
+ host.replaceChildren(...shown.map(function(name){
+  var button=document.createElement('button');
+  button.type='button';button.className='lb-board-station-option';
+  button.dataset.lbBoardStationChoice=name;
+  button.setAttribute('aria-current',String(norm(name)===norm(S.station)));
+  button.textContent=name;
+  return button;
+ }));
+ if(hint)hint.textContent=!matches.length?'Aucune gare trouvée.':matches.length>shown.length
+  ?matches.length+' gares · Affine la recherche pour afficher les autres.'
+  :query?matches.length+' gare'+(matches.length>1?'s':'')+' trouvée'+(matches.length>1?'s':'')+'.'
+  :'Choisis une gare : validation immédiate.';
+}
+function showStationPicker(visible){
+ var panel=document.getElementById('lbBoardStationPanel');
+ var toggle=document.getElementById('lbBoardStationToggle');
+ var input=document.getElementById('lbBoardStationSearch');
+ if(!panel||!toggle)return;
+ panel.hidden=!visible;
+ toggle.setAttribute('aria-expanded',String(visible));
+ if(visible){
+  if(input)input.value='';
+  renderStationOptions();
+ }else if(input){
+  if(document.activeElement===input)input.blur();
+  input.value='';
+ }
 }
 function onAccountStationsUpdated(){
  renderChoices();
@@ -265,9 +305,13 @@ function onAccountStationsUpdated(){
 function choose(value,explicit){
  var key=norm(value),favorites=accountStations();
  var name=S.stations.find(function(x){return norm(x)===key;})||priority.find(function(x){return norm(x)===key;})||[favorites.morning,favorites.evening].find(function(x){return norm(x)===key;});
- if(!name){src('Gare non reconnue : choisis une gare dans la liste.');return;}
+ if(!name){src('Gare non reconnue : choisis une gare dans la liste.');return false;}
  if(explicit!==false)S.userPicked=true;
- S.station=name;S.limit=8;S.exact=null;S.exactKey='';document.getElementById('lbBoardStation').value=name;setTitle();renderChoices();refresh();requestExact();
+ S.station=name;S.limit=8;S.exact=null;S.exactKey='';
+ document.getElementById('lbBoardStationValue').textContent=name;
+ showStationPicker(false);
+ setTitle();renderChoices();refresh();requestExact();
+ return true;
 }
 function tabs(){document.querySelectorAll('[data-lb-board-mode]').forEach(function(b){b.setAttribute('aria-selected',String(b.dataset.lbBoardMode===S.mode));});}
 function open(station){
@@ -275,12 +319,12 @@ function open(station){
  S.lastFocus=document.activeElement;S.open=true;S.mode='dep';S.limit=8;S.userPicked=false;S.exact=null;S.exactKey='';
  S.station=friendly(station||defaultStation());
  overlay.hidden=false;document.body.classList.add('lb-board-visible');
- document.getElementById('lbBoardStation').value=S.station;tabs();setTitle();renderChoices();
+ document.getElementById('lbBoardStationValue').textContent=S.station;showStationPicker(false);tabs();setTitle();renderChoices();
  document.getElementById('lbStationBoardSheet').focus({preventScroll:true});
  refresh();requestExact();
 }
 function close(){
- if(!S.open)return;S.open=false;++S.token;stopBridge();
+ if(!S.open)return;S.open=false;++S.token;stopBridge();showStationPicker(false);
  document.getElementById('lbStationBoardOverlay').hidden=true;
  document.body.classList.remove('lb-board-visible');
  if(S.lastFocus?.isConnected)S.lastFocus.focus({preventScroll:true});
@@ -295,7 +339,7 @@ function init(){
  var wrap=document.createElement('div');wrap.id='lbStationBoardOverlay';wrap.className='lb-board-overlay';wrap.hidden=true;
  wrap.innerHTML='<div class="lb-board-shade" data-lb-board-close></div><section id="lbStationBoardSheet" class="lb-board-sheet" role="dialog" aria-modal="true" aria-labelledby="lbBoardTitle" tabindex="-1">'+
  '<div class="lb-board-handle" aria-hidden="true"></div><header class="lb-board-head"><span class="lb-board-symbol" aria-hidden="true">🏠</span><div class="lb-board-head-text"><h2 id="lbBoardTitle">Gare de <span id="lbBoardName">Nancy</span></h2></div><button type="button" class="lb-auth-close tron-close-button lb-board-x" data-lb-board-close aria-label="Fermer la gare"></button></header>'+
- '<label for="lbBoardStation" class="lb-board-picker-label">Choisir une gare</label><div class="lb-board-picker"><input id="lbBoardStation" type="search" list="lbBoardStationList" autocomplete="off" spellcheck="false" placeholder="Rechercher une gare…"><datalist id="lbBoardStationList"></datalist><span aria-hidden="true">⌄</span></div>'+ 
+ '<span id="lbBoardStationLabel" class="lb-board-picker-label">Choisir une gare</span><div class="lb-board-picker"><button type="button" id="lbBoardStationToggle" aria-labelledby="lbBoardStationLabel lbBoardStationValue" aria-controls="lbBoardStationPanel" aria-expanded="false"><span id="lbBoardStationValue">Nancy</span><span class="lb-board-station-chevron" aria-hidden="true">⌄</span></button><div id="lbBoardStationPanel" class="lb-board-station-panel" hidden><label for="lbBoardStationSearch" class="lb-board-station-search-label">Rechercher une gare</label><input id="lbBoardStationSearch" type="search" inputmode="search" autocomplete="off" spellcheck="false" placeholder="Nom de la gare…" aria-controls="lbBoardStationResults"><div id="lbBoardStationResults" class="lb-board-station-results" role="group" aria-label="Choisir une gare"></div><p id="lbBoardStationHint" class="lb-board-station-hint" aria-live="polite"></p></div></div>'+ 
  '<div id="lbBoardFavorites" class="lb-board-favorites" role="group" aria-label="Mes gares favorites" hidden><button type="button" data-lb-board-favorite="morning"><span class="lb-board-fav-label">☀ Matin</span><span class="lb-board-fav-station"></span></button><button type="button" data-lb-board-favorite="evening"><span class="lb-board-fav-label">☾ Soir</span><span class="lb-board-fav-station"></span></button></div>'+ 
  '<div class="lb-board-tabs" role="tablist" aria-label="Départs ou arrivées"><button type="button" data-lb-board-mode="dep" role="tab" aria-selected="true">↗ Départs</button><button type="button" data-lb-board-mode="arr" role="tab" aria-selected="false">↙ Arrivées</button></div>'+
  '<p class="lb-board-source" id="lbBoardSource" aria-live="polite">Chargement à la demande…</p><div id="lbBoardRows" class="lb-board-rows" aria-live="polite"></div>'+
@@ -303,15 +347,35 @@ function init(){
  document.body.appendChild(wrap);
  wrap.addEventListener('click',function(e){
   if(e.target.closest('[data-lb-board-close]'))return close();
+  var stationOption=e.target.closest('[data-lb-board-station-choice]');
+  if(stationOption){choose(stationOption.dataset.lbBoardStationChoice,true);return;}
+  if(e.target.closest('#lbBoardStationToggle')){
+   var panel=document.getElementById('lbBoardStationPanel');
+   showStationPicker(!!panel?.hidden);
+   return;
+  }
+  if(!e.target.closest('.lb-board-picker'))showStationPicker(false);
   var favorite=e.target.closest('[data-lb-board-favorite]');
   if(favorite){var name=accountStations()[favorite.dataset.lbBoardFavorite];if(name)choose(name,true);return;}
   var mode=e.target.closest('[data-lb-board-mode]');if(mode){S.mode=mode.dataset.lbBoardMode;S.limit=8;S.exact=null;S.exactKey='';tabs();render();requestExact();return;}
   var train=e.target.closest('[data-lb-board-train]');if(train){var num=train.dataset.lbBoardTrain,date=train.dataset.lbBoardDate;close();if(typeof window.lbOpenTrainDetail==='function')window.lbOpenTrainDetail(num,date);return;}
   if(e.target.closest('#lbBoardMore')){S.limit+=8;render();}
  });
- wrap.querySelector('#lbBoardStation').addEventListener('change',function(e){choose(e.target.value,true);});
- wrap.querySelector('#lbBoardStation').addEventListener('keydown',function(e){if(e.key==='Enter'){e.preventDefault();choose(e.target.value,true);e.target.blur();}});
- document.addEventListener('keydown',function(e){if(e.key==='Escape'&&S.open){e.preventDefault();close();}});
+ var stationSearch=wrap.querySelector('#lbBoardStationSearch');
+ stationSearch.addEventListener('input',renderStationOptions);
+ stationSearch.addEventListener('keydown',function(e){
+  if(e.key==='Enter'){
+   e.preventDefault();
+   var first=wrap.querySelector('#lbBoardStationResults [data-lb-board-station-choice]');
+   if(first)choose(first.dataset.lbBoardStationChoice,true);
+  }
+ });
+ document.addEventListener('keydown',function(e){
+  if(e.key!=='Escape'||!S.open)return;
+  e.preventDefault();
+  if(!document.getElementById('lbBoardStationPanel').hidden){showStationPicker(false);return;}
+  close();
+ });
  window.addEventListener('message',onExactResponse);
  document.addEventListener('lb:prefs-updated',onAccountStationsUpdated);
  document.addEventListener('lb:auth-state',onAccountStationsUpdated);
