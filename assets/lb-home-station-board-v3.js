@@ -5,7 +5,7 @@ if(window.__lbStationBoardInit)return;
 window.__lbStationBoardInit=true;
 var URL_STATIC='https://vps.labetaillere.fr/map-v2/z/41a9d7f2';
 var URL_LIVE='https://vps.labetaillere.fr/map-v2/z/77a13c5e';
-var S={open:false,mode:'dep',station:'Nancy',staticData:null,staticLoading:null,live:null,liveLoading:null,liveAt:0,byStation:new Map(),stations:[],stationChoices:[],limit:8,token:0,lastFocus:null,userPicked:false,exact:null,exactKey:'',bridgeFrame:null,bridgeTarget:null,bridgeTimer:null,bridgeToken:0,lastMarkup:null,initialPending:false,initialKey:'',initialFallback:null,initialSettle:null};
+var S={open:false,mode:'dep',station:'Nancy',staticData:null,staticLoading:null,live:null,liveLoading:null,liveAt:0,byStation:new Map(),stations:[],stationChoices:[],limit:8,token:0,lastFocus:null,userPicked:false,exact:null,exactKey:'',bridgeFrame:null,bridgeTarget:null,bridgeTimer:null,bridgeToken:0,lastMarkup:null,exactCache:new Map()};
 var priority=['Nancy','Metz','Thionville','Luxembourg','Hagondange','Bettembourg','Pont-à-Mousson','Hettange-Grande','Howald','Uckange'];
 function norm(s){return String(s||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().replace(/[^a-z0-9]+/g,' ').trim().replace(/ gare centrale$/,'');}
 function friendly(s){return String(s||'').trim().replace(/^Luxembourg, Gare Centrale$/i,'Luxembourg').replace(/^Luxembourg,?\s+Gare$/i,'Luxembourg').replace(/^Howald, Gare$/i,'Howald').replace(/^Bettembourg,?\s+Gare$/i,'Bettembourg');}
@@ -204,64 +204,39 @@ function draw(rows,cached){
  }
  more.hidden=rows.length<=S.limit;more.textContent='Plus de trains';
 }
-/* Le flux carte envoie successivement les horaires, les statuts, puis les
- * voies. Attendre sa stabilisation initiale évite trois états successifs. */
-function clearInitialTimers(){
- if(S.initialFallback){clearTimeout(S.initialFallback);S.initialFallback=null;}
- if(S.initialSettle){clearTimeout(S.initialSettle);S.initialSettle=null;}
-}
-function startInitialLoad(){
- clearInitialTimers();
- S.initialPending=true;
- S.initialKey=norm(S.station)+'|'+S.mode;
- S.lastMarkup=null;
- var host=document.getElementById('lbBoardRows');
- if(host)host.innerHTML='<p class="lb-board-wait" role="status">Chargement des trains et des voies…</p>';
- var more=document.getElementById('lbBoardMore');
- if(more)more.hidden=true;
- src('Préparation du tableau de gare…');
- var key=S.initialKey;
- S.initialFallback=setTimeout(function(){
-  if(S.open&&S.initialPending&&S.initialKey===key)finishInitialLoad();
- },7500);
-}
-function finishInitialLoad(){
- if(!S.open||!S.initialPending)return;
- clearInitialTimers();S.initialPending=false;render();
-}
-function settleExact(){
- if(!S.initialPending){render();return;}
- if(S.initialSettle)clearTimeout(S.initialSettle);
- var key=S.initialKey;
- S.initialSettle=setTimeout(function(){
-  S.initialSettle=null;
-  if(S.open&&S.initialPending&&S.initialKey===key)finishInitialLoad();
- },1550);
-}
 function render(){
- if(!S.open||S.initialPending)return;
+ if(!S.open)return;
  if(S.exact && S.exactKey===norm(S.station)+'|'+S.mode){
   draw(S.exact,false);saveCached(S.exact);
   src('Source : carte La Bétaillère · horaires et statuts synchronisés');
   return;
  }
  if(!S.staticData){
-  var old=getCached();if(old){draw(old.rows,true);src('Dernières données mémorisées · non actualisées');}
+  var old=getCached();if(old&&Date.now()-old.at<60000){draw(old.rows,true);src('Mise à jour en direct…');}
   else{document.getElementById('lbBoardRows').innerHTML='<p class="lb-board-wait">Chargement des prochains trains…</p>';src('Chargement à la demande…');}
   return;
  }
  var rows=getRows();draw(rows,false);saveCached(rows);
  src('Synchronisation avec la carte… · horaires prévus en attendant');
 }
-async function refresh(){
- var ticket=++S.token;render();
- try{
-  // Attendre les données statiques et LIVE ensemble ; un rendu seulement.
-  await Promise.all([loadStatic(),loadLive()]);
-  if(S.open&&ticket===S.token)render();
+function refresh(){
+ // Dès que l'index local est prêt, afficher SYNCHRONEMENT chaque gare.
+ var ticket=++S.token;
+ render();
+ if(!S.staticData){
+  loadStatic().then(function(){
+   if(S.open&&ticket===S.token)render();
+  }).catch(function(){
+   if(!S.open||ticket!==S.token||S.exact)return;
+   var old=getCached();
+   if(old){draw(old.rows,true);src('Hors ligne · données mémorisées non actualisées');}
+   else{document.getElementById('lbBoardRows').innerHTML='<p class="lb-board-wait">Horaires temporairement indisponibles.</p>';src('Impossible de récupérer les horaires');}
+  });
  }
- catch(_){if(!S.open||ticket!==S.token)return;var old=getCached();if(old){draw(old.rows,true);src('Hors ligne · dernières données du '+new Date(old.at).toLocaleString('fr-FR'));}
- else{document.getElementById('lbBoardRows').innerHTML='<p class="lb-board-wait">Horaires indisponibles. Réessaie quand la connexion revient.</p>';src('Impossible de récupérer les horaires');}}
+ // La requête LIVE enrichit les horaires mais ne bloque JAMAIS l'ouverture.
+ loadLive().then(function(){
+  if(S.open&&ticket===S.token&&S.staticData&&!S.exact)render();
+ }).catch(function(){});
 }
 function setTitle(){
  var label=document.getElementById('lbBoardName');
@@ -306,7 +281,9 @@ function requestExact(){
   iframe.src='https://vps.labetaillere.fr/map-v2/carte-preview.html?lbStationBoard=1';
  }
  if(S.bridgeTimer)clearTimeout(S.bridgeTimer);
- S.bridgeTimer=setTimeout(bridgeLoop,1800);
+ // Ne plus attendre 1,8 s lorsque la carte est déjà disponible.
+ if(S.bridgeTarget?.contentWindow)sendExactRequest();
+ S.bridgeTimer=setTimeout(bridgeLoop,S.exact?30000:2700);
 }
 function onExactResponse(event){
  if(!['https://vps.labetaillere.fr',location.origin].includes(event.origin)||event.source!==S.bridgeTarget?.contentWindow)return;
@@ -322,7 +299,9 @@ function onExactResponse(event){
    category:r.category,mode:S.mode,origin:r.place,dest:r.place,
    imminent:!!r.isImminent,trainId:r.trainId,exact:true};
  });
- settleExact();
+ S.exactCache.set(S.exactKey,{at:Date.now(),rows:S.exact});
+ if(S.exactCache.size>24)S.exactCache.delete(S.exactCache.keys().next().value);
+ render();
 }
 
 /* Compte BER : gare aller = départ du matin, gare retour = départ du soir.
@@ -408,29 +387,34 @@ function onAccountStationsUpdated(){
  if(norm(wanted)!==norm(S.station))choose(wanted,false);
 }
 
+function useRecentExact(){
+ var key=norm(S.station)+'|'+S.mode,hit=S.exactCache.get(key);
+ S.exact=hit&&Date.now()-hit.at<30000?hit.rows:null;
+ S.exactKey=S.exact?key:'';
+}
 function choose(value,explicit){
  var key=norm(friendly(value)),favorites=accountStations();
  var name=S.stations.find(function(x){return norm(x)===key;})||priority.find(function(x){return norm(x)===key;})||[favorites.morning,favorites.evening].find(function(x){return norm(x)===key;});
  if(!name){src('Gare non reconnue : choisis une gare dans la liste.');return false;}
  if(explicit!==false)S.userPicked=true;
- S.station=name;S.limit=8;S.exact=null;S.exactKey='';
+ S.station=name;S.limit=8;useRecentExact();
  document.getElementById('lbBoardStationValue').textContent=name;
  showStationPicker(false);
- setTitle();renderChoices();startInitialLoad();refresh();requestExact();
+ setTitle();renderChoices();refresh();requestExact();
  return true;
 }
 function tabs(){document.querySelectorAll('[data-lb-board-mode]').forEach(function(b){b.setAttribute('aria-selected',String(b.dataset.lbBoardMode===S.mode));});}
 function open(station){
  var overlay=document.getElementById('lbStationBoardOverlay');if(!overlay)return;
- S.lastFocus=document.activeElement;S.open=true;S.mode='dep';S.limit=8;S.userPicked=false;S.exact=null;S.exactKey='';
- S.station=friendly(station||defaultStation());
+ S.lastFocus=document.activeElement;S.open=true;S.mode='dep';S.limit=8;S.userPicked=false;
+ S.station=friendly(station||defaultStation());useRecentExact();
  overlay.hidden=false;document.body.classList.add('lb-board-visible');
  document.getElementById('lbBoardStationValue').textContent=S.station;showStationPicker(false);tabs();setTitle();renderChoices();
  document.getElementById('lbStationBoardSheet').focus({preventScroll:true});
- startInitialLoad();refresh();requestExact();
+ refresh();requestExact();
 }
 function close(){
- if(!S.open)return;S.open=false;++S.token;clearInitialTimers();S.initialPending=false;stopBridge();showStationPicker(false);
+ if(!S.open)return;S.open=false;++S.token;stopBridge();showStationPicker(false);
  document.getElementById('lbStationBoardOverlay').hidden=true;
  document.body.classList.remove('lb-board-visible');
  if(S.lastFocus?.isConnected)S.lastFocus.focus({preventScroll:true});
@@ -463,7 +447,7 @@ function init(){
   if(!e.target.closest('.lb-board-picker'))showStationPicker(false);
   var favorite=e.target.closest('[data-lb-board-favorite]');
   if(favorite){var name=accountStations()[favorite.dataset.lbBoardFavorite];if(name)choose(name,true);return;}
-  var mode=e.target.closest('[data-lb-board-mode]');if(mode){if(S.mode===mode.dataset.lbBoardMode)return;S.mode=mode.dataset.lbBoardMode;S.limit=8;S.exact=null;S.exactKey='';tabs();startInitialLoad();refresh();requestExact();return;}
+  var mode=e.target.closest('[data-lb-board-mode]');if(mode){if(S.mode===mode.dataset.lbBoardMode)return;S.mode=mode.dataset.lbBoardMode;S.limit=8;useRecentExact();tabs();refresh();requestExact();return;}
   var train=e.target.closest('[data-lb-board-train]');if(train){var num=train.dataset.lbBoardTrain,date=train.dataset.lbBoardDate;close();if(typeof window.lbOpenTrainDetail==='function')window.lbOpenTrainDetail(num,date);return;}
   if(e.target.closest('#lbBoardMore')){S.limit+=8;render();}
  });
@@ -517,5 +501,15 @@ function init(){
  document.addEventListener('visibilitychange',function(){if(S.open&&!document.hidden&&Date.now()-S.liveAt>45000)refresh();});
  window.lbOpenStationBoard=open;
 }
-if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',init,{once:true});else init();
+// Préparer l'index local pendant un temps libre, sans bloquer l'accueil.
+function warmBoardData(){
+ if(navigator.connection?.saveData)return;
+ loadStatic().catch(function(){});
+ loadLive().catch(function(){});
+}
+function scheduleWarm(){
+ if(typeof requestIdleCallback==='function')requestIdleCallback(warmBoardData,{timeout:2600});
+ else setTimeout(warmBoardData,1000);
+}
+if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',function(){init();scheduleWarm();},{once:true});else{init();scheduleWarm();}
 })();
