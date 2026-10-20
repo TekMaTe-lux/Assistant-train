@@ -8,7 +8,7 @@ var URL_LIVE='https://vps.labetaillere.fr/map-v2/z/77a13c5e';
 var S={open:false,mode:'dep',station:'Nancy',staticData:null,staticLoading:null,live:null,liveAt:0,byStation:new Map(),stations:[],stationChoices:[],limit:8,token:0,lastFocus:null,userPicked:false,exact:null,exactKey:'',bridgeFrame:null,bridgeTarget:null,bridgeTimer:null,bridgeToken:0};
 var priority=['Nancy','Metz','Thionville','Luxembourg','Hagondange','Bettembourg','Pont-à-Mousson','Hettange-Grande','Howald','Uckange'];
 function norm(s){return String(s||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().replace(/[^a-z0-9]+/g,' ').trim().replace(/ gare centrale$/,'');}
-function friendly(s){return String(s||'').replace(/^Luxembourg, Gare Centrale$/i,'Luxembourg').replace(/^Howald, Gare$/i,'Howald').replace(/^Bettembourg, Gare$/i,'Bettembourg');}
+function friendly(s){return String(s||'').trim().replace(/^Luxembourg, Gare Centrale$/i,'Luxembourg').replace(/^Howald, Gare$/i,'Howald').replace(/^Bettembourg,?\s+Gare$/i,'Bettembourg');}
 function clean(s){return String(s==null?'':s).replace(/[&<>"']/g,function(x){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[x];});}
 function clock(sec){var min=Math.floor(sec/60);return String((Math.floor(min/60)%24+24)%24).padStart(2,'0')+':'+String((min%60+60)%60).padStart(2,'0');}
 function nowParis(){var d=Object.fromEntries(new Intl.DateTimeFormat('en-GB',{timeZone:'Europe/Paris',year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit',hourCycle:'h23'}).formatToParts(new Date()).filter(function(p){return p.type!=='literal';}).map(function(p){return [p.type,Number(p.value)];}));return {y:d.year,m:d.month,d:d.day,sec:d.hour*3600+d.minute*60+d.second};}
@@ -303,7 +303,7 @@ function onAccountStationsUpdated(){
 }
 
 function choose(value,explicit){
- var key=norm(value),favorites=accountStations();
+ var key=norm(friendly(value)),favorites=accountStations();
  var name=S.stations.find(function(x){return norm(x)===key;})||priority.find(function(x){return norm(x)===key;})||[favorites.morning,favorites.evening].find(function(x){return norm(x)===key;});
  if(!name){src('Gare non reconnue : choisis une gare dans la liste.');return false;}
  if(explicit!==false)S.userPicked=true;
