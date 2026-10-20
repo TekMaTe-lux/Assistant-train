@@ -10883,34 +10883,52 @@ document.addEventListener('DOMContentLoaded', () => {
 
 
   // Réutilise l'index horaire SNCF du VPS, sans aucun chargement au démarrage.
-  let lookupRequestId=0,lookupRunning=false;
+  // Une seule fenêtre pour Recherche / Une bétaillère et Statistiques.
+  const trainFinderModal=byId('lbTrainFinderModal');
+  if(trainFinderModal && trainFinderModal.parentNode!==document.body) {
+    // Nécessaire : le panneau Statistiques peut être masqué lorsque Recherche est actif.
+    document.body.appendChild(trainFinderModal);
+  }
+  let lookupRequestId=0,lookupRunning=false,lookupContext='stats';
+  let lookupRestoreFocus=null;
   function setLookupMessage(value){
     const el=byId('statsV2LookupMessage');
     if(el)el.textContent=String(value||'');
   }
-  function setTrainLookupOpen(open){
-    const toggle=byId('statsV2LookupToggle'),panel=byId('statsV2LookupPanel');
-    if(!toggle||!panel)return;
-    toggle.setAttribute('aria-expanded',String(open));panel.hidden=!open;
+  function setTrainLookupOpen(open,source){
+    const panel=byId('statsV2LookupPanel'),toggle=byId('statsV2LookupToggle');
+    const searchToggle=byId('tableauTrainLookupToggle');
+    if(!panel||!trainFinderModal)return;
     if(open){
-      // Choix automatique au premier affichage, heure LOCALE de la ligne
-      // Nancy-Metz-Luxembourg, indépendante du fuseau du téléphone/PC.
+      lookupContext=source==='search'?'search':'stats';
+      lookupRestoreFocus=lookupContext==='search'?searchToggle:toggle;
+      const date=byId('statsV2LookupDate'),time=byId('statsV2LookupTime');
       const today=luxDateIso();
-      const date=byId('statsV2LookupDate');
-      const time=byId('statsV2LookupTime');
       if(date){
         date.max=today;
         if(!date.value)date.value=today;
       }
-      if(time && !time.value){
+      if(time&&!time.value){
         const parts=new Intl.DateTimeFormat('fr-FR',{
           timeZone:'Europe/Luxembourg',hour:'2-digit',minute:'2-digit',hourCycle:'h23'
         }).formatToParts(new Date());
-        const hour=parts.find(p=>p.type==='hour')?.value||'00';
-        const minute=parts.find(p=>p.type==='minute')?.value||'00';
-        time.value=hour+':'+minute;
+        time.value=(parts.find(p=>p.type==='hour')?.value||'00')+':'+
+          (parts.find(p=>p.type==='minute')?.value||'00');
       }
-    }else ++lookupRequestId;
+      panel.hidden=false;
+      if(!trainFinderModal.open)trainFinderModal.showModal();
+      const title=byId('lbTrainFinderTitle');
+      if(title)title.textContent='🚆 Retrouver ma bétaillère';
+      byId('lbTrainFinderClose')?.focus({preventScroll:true});
+    }else{
+      ++lookupRequestId;
+      panel.hidden=true;
+      if(trainFinderModal.open)trainFinderModal.close();
+      if(!lookupRestoreFocus?.closest('[hidden]'))lookupRestoreFocus?.focus({preventScroll:true});
+      lookupRestoreFocus=null;
+    }
+    toggle?.setAttribute('aria-expanded',String(open&&lookupContext==='stats'));
+    searchToggle?.setAttribute('aria-expanded',String(open&&lookupContext==='search'));
   }
   function renderTrainLookupResults(data,hasTime){
     const host=byId('statsV2LookupResults');
@@ -10929,7 +10947,7 @@ document.addEventListener('DOMContentLoaded', () => {
       '<button class="stats-v2__lookup-result" type="button" data-stats-train-lookup="'+escapeHtml(item.train)+'">'+
       '<span class="stats-v2__lookup-schedule"><strong>'+escapeHtml(item.dep)+'</strong><small>→ '+escapeHtml(item.arr)+'</small></span>'+
       '<span class="stats-v2__lookup-number"><strong>TER '+escapeHtml(item.train)+'</strong><small>SNCF · horaire théorique</small></span>'+
-      '<span class="stats-v2__lookup-action">Analyser ↗</span></button>'
+      '<span class="stats-v2__lookup-action">'+(lookupContext==='search'?'Ouvrir ↗':'Analyser ↗')+'</span></button>'
     ).join('');
     if(records.length)setLookupMessage(records.length+' train(s) trouvé(s). Sélectionne celui qui correspond à ton trajet.');
     else setLookupMessage('Aucun train direct SNCF trouvé. Vérifie le trajet, la date ou essaie un autre horaire.');
@@ -11572,8 +11590,19 @@ document.addEventListener('DOMContentLoaded', () => {
   });
   byId('statsV2ApplyRange')?.addEventListener('click', () => setPeriod('custom', { user: true, loadCustom: true }));
 
-  byId('statsV2LookupToggle')?.addEventListener('click',()=>{
-    setTrainLookupOpen(byId('statsV2LookupToggle')?.getAttribute('aria-expanded')!=='true');
+  byId('statsV2LookupToggle')?.addEventListener('click',()=>setTrainLookupOpen(true,'stats'));
+  byId('tableauTrainLookupToggle')?.addEventListener('click',()=>setTrainLookupOpen(true,'search'));
+  byId('lbTrainFinderClose')?.addEventListener('click',()=>setTrainLookupOpen(false));
+  trainFinderModal?.addEventListener('close',()=>{
+    // Échap du navigateur : vider aussi l'état interne et les requêtes anciennes.
+    if(!byId('statsV2LookupPanel')?.hidden)setTrainLookupOpen(false);
+  });
+  trainFinderModal?.addEventListener('click',event=>{
+    if(event.target!==trainFinderModal)return;
+    const rect=trainFinderModal.getBoundingClientRect();
+    if(event.clientX<rect.left||event.clientX>rect.right||event.clientY<rect.top||event.clientY>rect.bottom){
+      setTrainLookupOpen(false);
+    }
   });
   byId('statsV2LookupSearch')?.addEventListener('click',searchTrainByRoute);
   ['statsV2LookupFrom','statsV2LookupTo','statsV2LookupTime'].forEach(id=>{
@@ -11586,12 +11615,21 @@ document.addEventListener('DOMContentLoaded', () => {
     if(!button)return;
     const train=normalizeTrain(button.dataset.statsTrainLookup);
     if(!train)return;
-    hasTargetInteracted=true;
-    byId('statsV2TrainInput').value=train;
-    byId('statsV2TrainStop').value=''; // pas de gare implicite
+    const context=lookupContext;
+    const pickedDate=byId('statsV2LookupDate')?.value||luxDateIso();
     setTrainLookupOpen(false);
-    runTrain();
-    byId('statsV2TrainPanel')?.scrollIntoView({behavior:'smooth',block:'start'});
+    if(context==='search'){
+      const input=byId('tableauTrainNumber'),date=byId('tableauTrainDate');
+      if(input)input.value=train;
+      if(date)date.value=pickedDate;
+      byId('tableauTrainSearchForm')?.requestSubmit();
+    }else{
+      hasTargetInteracted=true;
+      byId('statsV2TrainInput').value=train;
+      byId('statsV2TrainStop').value=''; // pas de gare implicite
+      runTrain();
+      byId('statsV2TrainPanel')?.scrollIntoView({behavior:'smooth',block:'start'});
+    }
   });
 
   byId('statsV2TrainRun')?.addEventListener('click', runTrain);
