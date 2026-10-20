@@ -418,6 +418,7 @@ function open(station){
  overlay.hidden=false;document.body.classList.add('lb-board-visible');
  document.getElementById('lbBoardStationValue').textContent=S.station;showStationPicker(false);tabs();setTitle();renderChoices();
  document.getElementById('lbStationBoardSheet').focus({preventScroll:true});
+ overlay.dispatchEvent(new Event('lb-board-opened'));
  refresh();requestExact();
 }
 function close(){
@@ -425,6 +426,72 @@ function close(){
  document.getElementById('lbStationBoardOverlay').hidden=true;
  document.body.classList.remove('lb-board-visible');
  if(S.lastFocus?.isConnected)S.lastFocus.focus({preventScroll:true});
+}
+/* En gare — tiroir à hauteur stable et poignée redimensionnable.
+ * La hauteur ne dépend plus des statuts/retards ni du mode Départs/Arrivées. */
+function setupDrawerResize(overlay){
+ var sheet=overlay.querySelector('#lbStationBoardSheet'),handle=overlay.querySelector('.lb-board-handle');
+ if(!sheet||!handle)return;
+ handle.setAttribute('role','slider');
+ handle.setAttribute('tabindex','0');
+ handle.setAttribute('aria-label','Régler la hauteur du tiroir En gare');
+ handle.setAttribute('aria-orientation','vertical');
+ handle.setAttribute('title','Faire glisser vers le haut ou le bas pour régler la hauteur');
+ var drag=null,userHeight=null;
+ function bounds(){
+  var viewport=Math.min(window.innerHeight,window.visualViewport?.height||window.innerHeight);
+  var max=Math.max(220,Math.floor(viewport)-8);
+  var min=Math.min(max,Math.max(330,Math.round(max*.5)));
+  return {min:min,max:max};
+ }
+ function syncAria(){
+  var b=bounds(),height=Math.round(sheet.getBoundingClientRect().height);
+  handle.setAttribute('aria-valuemin',String(b.min));
+  handle.setAttribute('aria-valuemax',String(b.max));
+  handle.setAttribute('aria-valuenow',String(height));
+  handle.setAttribute('aria-valuetext',height+' pixels');
+ }
+ function changeHeight(next){
+  var b=bounds();
+  userHeight=Math.max(b.min,Math.min(b.max,Math.round(next)));
+  sheet.style.setProperty('--lb-board-drawer-height',userHeight+'px');
+  syncAria();
+ }
+ handle.addEventListener('pointerdown',function(e){
+  if(e.button!==0)return;
+  e.preventDefault();
+  drag={id:e.pointerId,startY:e.clientY,startHeight:sheet.getBoundingClientRect().height};
+  handle.setPointerCapture?.(e.pointerId);
+  handle.classList.add('is-dragging');
+ });
+ handle.addEventListener('pointermove',function(e){
+  if(!drag||drag.id!==e.pointerId)return;
+  e.preventDefault();
+  changeHeight(drag.startHeight+drag.startY-e.clientY);
+ });
+ function endDrag(e){
+  if(!drag||drag.id!==e.pointerId)return;
+  drag=null;handle.classList.remove('is-dragging');
+  if(handle.hasPointerCapture?.(e.pointerId))handle.releasePointerCapture(e.pointerId);
+ }
+ handle.addEventListener('pointerup',endDrag);
+ handle.addEventListener('pointercancel',endDrag);
+ handle.addEventListener('lostpointercapture',function(){drag=null;handle.classList.remove('is-dragging');});
+ handle.addEventListener('keydown',function(e){
+  var amount=(e.shiftKey?50:24),key=e.key;
+  if(!['ArrowUp','ArrowDown','PageUp','PageDown','Home','End'].includes(key))return;
+  e.preventDefault();
+  var h=sheet.getBoundingClientRect().height,b=bounds();
+  changeHeight(key==='Home'?b.min:key==='End'?b.max:h+((key==='ArrowUp'||key==='PageUp')?amount:-amount));
+ });
+ handle.addEventListener('dblclick',function(){
+  userHeight=null;sheet.style.removeProperty('--lb-board-drawer-height');syncAria();
+ });
+ window.addEventListener('resize',function(){
+  if(userHeight!==null)changeHeight(userHeight);
+  else syncAria();
+ });
+ overlay.addEventListener('lb-board-opened',syncAria);
 }
 function init(){
  var card=document.querySelector('#home .home-card[aria-label="Mes Bétaillères favorites"]');if(!card)return;
@@ -442,6 +509,7 @@ function init(){
  '<p class="lb-board-source" id="lbBoardSource" aria-live="polite">Chargement à la demande…</p><div id="lbBoardRows" class="lb-board-rows" aria-live="polite"></div>'+
  '<button type="button" class="lb-board-more" id="lbBoardMore" hidden>Voir plus de trains ↓</button></section>';
  document.body.appendChild(wrap);
+ setupDrawerResize(wrap);
  wrap.addEventListener('click',function(e){
   if(e.target.closest('[data-lb-board-close]'))return close();
   var stationOption=e.target.closest('[data-lb-board-station-choice]');
