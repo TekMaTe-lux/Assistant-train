@@ -6072,6 +6072,38 @@ function lbCurrentStaticRangeBounds(){
     if (Number.isFinite(min)) values.push(min);
   });
 
+  // Depuis la recherche statique sur VPS, __lbFastStaticBatch peut rester vide.
+  // Retrouver les bornes à partir des horaires déjà visibles dans le tableau :
+  // aucun nouvel appel réseau, aucune dépendance au cache navigateur.
+  if (!values.length) {
+    const table = document.querySelector('#trainInfo .table-scroll table');
+    const headers = Array.from(table?.tHead?.rows?.[0]?.cells || []);
+    const tableRows = Array.from(table?.tBodies?.[0]?.rows || []);
+    const numbers = new Set(Array.from(selectedTrains || [], String));
+    headers.forEach((heading, column) => {
+      if (column === 0) return;
+      const num = String(heading.dataset.trainNumber || heading.textContent || '').match(/\b\d{5,6}\b/)?.[0];
+      if (!num || !numbers.has(num)) return;
+      const stationRow = tableRows.find((row) => {
+        const station = String(row.cells?.[0]?.textContent || '').trim();
+        const normalized = typeof normalizeStationName === 'function'
+          ? normalizeStationName(station) : station.toLowerCase();
+        return !!startNorm && (normalized === startNorm || normalized.startsWith(startNorm + ' '));
+      });
+      // Les trains courts démarrent parfois à Metz ou Thionville : dans ce cas
+      // leur première cellule horaire réelle constitue le départ de référence.
+      const candidates = stationRow ? [stationRow, ...tableRows] : tableRows;
+      for (const row of candidates) {
+        const cell = row.cells?.[column];
+        const match = String(cell?.textContent || '').match(/\b(?:[01]?\d|2[0-3]):[0-5]\d\b/);
+        if (!match) continue;
+        const minute = lbRangeClockToMin(match[0]);
+        if (Number.isFinite(minute)) values.push(minute);
+        break;
+      }
+    });
+  }
+
   if (!values.length) return null;
   return { min: Math.min(...values), max: Math.max(...values) };
 }
@@ -6184,7 +6216,7 @@ async function lbExtendFixedPreset(direction){
       kind,
       side: direction,
       anchor: String(anchor),
-      limit: '2'
+      limit: '6'
     });
     const response = await fetch(
       'https://vps.labetaillere.fr/api/train-static-corridor-neighbors?' + params.toString(),
@@ -6197,7 +6229,7 @@ async function lbExtendFixedPreset(direction){
     const additions = (Array.isArray(payload?.trains) ? payload.trains : [])
       .map((row) => String(row?.train || '').trim())
       .filter((num) => /^88\d{3}$/.test(num) && !selectedTrains.has(num))
-      .slice(0, 2);
+      .slice(direction === 'earlier' ? -2 : 0, direction === 'earlier' ? undefined : 2);
 
     if (!additions.length) return;
 
