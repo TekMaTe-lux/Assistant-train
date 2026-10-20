@@ -403,7 +403,14 @@ function choose(value,explicit){
  setTitle();renderChoices();refresh();requestExact();
  return true;
 }
-function tabs(){document.querySelectorAll('[data-lb-board-mode]').forEach(function(b){b.setAttribute('aria-selected',String(b.dataset.lbBoardMode===S.mode));});}
+function tabs(){
+ document.querySelectorAll('[data-lb-board-mode]').forEach(function(btn){
+  btn.setAttribute('aria-selected',String(btn.dataset.lbBoardMode===S.mode));
+ });
+ // Teinte du tableau dépend seulement de la direction affichée.
+ var overlay=document.getElementById('lbStationBoardOverlay');
+ if(overlay)overlay.setAttribute('data-board-mode',S.mode);
+}
 function open(station){
  var overlay=document.getElementById('lbStationBoardOverlay');if(!overlay)return;
  S.lastFocus=document.activeElement;S.open=true;S.mode='dep';S.limit=8;S.userPicked=false;
