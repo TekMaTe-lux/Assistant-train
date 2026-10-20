@@ -5,7 +5,7 @@ if(window.__lbStationBoardInit)return;
 window.__lbStationBoardInit=true;
 var URL_STATIC='https://vps.labetaillere.fr/map-v2/z/41a9d7f2';
 var URL_LIVE='https://vps.labetaillere.fr/map-v2/z/77a13c5e';
-var S={open:false,mode:'dep',station:'Nancy',staticData:null,staticLoading:null,live:null,liveLoading:null,liveAt:0,byStation:new Map(),stations:[],stationChoices:[],limit:8,token:0,lastFocus:null,userPicked:false,exact:null,exactKey:'',bridgeFrame:null,bridgeTarget:null,bridgeTimer:null,bridgeToken:0,lastMarkup:null,exactCache:new Map()};
+var S={open:false,mode:'dep',station:'Nancy',staticData:null,staticLoading:null,live:null,liveLoading:null,liveAt:0,byStation:new Map(),stations:[],stationChoices:[],limit:8,token:0,lastFocus:null,userPicked:false,exact:null,exactKey:'',bridgeFrame:null,bridgeTarget:null,bridgeTimer:null,bridgeToken:0,lastMarkup:null,exactCache:new Map(),clockTimer:null,luxArrivalFeed:null,luxArrivalAt:0,luxArrivalPromise:null};
 var priority=['Nancy','Metz','Thionville','Luxembourg','Hagondange','Bettembourg','Pont-à-Mousson','Hettange-Grande','Howald','Uckange'];
 function norm(s){return String(s||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().replace(/[^a-z0-9]+/g,' ').trim().replace(/ gare centrale$/,'');}
 function friendly(s){return String(s||'').trim().replace(/^Luxembourg, Gare Centrale$/i,'Luxembourg').replace(/^Luxembourg,?\s+Gare$/i,'Luxembourg').replace(/^Howald, Gare$/i,'Howald').replace(/^Bettembourg,?\s+Gare$/i,'Bettembourg');}
@@ -13,6 +13,25 @@ function clean(s){return String(s==null?'':s).replace(/[&<>"']/g,function(x){ret
 function clock(sec){var min=Math.floor(sec/60);return String((Math.floor(min/60)%24+24)%24).padStart(2,'0')+':'+String((min%60+60)%60).padStart(2,'0');}
 function nowParis(){var d=Object.fromEntries(new Intl.DateTimeFormat('en-GB',{timeZone:'Europe/Paris',year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit',hourCycle:'h23'}).formatToParts(new Date()).filter(function(p){return p.type!=='literal';}).map(function(p){return [p.type,Number(p.value)];}));return {y:d.year,m:d.month,d:d.day,sec:d.hour*3600+d.minute*60+d.second};}
 function isoDay(now,offset){return new Date(Date.UTC(now.y,now.m-1,now.d+offset)).toISOString().slice(0,10);}
+/* Horloge de la gare : secondes réellement animées, aucun nouveau fetch
+ * et aucune reconstruction du tableau. Timer actif uniquement modal visible. */
+var boardClockFmt=new Intl.DateTimeFormat('fr-FR',{
+ timeZone:'Europe/Luxembourg',hour:'2-digit',minute:'2-digit',second:'2-digit',hourCycle:'h23'
+});
+function boardClockText(){return boardClockFmt.format(new Date());}
+function tickBoardClock(){
+ if(!S.open||document.hidden){stopBoardClock();return;}
+ var node=document.getElementById('lbBoardClock');
+ if(node)node.textContent=boardClockText();
+ S.clockTimer=setTimeout(tickBoardClock,Math.max(100,1010-Date.now()%1000));
+}
+function stopBoardClock(){
+ if(S.clockTimer!=null){clearTimeout(S.clockTimer);S.clockTimer=null;}
+}
+function startBoardClock(){
+ stopBoardClock();
+ if(S.open&&!document.hidden)tickBoardClock();
+}
 function src(text){document.getElementById('lbBoardSource').textContent=text;}
 function getCached(){
  try {var v=JSON.parse(localStorage.getItem('lb:station-board:'+norm(S.station)+':'+S.mode)||'null');return v&&v.at>Date.now()-36*3600000&&Array.isArray(v.rows)?v:null;}catch(_){return null;}
@@ -172,7 +191,7 @@ function draw(rows,cached){
  }
  var heading=S.mode==='dep'?'DÉPARTS':'ARRIVÉES';
  var col=S.mode==='dep'?'DESTINATION':'PROVENANCE';
- var html='<div class="lb-gare-table-top"><b>'+heading+'</b><time id="lbBoardClock">'+new Date().toLocaleTimeString('fr-FR',{timeZone:'Europe/Paris'})+'</time></div>'+
+ var html='<div class="lb-gare-table-top"><b>'+heading+'</b><span class="lb-gare-clock-live"><span class="lb-gare-clock-live-label" aria-hidden="true">LIVE</span><time id="lbBoardClock" aria-label="Heure actuelle" aria-live="off" title="Horloge actualisée chaque seconde">'+boardClockText()+'</time></span></div>'+
  '<table class="lb-gare-table"><colgroup><col style="width:47%"><col style="width:21%"><col style="width:32%"></colgroup>'+
  '<thead><tr><th>'+col+'</th><th>HEURE</th><th aria-label="Voie et détails"></th></tr></thead><tbody>';
  rows.slice(0,S.limit).forEach(function(r){
@@ -197,7 +216,7 @@ function draw(rows,cached){
  var stable=markup.replace(/(<time id="lbBoardClock">)[^<]*(<\/time>)/,'$1$2');
  if(S.lastMarkup===stable&&host.querySelector('.lb-gare-table')){
   var clockLabel=host.querySelector('#lbBoardClock');
-  if(clockLabel)clockLabel.textContent=new Date().toLocaleTimeString('fr-FR',{timeZone:'Europe/Paris'});
+  if(clockLabel)clockLabel.textContent=boardClockText();
  }else{
   if(!patchTableInPlace(host,markup))host.innerHTML=markup;
   S.lastMarkup=stable;
@@ -285,6 +304,85 @@ function requestExact(){
  if(S.bridgeTarget?.contentWindow)sendExactRequest();
  S.bridgeTimer=setTimeout(bridgeLoop,S.exact?30000:2700);
 }
+/* Voie Luxembourg : même correspondance sécurisée que la carte BER V9.
+ * SNCF Nancy TER 88513 => HAFAS 88512, numéro + retards jamais modifiés.
+ * Donnée HAFAS unique, même arrivée planifiée, provenance Nancy, jour courant.
+ * Récupération paresseuse, maximum 1 requête / 60s, jamais bloquante. */
+var LUX_ARRIVAL_FEED='https://vps.labetaillere.fr/g/e7a329d6';
+function luxServiceDay(date){
+ var parts=new Intl.DateTimeFormat('en-GB',{
+  timeZone:'Europe/Luxembourg',year:'numeric',month:'2-digit',day:'2-digit'
+ }).formatToParts(date);
+ var d={};parts.forEach(function(p){d[p.type]=p.value;});
+ return d.year+'-'+d.month+'-'+d.day;
+}
+function luxPlatformValue(info){
+ var raw=info?.arrivalPlatformRealtime||info?.arrivalPlatformPlanned;
+ if(typeof raw!=='string'&&typeof raw!=='number')return '';
+ var platform=String(raw).trim();
+ return /^[a-z\d][a-z\d\s-]{0,10}$/i.test(platform)?platform.slice(0,8):'';
+}
+function mergeLuxArrivalTracks(rows){
+ if(norm(S.station)!=='luxembourg'||S.mode!=='arr'||!Array.isArray(rows))return false;
+ var feed=S.luxArrivalFeed;
+ if(!feed||Date.now()-S.luxArrivalAt>60000)return false;
+ var changed=false;
+ rows.forEach(function(row){
+  if(row.track||!/^nancy(?: ville)?$/.test(norm(row.origin)))return;
+  var raw=String(row.number||'');
+  var match=raw.match(/\b(885\d{2})\b/);
+  if(!match)return;
+  var number=Number(match[1]);
+  if(number%2!==1)return;
+  var arrivalClock=clock(row.planned);
+  if(!arrivalClock||row.day!==feed.day)return;
+  var direct=feed.data.get(String(number));
+  var matching=direct&&luxPlatformValue(direct)&&direct.arrivalPlanned===arrivalClock
+    ?[direct]:Array.from(feed.data.entries()).filter(function(entry){
+      var key=Number(entry[0]),info=entry[1];
+      return key===number-1&&info.arrivalPlanned===arrivalClock&&
+       luxPlatformValue(info)&&/nancy/i.test(String(info.origin||''));
+    }).map(function(e){return e[1];});
+  // Jamais de voie supposée si les candidats ne sont pas uniques.
+  if(matching.length!==1)return;
+  var platform=luxPlatformValue(matching[0]);
+  if(platform){row.track=platform;row.trackFromCflAlias=true;changed=true;}
+ });
+ return changed;
+}
+function ensureLuxArrivalTracks(){
+ if(!S.open||norm(S.station)!=='luxembourg'||S.mode!=='arr'||!navigator.onLine)return;
+ if(S.luxArrivalPromise)return;
+ if(S.luxArrivalFeed&&Date.now()-S.luxArrivalAt<60000){
+  if(S.exact&&mergeLuxArrivalTracks(S.exact))render();
+  return;
+ }
+ S.luxArrivalPromise=(async function(){
+  var ctrl=new AbortController(),t=setTimeout(function(){ctrl.abort();},4500);
+  try{
+   var response=await fetch(LUX_ARRIVAL_FEED,{cache:'no-store',mode:'cors',signal:ctrl.signal});
+   if(!response.ok)return;
+   var payload=await response.json(),entries=payload?.data;
+   var updated=new Date(payload?.updatedAt);
+   if(!entries||typeof entries!=='object'||!Number.isFinite(updated.getTime())||
+    Math.abs(Date.now()-updated.getTime())>8*60000)return;
+   var map=new Map();
+   Object.entries(entries).forEach(function(entry){
+    var number=String(entry[0]).match(/885\d{2}/);
+    if(number&&entry[1]&&typeof entry[1]==='object')map.set(number[0],entry[1]);
+   });
+   if(!map.size)return;
+   S.luxArrivalFeed={data:map,day:luxServiceDay(updated)};
+   S.luxArrivalAt=Date.now();
+   if(S.open&&S.exact&&mergeLuxArrivalTracks(S.exact)){
+    S.exactCache.set(S.exactKey,{at:Date.now(),rows:S.exact});
+    render();
+   }
+  }catch(_){/* La voie reste non renseignée si CFL indisponible. */}
+  finally{clearTimeout(t);}
+ })();
+ S.luxArrivalPromise.finally(function(){S.luxArrivalPromise=null;});
+}
 function onExactResponse(event){
  if(!['https://vps.labetaillere.fr',location.origin].includes(event.origin)||event.source!==S.bridgeTarget?.contentWindow)return;
  var m=event.data;
@@ -299,9 +397,10 @@ function onExactResponse(event){
    category:r.category,mode:S.mode,origin:r.place,dest:r.place,
    imminent:!!r.isImminent,trainId:r.trainId,exact:true};
  });
+ mergeLuxArrivalTracks(S.exact);
  S.exactCache.set(S.exactKey,{at:Date.now(),rows:S.exact});
  if(S.exactCache.size>24)S.exactCache.delete(S.exactCache.keys().next().value);
- render();
+ render();ensureLuxArrivalTracks();
 }
 
 /* Compte BER : gare aller = départ du matin, gare retour = départ du soir.
@@ -391,6 +490,7 @@ function useRecentExact(){
  var key=norm(S.station)+'|'+S.mode,hit=S.exactCache.get(key);
  S.exact=hit&&Date.now()-hit.at<30000?hit.rows:null;
  S.exactKey=S.exact?key:'';
+ if(S.exact)mergeLuxArrivalTracks(S.exact);
 }
 function choose(value,explicit){
  var key=norm(friendly(value)),favorites=accountStations();
@@ -400,7 +500,7 @@ function choose(value,explicit){
  S.station=name;S.limit=8;useRecentExact();
  document.getElementById('lbBoardStationValue').textContent=name;
  showStationPicker(false);
- setTitle();renderChoices();refresh();requestExact();
+ setTitle();renderChoices();refresh();requestExact();ensureLuxArrivalTracks();
  return true;
 }
 function tabs(){
@@ -419,10 +519,11 @@ function open(station){
  document.getElementById('lbBoardStationValue').textContent=S.station;showStationPicker(false);tabs();setTitle();renderChoices();
  document.getElementById('lbStationBoardSheet').focus({preventScroll:true});
  overlay.dispatchEvent(new Event('lb-board-opened'));
- refresh();requestExact();
+ startBoardClock();
+ refresh();requestExact();ensureLuxArrivalTracks();
 }
 function close(){
- if(!S.open)return;S.open=false;++S.token;stopBridge();showStationPicker(false);
+ if(!S.open)return;S.open=false;++S.token;stopBoardClock();stopBridge();showStationPicker(false);
  document.getElementById('lbStationBoardOverlay').hidden=true;
  document.body.classList.remove('lb-board-visible');
  if(S.lastFocus?.isConnected)S.lastFocus.focus({preventScroll:true});
@@ -522,7 +623,7 @@ function init(){
   if(!e.target.closest('.lb-board-picker'))showStationPicker(false);
   var favorite=e.target.closest('[data-lb-board-favorite]');
   if(favorite){var name=accountStations()[favorite.dataset.lbBoardFavorite];if(name)choose(name,true);return;}
-  var mode=e.target.closest('[data-lb-board-mode]');if(mode){if(S.mode===mode.dataset.lbBoardMode)return;S.mode=mode.dataset.lbBoardMode;S.limit=8;useRecentExact();tabs();refresh();requestExact();return;}
+  var mode=e.target.closest('[data-lb-board-mode]');if(mode){if(S.mode===mode.dataset.lbBoardMode)return;S.mode=mode.dataset.lbBoardMode;S.limit=8;useRecentExact();tabs();refresh();requestExact();ensureLuxArrivalTracks();return;}
   var train=e.target.closest('[data-lb-board-train]');if(train){var num=train.dataset.lbBoardTrain,date=train.dataset.lbBoardDate;close();if(typeof window.lbOpenTrainDetail==='function')window.lbOpenTrainDetail(num,date);return;}
   if(e.target.closest('#lbBoardMore')){S.limit+=8;render();}
  });
@@ -573,7 +674,7 @@ function init(){
  document.addEventListener('lb:prefs-updated',onAccountStationsUpdated);
  document.addEventListener('lb:auth-state',onAccountStationsUpdated);
  window.addEventListener('online',function(){if(S.open)refresh();});
- document.addEventListener('visibilitychange',function(){if(S.open&&!document.hidden&&Date.now()-S.liveAt>45000)refresh();});
+ document.addEventListener('visibilitychange',function(){if(!S.open)return;if(document.hidden)stopBoardClock();else{startBoardClock();if(Date.now()-S.liveAt>45000)refresh();}});
  window.lbOpenStationBoard=open;
 }
 // Préparer l'index local pendant un temps libre, sans bloquer l'accueil.
