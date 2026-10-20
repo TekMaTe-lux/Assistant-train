@@ -5,7 +5,7 @@ if(window.__lbStationBoardInit)return;
 window.__lbStationBoardInit=true;
 var URL_STATIC='https://vps.labetaillere.fr/map-v2/z/41a9d7f2';
 var URL_LIVE='https://vps.labetaillere.fr/map-v2/z/77a13c5e';
-var S={open:false,mode:'dep',station:'Nancy',staticData:null,staticLoading:null,live:null,liveLoading:null,liveAt:0,byStation:new Map(),stations:[],stationChoices:[],limit:8,token:0,lastFocus:null,userPicked:false,exact:null,exactKey:'',bridgeFrame:null,bridgeTarget:null,bridgeTimer:null,bridgeToken:0,lastMarkup:null};
+var S={open:false,mode:'dep',station:'Nancy',staticData:null,staticLoading:null,live:null,liveLoading:null,liveAt:0,byStation:new Map(),stations:[],stationChoices:[],limit:8,token:0,lastFocus:null,userPicked:false,exact:null,exactKey:'',bridgeFrame:null,bridgeTarget:null,bridgeTimer:null,bridgeToken:0,lastMarkup:null,initialPending:false,initialKey:'',initialFallback:null,initialSettle:null};
 var priority=['Nancy','Metz','Thionville','Luxembourg','Hagondange','Bettembourg','Pont-à-Mousson','Hettange-Grande','Howald','Uckange'];
 function norm(s){return String(s||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().replace(/[^a-z0-9]+/g,' ').trim().replace(/ gare centrale$/,'');}
 function friendly(s){return String(s||'').trim().replace(/^Luxembourg, Gare Centrale$/i,'Luxembourg').replace(/^Luxembourg,?\s+Gare$/i,'Luxembourg').replace(/^Howald, Gare$/i,'Howald').replace(/^Bettembourg,?\s+Gare$/i,'Bettembourg');}
@@ -204,8 +204,42 @@ function draw(rows,cached){
  }
  more.hidden=rows.length<=S.limit;more.textContent='Plus de trains';
 }
+/* Le flux carte envoie successivement les horaires, les statuts, puis les
+ * voies. Attendre sa stabilisation initiale évite trois états successifs. */
+function clearInitialTimers(){
+ if(S.initialFallback){clearTimeout(S.initialFallback);S.initialFallback=null;}
+ if(S.initialSettle){clearTimeout(S.initialSettle);S.initialSettle=null;}
+}
+function startInitialLoad(){
+ clearInitialTimers();
+ S.initialPending=true;
+ S.initialKey=norm(S.station)+'|'+S.mode;
+ S.lastMarkup=null;
+ var host=document.getElementById('lbBoardRows');
+ if(host)host.innerHTML='<p class="lb-board-wait" role="status">Chargement des trains et des voies…</p>';
+ var more=document.getElementById('lbBoardMore');
+ if(more)more.hidden=true;
+ src('Préparation du tableau de gare…');
+ var key=S.initialKey;
+ S.initialFallback=setTimeout(function(){
+  if(S.open&&S.initialPending&&S.initialKey===key)finishInitialLoad();
+ },7500);
+}
+function finishInitialLoad(){
+ if(!S.open||!S.initialPending)return;
+ clearInitialTimers();S.initialPending=false;render();
+}
+function settleExact(){
+ if(!S.initialPending){render();return;}
+ if(S.initialSettle)clearTimeout(S.initialSettle);
+ var key=S.initialKey;
+ S.initialSettle=setTimeout(function(){
+  S.initialSettle=null;
+  if(S.open&&S.initialPending&&S.initialKey===key)finishInitialLoad();
+ },1550);
+}
 function render(){
- if(!S.open)return;
+ if(!S.open||S.initialPending)return;
  if(S.exact && S.exactKey===norm(S.station)+'|'+S.mode){
   draw(S.exact,false);saveCached(S.exact);
   src('Source : carte La Bétaillère · horaires et statuts synchronisés');
@@ -288,7 +322,7 @@ function onExactResponse(event){
    category:r.category,mode:S.mode,origin:r.place,dest:r.place,
    imminent:!!r.isImminent,trainId:r.trainId,exact:true};
  });
- render();
+ settleExact();
 }
 
 /* Compte BER : gare aller = départ du matin, gare retour = départ du soir.
@@ -382,7 +416,7 @@ function choose(value,explicit){
  S.station=name;S.limit=8;S.exact=null;S.exactKey='';
  document.getElementById('lbBoardStationValue').textContent=name;
  showStationPicker(false);
- setTitle();renderChoices();refresh();requestExact();
+ setTitle();renderChoices();startInitialLoad();refresh();requestExact();
  return true;
 }
 function tabs(){document.querySelectorAll('[data-lb-board-mode]').forEach(function(b){b.setAttribute('aria-selected',String(b.dataset.lbBoardMode===S.mode));});}
@@ -393,10 +427,10 @@ function open(station){
  overlay.hidden=false;document.body.classList.add('lb-board-visible');
  document.getElementById('lbBoardStationValue').textContent=S.station;showStationPicker(false);tabs();setTitle();renderChoices();
  document.getElementById('lbStationBoardSheet').focus({preventScroll:true});
- refresh();requestExact();
+ startInitialLoad();refresh();requestExact();
 }
 function close(){
- if(!S.open)return;S.open=false;++S.token;stopBridge();showStationPicker(false);
+ if(!S.open)return;S.open=false;++S.token;clearInitialTimers();S.initialPending=false;stopBridge();showStationPicker(false);
  document.getElementById('lbStationBoardOverlay').hidden=true;
  document.body.classList.remove('lb-board-visible');
  if(S.lastFocus?.isConnected)S.lastFocus.focus({preventScroll:true});
@@ -429,7 +463,7 @@ function init(){
   if(!e.target.closest('.lb-board-picker'))showStationPicker(false);
   var favorite=e.target.closest('[data-lb-board-favorite]');
   if(favorite){var name=accountStations()[favorite.dataset.lbBoardFavorite];if(name)choose(name,true);return;}
-  var mode=e.target.closest('[data-lb-board-mode]');if(mode){S.mode=mode.dataset.lbBoardMode;S.limit=8;S.exact=null;S.exactKey='';tabs();render();requestExact();return;}
+  var mode=e.target.closest('[data-lb-board-mode]');if(mode){if(S.mode===mode.dataset.lbBoardMode)return;S.mode=mode.dataset.lbBoardMode;S.limit=8;S.exact=null;S.exactKey='';tabs();startInitialLoad();refresh();requestExact();return;}
   var train=e.target.closest('[data-lb-board-train]');if(train){var num=train.dataset.lbBoardTrain,date=train.dataset.lbBoardDate;close();if(typeof window.lbOpenTrainDetail==='function')window.lbOpenTrainDetail(num,date);return;}
   if(e.target.closest('#lbBoardMore')){S.limit+=8;render();}
  });
