@@ -213,7 +213,7 @@ function draw(rows,cached){
  });
  var markup=html+'</tbody></table>';
  // L'horloge qui avance ne nécessite pas un remplacement de tout le tableau.
- var stable=markup.replace(/(<time id="lbBoardClock">)[^<]*(<\/time>)/,'$1$2');
+ var stable=markup.replace(/<time id="lbBoardClock"[^>]*>[^<]*<\/time>/,'<time id="lbBoardClock"></time>');
  if(S.lastMarkup===stable&&host.querySelector('.lb-gare-table')){
   var clockLabel=host.querySelector('#lbBoardClock');
   if(clockLabel)clockLabel.textContent=boardClockText();
@@ -333,16 +333,24 @@ function mergeLuxArrivalTracks(rows){
   var match=raw.match(/\b(885\d{2})\b/);
   if(!match)return;
   var number=Number(match[1]);
-  if(number%2!==1)return;
   var arrivalClock=clock(row.planned);
   if(!arrivalClock||row.day!==feed.day)return;
-  var direct=feed.data.get(String(number));
-  var matching=direct&&luxPlatformValue(direct)&&direct.arrivalPlanned===arrivalClock
-    ?[direct]:Array.from(feed.data.entries()).filter(function(entry){
-      var key=Number(entry[0]),info=entry[1];
-      return key===number-1&&info.arrivalPlanned===arrivalClock&&
-       luxPlatformValue(info)&&/nancy/i.test(String(info.origin||''));
-    }).map(function(e){return e[1];});
+  // Certaines courses SNCF/CFL ont le même numéro, d'autres +/- 1.
+  // L'horaire prévu et la provenance Nancy doivent toujours coïncider.
+  var candidates=Array.from(feed.data.entries()).filter(function(entry){
+   var key=Number(entry[0]),info=entry[1];
+   return Math.abs(key-number)<=1 && info.arrivalPlanned===arrivalClock &&
+    luxPlatformValue(info) && /^nancy(?: ville)?$/.test(norm(info.origin));
+  }).map(function(entry){return entry[1];});
+  // Repli sûr : uniquement si un seul train CFL de Nancy correspond à
+  // l'heure exacte (au cas où la numérotation évolue davantage).
+  if(!candidates.length){
+   candidates=Array.from(feed.data.values()).filter(function(info){
+    return info.arrivalPlanned===arrivalClock && luxPlatformValue(info) &&
+     /^nancy(?: ville)?$/.test(norm(info.origin));
+   });
+  }
+  var matching=candidates;
   // Jamais de voie supposée si les candidats ne sont pas uniques.
   if(matching.length!==1)return;
   var platform=luxPlatformValue(matching[0]);
