@@ -10374,6 +10374,170 @@ document.addEventListener('DOMContentLoaded', () => {
       : '—';
   }
 
+
+  // Passerelles Statistiques : aucune navigation supplémentaire au chargement.
+  // Les détails SNCF sont récupérés seulement quand l'utilisateur les ouvre.
+  let explorerOpen = false;
+  let explorerMode = 'ranking';
+  let explorerCause = '';
+  let explorerDay = '';
+  let explorerFilter = 'all';
+  let explorerPayload = null;
+  let explorerExpanded = false;
+  let explorerRequestId = 0;
+
+  function favoriteStatsTrains(){
+    const prefs = window.lbIsAuthed === true ? (window.lbPrefsCache || {}) : {};
+    return [...new Set([
+      prefs.favoriteMorningTrain,
+      prefs.favoriteEveningTrain
+    ].map(normalizeTrain).filter(Boolean))].slice(0, 6);
+  }
+  function statsExploreQuery(){
+    const query = new URLSearchParams({ from: currentRange.from, to: currentRange.to });
+    const favorites = favoriteStatsTrains();
+    if (explorerFilter === 'favorites' && favorites.length) query.set('trains', favorites.join(','));
+    if (explorerMode === 'cause' && explorerCause) query.set('cause', explorerCause);
+    if (explorerMode === 'day' && explorerDay) query.set('day', explorerDay);
+    return query;
+  }
+  function showExplorer(visible, mode = 'ranking'){
+    explorerOpen = Boolean(visible);
+    if (visible) {
+      explorerMode = mode;
+      explorerDay = mode === 'day' ? String(currentOverview?.cards?.worst_day?.date || '') : '';
+      explorerCause = '';
+      explorerExpanded = false;
+    } else {
+      ++explorerRequestId;
+    }
+    const host = byId('statsV2CauseExplorer');
+    if (host) host.hidden = !explorerOpen;
+    byId('statsV2CauseToggle')?.setAttribute('aria-expanded', String(explorerOpen));
+    if (explorerOpen) {
+      renderExplorer();
+      host?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
+  }
+  function renderExplorerRows(items, count, truncated){
+    const container = byId('statsV2ExploreRows');
+    if (!container) return;
+    const shown = explorerExpanded ? items : items.slice(0, 16);
+    const label = { delayed:'En retard', canceled:'Supprimé', partial:'Suppr. partielle' };
+    container.innerHTML = shown.map((item)=>{
+      const status = String(item.status || 'delayed');
+      const statusName = label[status] || status;
+      const delay = status === 'delayed' && Number(item.delay) > 0 ? ' · +' + fmtInt(item.delay) + ' min' : '';
+      return '<button type="button" class="stats-v2__explorer-run" data-stats-explore-train="' + escapeHtml(item.train) + '">' +
+        '<time>' + escapeHtml(item.date) + '</time>' +
+        '<span><strong>TER ' + escapeHtml(item.train) + '</strong><small>' +
+        escapeHtml((item.causes || []).join(' · ') || 'Cause non renseignée') +
+        '</small></span><span class="is-' + escapeHtml(status) + '">' +
+        escapeHtml(statusName + delay) + '</span><span aria-hidden="true">↗</span></button>';
+    }).join('') || '<p class="stats-v2__explorer-message">Aucun train concerné pour ce filtre.</p>';
+    const more = byId('statsV2ExploreMore');
+    if (more) {
+      more.hidden = explorerExpanded || items.length <= 16;
+      more.textContent = 'Afficher les ' + fmtInt(items.length - 16) + ' autres';
+    }
+    if (truncated) {
+      const note = document.createElement('p');
+      note.className = 'stats-v2__explorer-message';
+      note.textContent = '80 premières circulations sur ' + fmtInt(count) +
+        ' · Affine la période pour en afficher davantage.';
+      container.appendChild(note);
+    }
+  }
+  function paintExplorer(payload){
+    if (!explorerOpen) return;
+    explorerPayload = payload;
+    const cover = payload?.cause_coverage || payload?.coverage || {};
+    const total = toNumber(cover.total);
+    const covered = toNumber(cover.with_cause);
+    const pct = total ? ((covered / total) * 100).toFixed(1).replace('.', ',') : '0';
+    byId('statsV2ExploreCoverage').textContent =
+      'Causes renseignées : ' + fmtInt(covered) + ' / ' + fmtInt(total) +
+      ' circulations perturbées (' + pct + ' %).';
+    const favorites = favoriteStatsTrains();
+    const favoriteButton = byId('statsV2ExploreFavorites');
+    if (favoriteButton) {
+      favoriteButton.disabled = !favorites.length;
+      favoriteButton.title = favorites.length ?
+        'Filtrer les trains favoris : ' + favorites.join(', ') :
+        'Configure tes trains favoris dans Mon trajet';
+    }
+    for (const [id, value] of [['statsV2ExploreAll','all'],['statsV2ExploreFavorites','favorites']]) {
+      const button = byId(id);
+      button?.classList.toggle('is-active', explorerFilter === value);
+      button?.setAttribute('aria-pressed', String(explorerFilter === value));
+    }
+    const causes = Array.isArray(payload?.causes) ? payload.causes :
+      Array.isArray(payload?.top_causes) ? payload.top_causes : [];
+    const ranks = byId('statsV2ExploreRanking');
+    const details = byId('statsV2ExploreDetails');
+    const title = byId('statsV2ExploreTitle');
+    const back = byId('statsV2ExploreBack');
+    if (ranks) ranks.hidden = explorerMode === 'day';
+    if (details) details.hidden = explorerMode === 'ranking';
+    if (back) back.hidden = explorerMode === 'day';
+    if (title) title.textContent = explorerMode === 'day'
+      ? 'Trains perturbés · ' + humanDate(explorerDay, { year: true })
+      : explorerMode === 'cause' ? explorerCause : 'Classement des causes renseignées';
+    const max = Math.max(1, ...causes.map(c => toNumber(c.occurrences)));
+    if (ranks) {
+      ranks.innerHTML = causes.slice(0, 25).map((item,index)=>{
+        const num = toNumber(item.occurrences);
+        const width = (100 * num / max).toFixed(1);
+        return '<button type="button" class="stats-v2__explorer-cause" data-stats-explore-cause="' +
+          escapeHtml(item.cause) + '">' +
+          '<span class="stats-v2__explorer-cause-rank">' + (index + 1) + '</span>' +
+          '<span class="stats-v2__explorer-cause-label"><span class="stats-v2__explorer-cause-name">' +
+          escapeHtml(item.cause) + '</span><span class="stats-v2__explorer-meter"><i style="width:' +
+          width + '%"></i></span></span>' +
+          '<strong class="stats-v2__explorer-cause-count">' + fmtInt(num) +
+          '</strong><span aria-hidden="true">›</span></button>';
+      }).join('') || '<p class="stats-v2__explorer-message">Aucune cause renseignée pour ce filtre.</p>';
+    }
+    const message = byId('statsV2ExploreMessage');
+    if (message) message.textContent = explorerMode === 'cause'
+      ? fmtInt(payload?.details?.total || 0) + ' circulation(s) associée(s) à ce motif.'
+      : explorerMode === 'day'
+        ? fmtInt(payload?.details?.total || 0) + ' train(s) perturbé(s) ce jour-là.'
+        : (favorites.length ? 'Appuie sur une cause pour voir ses trains et leurs dates.' :
+          'Appuie sur une cause pour voir les trains concernés. Les favoris nécessitent un compte configuré.');
+    if (explorerMode !== 'ranking') {
+      renderExplorerRows(payload?.details?.items || [], payload?.details?.total || 0, payload?.details?.truncated);
+    }
+  }
+  async function renderExplorer(){
+    if (!explorerOpen || !currentRange) return;
+    const id = ++explorerRequestId;
+    const message = byId('statsV2ExploreMessage');
+    if (message) message.textContent = 'Chargement des informations…';
+    try {
+      const needsDetail = explorerMode !== 'ranking';
+      const payload = explorerFilter === 'all' && !needsDetail
+        ? currentOverview
+        : await apiJson('/api/stats/beta/causes-verified?' + statsExploreQuery().toString());
+      if (id !== explorerRequestId || !explorerOpen) return;
+      paintExplorer(payload);
+    } catch(error){
+      if(id !== explorerRequestId) return;
+      if(message) message.textContent = 'Détails indisponibles pour le moment. ' + (error?.message || '');
+    }
+  }
+  function openTrainFromInsights(train){
+    const value = normalizeTrain(train);
+    if (!value) return;
+    const field = byId('statsV2TrainInput');
+    if (!field) return;
+    field.value = value;
+    hasTargetInteracted = true;
+    setView('train', { autoRun: false });
+    runTrain();
+    byId('statsV2TrainPanel')?.scrollIntoView({ behavior:'smooth', block:'start' });
+  }
+
   function renderOverview(){
     if (!currentOverview) return;
     const current = cardsOf(currentOverview);
@@ -10419,6 +10583,13 @@ document.addEventListener('DOMContentLoaded', () => {
     renderTopTrains(currentOverview);
     renderInsights(currentOverview);
     applyModuleVisibility();
+    if (explorerOpen) {
+      explorerMode = 'ranking';
+      explorerCause = '';
+      explorerDay = '';
+      explorerExpanded = false;
+      renderExplorer();
+    }
   }
 
   async function loadOverview(options = {}){
@@ -10642,7 +10813,7 @@ document.addEventListener('DOMContentLoaded', () => {
           labels: rows.map((row) => humanDate(row.date)),
           datasets: [{
             label: 'Retard',
-            data: rows.map((row) => bucketOf(row) === 'CANCELED' ? null : toNumber(row.value)),
+            data: rows.map((row) => ['CANCELED','PARTIAL'].includes(bucketOf(row)) ? null : toNumber(row.value)),
             backgroundColor: rows.map((row) => STATUS[bucketOf(row)]?.color || COLORS.muted),
             borderRadius: 4,
             maxBarThickness: 18
@@ -10659,7 +10830,7 @@ document.addEventListener('DOMContentLoaded', () => {
                   const row = rows[ctx.dataIndex];
                   const bucket = bucketOf(row);
                   if (bucket === 'CANCELED') return 'Supprimé';
-                  if (bucket === 'PARTIAL') return `Suppression partielle · ${fmtDelay(row.value)}`;
+                  if (bucket === 'PARTIAL') return 'Suppression partielle (aucune valeur de retard imputée)';
                   return bucket === 'ON_TIME' ? 'À l’heure' : `Retard : ${fmtDelay(row.value)}`;
                 }
               }
@@ -10690,7 +10861,7 @@ document.addEventListener('DOMContentLoaded', () => {
       tbody.innerHTML = rows.slice(-60).reverse().map((row) => {
         const bucket = bucketOf(row);
         const info = STATUS[bucket] || STATUS.NO_DATA;
-        const value = bucket === 'CANCELED' ? '—' : fmtDelay(toNumber(row.value));
+        const value = ['CANCELED','PARTIAL'].includes(bucket) ? '—' : fmtDelay(toNumber(row.value));
         const cause = circulationCause(row);
         return `
           <tr>
@@ -11305,6 +11476,47 @@ document.addEventListener('DOMContentLoaded', () => {
   byId('statsV2StopInput')?.addEventListener('keydown', (event) => {
     if (event.key === 'Enter') runStop();
   });
+
+  byId('statsV2CauseToggle')?.addEventListener('click', () => {
+    showExplorer(!explorerOpen,'ranking');
+  });
+  byId('statsV2WorstDayLink')?.addEventListener('click', () => {
+    if(currentOverview?.cards?.worst_day?.date)showExplorer(true,'day');
+  });
+  byId('statsV2WorstTrainLink')?.addEventListener('click', () => {
+    openTrainFromInsights(currentOverview?.cards?.top_train?.train_number);
+  });
+  byId('statsV2ExploreClose')?.addEventListener('click', () => showExplorer(false));
+  byId('statsV2ExploreBack')?.addEventListener('click', () => {
+    explorerMode = 'ranking';explorerCause = '';explorerExpanded = false;
+    renderExplorer();
+  });
+  for (const [id,filter] of [['statsV2ExploreAll','all'],['statsV2ExploreFavorites','favorites']]) {
+    byId(id)?.addEventListener('click', () => {
+      if (filter === 'favorites' && !favoriteStatsTrains().length) return;
+      explorerFilter = filter;explorerMode = 'ranking';explorerCause = '';
+      explorerDay = '';explorerExpanded = false;
+      renderExplorer();
+    });
+  }
+  byId('statsV2ExploreRanking')?.addEventListener('click', (event) => {
+    const button = event.target.closest('[data-stats-explore-cause]');
+    if (!button) return;
+    explorerMode = 'cause';
+    explorerCause = button.dataset.statsExploreCause;
+    explorerExpanded = false;
+    renderExplorer();
+  });
+  byId('statsV2ExploreRows')?.addEventListener('click', (event) => {
+    const button = event.target.closest('[data-stats-explore-train]');
+    if(button)openTrainFromInsights(button.dataset.statsExploreTrain);
+  });
+  byId('statsV2ExploreMore')?.addEventListener('click', () => {
+    explorerExpanded = true;
+    renderExplorerRows(explorerPayload?.details?.items || [],
+      explorerPayload?.details?.total || 0, explorerPayload?.details?.truncated);
+  });
+
   byId('statsV2TrainList')?.addEventListener('click', (event) => {
     const row = event.target.closest('[data-stats-train]');
     if (!row) return;
