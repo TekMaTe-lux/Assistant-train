@@ -114,6 +114,55 @@ function getRows(){
  result.sort(function(a,b){return a.when-b.when;});
  return result;
 }
+/* Mettre à jour les cellules qui changent, sans détruire le tableau ni
+ * reprendre le focus/défilement lors de l'arrivée des données de la carte. */
+function patchTableInPlace(host,markup){
+ var existing=host.querySelector('.lb-gare-table');
+ if(!existing||!existing.tBodies?.[0])return false;
+ var template=document.createElement('template');template.innerHTML=markup;
+ var next=template.content.querySelector('.lb-gare-table');
+ if(!next||!next.tBodies?.[0]||existing.tHead?.textContent!==next.tHead?.textContent)return false;
+ var top=host.querySelector('.lb-gare-table-top');
+ var nextTop=template.content.querySelector('.lb-gare-table-top');
+ if(top&&nextTop){
+  var clock=top.querySelector('#lbBoardClock');
+  var nextClock=nextTop.querySelector('#lbBoardClock');
+  if(clock&&nextClock)clock.textContent=nextClock.textContent;
+  var title=top.querySelector('b'),nextTitle=nextTop.querySelector('b');
+  if(title&&nextTitle&&title.textContent!==nextTitle.textContent)title.textContent=nextTitle.textContent;
+ }
+ var body=existing.tBodies[0],desired=Array.from(next.tBodies[0].rows);
+ function id(row){
+  var button=row.querySelector('[data-lb-board-train]');
+  return button?button.dataset.lbBoardTrain+'|'+button.dataset.lbBoardDate:'';
+ }
+ var buckets=new Map();
+ Array.from(body.rows).forEach(function(row){
+  var key=id(row);
+  if(!buckets.has(key))buckets.set(key,[]);
+  buckets.get(key).push(row);
+ });
+ var keep=new Set();
+ desired.forEach(function(target,index){
+  var key=id(target),found=buckets.get(key)?.shift();
+  if(!found){
+   body.insertBefore(target,body.rows[index]||null);
+   keep.add(target);
+   return;
+  }
+  keep.add(found);
+  if(found.className!==target.className)found.className=target.className;
+  Array.from(target.cells).forEach(function(fresh,i){
+   var current=found.cells[i];
+   if(!current)return;
+   if(current.className!==fresh.className)current.className=fresh.className;
+   if(current.innerHTML!==fresh.innerHTML)current.innerHTML=fresh.innerHTML;
+  });
+  if(body.rows[index]!==found)body.insertBefore(found,body.rows[index]||null);
+ });
+ Array.from(body.rows).forEach(function(row){if(!keep.has(row))row.remove();});
+ return true;
+}
 function draw(rows,cached){
  var host=document.getElementById('lbBoardRows'),more=document.getElementById('lbBoardMore');
  if(!rows.length){
@@ -150,7 +199,7 @@ function draw(rows,cached){
   var clockLabel=host.querySelector('#lbBoardClock');
   if(clockLabel)clockLabel.textContent=new Date().toLocaleTimeString('fr-FR',{timeZone:'Europe/Paris'});
  }else{
-  host.innerHTML=markup;
+  if(!patchTableInPlace(host,markup))host.innerHTML=markup;
   S.lastMarkup=stable;
  }
  more.hidden=rows.length<=S.limit;more.textContent='Plus de trains';
