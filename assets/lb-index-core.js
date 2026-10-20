@@ -11532,10 +11532,18 @@ document.addEventListener('DOMContentLoaded', () => {
     if (isAuthed && window.lbPrefsCache) {
       hydrateFromAccount(window.lbPrefsCache, { applyDefaults: !hasTargetInteracted });
     }
+    if (explorerOpen) {
+      if (!favoriteStatsTrains().length) explorerFilter = 'all';
+      renderExplorer();
+    }
   });
   document.addEventListener('lb:prefs-updated', (event) => {
     if (event.detail?.source === 'stats-v2') return;
     hydrateFromAccount(event.detail?.prefs || window.lbPrefsCache, { applyDefaults: !hasTargetInteracted });
+    if (explorerOpen) {
+      if (!favoriteStatsTrains().length) explorerFilter = 'all';
+      renderExplorer();
+    }
   });
   const resizeStatsCharts = () => {
     window.setTimeout(() => {
