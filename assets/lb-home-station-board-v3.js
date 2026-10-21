@@ -8,7 +8,7 @@ var URL_LIVE='https://vps.labetaillere.fr/map-v2/z/77a13c5e';
 var S={open:false,mode:'dep',station:'Nancy',staticData:null,staticLoading:null,live:null,liveLoading:null,liveAt:0,byStation:new Map(),stations:[],stationChoices:[],limit:8,token:0,lastFocus:null,userPicked:false,exact:null,exactKey:'',bridgeFrame:null,bridgeTarget:null,bridgeTimer:null,bridgeToken:0,lastMarkup:null,exactCache:new Map(),clockTimer:null,luxArrivalFeed:null,luxArrivalAt:0,luxArrivalPromise:null};
 var BE_ENDPOINTS_URL='https://vps.labetaillere.fr/map-v2/data/lb-be-international-ends-v1.json';
 var BE_MATCHER_URL='https://vps.labetaillere.fr/map-v2/lb-be-extension-helper-v1.js?v=20261021-arlon3';
-var beIndex=null,beLoading=null,beTripRoutes=new Map();
+var beIndex=null,beIndexAt=0,beLoading=null,beTripRoutes=new Map();
 var priority=['Nancy','Metz','Thionville','Luxembourg','Hagondange','Bettembourg','Pont-à-Mousson','Hettange-Grande','Howald','Uckange'];
 function norm(s){return String(s||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().replace(/[^a-z0-9]+/g,' ').trim().replace(/ gare centrale$/,'');}
 function friendly(s){return String(s||'').trim().replace(/^Luxembourg, Gare Centrale$/i,'Luxembourg').replace(/^Luxembourg,?\s+Gare$/i,'Luxembourg').replace(/^Howald, Gare$/i,'Howald').replace(/^Bettembourg,?\s+Gare$/i,'Bettembourg');}
@@ -42,7 +42,7 @@ function getCached(){
 function saveCached(rows){try{localStorage.setItem('lb:station-board:'+norm(S.station)+':'+S.mode,JSON.stringify({at:Date.now(),rows:rows.slice(0,18)}));}catch(_){}}
 
 function ensureBelgianStations(){
- if(beIndex&&typeof window.lbVerifyInternationalBeEndpoint==='function')return Promise.resolve(beIndex);
+ if(beIndex&&Date.now()-beIndexAt<10*60*1000&&typeof window.lbVerifyInternationalBeEndpoint==='function')return Promise.resolve(beIndex);
  if(beLoading)return beLoading;
  var matcher=typeof window.lbVerifyInternationalBeEndpoint==='function'?Promise.resolve():new Promise(function(resolve,reject){
    var script=document.createElement('script');script.src=BE_MATCHER_URL;script.async=true;
@@ -55,7 +55,7 @@ function ensureBelgianStations(){
    var data=values[1];
    if(data?.schema!=='lb-be-international-ends-v1'||!data.trains||
       typeof window.lbVerifyInternationalBeEndpoint!=='function')throw Error('International index invalid');
-   beIndex=data;
+   beIndex=data;beIndexAt=Date.now();
    if(S.open){S.lastMarkup=null;render();}
    return data;
  }).finally(function(){beLoading=null;});
