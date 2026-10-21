@@ -5,7 +5,7 @@ if(window.__lbStationBoardInit)return;
 window.__lbStationBoardInit=true;
 var URL_STATIC='https://vps.labetaillere.fr/map-v2/z/41a9d7f2';
 var URL_LIVE='https://vps.labetaillere.fr/map-v2/z/77a13c5e';
-var S={open:false,mode:'dep',station:'Nancy',staticData:null,staticLoading:null,live:null,liveLoading:null,liveAt:0,byStation:new Map(),stations:[],stationChoices:[],limit:8,token:0,lastFocus:null,userPicked:false,exact:null,exactKey:'',bridgeFrame:null,bridgeTarget:null,bridgeTimer:null,bridgeToken:0,lastMarkup:null,exactCache:new Map(),clockTimer:null,luxArrivalFeed:null,luxArrivalAt:0,luxArrivalPromise:null};
+var S={open:false,mode:'dep',station:'Nancy',staticData:null,staticLoading:null,live:null,liveLoading:null,liveAt:0,byStation:new Map(),stations:[],stationChoices:[],limit:8,token:0,lastFocus:null,userPicked:false,returnFromTrain:null,exact:null,exactKey:'',bridgeFrame:null,bridgeTarget:null,bridgeTimer:null,bridgeToken:0,lastMarkup:null,exactCache:new Map(),clockTimer:null,luxArrivalFeed:null,luxArrivalAt:0,luxArrivalPromise:null};
 var BE_ENDPOINTS_URL='https://vps.labetaillere.fr/map-v2/data/lb-be-international-ends-v1.json';
 var BE_MATCHER_URL='https://vps.labetaillere.fr/map-v2/lb-be-extension-helper-v1.js?v=20261021-arlon3';
 var beIndex=null,beIndexAt=0,beLoading=null,beTripRoutes=new Map();
@@ -577,10 +577,66 @@ function open(station){
  refresh();requestExact();ensureLuxArrivalTracks();
 }
 function close(){
- if(!S.open)return;S.open=false;++S.token;stopBoardClock();stopBridge();showStationPicker(false);
+ if(!S.open)return;
+ if(S.returnFromTrain){S.returnFromTrain.cancel();S.returnFromTrain=null;}
+ S.open=false;++S.token;stopBoardClock();stopBridge();showStationPicker(false);
  document.getElementById('lbStationBoardOverlay').hidden=true;
  document.body.classList.remove('lb-board-visible');
  if(S.lastFocus?.isConnected)S.lastFocus.focus({preventScroll:true});
+}
+
+/* En gare > Détails > En gare : préserver l'état réel du tiroir plutôt
+ * que le fermer (gare, onglet, scroll, plus de trains, hauteur).
+ * L'observation du panneau couvre croix, retour et touche Échap. */
+function openTrainAndReturnToBoard(train){
+ var openDetail=window.lbOpenTrainDetail;
+ var panel=document.getElementById('trainDetailPanel');
+ if(typeof openDetail!=='function'||!panel){
+  close();if(typeof openDetail==='function')openDetail(train.dataset.lbBoardTrain,train.dataset.lbBoardDate);
+  return;
+ }
+ if(S.returnFromTrain)S.returnFromTrain.cancel();
+ var overlay=document.getElementById('lbStationBoardOverlay');
+ var list=document.getElementById('lbBoardRows');
+ var previousScroll=list?.scrollTop||0;
+ var previousHash=location.hash;
+ var active=true,profileSeen=!panel.hidden;
+ var observer=new MutationObserver(function(){
+  if(!active)return;
+  if(!panel.hidden){profileSeen=true;return;}
+  if(profileSeen)restore();
+ });
+ function cancel(){active=false;observer.disconnect();}
+ function restore(){
+  if(!active)return;
+  cancel();
+  if(S.returnFromTrain?.cancel===cancel)S.returnFromTrain=null;
+  if(!S.open)return;
+  // Ne pas masquer une nouvelle page ouverte depuis la fiche (Stats).
+  if(location.hash!==previousHash){close();return;}
+  overlay.hidden=false;
+  document.body.classList.add('lb-board-visible');
+  if(list)list.scrollTop=previousScroll;
+  startBoardClock();
+  if(train.isConnected)train.focus({preventScroll:true});
+  else document.getElementById('lbStationBoardSheet')?.focus({preventScroll:true});
+ }
+ S.returnFromTrain={cancel:cancel};
+ observer.observe(panel,{attributes:true,attributeFilter:['hidden','aria-hidden']});
+ overlay.hidden=true;
+ document.body.classList.remove('lb-board-visible');
+ stopBoardClock();
+ try{
+  var opened=openDetail(train.dataset.lbBoardTrain,train.dataset.lbBoardDate);
+  if(!panel.hidden)profileSeen=true;
+  if(opened&&typeof opened.then==='function'){
+   opened.then(function(){if(active&&panel.hidden&&!profileSeen)restore();},
+    function(){if(active&&panel.hidden)restore();});
+  }
+ }catch(error){
+  restore();
+  console.warn('[En gare] Ouverture de fiche indisponible',error);
+ }
 }
 /* En gare — tiroir à hauteur stable et poignée redimensionnable.
  * La hauteur ne dépend plus des statuts/retards ni du mode Départs/Arrivées. */
@@ -678,7 +734,7 @@ function init(){
   var favorite=e.target.closest('[data-lb-board-favorite]');
   if(favorite){var name=accountStations()[favorite.dataset.lbBoardFavorite];if(name)choose(name,true);return;}
   var mode=e.target.closest('[data-lb-board-mode]');if(mode){if(S.mode===mode.dataset.lbBoardMode)return;S.mode=mode.dataset.lbBoardMode;S.limit=8;useRecentExact();tabs();refresh();requestExact();ensureLuxArrivalTracks();return;}
-  var train=e.target.closest('[data-lb-board-train]');if(train){var num=train.dataset.lbBoardTrain,date=train.dataset.lbBoardDate;close();if(typeof window.lbOpenTrainDetail==='function')window.lbOpenTrainDetail(num,date);return;}
+  var train=e.target.closest('[data-lb-board-train]');if(train){openTrainAndReturnToBoard(train);return;}
   if(e.target.closest('#lbBoardMore')){S.limit+=8;render();}
  });
  /* iOS/Android : quand le clavier est ouvert, le premier clic natif peut
@@ -719,7 +775,7 @@ function init(){
   }
  });
  document.addEventListener('keydown',function(e){
-  if(e.key!=='Escape'||!S.open)return;
+  if(e.key!=='Escape'||!S.open||document.getElementById('lbStationBoardOverlay')?.hidden)return;
   e.preventDefault();
   if(!document.getElementById('lbBoardStationPanel').hidden){showStationPicker(false);return;}
   close();
