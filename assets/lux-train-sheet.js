@@ -123,7 +123,7 @@
     text('trainDetailPlatform', payload?.track ? `Voie ${payload.track}` : 'Voie non communiquée');
     text('trainDetailNext', 'Résolution du parcours CFL…');
     text('trainDetailPath', 'Parcours CFL');
-    text('trainDetailRouteMode', 'GTFS CFL + LIVE');
+    text('trainDetailRouteMode', 'Parcours et horaires');
     text('trainDetailCompo', 'Non disponible');
     text('trainDetailCompoConfidence', 'CFL');
     text('trainDetailCompoMeta', 'Composition CFL non disponible pour le moment.');
@@ -135,7 +135,7 @@
     const source = el('trainDetailSourceState');
     if (source) {
       source.className = 'lb-train-profile__source is-loading';
-      source.innerHTML = '<i></i> LIVE CFL / HAFAS + GTFS';
+      source.innerHTML = '<i></i> Informations trafic';
     }
 
     const status = el('trainDetailLiveStatus');
@@ -208,18 +208,18 @@
     text('trainDetailOrigin', origin || 'Origine');
     text('trainDetailDestination', destination || 'Destination');
     text('trainDetailPath', origin && destination ? `${origin} → ${destination}` : 'Parcours CFL');
-    text('trainDetailRouteMode', 'GTFS CFL + LIVE');
+    text('trainDetailRouteMode', 'Parcours et horaires');
     text('trainDetailPlatform', track ? `Voie ${track}` : 'Voie non communiquée');
 
     const duration = durationMinutes(firstPlanned, lastPlanned);
-    text('trainDetailDuration', Number.isFinite(duration) ? `${duration} min` : 'GTFS CFL');
+    text('trainDetailDuration', Number.isFinite(duration) ? `${duration} min` : '—');
     text('trainDetailNext', `${origin} → ${destination} · ${phase.toLowerCase()}${delay > 0 ? ` · retard +${delay} min` : ''}.`);
     text('trainDetailMessage', '');
 
     const source = el('trainDetailSourceState');
     if (source) {
       source.className = 'lb-train-profile__source';
-      source.innerHTML = '<i></i> LIVE CFL / HAFAS + GTFS';
+      source.innerHTML = '<i></i> Informations trafic';
     }
 
     const liveStatus = el('trainDetailLiveStatus');
@@ -237,8 +237,8 @@
         const lux = isLuxStop(stop);
         let timeHtml = `<b>${esc(dep || arr || '—')}</b>`;
         let meta = arr && dep && arr !== dep
-          ? `Arr. ${arr} · Dép. ${dep} · GTFS CFL`
-          : 'GTFS CFL';
+          ? `Arr. ${arr} · Dép. ${dep}`
+          : 'Horaire prévu';
         let delayHtml = '';
 
         if (lux) {
@@ -251,7 +251,7 @@
           if (arr) details.push(`Arr. ${arr}`);
           if (dep) details.push(`Dép. ${dep}`);
           if (track) details.push(`Voie ${track}`);
-          details.push('LIVE HAFAS');
+          details.push('En direct');
           meta = details.join(' · ');
           delayHtml = delay > 0
             ? `<span class="lb-train-profile__delay">+${delay} min</span>`
@@ -280,11 +280,11 @@
     text('trainDetailTitle', `${type || 'CFL'} ${number}`);
     text('trainDetailDateLabel', dateLabel(dateIso));
     text('trainDetailPlatform', payload?.track ? `Voie ${payload.track}` : 'Voie non communiquée');
-    text('trainDetailMessage', 'LIVE disponible, mais parcours GTFS CFL momentanément indisponible.');
+    text('trainDetailMessage', 'Informations en direct disponibles, mais parcours momentanément indisponible.');
     const source = el('trainDetailSourceState');
     if (source) {
       source.className = 'lb-train-profile__source is-error';
-      source.innerHTML = '<i></i> LIVE CFL / HAFAS';
+      source.innerHTML = '<i></i> Informations partielles';
     }
     if (panel) panel.setAttribute('aria-busy', 'false');
     console.error('[Gare Luxembourg] fiche CFL impossible', error);
@@ -393,7 +393,7 @@
           'Collecte des retards CFL active depuis le ' + coverage +
           '. Pas encore assez de données pour ce train.');
         text('trainDetailReliabilityRuns',
-          'Observations HAFAS, distinctes des statistiques SNCF.');
+          'Données indicatives, en cours de consolidation.');
         return;
       }
       const journeys = Number(stats.observedJourneys) || 0;
@@ -408,7 +408,7 @@
         (journeys < 10 || days < 7 ? 'Échantillon encore trop faible pour une fiabilité représentative.' :
          'Résultats indicatifs fondés sur la dernière prévision observée par arrêt.'));
       text('trainDetailReliabilityRuns',
-        'Historique depuis ' + coverage + ' · HAFAS CFL · Non officiel');
+        'Historique depuis ' + coverage + ' · Données indicatives');
     } catch (_) {
       // Indisponibilité de l'archive : aucune modification du LIVE ni des fiches SNCF.
     }
@@ -582,7 +582,7 @@
     text('trainDetailMessage','Horaires prévus · informations LIVE non disponibles pour ce tronçon.');
     text('trainDetailPlatform','Voie non communiquée');
     const state=el('trainDetailSourceState');
-    if(state){state.className='lb-train-profile__source is-static';state.textContent='HORAIRES PRÉVUS · SNCB';}
+    if(state){state.className='lb-train-profile__source is-static';state.textContent='HORAIRES PRÉVUS';}
     const status=el('trainDetailLiveStatus');
     if(status){status.className='lb-train-profile__status is-upcoming';status.textContent='À VENIR · HORAIRES PRÉVUS';}
     void fetch(BE_INDEX_URL,{cache:'no-store',credentials:'omit'})
