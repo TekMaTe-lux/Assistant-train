@@ -116,17 +116,18 @@ window.addEventListener('click', (event) => {
           z-index:12950;
           overflow:hidden;
           padding:0 max(12px,env(safe-area-inset-right)) 0 max(12px,env(safe-area-inset-left));
-          border-block:1px solid rgba(255,66,95,.32);
-          background:linear-gradient(90deg,#3d0d19 0%,#240d15 60%,#180b11 100%);
+          border-block:1px solid rgba(255,92,115,.7);
+          background:linear-gradient(90deg,#6b1326 0%,#451123 60%,#280e1a 100%);
           box-shadow:0 8px 22px rgba(0,0,0,.26),inset 0 -1px rgba(255,255,255,.03);
           -webkit-backdrop-filter:blur(12px);
           backdrop-filter:blur(12px);
         }
         #lbMajorAlertBanner[data-level="warning"] {
-          --alarm:#ffb44b;
-          --alarm-soft:#ffe0a7;
-          border-block-color:rgba(255,177,67,.32);
-          background:linear-gradient(90deg,#44300e 0%,#2a1b10 60%,#17120c);
+          /* Même rouge que le modal : toute alerte présente ici est majeure. */
+          --alarm:#ff5871;
+          --alarm-soft:#ffd7df;
+          border-block-color:rgba(255,92,115,.7);
+          background:linear-gradient(90deg,#6b1326 0%,#451123 60%,#280e1a 100%);
         }
         .lb-major-alert-banner__inner {
           width:100%;
