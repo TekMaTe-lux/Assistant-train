@@ -141,7 +141,14 @@ function stopObservation(stop,view){
 function renderAll(view){
  const stops=view.gtfsStops||[];
  if(!stops.length){node('Stops').innerHTML='<p>Parcours prévu momentanément indisponible.</p>';return;}
- const records=stops.map(s=>({stop:s,obs:stopObservation(s,view)}));
+ const fullNotice=(view.events||[]).some(e=>
+   /\\bce train est supprim[eé]/i.test(stripMarkup(e.text||e.detail||'')) &&
+   !/supprim[eé].*entre\\s+/i.test(stripMarkup(e.text||e.detail||'')));
+ const records=stops.map(s=>{
+   let obs=stopObservation(s,view);
+   if(fullNotice)obs={...(obs||{}),cancelled:true,delay:null,supplement:'him'};
+   return {stop:s,obs};
+ });
  const first=records[0],last=records[records.length-1];
  function plannedTime(s,obs){
   const base=clock(s.departure||s.arrival);
@@ -173,7 +180,7 @@ function renderAll(view){
   let time='<b class="planned'+(cancelled||forecast&&forecast!==planned?' is-struck':'')+'">'+esc(planned)+'</b>';
   if(forecast&&!cancelled&&forecast!==planned)time+='<b class="new-time">→ '+esc(forecast)+'</b>';
   const detail=platform?'<span class="stop-voie">Voie '+esc(platform)+'</span>':'';
-  const provenance=explicit?(obs.supplement==='arrivals'?'Prévision d’arrivée CFL':'HAFAS · dernier état observé'):
+  const provenance=explicit?(obs.supplement==='him'?'HAFAS · suppression du train':obs.supplement==='arrivals'?'Prévision d’arrivée CFL':'HAFAS · dernier état observé'):
     obs?'Retard disponible sur la carte':'Horaire théorique · état non connu';
   const status=cancelled?'<strong class="stop-state">SUPPRIMÉ</strong>':
    delay!=null&&Number.isFinite(Number(delay))?
@@ -198,6 +205,7 @@ function renderAll(view){
  status.textContent=known>0&&served>0 || lastArrival?.partialCancelled===true?
   '⚠️ SUPPRESSION PARTIELLE · '+known+' arrêt'+(known>1?'s':'')+' signalé'+(known>1?'s':'')+' supprimé'+(known>1?'s':'')+arrivalSuffix:
   lastArrival?.cancelled===true?'⛔ ARRIVÉE SUPPRIMÉE SELON CFL':
+  fullNotice?'⛔ TRAIN SUPPRIMÉ SELON L’ALERTE HAFAS':
   known>0?'⛔ SUPPRESSIONS D’ARRÊTS SIGNALÉES PAR HAFAS':
   cancelledEvent?'⛔ SUPPRESSION SIGNALÉE PAR HAFAS':
   arrivalDelay!=null&&Number(arrivalDelay)>0?'🟠 RETARD PRÉVU À L’ARRIVÉE +'+Number(arrivalDelay)+' MIN':
