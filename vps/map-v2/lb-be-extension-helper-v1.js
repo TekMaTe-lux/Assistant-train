@@ -31,7 +31,10 @@
     const results=[];
     for(const be of candidates){
       if(be.date!==date||be.number!==number || !Array.isArray(be.anchors))continue;
-      if(wantedType&&wantedType!=='CFL'&&wantedType!=='TRAIN'&&wantedType!==String(be.type||'').toUpperCase())continue;
+      // Railway labels can differ across the border (RE/IC). Allow this only
+      // when three or more independently timed common stops prove identity.
+      const differingType=Boolean(wantedType&&wantedType!=='CFL'&&wantedType!=='TRAIN'
+        &&wantedType!==String(be.type||'').toUpperCase());
       let previous=-1;
       const matches=[];
       for(let i=0;i<stops.length;i++){
@@ -44,7 +47,7 @@
           break;
         }
       }
-      if(matches.length<2)continue;
+      if(matches.length<(differingType?3:2))continue;
       const first=stops[0],last=stops[stops.length-1];
       const sameOrigin=station(first.name||first.stop_name)===station(be.origin?.name);
       const sameDest=station(last.name||last.stop_name)===station(be.destination?.name);
