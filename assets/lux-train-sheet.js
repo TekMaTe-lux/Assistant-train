@@ -463,6 +463,23 @@
         text('trainDetailDestination',destination);
         text('trainDetailArrival',shortTime(extension.destination.time));
       }
+      // Add static Belgian-only stop rows around the authoritative CFL section.
+      // Never assign a live status, delay, platform or cancellation to these rows.
+      const host=el('trainDetailStops');
+      if(host){
+        const createStop=(stop)=>{
+          const div=document.createElement('div');
+          div.className='lb-train-profile__stop lb-train-profile__stop--planned-be';
+          const t=shortTime(stop?.time || stop?.departure || stop?.arrival)||'—';
+          div.innerHTML='<div class="lb-train-profile__times"><b>'+esc(t)+'</b></div>'+
+            '<i class="lb-train-profile__dot"></i>'+
+            '<div class="lb-train-profile__stop-name"><strong>'+
+            esc(stop?.name||'Gare')+'</strong><span>Horaire prévu</span></div>';
+          return div;
+        };
+        for(const beStop of (extension.prefix||[]).slice().reverse())host.prepend(createStop(beStop));
+        for(const beStop of (extension.suffix||[]))host.append(createStop(beStop));
+      }
       const start=extension.origin?.time || stopDep(first)||stopArr(first);
       const end=extension.destination?.time || stopArr(last)||stopDep(last);
       const duration=durationMinutes(start,end);
@@ -474,8 +491,7 @@
       const localDelay=delayMinutes(localPlanned,localRealtime);
       text('trainDetailNext',origin+' → '+destination+' · '+phase+
         (localDelay>0?' · retard +'+localDelay+' min':'')+'.');
-      // Clarify that the detailed list is the original CFL section only.
-      text('trainDetailRouteMode','Arrêts détaillés de '+extension.sectionFrom+' à '+extension.sectionTo);
+      text('trainDetailRouteMode','Parcours complet · horaires prévus pour les arrêts ajoutés');
     }).catch(()=>{/* Existing CFL train detail remains fully usable */});
   }
 
