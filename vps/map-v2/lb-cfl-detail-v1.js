@@ -142,8 +142,8 @@ function renderAll(view){
  const stops=view.gtfsStops||[];
  if(!stops.length){node('Stops').innerHTML='<p>Parcours prévu momentanément indisponible.</p>';return;}
  const fullNotice=(view.events||[]).some(e=>
-   /\\bce train est supprim[eé]/i.test(stripMarkup(e.text||e.detail||'')) &&
-   !/supprim[eé].*entre\\s+/i.test(stripMarkup(e.text||e.detail||'')));
+   /\bce train est supprim[eé]/i.test(stripMarkup(e.text||e.detail||'')) &&
+   !/supprim[eé].*entre\s+/i.test(stripMarkup(e.text||e.detail||'')));
  const records=stops.map(s=>{
    let obs=stopObservation(s,view);
    if(fullNotice)obs={...(obs||{}),cancelled:true,delay:null,supplement:'him'};
