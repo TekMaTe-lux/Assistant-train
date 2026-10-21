@@ -123,7 +123,7 @@
     text('trainDetailCompo', 'Non disponible');
     text('trainDetailCompoConfidence', 'CFL');
     text('trainDetailCompoMeta', 'Composition CFL non disponible pour le moment.');
-    text('trainDetailReliabilitySample', 'CFL · PAS ENCORE DE STATS');
+    text('trainDetailReliabilitySample', 'CFL · HISTORIQUE EN CONSTRUCTION');
     text('trainDetailReliabilityDetails', 'Les statistiques historiques CFL ne sont pas encore disponibles.');
     text('trainDetailReliabilityRuns', '');
     text('trainDetailMessage', 'Chargement du parcours CFL…');
@@ -336,6 +336,80 @@
     }
   }
 
+
+  // Archivage CFL complémentaire : lecture différée, sans incidence sur les sources LIVE.
+  const CFL_STATS_URL = 'https://vps.labetaillere.fr/gtfs/cfl-history/summary.json';
+  let cflStatsCached = null;
+  let cflStatsLoading = null;
+  function getCflStats(){
+    const now = Date.now();
+    if (cflStatsCached && (now - cflStatsCached.at) < 600000) {
+      return Promise.resolve(cflStatsCached.value);
+    }
+    if (cflStatsLoading) return cflStatsLoading;
+    cflStatsLoading = fetch(CFL_STATS_URL, { cache:'no-store', credentials:'omit' })
+      .then((response) => {
+        if (!response.ok) throw new Error('CFL stats unavailable');
+        return response.json();
+      })
+      .then((value) => {
+        if (value?.version !== 1 || !value?.trains || !value?.source) {
+          throw new Error('CFL stats invalid');
+        }
+        cflStatsCached = { at:Date.now(), value };
+        return value;
+      })
+      .finally(() => { cflStatsLoading = null; });
+    return cflStatsLoading;
+  }
+
+  async function loadCflStatistics(number, type, sequence){
+    const isCurrent = () => sequence === requestSeq &&
+      el('trainDetailPanel')?.dataset.lbProvider === 'cfl';
+    try {
+      const data = await getCflStats();
+      if (!isCurrent()) return;
+      const trains = data?.trains || {};
+      const wanted = (String(type || '') + String(number || '')).replace(/\s+/g,'').toUpperCase();
+      const keys = Object.keys(trains);
+      let key = keys.find((name) => name.replace(/\s+/g,'').toUpperCase() === wanted);
+      if (!key) {
+        const matching = keys.filter((name) => {
+          const match = name.match(/(\d{3,6})\s*$/);
+          return match && match[1] === String(number);
+        });
+        if (matching.length === 1) key = matching[0];
+      }
+      const stats = key ? trains[key] : null;
+      const days = Object.keys(data?.daily || {}).length;
+      const coverage = data?.coverageStart || 'date inconnue';
+      if (!stats || !stats.observedJourneys) {
+        text('trainDetailReliabilitySample','CFL · HISTORIQUE EN CONSTRUCTION');
+        text('trainDetailReliabilityDetails',
+          'Collecte des retards CFL active depuis le ' + coverage +
+          '. Pas encore assez de données pour ce train.');
+        text('trainDetailReliabilityRuns',
+          'Observations HAFAS, distinctes des statistiques SNCF.');
+        return;
+      }
+      const journeys = Number(stats.observedJourneys) || 0;
+      const stops = Number(stats.observedStops) || 0;
+      const delayed = Number(stats.delay6OrMoreStops) || 0;
+      text('trainDetailReliabilitySample',
+        'CFL · ' + journeys + ' CIRCULATION' + (journeys > 1 ? 'S' : '') + ' OBSERVÉE' + (journeys > 1 ? 'S' : ''));
+      const samples = stops + ' arrêt' + (stops > 1 ? 's' : '') + ' mémorisé' + (stops > 1 ? 's' : '');
+      const delayText = delayed + ' avec un retard annoncé de 6 min ou plus';
+      text('trainDetailReliabilityDetails',
+        samples + ' · ' + delayText + '. ' +
+        (journeys < 10 || days < 7 ? 'Échantillon encore trop faible pour une fiabilité représentative.' :
+         'Résultats indicatifs fondés sur la dernière prévision observée par arrêt.'));
+      text('trainDetailReliabilityRuns',
+        'Historique depuis ' + coverage + ' · HAFAS CFL · Non officiel');
+    } catch (_) {
+      // Indisponibilité de l'archive : aucune modification du LIVE ni des fiches SNCF.
+    }
+  }
+
   async function openCfl(payload){
     const numberMatch = String(payload?.trainNumber || '').match(/\d{3,6}/);
     if (!numberMatch) return;
@@ -355,6 +429,7 @@
 
     resetCflPanel(payload, number, type, dateIso);
     void loadCflTrafficEvents(number, dateIso, seq);
+    void loadCflStatistics(number, type, seq);
 
     try {
       if (!planned) throw new Error('Horaire planifié Luxembourg absent');
