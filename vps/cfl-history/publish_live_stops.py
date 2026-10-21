@@ -15,6 +15,7 @@ from zoneinfo import ZoneInfo
 DB = Path("/var/lib/labetaillere-cfl-history/observations.sqlite3")
 ARRIVALS = Path("/var/www/gtfs/retards_cfl_arrivals.json")
 OUTPUT = Path("/var/www/gtfs/cfl_live_stops.json")
+ARRIVALS_MEMORY = Path("/var/lib/labetaillere-cfl-live/arrivals.json")
 LOCAL_TZ = ZoneInfo("Europe/Luxembourg")
 TRAIN_PATTERN = re.compile(r"^(IC|RE|RB|EC|ICE|L|S)\s*(\d{3,6})$", re.I)
 
@@ -84,7 +85,15 @@ def build(now=None):
 
     # The existing CFL arrivals collector provides the arrival platform and forecast
     # even when departureBoard has no entry for the terminus.
+    # Retain the latest observation locally when an arrived train leaves its feed.
     arrival_data = {}
+    try:
+        previous = json.loads(ARRIVALS_MEMORY.read_text(encoding="utf-8"))
+        if isinstance(previous, dict):
+            arrival_data = {k:v for k,v in previous.items()
+                            if isinstance(v,dict) and v.get("date") in dates}
+    except (OSError, ValueError, TypeError):
+        pass
     try:
         source = json.loads(ARRIVALS.read_text(encoding="utf-8"))
         observed = str(source.get("updatedAt") or "")
@@ -122,6 +131,8 @@ def main():
     if not DB.is_file():
         raise RuntimeError("Existing CFL history database not found; refusing empty update")
     payload = build()
+    ARRIVALS_MEMORY.parent.mkdir(parents=True, exist_ok=True)
+    atomic_json(ARRIVALS_MEMORY, payload["arrivals"])
     atomic_json(OUTPUT, payload)
     print(json.dumps({
         "ok": True, "trains": len(payload["trains"]),
