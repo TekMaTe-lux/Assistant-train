@@ -466,18 +466,24 @@ function resolveCflPlatformForProfile(number,dateIso,journeyRows,row,isLast){
     .map(normalizeCflVoiesTrainKey).filter(x=>x!==canonical)];
   for(const key of [...new Set(variants)]){
     const entries=timed.get(key)||[];
-    // Some CFL station feeds keep Bettembourg while omitting the already
-    // departed Luxembourg/Howald rows. Accept a matching dated stop inside
-    // Luxembourg as proof of this train's identity, never just its number.
-    const matchAnyLuxembourgStop=journeyRows.some(s=>{
-      const station=clean(s.name);
-      if(!['luxembourg','howald','bettembourg'].includes(station))return false;
-      const planned=time(s,'dep');
-      if(!planned)return false;
-      return entries.some(e=>e.date===dateIso&&e.mode==='dep'&&
-        e.stopKey===station&&Math.abs(toMinutes(e.when)-toMinutes(planned))<=1);
-    });
-    if(!matchAnyLuxembourgStop)continue;
+    // After a train passes, the departure feed can drop its first stops.
+    // Authenticate the train by a dated exact timetable match at one LU stop,
+    // OR at least TWO distinct later stops of the same journey (not its number
+    // alone). The same full-route identities power the Bétaillère map.
+    const confirmedStops=new Set();
+    for(const scheduled of journeyRows){
+      const stopAliases=getEquivalentCflStopKeys(scheduled.name);
+      const knownTimes=new Set([time(scheduled,'dep'),time(scheduled,'arr')].filter(Boolean));
+      if(!knownTimes.size)continue;
+      for(const known of entries){
+        if(known.date!==dateIso||!stopAliases.includes(known.stopKey))continue;
+        if([...knownTimes].some(t=>Math.abs(toMinutes(known.when)-toMinutes(t))<=1))
+          confirmedStops.add(clean(scheduled.name));
+      }
+    }
+    const provenInLux=['luxembourg','howald','bettembourg']
+      .some(station=>confirmedStops.has(station));
+    if(!provenInLux && confirmedStops.size<2)continue;
     const matches=entries.filter(e=>e.date===dateIso&&e.mode===stopMode&&
       stopKeys.includes(e.stopKey)&&
       Math.abs(toMinutes(e.when)-toMinutes(stopTime))<=1);
