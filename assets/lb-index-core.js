@@ -437,9 +437,44 @@ function normalizeCflByStationPayload(data){
 // Train numbers may differ between SNCF and CFL. Confirm the same service
 // date and minute at Luxembourg before borrowing the platform for each stop.
 // Other SNCF stats, delays and train identities remain untouched.
+// Read-only history already recorded by the VPS. Earlier stop rows
+// disappear from live boards, but their observed platforms are retained.
+function normalizeCflArchivedPlatformPayload(payload){
+  const archived=new Map();
+  const add=(label,date,station,when,platform,mode)=>{
+    const trainKey=normalizeCflVoiesTrainKey(label);
+    const stopKey=normalizeVoiesTrainKey(station);
+    const time=normalizeVoiesBaseTime(when);
+    const voie=normalizeVoieValue(platform);
+    if(!trainKey||!stopKey||!time||!voie||
+       !/^\d{4}-\d{2}-\d{2}$/.test(String(date||'')))return;
+    if(!archived.has(trainKey))archived.set(trainKey,[]);
+    archived.get(trainKey).push({date,stopKey,when:time,mode,voie});
+  };
+  if(!payload||typeof payload!=='object')return archived;
+  for(const [train,journeys] of Object.entries(payload.trains||{})){
+    if(!Array.isArray(journeys))continue;
+    for(const journey of journeys){
+      if(!journey||!Array.isArray(journey.stops))continue;
+      for(const stop of journey.stops){
+        if(!stop||stop.cancelled)continue;
+        add(train,journey.date,stop.name,stop.planned,stop.platform,'dep');
+      }
+    }
+  }
+  for(const [train,arrival] of Object.entries(payload.arrivals||{})){
+    if(!arrival||arrival.cancelled)continue;
+    add(train,arrival.date,arrival.station||'Luxembourg',
+      arrival.planned,arrival.platform,'arr');
+  }
+  return archived;
+}
+
 function resolveCflPlatformForProfile(number,dateIso,journeyRows,row,isLast){
   const timed=window.__lbCflTimedPlatforms;
-  if (!(timed instanceof Map)||!Array.isArray(journeyRows)||journeyRows.length<2||!row)return null;
+  const archived=window.__lbCflArchivedPlatforms;
+  if (!(timed instanceof Map)&&!(archived instanceof Map))return null;
+  if(!Array.isArray(journeyRows)||journeyRows.length<2||!row)return null;
   const parts=new Intl.DateTimeFormat('en-GB',{timeZone:'Europe/Luxembourg',
     year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(new Date());
   const part=t=>parts.find(x=>x.type===t)?.value||'';
@@ -465,7 +500,8 @@ function resolveCflPlatformForProfile(number,dateIso,journeyRows,row,isLast){
   const variants=[canonical,...getEquivalentCflNumeros(canonical)
     .map(normalizeCflVoiesTrainKey).filter(x=>x!==canonical)];
   for(const key of [...new Set(variants)]){
-    const entries=timed.get(key)||[];
+    const entries=[...(timed instanceof Map ? timed.get(key)||[] : []),
+      ...(archived instanceof Map ? archived.get(key)||[] : [])];
     // After a train passes, the departure feed can drop its first stops.
     // Authenticate the train by a dated exact timetable match at one LU stop,
     // OR at least TWO distinct later stops of the same journey (not its number
@@ -532,6 +568,13 @@ async function loadCflVoiesByTrain({ forceFresh = false, onlyIfChanged = false }
       let mapFromByStation = new Map();
       let sourceRetards = null;
       let sourceByStation = null;
+      // Read an existing local archive in parallel with the normal live
+      // requests; no extra HAFAS calls and no impact on SNCF statistics.
+      const archivePromise=fetch('https://vps.labetaillere.fr/gtfs/cfl_live_stops.json',
+        {cache:forceFresh?'no-cache':'default',credentials:'omit'})
+        .then(res=>res.ok?res.json():null)
+        .then(data=>normalizeCflArchivedPlatformPayload(data))
+        .catch(()=>null);
 
       for (const candidate of HAFAS_PROXY_CANDIDATES){
         if (!candidate) continue;
@@ -564,6 +607,11 @@ async function loadCflVoiesByTrain({ forceFresh = false, onlyIfChanged = false }
         }
       }
 
+      const archivedPlatforms=await archivePromise;
+      if(archivedPlatforms instanceof Map){
+        window.__lbCflArchivedPlatforms=archivedPlatforms;
+      }
+      // Keep the historic values separate from the live map's priority.
       const merged = mergeCflVoiesMaps(mapFromByStation, mapFromRetards);
       if (merged.size){
         window.cflVoiesByTrainMap = merged;
