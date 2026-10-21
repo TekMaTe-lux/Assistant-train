@@ -7,6 +7,10 @@
   const VPS_ORIGIN = 'https://vps.labetaillere.fr';
   const CFL_TYPES = /^(?:RE|RB|IC|EC|ICE|L|S)$/i;
   let requestSeq = 0;
+  let beResourcePromise = null;
+  let beResource = null;
+  const BE_HELPER_URL = VPS_ORIGIN + '/map-v2/lb-be-extension-helper-v1.js';
+  const BE_INDEX_URL = VPS_ORIGIN + '/map-v2/data/lb-be-international-ends-v1.json';
 
   const el = (id) => document.getElementById(id);
   const esc = (value) => String(value ?? '').replace(/[&<>"']/g, (char) => ({
@@ -410,6 +414,71 @@
     }
   }
 
+
+  // Optional international termini: NEVER substitute Belgian RT for CFL delays,
+  // cancellations, platforms or stop rows. Loads only when a CFL detail opens.
+  function loadBelgianEndResource(){
+    if(beResource)return Promise.resolve(beResource);
+    if(beResourcePromise)return beResourcePromise;
+    const getMatcher=typeof window.lbVerifyInternationalBeEndpoint==='function'
+      ? Promise.resolve()
+      : new Promise((resolve,reject)=>{
+          const script=document.createElement('script');
+          script.src=BE_HELPER_URL;
+          script.async=true;
+          script.onload=resolve;
+          script.onerror=()=>reject(new Error('International matcher unavailable'));
+          document.head.appendChild(script);
+        });
+    beResourcePromise=Promise.all([
+      getMatcher,
+      fetch(BE_INDEX_URL,{cache:'no-cache',credentials:'omit'})
+        .then(resp=>{if(!resp.ok)throw Error('International index unavailable');return resp.json();})
+    ]).then(([,index])=>{
+      if(typeof window.lbVerifyInternationalBeEndpoint!=='function'||
+         index?.schema!=='lb-be-international-ends-v1'||!index.trains)
+         throw Error('International index invalid');
+      beResource=index;
+      return index;
+    }).finally(()=>{beResourcePromise=null;});
+    return beResourcePromise;
+  }
+
+  function appendBelgianTerminus(payload,gtfs,number,type,dateIso,seq){
+    void loadBelgianEndResource().then(index=>{
+      if(seq!==requestSeq)return;
+      const match=gtfs?.match;
+      const stops=Array.isArray(match?.stops)?match.stops:[];
+      const extension=window.lbVerifyInternationalBeEndpoint(
+        {number,type,date:dateIso},stops,index);
+      if(!extension)return;
+      const first=stops[0]||{},last=stops[stops.length-1]||{};
+      const origin=extension.origin?.name || String(match?.origin || stopName(first)||payload?.origin||'').trim();
+      const destination=extension.destination?.name || String(match?.destination || stopName(last)||payload?.destination||'').trim();
+      if(extension.origin){
+        text('trainDetailOrigin',origin);
+        text('trainDetailDeparture',shortTime(extension.origin.time));
+      }
+      if(extension.destination){
+        text('trainDetailDestination',destination);
+        text('trainDetailArrival',shortTime(extension.destination.time));
+      }
+      const start=extension.origin?.time || stopDep(first)||stopArr(first);
+      const end=extension.destination?.time || stopArr(last)||stopDep(last);
+      const duration=durationMinutes(start,end);
+      if(Number.isFinite(duration))text('trainDetailDuration',duration+' min');
+      text('trainDetailPath',origin+' → '+destination);
+      const phase=phaseLabel(payload?.status).toLowerCase();
+      const localPlanned=payload?.mode==='arr'?payload?.plannedArrival:payload?.plannedDeparture;
+      const localRealtime=payload?.mode==='arr'?payload?.realtimeArrival:payload?.realtimeDeparture;
+      const localDelay=delayMinutes(localPlanned,localRealtime);
+      text('trainDetailNext',origin+' → '+destination+' · '+phase+
+        (localDelay>0?' · retard +'+localDelay+' min':'')+'.');
+      // Clarify that the detailed list is the original CFL section only.
+      text('trainDetailRouteMode','Arrêts détaillés de '+extension.sectionFrom+' à '+extension.sectionTo);
+    }).catch(()=>{/* Existing CFL train detail remains fully usable */});
+  }
+
   async function openCfl(payload){
     const numberMatch = String(payload?.trainNumber || '').match(/\d{3,6}/);
     if (!numberMatch) return;
@@ -448,6 +517,7 @@
       if (!gtfs?.ok || !gtfs?.match) throw new Error('Réponse GTFS CFL invalide');
       if (seq !== requestSeq) return;
       renderCflRoute(payload, gtfs, number, type, dateIso);
+      appendBelgianTerminus(payload,gtfs,number,type,dateIso,seq);
     } catch (error) {
       if (seq !== requestSeq) return;
       renderCflError(error, payload, number, type, dateIso);
