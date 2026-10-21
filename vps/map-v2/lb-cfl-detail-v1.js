@@ -77,7 +77,8 @@ const minutes=(time)=>{
 function changedClock(time,delay){
  const min=minutes(time),diff=Number(delay);
  if(min==null||!Number.isFinite(diff))return '';
- return clock(String((min+Math.round(diff)+1440)%1440).padStart(2,'0')+':'+String((min+Math.round(diff)+1440)%60).padStart(2,'0'));
+ const updated=((min+Math.round(diff))%1440+1440)%1440;
+ return String(Math.floor(updated/60)).padStart(2,'0')+':'+String(updated%60).padStart(2,'0');
 }
 function fromArchive(info,payload){
  if(!payload||payload.version!==1)return null;
