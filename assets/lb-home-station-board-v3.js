@@ -5,7 +5,7 @@ if(window.__lbStationBoardInit)return;
 window.__lbStationBoardInit=true;
 var URL_STATIC='https://vps.labetaillere.fr/map-v2/z/41a9d7f2';
 var URL_LIVE='https://vps.labetaillere.fr/map-v2/z/77a13c5e';
-var S={open:false,mode:'dep',station:'Nancy',staticData:null,staticLoading:null,live:null,liveLoading:null,liveAt:0,byStation:new Map(),stations:[],stationChoices:[],limit:8,token:0,lastFocus:null,userPicked:false,returnFromTrain:null,exact:null,exactKey:'',bridgeFrame:null,bridgeTarget:null,bridgeTimer:null,bridgeToken:0,lastMarkup:null,exactCache:new Map(),clockTimer:null,luxArrivalFeed:null,luxArrivalAt:0,luxArrivalPromise:null};
+var S={open:false,mode:'dep',station:'Nancy',staticData:null,staticLoading:null,live:null,liveLoading:null,liveAt:0,byStation:new Map(),stations:[],stationChoices:[],limit:8,token:0,lastFocus:null,userPicked:false,returnFromTrain:null,visibleRows:[],exact:null,exactKey:'',bridgeFrame:null,bridgeTarget:null,bridgeTimer:null,bridgeToken:0,lastMarkup:null,exactCache:new Map(),clockTimer:null,luxArrivalFeed:null,luxArrivalAt:0,luxArrivalPromise:null};
 var BE_ENDPOINTS_URL='https://vps.labetaillere.fr/map-v2/data/lb-be-international-ends-v1.json';
 var BE_MATCHER_URL='https://vps.labetaillere.fr/map-v2/lb-be-extension-helper-v1.js?v=20261021-arlon3';
 var beIndex=null,beIndexAt=0,beLoading=null,beTripRoutes=new Map();
@@ -228,6 +228,7 @@ function patchTableInPlace(host,markup){
  return true;
 }
 function draw(rows,cached){
+ S.visibleRows=rows;
  var host=document.getElementById('lbBoardRows'),more=document.getElementById('lbBoardMore');
  if(!rows.length){
   var empty='<p class="lb-board-wait">Aucun autre train prévu pour cette gare.</p>';
@@ -239,7 +240,7 @@ function draw(rows,cached){
  var html='<div class="lb-gare-table-top"><b>'+heading+'</b><span class="lb-gare-clock-live"><span class="lb-gare-clock-live-label" aria-hidden="true">LIVE</span><time id="lbBoardClock" aria-label="Heure actuelle" aria-live="off" title="Horloge actualisée chaque seconde">'+boardClockText()+'</time></span></div>'+
  '<table class="lb-gare-table"><colgroup><col style="width:47%"><col style="width:21%"><col style="width:32%"></colgroup>'+
  '<thead><tr><th>'+col+'</th><th>HEURE</th><th aria-label="Voie et détails"></th></tr></thead><tbody>';
- rows.slice(0,S.limit).forEach(function(r){
+ rows.slice(0,S.limit).forEach(function(r,rowIndex){
   var late=r.delay>0,partial=!!r.partial,cancelled=!!r.cancelled;
   var status=cached?'Non actualisé':cancelled?'Supprimé':r.bePlannedOnly?'Horaire prévu':partial?'Suppr. partielle':late?'Retard +'+r.delay+'m':r.exact?'À l’heure':'Prévu';
   var statusClass=cancelled?'is-cancelled':partial?'is-partial':late?'is-late':'is-normal';
@@ -247,9 +248,10 @@ function draw(rows,cached){
     ?'<s class="lb-gare-old-time">'+clock(r.planned)+'</s><strong class="lb-gare-time is-late">'+clock(r.when)+'</strong>'
     :'<strong class="lb-gare-time '+(cancelled?'is-cancelled':'')+'">'+clock(r.when)+'</strong>';
   var rawNum=String(r.number||'').trim();
-  var num=r.exact?rawNum:(r.category==='bus'?'BUS ':'TER ')+rawNum.replace(/^TER |^BUS /i,'');
+  var num=r.exact?rawNum:trainOperator(r)==='CFL'?(stationTrainType(r)+' '+String(Number(rawNum.match(/\d{2,6}/)?.[0]||0))):
+    (r.category==='bus'?'BUS ':'TER ')+rawNum.replace(/^TER |^BUS /i,'');
   var place=internationalBoardPlace(r);
-  var details='<button type="button" class="lb-gare-details" data-lb-board-train="'+clean(r.number)+'" data-lb-board-date="'+clean(r.day)+'" aria-label="Ouvrir le détail du '+clean(num)+'">🐄 Détails</button>';
+  var details='<button type="button" class="lb-gare-details" data-lb-board-row="'+rowIndex+'" data-lb-board-train="'+clean(r.number)+'" data-lb-board-date="'+clean(r.day)+'" aria-label="Ouvrir le détail du '+clean(num)+'">🐄 Détails</button>';
   var voie=r.category==='bus'?'<span class="lb-gare-bus" title="Service routier" aria-label="Bus"><svg class="bus-icon-svg" viewBox="0 0 64 64" aria-hidden="true" focusable="false"><rect x="12" y="7" width="40" height="43" rx="7" fill="#0a0a0a"/><rect x="17" y="13" width="30" height="15" rx="2.5" fill="#ffffff"/><rect x="17" y="33" width="6" height="5" rx="1" fill="#ffffff"/><rect x="41" y="33" width="6" height="5" rx="1" fill="#ffffff"/><rect x="21" y="42" width="22" height="3" rx="1.5" fill="#ffffff"/><circle cx="20" cy="52" r="5" fill="#0a0a0a"/><circle cx="44" cy="52" r="5" fill="#0a0a0a"/></svg></span>'
            :r.track?'<span class="lb-gare-voie" title="Voie '+clean(r.track)+'"><small>Voie</small><b>'+clean(r.track)+'</b></span>':'';
   html+='<tr class="'+statusClass+'"><td class="lb-gare-place-cell"><b class="lb-gare-place">'+clean(place||'Destination inconnue')+'</b><small class="lb-gare-train">'+clean(num)+'</small></td>'+
@@ -448,7 +450,7 @@ function onExactResponse(event){
   return {number:r.number,day:r.serviceDate,planned:r.planned,when:r.when,
    delay:delay,cancelled:!!r.isCancelled,partial:!!r.partialCancellationStation,
    partialStation:r.partialCancellationStation,track:r.track||'',
-   category:r.category,mode:S.mode,origin:r.place,dest:r.place,
+   category:r.category,source:r.source,mode:S.mode,origin:r.place,dest:r.place,
    imminent:!!r.isImminent,bePlannedOnly:!!r.bePlannedOnly,trainId:r.trainId,exact:true};
  });
  mergeLuxArrivalTracks(S.exact);
@@ -585,16 +587,70 @@ function close(){
  if(S.lastFocus?.isConnected)S.lastFocus.focus({preventScroll:true});
 }
 
+
+/* The timetable uses multiple operators. Never send a CFL or Belgian train
+ * number to the SNCF-only profile resolver, which may find an unrelated TER. */
+function trainOperator(row){
+ var id=String(row?.trainId||row?.id||'');
+ var source=String(row?.source||'').toUpperCase();
+ if(source==='BE-PLANNED'||id.startsWith('BE-PLANNED:'))return 'BE-PLANNED';
+ if(source==='HAFAS_LUX'||id.startsWith('HAFAS-LUX:'))return 'CFL';
+ if(source==='CFL'||id.startsWith('CFL:'))return 'CFL';
+ return 'SNCF';
+}
+function stationTrainType(row){
+ var prefix=String(row?.number||'').match(/^(IC|RB|RE|EC|ICE|S|L|TER|TGV)\b/i);
+ if(prefix)return prefix[1].toUpperCase();
+ var id=String(row?.trainId||row?.id||'');
+ var trip=S.staticData?.tripsById?.find(function(pair){return String(pair[0])===id;})?.[1];
+ var line=S.staticData?.routesById?.find(function(pair){return pair[0]===trip?.route_id;})?.[1];
+ return String(line?.short||'CFL').trim().toUpperCase();
+}
+function openSelectedTrainDetails(row,button){
+ var operator=trainOperator(row);
+ var raw=String(row?.number||button.dataset.lbBoardTrain||'');
+ var number=raw.match(/\d{2,6}/)?.[0]?.replace(/^0+(?=\d)/,'');
+ var date=row?.day||button.dataset.lbBoardDate;
+ if(!number)return false;
+ if(operator==='SNCF'){
+  if(typeof window.lbOpenTrainDetail!=='function')return false;
+  var panel=document.getElementById('trainDetailPanel');
+  if(panel)delete panel.dataset.lbProvider;
+  window.lbOpenTrainDetail(number,date);
+  return true;
+ }
+ var type=stationTrainType(row),mode=row?.mode||S.mode;
+ var stop=S.byStation.get(norm(S.station))?.find(function(x){
+  return String(x.id)===String(row.trainId||row.id) && x.mode===mode;
+ });
+ var destination=mode==='dep'?(stop?.dest||row?.dest||''):(stop?.dest||S.station);
+ var origin=mode==='arr'?(stop?.origin||row?.origin||''):(stop?.origin||S.station);
+ var planned=Number(row?.planned),when=Number(row?.when);
+ var track=String(row?.track||'');
+ var payload={
+  trainNumber:number,trainType:type,date:date,
+  mode:mode,station:S.station,
+  origin:origin,destination:destination,track:track,
+  status:'dwell',fromStationBoard:true
+ };
+ if(Number.isFinite(planned)&&planned>=0){
+  payload[mode==='arr'?'plannedArrival':'plannedDeparture']=clock(planned);
+  payload[mode==='arr'?'realtimeArrival':'realtimeDeparture']=clock(Number.isFinite(when)?when:planned);
+ }
+ if(operator==='BE-PLANNED'){
+  if(typeof window.lbOpenBePlannedFromStationBoard!=='function')return false;
+  return window.lbOpenBePlannedFromStationBoard({...payload,trainId:row.trainId||row.id})===true;
+ }
+ if(typeof window.lbOpenCflFromStationBoard!=='function')return false;
+ return window.lbOpenCflFromStationBoard(payload)===true;
+}
 /* En gare > Détails > En gare : préserver l'état réel du tiroir plutôt
  * que le fermer (gare, onglet, scroll, plus de trains, hauteur).
  * L'observation du panneau couvre croix, retour et touche Échap. */
 function openTrainAndReturnToBoard(train){
- var openDetail=window.lbOpenTrainDetail;
+ var row=S.visibleRows[Number(train.dataset.lbBoardRow)];
  var panel=document.getElementById('trainDetailPanel');
- if(typeof openDetail!=='function'||!panel){
-  close();if(typeof openDetail==='function')openDetail(train.dataset.lbBoardTrain,train.dataset.lbBoardDate);
-  return;
- }
+ if(!row||!panel)return;
  if(S.returnFromTrain)S.returnFromTrain.cancel();
  var overlay=document.getElementById('lbStationBoardOverlay');
  var list=document.getElementById('lbBoardRows');
@@ -627,12 +683,9 @@ function openTrainAndReturnToBoard(train){
  document.body.classList.remove('lb-board-visible');
  stopBoardClock();
  try{
-  var opened=openDetail(train.dataset.lbBoardTrain,train.dataset.lbBoardDate);
+  var opened=openSelectedTrainDetails(row,train);
+  if(opened!==true){restore();return;}
   if(!panel.hidden)profileSeen=true;
-  if(opened&&typeof opened.then==='function'){
-   opened.then(function(){if(active&&panel.hidden&&!profileSeen)restore();},
-    function(){if(active&&panel.hidden)restore();});
-  }
  }catch(error){
   restore();
   console.warn('[En gare] Ouverture de fiche indisponible',error);
