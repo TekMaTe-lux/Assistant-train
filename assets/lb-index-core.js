@@ -403,26 +403,94 @@ function normalizeCflVoiesPayload(data){
 
 function normalizeCflByStationPayload(data){
   const out = new Map();
+  const timed = new Map(); // planned date/time for safe cross-border matches
   if (!data || typeof data !== 'object' || !data.stations || typeof data.stations !== 'object') return out;
 
   for (const [stationName, stationInfo] of Object.entries(data.stations)){
     const stopKey = normalizeVoiesTrainKey(stationName);
     if (!stopKey) continue;
-    const departures = Array.isArray(stationInfo?.departures) ? stationInfo.departures : [];
-    for (const dep of departures){
-      if (!dep || typeof dep !== 'object') continue;
-      const trainRaw = dep.train ?? dep.name ?? dep.number ?? dep.trainNumber ?? dep.line;
-      const trainKey = normalizeCflVoiesTrainKey(trainRaw);
-      if (!trainKey) continue;
-      const voieRaw = dep.platform ?? dep.track ?? dep.voie ?? dep.quai;
-      const voie = String(voieRaw || '').trim();
-      if (!voie) continue;
-      if (!out.has(trainKey)) out.set(trainKey, new Map());
-      out.get(trainKey).set(stopKey, voie);
+    for (const [listName,mode] of [['departures','dep'],['arrivals','arr']]){
+      const entries = Array.isArray(stationInfo?.[listName]) ? stationInfo[listName] : [];
+      for (const dep of entries){
+        if (!dep || typeof dep !== 'object' || dep.cancelled) continue;
+        const trainRaw = dep.train ?? dep.name ?? dep.number ?? dep.trainNumber ?? dep.line;
+        const trainKey = normalizeCflVoiesTrainKey(trainRaw);
+        if (!trainKey) continue;
+        const voie = normalizeVoieValue(dep.platform ?? dep.track ?? dep.voie ?? dep.quai);
+        if (!voie) continue;
+        if (mode==='dep'){
+          if (!out.has(trainKey)) out.set(trainKey, new Map());
+          out.get(trainKey).set(stopKey, voie);
+        }
+        const when=normalizeVoiesBaseTime(dep.scheduledTime);
+        const serviceDate=String(dep.scheduledDate||'');
+        if (!when || !/^\d{4}-\d{2}-\d{2}$/.test(serviceDate)) continue;
+        if (!timed.has(trainKey)) timed.set(trainKey, []);
+        timed.get(trainKey).push({stopKey,mode,when,date:serviceDate,voie});
+      }
     }
   }
-
+  window.__lbCflTimedPlatforms=timed;
   return out;
+}
+
+// Train numbers may differ between SNCF and CFL. Confirm the same service
+// date and minute at Luxembourg before borrowing the platform for each stop.
+// Other SNCF stats, delays and train identities remain untouched.
+function resolveCflPlatformForProfile(number,dateIso,journeyRows,row,isLast){
+  const timed=window.__lbCflTimedPlatforms;
+  if (!(timed instanceof Map)||!Array.isArray(journeyRows)||journeyRows.length<2||!row)return null;
+  const parts=new Intl.DateTimeFormat('en-GB',{timeZone:'Europe/Luxembourg',
+    year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(new Date());
+  const part=t=>parts.find(x=>x.type===t)?.value||'';
+  if(dateIso!==part('year')+'-'+part('month')+'-'+part('day'))return null;
+  const clean=n=>normalizeVoiesTrainKey(String(n||'').replace(/,?\s*gare(?:\s+centrale)?\s*$/i,''));
+  const first=journeyRows[0],last=journeyRows[journeyRows.length-1];
+  const anchor=clean(first.name)==='luxembourg'
+    ?{row:first,mode:'dep'}
+    :clean(last.name)==='luxembourg'
+      ?{row:last,mode:'arr'}:null;
+  if(!anchor)return null;
+  const time=(item,mode)=>normalizeVoiesBaseTime(
+    mode==='arr'?(item.arrival||item.departure):(item.departure||item.arrival)
+  );
+  const anchorTime=time(anchor.row,anchor.mode);
+  const stopMode=isLast?'arr':'dep';
+  const stopTime=time(row,stopMode);
+  if(!anchorTime||!stopTime)return null;
+  const stopKeys=getEquivalentCflStopKeys(row.name);
+  const toMinutes=v=>{const x=String(v).match(/^(\d{2}):(\d{2})$/);return x?Number(x[1])*60+Number(x[2]):NaN;};
+  const canonical=normalizeCflVoiesTrainKey(number);
+  if(!canonical)return null;
+  const variants=[canonical,...getEquivalentCflNumeros(canonical)
+    .map(normalizeCflVoiesTrainKey).filter(x=>x!==canonical)];
+  for(const key of [...new Set(variants)]){
+    const entries=timed.get(key)||[];
+    // Some CFL station feeds keep Bettembourg while omitting the already
+    // departed Luxembourg/Howald rows. Accept a matching dated stop inside
+    // Luxembourg as proof of this train's identity, never just its number.
+    const matchAnyLuxembourgStop=journeyRows.some(s=>{
+      const station=clean(s.name);
+      if(!['luxembourg','howald','bettembourg'].includes(station))return false;
+      const planned=time(s,'dep');
+      if(!planned)return false;
+      return entries.some(e=>e.date===dateIso&&e.mode==='dep'&&
+        e.stopKey===station&&Math.abs(toMinutes(e.when)-toMinutes(planned))<=1);
+    });
+    if(!matchAnyLuxembourgStop)continue;
+    const matches=entries.filter(e=>e.date===dateIso&&e.mode===stopMode&&
+      stopKeys.includes(e.stopKey)&&
+      Math.abs(toMinutes(e.when)-toMinutes(stopTime))<=1);
+    const distinct=[...new Set(matches.map(e=>e.voie).filter(Boolean))];
+    if(distinct.length===1)return distinct[0];
+    if(distinct.length>1)return null;
+    // The same verified CFL train can still have earlier stops missing
+    // from its by-station timetable. Reuse its stop-level platform map.
+    const map=window.cflVoiesByTrainMap?.get(key);
+    const fallback=resolveCflVoieForStop({voiesMap:map,stopName:row.name});
+    if(fallback)return fallback;
+  }
+  return null;
 }
 
 function mergeCflVoiesMaps(primary, secondary){
@@ -19251,4 +19319,3 @@ async function loadAffluenceDate(dateStr){
     initTableDateNav();
   }
 })();
-
