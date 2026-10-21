@@ -4723,6 +4723,78 @@
     return { planned: fallbackPlanned, actual: fallbackPlanned, delay: 0, source: '' };
   }
 
+
+  // Reuse the verified Luxembourg track already known by the map.
+  // Date, scheduled minute, direction and number aliases are checked there.
+  // No modification to the train identity, delays or SNCF statistics.
+  let profileLuxTrack=null;
+  let profileLuxTrackTicket=0;
+  let profileLuxTrackCleanup=null;
+  function profileLuxTrackValidFor(number,row,isLast){
+    const name=String(row?.name||'').normalize('NFD')
+      .replace(/[\u0300-\u036f]/g,'').toLowerCase();
+    if(!/^luxembourg(?:,|$)/.test(name)||!profileLuxTrack)return false;
+    const raw=String(isLast?(row?.arrival||row?.departure||''):(row?.departure||row?.arrival||''));
+    const when=raw.match(/([0-2]?\d):([0-5]\d)/);
+    if(!when)return false;
+    const clock=String(when[1]).padStart(2,'0')+':'+when[2];
+    return profileLuxTrack.number===String(number)&&
+      profileLuxTrack.date===state.dateIso&&
+      profileLuxTrack.mode===(isLast?'arr':'dep')&&
+      profileLuxTrack.time===clock;
+  }
+  function requestLuxTrackFromMap(number,dateIso,rows,requestId){
+    ++profileLuxTrackTicket;profileLuxTrack=null;
+    if(profileLuxTrackCleanup){profileLuxTrackCleanup();profileLuxTrackCleanup=null;}
+    if(dateIso!==todayIso()||!Array.isArray(rows)||rows.length<2)return;
+    const first=rows[0],last=rows[rows.length-1];
+    const lux=/^luxembourg(?:\s*,|$)/i;
+    const stop=lux.test(String(first.name||''))?first:lux.test(String(last.name||''))?last:null;
+    if(!stop)return;
+    const mode=stop===last?'arr':'dep';
+    const raw=String(mode==='arr'?(stop.arrival||stop.departure||''):(stop.departure||stop.arrival||''));
+    const m=raw.match(/([0-2]?\d):([0-5]\d)/);
+    if(!m)return;
+    const time=String(m[1]).padStart(2,'0')+':'+m[2];
+    const ticket=profileLuxTrackTicket;
+    const key='lb-profile-track-'+Date.now()+'-'+ticket;
+    let alive=true;
+    const timers=[];
+    function cleanup(){
+      if(!alive)return;
+      alive=false;
+      window.removeEventListener('message',onMessage);
+      timers.forEach(clearTimeout);
+    }
+    profileLuxTrackCleanup=cleanup;
+    function onMessage(event){
+      if(!alive||event.origin!=='https://vps.labetaillere.fr')return;
+      const msg=event.data;
+      if(msg?.type!=='lb:train-platform:response'||msg.requestId!==key)return;
+      if(msg.number!==number||msg.date!==dateIso||msg.time!==time||msg.mode!==mode)return;
+      if(!/^\d{1,2}(?:[A-Za-z]-[A-Za-z])?$/.test(String(msg.track||'')))return;
+      if(ticket!==profileLuxTrackTicket||requestId!==state.requestId||
+         byId('trainDetailPanel')?.hidden||!state.lastBundle)return;
+      profileLuxTrack={number,date:dateIso,mode,time,track:msg.track};
+      cleanup();profileLuxTrackCleanup=null;
+      const bundle=state.lastBundle;
+      renderHero(number,dateIso,bundle.effectiveRows.length?bundle.effectiveRows:bundle.rows,bundle.liveBundle);
+      renderRoute(number,dateIso,bundle.rows,bundle.liveBundle);
+    }
+    window.addEventListener('message',onMessage);
+    function attempt(){
+      if(!alive||ticket!==profileLuxTrackTicket||requestId!==state.requestId)return;
+      const frame=document.querySelector('.lb-board-data-frame')||
+        document.querySelector('#carte iframe');
+      if(frame?.contentWindow)frame.contentWindow.postMessage({
+        type:'lb:train-platform:request',requestId:key,number,date:dateIso,
+        station:'Luxembourg',mode,time
+      },'https://vps.labetaillere.fr');
+    }
+    [0,1300,3000,5200].forEach(ms=>timers.push(setTimeout(attempt,ms)));
+    timers.push(setTimeout(()=>{cleanup();profileLuxTrackCleanup=null;},7500));
+  }
+
   function platformAtStop(number, row, isLast) {
     let value = '';
     const scheduled = isLast ? (row.arrival || row.departure) : (row.departure || row.arrival);
@@ -4748,6 +4820,7 @@
       }
       if (value && typeof formatVoieLabel === 'function') return formatVoieLabel(value);
     } catch (_) {}
+    if (!value && profileLuxTrackValidFor(number,row,isLast)) value=profileLuxTrack.track;
     if (!value) return '';
     return /^(voie|quai)\s/i.test(String(value)) ? String(value) : `Voie ${value}`;
   }
@@ -5707,6 +5780,8 @@
       return;
     }
 
+    if(profileLuxTrackCleanup){profileLuxTrackCleanup();profileLuxTrackCleanup=null;}
+    profileLuxTrack=null;++profileLuxTrackTicket;
     state.trainNumber = number;
     state.dateIso = dateIso;
     state.origin = options.origin === 'map' ? 'map' : '';
@@ -5821,6 +5896,7 @@
       renderAffluence(affluence);
       renderReliability(reliability);
       state.lastBundle = { number, dateIso, rows, effectiveRows, liveBundle, reliability, affluence };
+      requestLuxTrackFromMap(number,dateIso,rows,requestId);
       if (typeof window.lbLoadTrainStaticToday === 'function' && (
         heroState?.journeyPhase === 'after' || heroState?.journeyPhase === 'scheduled' || heroState?.status?.className === 'is-cancel'
       )) {
