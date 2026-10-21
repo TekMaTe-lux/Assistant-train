@@ -17,7 +17,7 @@ ARRIVALS = Path("/var/www/gtfs/retards_cfl_arrivals.json")
 OUTPUT = Path("/var/www/gtfs/cfl_live_stops.json")
 ARRIVALS_MEMORY = Path("/var/lib/labetaillere-cfl-live/arrivals.json")
 LOCAL_TZ = ZoneInfo("Europe/Luxembourg")
-TRAIN_PATTERN = re.compile(r"^(IC|RE|RB|EC|ICE|L|S)\s*(\d{3,6})$", re.I)
+TRAIN_PATTERN = re.compile(r"^(IC|RE|RB|EC|ICE|TER|L|S)\s*(\d{3,6})$", re.I)
 
 
 def atomic_json(path, payload):
@@ -65,6 +65,9 @@ def build(now=None):
             match = TRAIN_PATTERN.match(train)
             if not match or not station:
                 continue
+            # The historical collector writes "TER88533" (without a space).
+            # Normalize its public key exactly like other CFL sheet consumers.
+            train = f"{match.group(1).upper()} {match.group(2)}"
             key = (service, train, journey_id)
             if key not in groups:
                 groups[key] = {"date": service, "train": train, "stops": [], "lastSeen": 0}
