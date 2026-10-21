@@ -557,6 +557,69 @@
       .catch((error) => console.error('[Gare Luxembourg] fiche SNCF impossible', error));
   }
 
+
+  // Entry point for the homepage "En gare" board. It deliberately reuses
+  // the exact same CFL sheet engine as the map, never the SNCF resolver.
+  window.lbOpenCflFromStationBoard = function(payload){
+    if (!payload || !/^\d{2,6}$/.test(String(payload.trainNumber||''))) return false;
+    const type=String(payload.trainType||'').trim().toUpperCase();
+    if(!CFL_TYPES.test(type))return false;
+    void openCfl(payload);
+    return true;
+  };
+
+  // Belgian-only through trains are in official GTFS SNCB but have no
+  // CFL trip. Show the planned Belgian route, not a random SNCF run.
+  window.lbOpenBePlannedFromStationBoard = function(payload){
+    const id=String(payload?.trainId||''),num=String(payload?.trainNumber||'');
+    if(!/^BE-PLANNED:\d{4}-\d{2}-\d{2}\|\d{2,6}$/.test(id)||
+       !/^\d{2,6}$/.test(num))return false;
+    const key=id.slice('BE-PLANNED:'.length),seq=++requestSeq;
+    const panel=resetCflPanel(payload,num,'IC',payload.date);
+    if(!panel)return false;
+    panel.dataset.lbProvider='be-planned';
+    text('trainDetailRouteMode','Parcours belge prévu');
+    text('trainDetailMessage','Horaires prévus · informations LIVE non disponibles pour ce tronçon.');
+    text('trainDetailPlatform','Voie non communiquée');
+    const state=el('trainDetailSourceState');
+    if(state){state.className='lb-train-profile__source is-static';state.textContent='HORAIRES PRÉVUS · SNCB';}
+    const status=el('trainDetailLiveStatus');
+    if(status){status.className='lb-train-profile__status is-upcoming';status.textContent='À VENIR · HORAIRES PRÉVUS';}
+    void fetch(BE_INDEX_URL,{cache:'no-store',credentials:'omit'})
+      .then(res=>{if(!res.ok)throw new Error('Horaires belges indisponibles');return res.json();})
+      .then(index=>{
+        if(seq!==requestSeq||panel.hidden||panel.dataset.lbProvider!=='be-planned')return;
+        const variants=index?.trains?.[key];
+        if(!Array.isArray(variants)||variants.length!==1)throw new Error('Parcours belge non confirmé');
+        const rec=variants[0],stops=Array.isArray(rec.anchors)?rec.anchors:[];
+        if(!stops.length)throw new Error('Arrêts belges indisponibles');
+        const planned=(stop,k)=>shortTime(stop[k]||stop.time)||'—';
+        const first=rec.origin||{},last=rec.destination||{};
+        text('trainDetailOrigin',String(first.name||'—'));
+        text('trainDetailDestination',String(last.name||'—'));
+        text('trainDetailDeparture',shortTime(first.time)||'—');
+        text('trainDetailArrival',shortTime(last.time)||'—');
+        const duration=durationMinutes(first.time,last.time);
+        if(duration!=null)text('trainDetailDuration',duration+' min');
+        text('trainDetailPath',String(first.name||'')+' → '+String(last.name||''));
+        text('trainDetailStops','');
+        const host=el('trainDetailStops');
+        if(host)host.innerHTML=stops.map(stop=>
+          '<div class="lb-train-profile__stop lb-train-profile__stop--planned-be">'+
+          '<div class="lb-train-profile__times"><b>'+esc(planned(stop,'arrival'))+'</b></div>'+
+          '<i class="lb-train-profile__dot"></i>'+
+          '<div class="lb-train-profile__stop-name"><strong>'+esc(stop.name||'')+'</strong>'+
+          '<span>Horaire prévu</span></div></div>'
+        ).join('');
+        panel.setAttribute('aria-busy','false');
+      }).catch(error=>{
+        if(seq!==requestSeq||panel.hidden||panel.dataset.lbProvider!=='be-planned')return;
+        text('trainDetailMessage','Horaires belges temporairement indisponibles.');
+        panel.setAttribute('aria-busy','false');
+        console.warn('[En gare] parcours belge introuvable',error);
+      });
+    return true;
+  };
   window.addEventListener('message', (event) => {
     if (event.origin !== VPS_ORIGIN) return;
     const payload = event.data;
