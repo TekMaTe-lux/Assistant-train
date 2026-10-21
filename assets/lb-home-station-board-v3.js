@@ -6,6 +6,9 @@ window.__lbStationBoardInit=true;
 var URL_STATIC='https://vps.labetaillere.fr/map-v2/z/41a9d7f2';
 var URL_LIVE='https://vps.labetaillere.fr/map-v2/z/77a13c5e';
 var S={open:false,mode:'dep',station:'Nancy',staticData:null,staticLoading:null,live:null,liveLoading:null,liveAt:0,byStation:new Map(),stations:[],stationChoices:[],limit:8,token:0,lastFocus:null,userPicked:false,exact:null,exactKey:'',bridgeFrame:null,bridgeTarget:null,bridgeTimer:null,bridgeToken:0,lastMarkup:null,exactCache:new Map(),clockTimer:null,luxArrivalFeed:null,luxArrivalAt:0,luxArrivalPromise:null};
+var BE_ENDPOINTS_URL='https://vps.labetaillere.fr/map-v2/data/lb-be-international-ends-v1.json';
+var BE_MATCHER_URL='https://vps.labetaillere.fr/map-v2/lb-be-extension-helper-v1.js?v=20261021-be-stops2';
+var beIndex=null,beLoading=null,beTripRoutes=new Map();
 var priority=['Nancy','Metz','Thionville','Luxembourg','Hagondange','Bettembourg','Pont-à-Mousson','Hettange-Grande','Howald','Uckange'];
 function norm(s){return String(s||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().replace(/[^a-z0-9]+/g,' ').trim().replace(/ gare centrale$/,'');}
 function friendly(s){return String(s||'').trim().replace(/^Luxembourg, Gare Centrale$/i,'Luxembourg').replace(/^Luxembourg,?\s+Gare$/i,'Luxembourg').replace(/^Howald, Gare$/i,'Howald').replace(/^Bettembourg,?\s+Gare$/i,'Bettembourg');}
@@ -37,6 +40,39 @@ function getCached(){
  try {var v=JSON.parse(localStorage.getItem('lb:station-board:'+norm(S.station)+':'+S.mode)||'null');return v&&v.at>Date.now()-36*3600000&&Array.isArray(v.rows)?v:null;}catch(_){return null;}
 }
 function saveCached(rows){try{localStorage.setItem('lb:station-board:'+norm(S.station)+':'+S.mode,JSON.stringify({at:Date.now(),rows:rows.slice(0,18)}));}catch(_){}}
+
+function ensureBelgianStations(){
+ if(beIndex&&typeof window.lbVerifyInternationalBeEndpoint==='function')return Promise.resolve(beIndex);
+ if(beLoading)return beLoading;
+ var matcher=typeof window.lbVerifyInternationalBeEndpoint==='function'?Promise.resolve():new Promise(function(resolve,reject){
+   var script=document.createElement('script');script.src=BE_MATCHER_URL;script.async=true;
+   script.onload=resolve;script.onerror=function(){reject(new Error('International matcher unavailable'));};
+   document.head.appendChild(script);
+ });
+ beLoading=Promise.all([matcher,fetch(BE_ENDPOINTS_URL,{mode:'cors',cache:'no-cache'}).then(function(r){
+   if(!r.ok)throw new Error('International index unavailable');return r.json();
+ })]).then(function(values){
+   var data=values[1];
+   if(data?.schema!=='lb-be-international-ends-v1'||!data.trains||
+      typeof window.lbVerifyInternationalBeEndpoint!=='function')throw Error('International index invalid');
+   beIndex=data;
+   if(S.open){S.lastMarkup=null;render();}
+   return data;
+ }).finally(function(){beLoading=null;});
+ return beLoading;
+}
+function internationalBoardPlace(row){
+ var place=row.mode==='dep'?row.dest:row.origin;
+ if(!beIndex||row.category==='bus')return place;
+ var id=String(row.id||row.trainId||''),route=beTripRoutes.get(id);
+ if(!route)return place;
+ var match=String(row.number||'').match(/\d{3,6}/);
+ if(!match)return place;
+ var ext=window.lbVerifyInternationalBeEndpoint({date:row.day,number:match[0],type:'CFL'},route,beIndex);
+ var name=row.mode==='dep'?ext?.destination?.name:ext?.origin?.name;
+ return name?String(name).replace(/\s+\((?:LU|BE)\)$/i,''):place;
+}
+
 function stationData(data){
  var stops=new Map(data.stopsById),trips=new Map(data.tripsById),stopKeys=new Map(),stationNames=new Map();
  stops.forEach(function(meta,id){
@@ -48,6 +84,7 @@ function stationData(data){
   if(meta.parent_station)stopKeys.set(meta.parent_station,key);
  });
  var indexed=new Map();
+  beTripRoutes=new Map();
  data.stopTimesByTrip.forEach(function(pair){
   var id=pair[0],seq=pair[1],trip=trips.get(id);
   if(!trip||!trip.service_id||!Array.isArray(seq)||seq.length<2)return;
@@ -56,6 +93,14 @@ function stationData(data){
   seq=seq.slice().sort(function(a,b){return Number(a.seq)-Number(b.seq);});
   var a=stops.get(seq[0].stop_id),b=stops.get(seq[seq.length-1].stop_id);
   var origin=friendly(a?.name||'Gare inconnue'),dest=friendly(b?.name||'Gare inconnue');
+   if(trip.source==='CFL'&&String(id).startsWith('CFL:')){
+     beTripRoutes.set(String(id),seq.map(function(stop){
+       var meta=stops.get(stop.stop_id);
+       return {name:meta?.name||stop.stop_id,
+        arrival:stop.arrival==null?'':clock(Number(stop.arrival)),
+        departure:stop.departure==null?'':clock(Number(stop.departure))};
+     }));
+   }
   seq.forEach(function(stop,i){
    var key=stopKeys.get(stop.stop_id);if(!key)return;
    if(!indexed.has(key))indexed.set(key,[]);
@@ -203,7 +248,7 @@ function draw(rows,cached){
     :'<strong class="lb-gare-time '+(cancelled?'is-cancelled':'')+'">'+clock(r.when)+'</strong>';
   var rawNum=String(r.number||'').trim();
   var num=r.exact?rawNum:(r.category==='bus'?'BUS ':'TER ')+rawNum.replace(/^TER |^BUS /i,'');
-  var place=r.mode==='dep'?r.dest:r.origin;
+  var place=internationalBoardPlace(r);
   var details='<button type="button" class="lb-gare-details" data-lb-board-train="'+clean(r.number)+'" data-lb-board-date="'+clean(r.day)+'" aria-label="Ouvrir le détail du '+clean(num)+'">🐄 Détails</button>';
   var voie=r.category==='bus'?'<span class="lb-gare-bus" title="Service routier" aria-label="Bus"><svg class="bus-icon-svg" viewBox="0 0 64 64" aria-hidden="true" focusable="false"><rect x="12" y="7" width="40" height="43" rx="7" fill="#0a0a0a"/><rect x="17" y="13" width="30" height="15" rx="2.5" fill="#ffffff"/><rect x="17" y="33" width="6" height="5" rx="1" fill="#ffffff"/><rect x="41" y="33" width="6" height="5" rx="1" fill="#ffffff"/><rect x="21" y="42" width="22" height="3" rx="1.5" fill="#ffffff"/><circle cx="20" cy="52" r="5" fill="#0a0a0a"/><circle cx="44" cy="52" r="5" fill="#0a0a0a"/></svg></span>'
            :r.track?'<span class="lb-gare-voie" title="Voie '+clean(r.track)+'"><small>Voie</small><b>'+clean(r.track)+'</b></span>':'';
@@ -239,6 +284,7 @@ function render(){
  src('Synchronisation avec la carte… · horaires prévus en attendant');
 }
 function refresh(){
+  void ensureBelgianStations().catch(function(){});
  // Dès que l'index local est prêt, afficher SYNCHRONEMENT chaque gare.
  var ticket=++S.token;
  render();
