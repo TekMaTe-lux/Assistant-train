@@ -42,7 +42,7 @@ def nearest_time(a, b):
 def stops_match(lu, be):
     matches=[]
     last=-1
-    for s in lu:
+    for lu_index,s in enumerate(lu):
         lu_key=clean(s.get("name"))
         if not lu_key:continue
         for j in range(last+1,len(be)):
@@ -51,11 +51,11 @@ def stops_match(lu, be):
             if not nearest_time(s.get("arrival") or s.get("departure"),
                                 other.get("arrival") or other.get("departure")):
                 continue
-            matches.append((lu_key,j))
+            matches.append((lu_index,j,lu_key))
             last=j
             break
     # Two independently scheduled common stations, in timetable order, must agree.
-    return matches if len(set(k for k,j in matches))>=2 else []
+    return matches if len(set(k for i,j,k in matches))>=2 else []
 
 def is_lu_border(row):
     # Only LU runs that actually reach a Belgian station, not an unrelated number.
@@ -93,6 +93,8 @@ def verified_pair(lu, be, lu_stops, be_stops):
     # The BE provider MUST extend the LU segment on one end only.
     # Every LU stop maps in order into the Belgian whole route.
     if not (start_extended or end_extended):return None
+    if matches[0][0]!=0 or matches[-1][0]!=len(lu_stops)-1:
+        return None
     if (start_extended and matches[0][1]==0) or (end_extended and matches[-1][1]>=len(be_stops)-1):
         return None
     if (start_extended and end_extended):return None
@@ -135,8 +137,12 @@ def build(meta):
             for b in belgian:
                 checks+=1
                 try:
-                    l_stop=trip_cache.setdefault(("LU",lu["tripId"]),query_trip(lu))
-                    b_stop=trip_cache.setdefault(("BE",b["tripId"]),query_trip(b))
+                    if ("LU",lu["tripId"]) not in trip_cache:
+                        trip_cache[("LU",lu["tripId"])]=query_trip(lu)
+                    if ("BE",b["tripId"]) not in trip_cache:
+                        trip_cache[("BE",b["tripId"])]=query_trip(b)
+                    l_stop=trip_cache[("LU",lu["tripId"])]
+                    b_stop=trip_cache[("BE",b["tripId"])]
                     pair=verified_pair(lu,b,l_stop,b_stop)
                     if pair:candidates.append(pair)
                 except Exception as exc:
