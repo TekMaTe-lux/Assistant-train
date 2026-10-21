@@ -13,7 +13,7 @@
   };
 
   // Script d’alertes historique conservé à l’identique.
-  load('./assets/home-major-alerts-core.js?v=20261021-major-dedupe3', 'lb-home-major-alert-core');
+  load('./assets/home-major-alerts-core.js?v=20261021-major-red4', 'lb-home-major-alert-core');
 
   // Pont gare dynamique Luxembourg -> fiche train #BER.
   load('./assets/lux-train-sheet.js?v=20261021-clean-train-sources9', 'lb-lux-train-sheet');
