@@ -165,6 +165,11 @@ window.addEventListener('click', (event) => {
           animation:lbMajorTicker var(--lb-ticker-duration) linear infinite;
           will-change:transform;
         }
+        #lbMajorAlertBanner.is-static .lb-major-alert-banner__track { animation:none; will-change:auto; }
+        #lbMajorAlertBanner.is-static .lb-major-alert-banner__repeat:last-child { display:none; }
+        #lbMajorAlertBanner.is-static .lb-major-alert-banner__ticker {
+          -webkit-mask-image:none; mask-image:none;
+        }
         .lb-major-alert-banner__repeat {
           display:block;
           flex:0 0 auto;
@@ -433,6 +438,16 @@ window.addEventListener('click', (event) => {
     return { key: 'info', icon: 'ℹ️', label: 'Information trafic', rank: 1 };
   };
 
+  // Le même incident peut être publié deux fois avec des espaces, pictos,
+  // ou mentions de consultation différents. La clé conserve l'heure, le
+  // parcours, la cause et le détail opérationnel, mais pas le pied de page.
+  function operationalFingerprint(situation){
+    const raw=String(situation?.detail || situation?.description || situation?.summary || '');
+    const text=normalize(raw).split(/\b(?:informations? en temps reel|consultez (?:les )?horaires|retrouvez (?:toutes )?les informations)\b/)[0];
+    return text.replace(/[^a-z0-9]+/g,' ').trim()
+      || String(situation?.situation_number || '');
+  }
+
   function classify(situation){
     const fullText = [
       situation?.summary,
@@ -468,14 +483,9 @@ window.addEventListener('click', (event) => {
       text,
       corridorTrains,
       severity: severityFor(text),
-      // SIRI : scope général et scope vehicleJourney peuvent avoir des descriptions
-      // courtes différentes, mais le même détail opérationnel (à la ponctuation près).
-      // Priorité au détail complet : il garde trajet + dates et évite de fusionner
-      // deux chantiers distincts partageant un titre générique "Travaux en cours".
-      fingerprint: normalize(situation?.detail || situation?.description || situation?.summary || '')
-        .replace(/^lorraine\s*:\s*/, '')
-        .replace(/[^a-z0-9]+/g, ' ')
-        .trim()
+      // Évite les doublons de publication, sans regrouper deux incidents
+      // dont la cause, le lieu ou l'heure seraient différents.
+      fingerprint: operationalFingerprint(situation)
     };
   }
 
@@ -528,13 +538,13 @@ window.addEventListener('click', (event) => {
     if (
       summary
       && !/^(perturbation(?: en)? lorraine|perturbation lorraine)\.?$/i.test(summary)
-      && !/^(information trafic|info trafic)\.?$/i.test(summary)
+      && !/^(information trafic|info trafic|plus d['’ ]?infos?)\s*:?\.?$/i.test(summary)
     ) {
       return summary.length > 74 ? `${summary.slice(0, 71)}…` : summary;
     }
 
     const source = String(situation.description || situation.detail || '');
-    const causeMatch = source.match(/suite\s+[àa]\s+([^\n.]+)/i);
+    const causeMatch = source.match(/(?:suite\s+[àa]|en raison d['’]un(?:e)?|à cause d['’]un(?:e)?)\s+([^\n.]+)/i);
     if (causeMatch?.[1]) {
       const cause = causeMatch[1].trim().replace(/[.!]+$/, '');
       if (cause) {
@@ -584,7 +594,9 @@ window.addEventListener('click', (event) => {
     }
 
     banner.dataset.level = strongest?.key || items[0]?.severity?.key || 'critical';
-    const messages = items.slice(0,4).map(tickerMessageFor).filter(Boolean);
+    // Le compteur/modal gardent tous les incidents distincts, mais un
+    // message identique n'est jamais affiché deux fois dans le ticker.
+    const messages = [...new Set(items.slice(0,4).map(tickerMessageFor).filter(Boolean))];
     if (items.length > 4) messages.push(`+ ${items.length - 4} autres alertes`);
     const text = messages.join('  ◆  ');
     if (bannerText && bannerEcho && bannerText.textContent !== text) {
@@ -598,6 +610,10 @@ window.addEventListener('click', (event) => {
       if (banner.hidden) return;
       // Une seule mesure à chaque nouvelle réponse SIRI : animation CSS ensuite.
       const width = bannerText?.getBoundingClientRect().width || 650;
+      // Un message court reste fixe : pas de faux doublon causé par la
+      // copie technique utilisée pour faire défiler les longs messages.
+      banner.classList.toggle('is-static', messages.length===1 &&
+        width <= Math.max(0,(bannerTicker?.clientWidth || 0)-8));
       banner.style.setProperty('--lb-ticker-duration', `${Math.max(17, Math.min(95, Math.round((width + 34) / 33)))}s`);
       syncBannerGeometry();
     });
