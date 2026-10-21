@@ -93,7 +93,7 @@ function stationData(data){
   seq=seq.slice().sort(function(a,b){return Number(a.seq)-Number(b.seq);});
   var a=stops.get(seq[0].stop_id),b=stops.get(seq[seq.length-1].stop_id);
   var origin=friendly(a?.name||'Gare inconnue'),dest=friendly(b?.name||'Gare inconnue');
-   if(trip.source==='CFL'&&String(id).startsWith('CFL:')){
+   if(trip.source==='CFL'&&String(id).startsWith('CFL:')&&/arlon|gouvy|athus/i.test(origin+' '+dest)){
      beTripRoutes.set(String(id),seq.map(function(stop){
        var meta=stops.get(stop.stop_id);
        return {name:meta?.name||stop.stop_id,
