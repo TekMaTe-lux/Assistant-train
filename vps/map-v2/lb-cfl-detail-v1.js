@@ -4,7 +4,9 @@
 if(window.lbOpenCflMapDetail)return;
 const GTFS='https://vps.labetaillere.fr/api/cfl-trip';
 const HIM='https://vps.labetaillere.fr/g/d14c83e7';
+const BE_ENDPOINTS='https://vps.labetaillere.fr/map-v2/data/lb-be-international-ends-v1.json';
 let layer=null, token=0, cachedEvents=null, cacheTime=0, pending=null;
+let beIndex=null, beLoading=null;
 const esc=(x)=>String(x??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const clock=(x)=>{const m=String(x||'').match(/^(\d{1,3}):(\d\d)/);return m?String(Number(m[1])%24).padStart(2,'0')+':'+m[2]:'—';};
 function stripMarkup(s){return String(s||'').replace(/<br\s*\/?>/gi,'\n').replace(/<\/p>/gi,'\n').replace(/<[^>]*>/g,' ').replace(/&nbsp;/gi,' ').trim();}
@@ -138,6 +140,24 @@ function stopObservation(stop,view){
  const fallback=(view.info.observedStops||[]).find(s=>normalizeStation(s.name)===key);
  return fallback?{...fallback,delay:fallback.delayMinutes,cancelled:false,supplement:'map'}:null;
 }
+
+function loadBeEndpoints(){
+ if(beIndex)return Promise.resolve(beIndex);
+ if(beLoading)return beLoading;
+ beLoading=fetch(BE_ENDPOINTS,{cache:'no-cache',credentials:'omit'})
+   .then(r=>{if(!r.ok)throw Error('BE endpoint index unavailable');return r.json();})
+   .then(data=>{
+     if(data?.schema!=='lb-be-international-ends-v1'||!data.trains)throw Error('BE endpoint index invalid');
+     beIndex=data;return data;
+   }).finally(()=>{beLoading=null;});
+ return beLoading;
+}
+function setBeExtension(view){
+ view.beExtension=typeof window.lbVerifyInternationalBeEndpoint==='function'&&view.beIndex
+   ? window.lbVerifyInternationalBeEndpoint(view.info,view.gtfsStops,view.beIndex)
+   : null;
+}
+
 function renderAll(view){
  const stops=view.gtfsStops||[];
  if(!stops.length){node('Stops').innerHTML='<p>Parcours prévu momentanément indisponible.</p>';return;}
@@ -165,10 +185,17 @@ function renderAll(view){
   if(forecast&&forecast!==planned)return '<s>'+esc(planned)+'</s><b>'+esc(forecast)+'</b>';
   return '<b>'+esc(planned)+'</b>';
  }
- node('Route').innerHTML='<div class="lb-cfl-sheet-route"><div>'+renderTop(first)+
-  '<small>'+esc(first.stop.name)+'</small></div><i>→</i><div style="text-align:right">'+
-  renderTop(last)+'<small>'+esc(last.stop.name)+'</small></div></div>';
- node('Stops').innerHTML='<section class="lb-cfl-sheet-block"><h3>Parcours et horaires</h3>'+
+ const ext=view.beExtension;
+ const firstClock=ext?.origin ? '<b>'+esc(clock(ext.origin.time))+'</b>' : renderTop(first);
+ const lastClock=ext?.destination ? '<b>'+esc(clock(ext.destination.time))+'</b>' : renderTop(last);
+ const firstName=ext?.origin?.name||first.stop.name;
+ const lastName=ext?.destination?.name||last.stop.name;
+ node('Route').innerHTML='<div class="lb-cfl-sheet-route"><div>'+firstClock+
+  '<small>'+esc(firstName)+'</small></div><i>→</i><div style="text-align:right">'+
+  lastClock+'<small>'+esc(lastName)+'</small></div></div>';
+ const sectionNote=ext ? '<p class="lb-cfl-sheet-note" style="margin:0 0 8px;">Arrêts détaillés de '
+   +esc(ext.sectionFrom)+' à '+esc(ext.sectionTo)+'.</p>' : '';
+ node('Stops').innerHTML='<section class="lb-cfl-sheet-block"><h3>Parcours et horaires</h3>'+sectionNote+
  records.map(({stop,obs})=>{
   const planned=plannedTime(stop,obs);
   const cancelled=obs?.cancelled===true;
@@ -236,13 +263,17 @@ async function open(info){
  init();const t=++token;
  layer.hidden=false;
  const view={info,gtfsStops:info.fallbackStops||[],gtfsSource:'carte / GTFS',
-             selected:null,events:null};
+             selected:null,events:null,beIndex:null,beExtension:null};
  node('Title').textContent=(info.type||'CFL')+' '+info.number;
  node('State').textContent='Vérification des informations trafic…';
  node('State').className='lb-cfl-sheet-state';
  node('Incidents').textContent='';
  renderAll(view);
  layer.querySelector('.lb-cfl-sheet')?.focus({preventScroll:true});
+ void loadBeEndpoints().then(index=>{
+  if(token!==t)return;
+  view.beIndex=index;setBeExtension(view);renderAll(view);
+ }).catch(()=>{/* No certified match: CFL display stays unchanged */});
  void readStopData().then(payload=>{
   if(token!==t)return;
   view.selected=fromArchive(info,payload);
@@ -266,6 +297,7 @@ async function open(info){
   if(!j?.ok||!Array.isArray(j.match?.stops)||!j.match.stops.length)throw Error('Parcours introuvable');
   view.gtfsStops=j.match.stops;
   view.gtfsSource='GTFS CFL';
+  setBeExtension(view);
   renderAll(view);
  }catch(e){
   if(token===t&&!(view.gtfsStops||[]).length)node('Stops').innerHTML='<p>Parcours momentanément indisponible.</p>';
