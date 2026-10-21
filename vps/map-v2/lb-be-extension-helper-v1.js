@@ -59,8 +59,22 @@
         && matches[0].i===0 && matches[0].j===0
         && matches[matches.length-1].j<be.anchors.length-1;
       if(!extendsOrigin&&!extendsDest)continue;
+      // Only extend OUTSIDE the trusted CFL stop sequence, never replace a
+      // shared Belgian/Luxembourg stop's time, platform or cancellation.
+      const existing=new Set(stops.map(s=>station(s.name||s.stop_name)));
+      const belgianStops=(extendsOrigin
+        ? be.anchors.slice(0,matches[0].j)
+        : be.anchors.slice(matches[matches.length-1].j+1))
+        .filter(a=>a.name&&a.time&&!existing.has(station(a.name)))
+        .map(a=>({
+          name:a.name,time:a.time,arrival:a.time,departure:a.time,
+          beOnly:true,plannedOnly:true
+        }));
+      if(!belgianStops.length)continue;
       results.push({origin:extendsOrigin?be.origin:null,
                     destination:extendsDest?be.destination:null,
+                    prefix:extendsOrigin?belgianStops:[],
+                    suffix:extendsDest?belgianStops:[],
                     matches:matches.length,
                     date,number,
                     sectionFrom:first.name||first.stop_name,
