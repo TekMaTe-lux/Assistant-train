@@ -24,7 +24,7 @@
   }
   function find(info,stops,index){
     if(!Array.isArray(stops)||stops.length<2 ||index?.schema!=='lb-be-international-ends-v1')return null;
-    const date=String(info?.date||''),number=String(info?.number||'');
+    const date=String(info?.date||''),number=String(info?.number||'').replace(/^0+(?=\d)/,'');
     const wantedType=String(info?.type||'').toUpperCase();
     if(!/^\d{4}-\d{2}-\d{2}$/.test(date)|| !/^\d{2,6}$/.test(number))return null;
     const candidates=index.trains?.[date+'|'+number]||[];
