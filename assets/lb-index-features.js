@@ -4820,6 +4820,10 @@
       }
       if (value && typeof formatVoieLabel === 'function') return formatVoieLabel(value);
     } catch (_) {}
+    if (!value && typeof resolveCflPlatformForProfile==='function'){
+      value=resolveCflPlatformForProfile(number,state.dateIso,
+        state.profileJourneyRows||state.lastBundle?.rows,row,isLast)||'';
+    }
     if (!value && profileLuxTrackValidFor(number,row,isLast)) value=profileLuxTrack.track;
     if (!value) return '';
     return /^(voie|quai)\s/i.test(String(value)) ? String(value) : `Voie ${value}`;
@@ -5782,6 +5786,7 @@
 
     if(profileLuxTrackCleanup){profileLuxTrackCleanup();profileLuxTrackCleanup=null;}
     profileLuxTrack=null;++profileLuxTrackTicket;
+    state.profileJourneyRows=null;
     state.trainNumber = number;
     state.dateIso = dateIso;
     state.origin = options.origin === 'map' ? 'map' : '';
@@ -5886,6 +5891,7 @@
       }
 
       mainRendered = true;
+      state.profileJourneyRows=rows;
       // Le bandeau décrit le trajet réellement assuré ; la timeline conserve
       // également le tronçon théorique supprimé pour l'expliquer visuellement.
       const effectiveRows = rows.filter((row) => !row.isDeleted);
