@@ -7,7 +7,7 @@ var URL_STATIC='https://vps.labetaillere.fr/map-v2/z/41a9d7f2';
 var URL_LIVE='https://vps.labetaillere.fr/map-v2/z/77a13c5e';
 var S={open:false,mode:'dep',station:'Nancy',staticData:null,staticLoading:null,live:null,liveLoading:null,liveAt:0,byStation:new Map(),stations:[],stationChoices:[],limit:8,token:0,lastFocus:null,userPicked:false,exact:null,exactKey:'',bridgeFrame:null,bridgeTarget:null,bridgeTimer:null,bridgeToken:0,lastMarkup:null,exactCache:new Map(),clockTimer:null,luxArrivalFeed:null,luxArrivalAt:0,luxArrivalPromise:null};
 var BE_ENDPOINTS_URL='https://vps.labetaillere.fr/map-v2/data/lb-be-international-ends-v1.json';
-var BE_MATCHER_URL='https://vps.labetaillere.fr/map-v2/lb-be-extension-helper-v1.js?v=20261021-be-stops2';
+var BE_MATCHER_URL='https://vps.labetaillere.fr/map-v2/lb-be-extension-helper-v1.js?v=20261021-arlon3';
 var beIndex=null,beLoading=null,beTripRoutes=new Map();
 var priority=['Nancy','Metz','Thionville','Luxembourg','Hagondange','Bettembourg','Pont-à-Mousson','Hettange-Grande','Howald','Uckange'];
 function norm(s){return String(s||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().replace(/[^a-z0-9]+/g,' ').trim().replace(/ gare centrale$/,'');}
@@ -241,7 +241,7 @@ function draw(rows,cached){
  '<thead><tr><th>'+col+'</th><th>HEURE</th><th aria-label="Voie et détails"></th></tr></thead><tbody>';
  rows.slice(0,S.limit).forEach(function(r){
   var late=r.delay>0,partial=!!r.partial,cancelled=!!r.cancelled;
-  var status=cached?'Non actualisé':cancelled?'Supprimé':partial?'Suppr. partielle':late?'Retard +'+r.delay+'m':r.exact?'À l’heure':'Prévu';
+  var status=cached?'Non actualisé':cancelled?'Supprimé':r.bePlannedOnly?'Horaire prévu':partial?'Suppr. partielle':late?'Retard +'+r.delay+'m':r.exact?'À l’heure':'Prévu';
   var statusClass=cancelled?'is-cancelled':partial?'is-partial':late?'is-late':'is-normal';
   var timeText=late&&r.planned!==r.when
     ?'<s class="lb-gare-old-time">'+clock(r.planned)+'</s><strong class="lb-gare-time is-late">'+clock(r.when)+'</strong>'
@@ -449,7 +449,7 @@ function onExactResponse(event){
    delay:delay,cancelled:!!r.isCancelled,partial:!!r.partialCancellationStation,
    partialStation:r.partialCancellationStation,track:r.track||'',
    category:r.category,mode:S.mode,origin:r.place,dest:r.place,
-   imminent:!!r.isImminent,trainId:r.trainId,exact:true};
+   imminent:!!r.isImminent,bePlannedOnly:!!r.bePlannedOnly,trainId:r.trainId,exact:true};
  });
  mergeLuxArrivalTracks(S.exact);
  S.exactCache.set(S.exactKey,{at:Date.now(),rows:S.exact});
