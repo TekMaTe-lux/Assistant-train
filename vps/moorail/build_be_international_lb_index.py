@@ -49,6 +49,10 @@ def compile_day_index(database,service_days):
         for service,trip,number,product,seq,arr,dep,name in con.execute(query,(*service_days,*KINDS)):
             by_trip[(service,trip,str(number or ""),str(product or ""))].append(
                 {"name":str(name or "").strip(),"arr":arr,"dep":dep})
+    expected_ic=defaultdict(set)
+    for (service,trip,num,kind),stops in by_trip.items():
+        if kind=="IC" and re.fullmatch(r"\d{2,6}",num) and len(stops)>=2:
+            expected_ic[service].add(num)
     result=defaultdict(dict)
     audits=defaultdict(set)
     rejected=0
@@ -80,9 +84,22 @@ def compile_day_index(database,service_days):
             "date":f"{service[:4]}-{service[4:6]}-{service[6:]}",
             "origin":first,"destination":last,"anchors":anchor}
         audits[service].add(num)
+    indexed_ic=defaultdict(set)
+    for key,candidates in result.items():
+        service,number=key.split("|",1)
+        ymd=service.replace("-","")
+        if any(c["type"]=="IC" for c in candidates.values()):
+            indexed_ic[ymd].add(number)
+    for service,expected in expected_ic.items():
+        missing=expected-indexed_ic[service]
+        if missing:
+            raise RuntimeError("Incomplete SNCB IC indexing on "+service+
+                               ": "+",".join(sorted(missing))[:350])
     return {key:list(v.values()) for key,v in sorted(result.items())},{
         "candidateTrips":len(by_trip),"rejectedTrips":rejected,
-        "numbersByDate":{day:len(nums) for day,nums in audits.items()}}
+        "numbersByDate":{day:len(nums) for day,nums in audits.items()},
+        "expectedICByDate":{day:len(v) for day,v in expected_ic.items()},
+        "indexedICByDate":{day:len(indexed_ic[day]) for day in expected_ic}}
 
 def build(path=DB,day=None):
     today=day or datetime.now(ZoneInfo("Europe/Luxembourg")).date()
