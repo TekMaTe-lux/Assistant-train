@@ -164,10 +164,14 @@ function renderAll(view){
  const fullNotice=(view.events||[]).some(e=>
    /\bce train est supprim[eé]/i.test(stripMarkup(e.text||e.detail||'')) &&
    !/supprim[eé].*entre\s+/i.test(stripMarkup(e.text||e.detail||'')));
- const records=stops.map(s=>{
+ // Full route = planned BE stations OUTSIDE the CFL section + intact CFL stops.
+ // No CFL live delay/cancellation/platform can be inferred for a BE-only stop.
+ const fullStops=[...(view.beExtension?.prefix||[]),...stops,...(view.beExtension?.suffix||[])];
+ const records=fullStops.map(s=>{
+   if(s.beOnly)return {stop:s,obs:null,beOnly:true};
    let obs=stopObservation(s,view);
    if(fullNotice)obs={...(obs||{}),cancelled:true,delay:null,supplement:'him'};
-   return {stop:s,obs};
+   return {stop:s,obs,beOnly:false};
  });
  const first=records[0],last=records[records.length-1];
  function plannedTime(s,obs){
@@ -193,8 +197,7 @@ function renderAll(view){
  node('Route').innerHTML='<div class="lb-cfl-sheet-route"><div>'+firstClock+
   '<small>'+esc(firstName)+'</small></div><i>→</i><div style="text-align:right">'+
   lastClock+'<small>'+esc(lastName)+'</small></div></div>';
- const sectionNote=ext ? '<p class="lb-cfl-sheet-note" style="margin:0 0 8px;">Arrêts détaillés de '
-   +esc(ext.sectionFrom)+' à '+esc(ext.sectionTo)+'.</p>' : '';
+ const sectionNote=ext ? '<p class="lb-cfl-sheet-note" style="margin:0 0 8px;">Parcours complet · horaires prévus pour les arrêts ajoutés.</p>' : '';
  node('Stops').innerHTML='<section class="lb-cfl-sheet-block"><h3>Parcours et horaires</h3>'+sectionNote+
  records.map(({stop,obs})=>{
   const planned=plannedTime(stop,obs);
