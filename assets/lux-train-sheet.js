@@ -9,7 +9,7 @@
   let requestSeq = 0;
   let beResourcePromise = null;
   let beResource = null;
-  const BE_HELPER_URL = VPS_ORIGIN + '/map-v2/lb-be-extension-helper-v1.js?v=20261021-be-stops2';
+  const BE_HELPER_URL = VPS_ORIGIN + '/map-v2/lb-be-extension-helper-v1.js?v=20261021-arlon3';
   const BE_INDEX_URL = VPS_ORIGIN + '/map-v2/data/lb-be-international-ends-v1.json';
 
   const el = (id) => document.getElementById(id);
