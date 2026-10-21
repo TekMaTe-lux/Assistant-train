@@ -19,6 +19,15 @@
     const d=Math.abs(x-y);
     return Math.min(d,Math.abs(d-1440))<=3;
   }
+  function borderTime(a,b,name){
+    if(sameTime(a,b))return true;
+    // At Arlon, the LU timetable gives the arrival and the BE timetable the
+    // onward departure of the same confirmed service: up to 6 min dwell.
+    // Never apply this exception to a different station or loose train match.
+    if(name!=='arlon')return false;
+    const x=minutes(a),y=minutes(b);
+    return x!==null&&y!==null&&Math.min(Math.abs(x-y),Math.abs(x-y-1440))<=6;
+  }
   function stamp(stop){
     return String(stop?.departure||stop?.arrival||stop?.time||'');
   }
@@ -41,7 +50,7 @@
         const name=station(stops[i]?.name||stops[i]?.stop_name);
         if(!name)continue;
         for(let j=previous+1;j<be.anchors.length;j++){
-          if(name!==station(be.anchors[j]?.name)||!sameTime(stamp(stops[i]),be.anchors[j]?.time))continue;
+          if(name!==station(be.anchors[j]?.name)||!borderTime(stamp(stops[i]),be.anchors[j]?.time,name))continue;
           matches.push({i,j});
           previous=j;
           break;
@@ -75,6 +84,8 @@
                     destination:extendsDest?be.destination:null,
                     prefix:extendsOrigin?belgianStops:[],
                     suffix:extendsDest?belgianStops:[],
+                    boundaryArrivalTime:extendsOrigin?be.anchors[matches[0].j]?.time:null,
+                    boundaryDepartureTime:extendsDest?be.anchors[matches[matches.length-1].j]?.time:null,
                     matches:matches.length,
                     date,number,
                     sectionFrom:first.name||first.stop_name,
