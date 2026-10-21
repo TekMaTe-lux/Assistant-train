@@ -50,11 +50,11 @@ function init(){
  layer.className='lb-cfl-sheet-bg';
  layer.hidden=true;
  layer.innerHTML='<section class="lb-cfl-sheet" role="dialog" aria-modal="true" aria-label="Fiche détaillée CFL" tabindex="-1">'+
- '<div class="lb-cfl-sheet-hd"><div><div class="lb-cfl-sheet-kicker">LA BÉTAILLÈRE · CFL / HAFAS</div><h2 id="lbCflDetailTitle">Train CFL</h2></div>'+
+ '<div class="lb-cfl-sheet-hd"><div><div class="lb-cfl-sheet-kicker">LA BÉTAILLÈRE · INFO TRAIN</div><h2 id="lbCflDetailTitle">Train CFL</h2></div>'+
  '<button class="lb-cfl-sheet-close" type="button" aria-label="Fermer la fiche">×</button></div>'+
  '<div id="lbCflDetailRoute"></div><div id="lbCflDetailState" class="lb-cfl-sheet-state"></div>'+
  '<div id="lbCflDetailIncidents"></div><div id="lbCflDetailStops"></div>'+
- '<p class="lb-cfl-sheet-note">Parcours : GTFS CFL (parfois limité à la portion disponible). Retards : observations HAFAS. Suppressions et alternatives : informations trafic HAFAS. Une prévision ne confirme pas un passage réel.</p></section>';
+ '<p class="lb-cfl-sheet-note">Horaires et informations susceptibles d’évoluer. Les heures annoncées ne confirment pas forcément le passage du train.</p></section>';
  document.body.appendChild(layer);
  layer.addEventListener('click',e=>{if(e.target===layer||e.target.closest('.lb-cfl-sheet-close'))close();});
  document.addEventListener('keydown',e=>{if(!layer.hidden&&e.key==='Escape')close();});
@@ -168,27 +168,25 @@ function renderAll(view){
  node('Route').innerHTML='<div class="lb-cfl-sheet-route"><div>'+renderTop(first)+
   '<small>'+esc(first.stop.name)+'</small></div><i>→</i><div style="text-align:right">'+
   renderTop(last)+'<small>'+esc(last.stop.name)+'</small></div></div>';
- node('Stops').innerHTML='<section class="lb-cfl-sheet-block"><h3>Parcours · '+esc(view.gtfsSource)+'</h3>'+
+ node('Stops').innerHTML='<section class="lb-cfl-sheet-block"><h3>Parcours et horaires</h3>'+
  records.map(({stop,obs})=>{
   const planned=plannedTime(stop,obs);
   const cancelled=obs?.cancelled===true;
   const delay=obs?.delay;
-  const explicit=obs&&obs.supplement!=='map';
   const platform=String(obs?.platform||'').trim();
   const forecast=obs?.forecast?clock(obs.forecast):
     !cancelled&&delay!=null?changedClock(planned,delay):'';
   let time='<b class="planned'+(cancelled||forecast&&forecast!==planned?' is-struck':'')+'">'+esc(planned)+'</b>';
   if(forecast&&!cancelled&&forecast!==planned)time+='<b class="new-time">→ '+esc(forecast)+'</b>';
   const detail=platform?'<span class="stop-voie">Voie '+esc(platform)+'</span>':'';
-  const provenance=explicit?(obs.supplement==='him'?'HAFAS · suppression du train':obs.supplement==='arrivals'?'Prévision d’arrivée CFL':'HAFAS · dernier état observé'):
-    obs?'Retard disponible sur la carte':'Horaire théorique · état non connu';
+  const metadata=detail || (!obs ? 'Horaire prévu' : '');
   const status=cancelled?'<strong class="stop-state">SUPPRIMÉ</strong>':
    delay!=null&&Number.isFinite(Number(delay))?
     '<span class="delay'+(Number(delay)===0?' ontime':'')+'">'+
-    (Number(delay)>0?'+':'')+esc(Number(delay))+' min</span>':'';
+    (Number(delay)===0?'À L’HEURE':(Number(delay)>0?'+':'')+esc(Number(delay))+' min')+'</span>':'';
   return '<div class="lb-cfl-sheet-stop'+(cancelled?' is-cancelled':'')+'">'+
-   '<div>'+time+'</div><i class="dot"></i><div><b>'+esc(stop.name)+'</b><small>'+
-   detail+(detail?' · ':'')+esc(provenance)+'</small></div>'+status+'</div>';
+   '<div>'+time+'</div><i class="dot"></i><div><b>'+esc(stop.name)+'</b>'+
+   (metadata?'<small>'+metadata+'</small>':'')+'</div>'+status+'</div>';
  }).join('')+'</section>';
  const known=records.filter(r=>r.obs?.cancelled===true).length;
  const served=records.filter(r=>r.obs&&r.obs.cancelled===false).length;
@@ -204,15 +202,15 @@ function renderAll(view){
    (lastArrival?.cancelled===true||cancelledEvent||known>0));
  status.textContent=known>0&&served>0 || lastArrival?.partialCancelled===true?
   '⚠️ SUPPRESSION PARTIELLE · '+known+' arrêt'+(known>1?'s':'')+' signalé'+(known>1?'s':'')+' supprimé'+(known>1?'s':'')+arrivalSuffix:
-  lastArrival?.cancelled===true?'⛔ ARRIVÉE SUPPRIMÉE SELON CFL':
-  fullNotice?'⛔ TRAIN SUPPRIMÉ SELON L’ALERTE HAFAS':
-  known>0?'⛔ SUPPRESSIONS D’ARRÊTS SIGNALÉES PAR HAFAS':
-  cancelledEvent?'⛔ SUPPRESSION SIGNALÉE PAR HAFAS':
+  lastArrival?.cancelled===true?'⛔ ARRIVÉE SUPPRIMÉE':
+  fullNotice?'⛔ TRAIN SUPPRIMÉ':
+  known>0?'⛔ ARRÊTS SUPPRIMÉS':
+  cancelledEvent?'⛔ SUPPRESSION SIGNALÉE':
   arrivalDelay!=null&&Number(arrivalDelay)>0?'🟠 RETARD PRÉVU À L’ARRIVÉE +'+Number(arrivalDelay)+' MIN':
-  delayedEvent?'🟠 RETARD SIGNALÉ PAR HAFAS':
+  delayedEvent?'🟠 RETARD SIGNALÉ':
   records.some(r=>r.obs?.delay>0)?'🟠 RETARD OBSERVÉ SUR LE PARCOURS':
-  records.some(r=>r.obs)?'ℹ️ DONNÉES TEMPS RÉEL HAFAS DISPONIBLES':
-  'Horaires théoriques · état HAFAS non communiqué pour les arrêts';
+  records.some(r=>r.obs)?'ℹ️ HORAIRES MIS À JOUR':
+  'Horaires prévus · informations en direct non disponibles';
 }
 
 function loadEvents(){
@@ -240,7 +238,7 @@ async function open(info){
  const view={info,gtfsStops:info.fallbackStops||[],gtfsSource:'carte / GTFS',
              selected:null,events:null};
  node('Title').textContent=(info.type||'CFL')+' '+info.number;
- node('State').textContent='Vérification de la situation HAFAS…';
+ node('State').textContent='Vérification des informations trafic…';
  node('State').className='lb-cfl-sheet-state';
  node('Incidents').textContent='';
  renderAll(view);
@@ -270,7 +268,7 @@ async function open(info){
   view.gtfsSource='GTFS CFL';
   renderAll(view);
  }catch(e){
-  if(token===t&&!(view.gtfsStops||[]).length)node('Stops').innerHTML='<p>Parcours GTFS indisponible.</p>';
+  if(token===t&&!(view.gtfsStops||[]).length)node('Stops').innerHTML='<p>Parcours momentanément indisponible.</p>';
  }finally{clearTimeout(wait);}
 }
 
