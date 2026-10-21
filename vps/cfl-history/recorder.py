@@ -24,6 +24,7 @@ SOURCE = Path(os.environ.get(
 BASE = Path(os.environ.get("LB_CFL_HISTORY_DIR", "/var/lib/labetaillere-cfl-history"))
 DB = BASE / "observations.sqlite3"
 SUMMARY = BASE / "summary.json"
+PUBLIC_SUMMARY = os.environ.get("LB_CFL_PUBLIC_SUMMARY", "").strip()
 DATE_PATTERN = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 
@@ -290,6 +291,8 @@ def main():
         result = ingest(conn, journeys) if journeys is not None else {}
         summary = make_summary(conn, args.days)
         write_summary(SUMMARY, summary)
+        if PUBLIC_SUMMARY:
+            write_summary(Path(PUBLIC_SUMMARY), summary)
         totals = conn.execute(
             "SELECT (SELECT COUNT(*) FROM stop_latest),(SELECT COUNT(*) FROM stop_events)"
         ).fetchone()
