@@ -11087,13 +11087,22 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     const tbody = byId('statsV2TrainTable');
+    const detailHeading = tbody?.closest('table')?.querySelector('thead th:last-child');
+    if (detailHeading) detailHeading.textContent = cfl ? 'Observations CFL' : 'Cause';
     if (tbody) {
       tbody.innerHTML = rows.slice(-60).reverse().map((row) => {
         const bucket = bucketOf(row);
         const info = STATUS[bucket] || STATUS.NO_DATA;
         const statusLabel = cfl && bucket === 'PARTIAL' ? 'Arrêt supprimé observé' : info.label;
         const value = ['CANCELED','PARTIAL'].includes(bucket) ? '—' : fmtDelay(toNumber(row.value));
-        const cause = circulationCause(row);
+        const cause = cfl
+          ? (row.luxArrivalPlanned
+            ? ('Arrivée Luxembourg ' + String(row.luxArrivalPlanned).slice(0,5) +
+               (row.luxArrivalForecast ? ' → ' + String(row.luxArrivalForecast).slice(0,5) : '') +
+               (row.luxArrivalDelayMinutes != null ? ' · ' + (row.luxArrivalDelayMinutes > 0 ? '+' : '') + row.luxArrivalDelayMinutes + ' min' : '') +
+               ' (prévision)')
+            : (row.observedStops ? row.observedStops + ' arrêt(s) observé(s)' : ''))
+          : circulationCause(row);
         return `
           <tr>
             <td>${escapeHtml(row.date)}</td>
