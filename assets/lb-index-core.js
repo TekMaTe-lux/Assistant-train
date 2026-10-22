@@ -19163,7 +19163,7 @@ async function loadAffluenceDate(dateStr){
       // Une seule horloge, mais garder les messages distincts SNCF et CFL.
       const delayItems = [...disr, ...list].filter(it =>
         it && it.level === 'orange' &&
-        (it.icon === '⏰' || /^retards?\\b/i.test(String(it.title || '')))
+        (it.icon === '⏰' || /^retards?\b/i.test(String(it.title || '')))
       );
       const seen = new Set();
       const unique = delayItems.filter(it => {
