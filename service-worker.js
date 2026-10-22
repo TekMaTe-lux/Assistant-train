@@ -1,4 +1,4 @@
-const CACHE_VERSION = 'v186';
+const CACHE_VERSION = 'v187';
 const APP_CACHE = `lbetaillere-app-${CACHE_VERSION}`;
 const STATIC_CACHE = `lbetaillere-static-${CACHE_VERSION}`;
 const DATA_CACHE = `lbetaillere-data-${CACHE_VERSION}`;
@@ -29,11 +29,11 @@ const APP_SHELL = [
   './assets/lb-design-system-v3.css?v=10',
   './assets/lb-mobile-v4.css?v=16',
   './assets/lb-v4-live-preview.css?v=20260831-3',
-  './assets/lb-index-inline.css?v=20261021-major-red4',
+  './assets/lb-index-inline.css?v=20261022-cfl-alert-compact1',
   './assets/lb-index-late.css?v=20261015-desktop-fret-v6',
   './assets/lb-home-premium-v2.css?v=1',
   './assets/lb-index-head.js?v=20261013-daily-dedupe1',
-  './assets/lb-index-core.js?v=20261021-cfl-archive7',
+  './assets/lb-index-core.js?v=20261022-cfl-alert-compact1',
   './assets/lb-account-page-v1.js?v=20261006-2',
   './assets/lb-account-page-v1.css?v=20261006-4',
   './assets/lb-grade-thumbs/grade-0.webp',
