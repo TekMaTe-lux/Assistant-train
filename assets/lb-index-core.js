@@ -11235,6 +11235,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const requestId=++lbProfileRequestId;
     lbProfileSelectedDate=date;
     lbProfileSelectedTrain=selected.key;
+    const itinerary=byId('statsV2TrainItinerary');
+    if(itinerary){ itinerary.hidden=true;itinerary.textContent=''; }
     const section=byId('statsV2TrainRunProfile');
     const content=byId('statsV2TrainRunProfileContent');
     const hint=byId('statsV2TrainRunProfileHint');
@@ -11253,6 +11255,8 @@ document.addEventListener('DOMContentLoaded', () => {
       const payload=await apiJson(path);
       if(requestId!==lbProfileRequestId || lbProfileCurrentTrain()?.key!==selected.key)return;
       lbRenderTrainRunProfile(payload,date,selected,scrollToProfile);
+      // Additional light metadata lookup, never blocks the existing graphs.
+      void lbUpdateStatsTrainItinerary(payload,selected,date,requestId);
     }catch(e){
       if(requestId!==lbProfileRequestId)return;
       if(content)content.hidden=true;
@@ -11275,6 +11279,62 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
+  // LB_STATS_TRAIN_ITINERARY_20261022
+  // Headline is an observed/dated route. SNCF planned times come from existing
+  // GTFS static batch API; CFL only from stop times actually archived by HAFAS.
+  const lbStatsTimetables = new Map();
+  let lbTrainTitleRequest = 0;
+  function lbItineraryClock(value){
+    const raw=String(value||'').trim();
+    if(/^\d{4}$/.test(raw))return raw.slice(0,2)+':'+raw.slice(2);
+    if(/^\d{2}:\d{2}/.test(raw))return raw.slice(0,5);
+    return '';
+  }
+  function lbSetStatsTrainItinerary(text,source,trainKey,date){
+    if(lbProfileCurrentTrain()?.key!==trainKey || lbProfileSelectedDate!==date)return;
+    const node=byId('statsV2TrainItinerary');
+    if(!node)return;
+    node.textContent=text;
+    node.hidden=!text;
+    node.title=source;
+  }
+  async function lbUpdateStatsTrainItinerary(payload,selected,date,requestId){
+    if(!selected || !date)return;
+    if(selected.cfl){
+      const stops=(payload?.stops||[]).filter(st=>st?.station&&lbItineraryClock(st.planned));
+      if(stops.length<2)return;
+      const first=stops[0],last=stops[stops.length-1];
+      if(first.station===last.station)return;
+      const line=first.station+' '+lbItineraryClock(first.planned)+
+        ' → '+last.station+' '+lbItineraryClock(last.planned);
+      if(requestId===lbProfileRequestId)lbSetStatsTrainItinerary(line,
+        'Parcours et horaires prévus observés dans les archives CFL/HAFAS du '+date+
+        ' (couverture potentiellement partielle)',selected.key,date);
+      return;
+    }
+    const ymd=date.replace(/-/g,'');
+    const cacheKey=ymd+':'+selected.number;
+    let promise=lbStatsTimetables.get(cacheKey);
+    if(!promise){
+      const params=new URLSearchParams({date:ymd,trains:selected.number});
+      promise=apiJson('/api/train-static-batch?'+params.toString())
+        .then(data=>data?.trains?.[selected.number]||null).catch(()=>null);
+      lbStatsTimetables.set(cacheKey,promise);
+      if(lbStatsTimetables.size>32)lbStatsTimetables.delete(lbStatsTimetables.keys().next().value);
+    }
+    const timetable=await promise;
+    if(requestId!==lbProfileRequestId || !timetable)return;
+    const stops=Array.isArray(timetable.stop_times)?timetable.stop_times:[];
+    const first=stops[0],last=stops[stops.length-1];
+    const origin=String(timetable.origin||first?.stop_point?.name||'').trim();
+    const dest=String(timetable.destination||last?.stop_point?.name||'').trim();
+    const departure=lbItineraryClock(first?.departure_time||first?.arrival_time);
+    const arrival=lbItineraryClock(last?.arrival_time||last?.departure_time);
+    if(!origin||!dest||!departure||!arrival)return;
+    lbSetStatsTrainItinerary(origin+' '+departure+' → '+dest+' '+arrival,
+      'Horaires théoriques SNCF GTFS du '+date+' (non temps réel)',selected.key,date);
+  }
+
   function renderTrain(payload, train, stop){
     const cfl = payload?.source === 'CFL_HAFAS' && ['IC','RE','RB'].includes(payload?.category);
     const trainLabel = cfl ? (payload.category + ' ' + train) : ('TER ' + train);
@@ -11284,6 +11344,8 @@ document.addEventListener('DOMContentLoaded', () => {
       .sort((a, b) => String(a.date).localeCompare(String(b.date)));
     trainLoaded = train;
     lbClearTrainRunProfile();
+    const headline=byId('statsV2TrainItinerary');
+    if(headline){headline.hidden=true;headline.textContent='';}
     const counts = { ON_TIME: 0, DELAYED: 0, PARTIAL: 0, CANCELED: 0, NO_DATA: 0 };
     const delayedValues = [];
     for (const row of rows) {
