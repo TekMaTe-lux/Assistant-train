@@ -11364,7 +11364,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const max = delayedValues.length ? Math.max(...delayedValues) : 0;
     const calendarMode = dateDiffInclusive(currentRange.from, currentRange.to) > 30;
 
-    byId('statsV2TrainTitle').textContent = trainLabel + (cfl ? ' · historique CFL/HAFAS' : ' · historique');
+    byId('statsV2TrainTitle').textContent = trainLabel;
     byId('statsV2TrainMeta').textContent = (cfl ? 'Prévisions CFL/HAFAS · ' : '') + rangeLabel(currentRange) + (stop ? ' · retard à ' + stop : ' · retard maximal du parcours');
     byId('statsV2TrainPunct').textContent = total ? fmtPct(punctuality) : '—';
     byId('statsV2TrainRuns').textContent = fmtInt(total);
