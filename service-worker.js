@@ -34,6 +34,7 @@ const APP_SHELL = [
   './assets/lb-home-premium-v2.css?v=1',
   './assets/lb-index-head.js?v=20261022-stats-one-nav1',
   './assets/lb-index-core.js?v=20261022-stats-train-itinerary3',
+  './assets/lb-stats-train-suggest-v1.js?v=20261022-catalog1',
   './assets/lb-account-page-v1.js?v=20261006-2',
   './assets/lb-account-page-v1.css?v=20261006-4',
   './assets/lb-grade-thumbs/grade-0.webp',
