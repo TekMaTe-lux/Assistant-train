@@ -10728,6 +10728,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }
   function openTrainFromInsights(train){
+    lbResetStatsSourceToSncf();
     const value = normalizeTrain(train);
     if (!value) return;
     const field = byId('statsV2TrainInput');
@@ -10878,6 +10879,30 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }
 
+  // LB_STATS_CFL_IC_RE_RB_20261022: category selector affects ONLY the train history tab.
+  const lbCflTrainExamples = { IC:'5335', RE:'411', RB:'4711' };
+  let lbLastSncfTrain = '';
+  const lbStatsSourceSelect = byId('statsV2TrainSource');
+  lbStatsSourceSelect?.addEventListener('change', () => {
+    const selected = lbStatsSourceSelect.value;
+    const field = byId('statsV2TrainInput');
+    if (field && selected !== 'sncf' && !lbLastSncfTrain)
+      lbLastSncfTrain = normalizeTrain(field.value) || settings.favoriteTrain || FALLBACK_TRAIN;
+    if (field) field.value = selected === 'sncf'
+      ? (lbLastSncfTrain || settings.favoriteTrain || FALLBACK_TRAIN)
+      : (lbCflTrainExamples[selected] || '');
+    const hint = byId('statsV2CflSourceHint');
+    if (hint) hint.hidden = selected === 'sncf';
+    trainLoaded = '';
+    hasTargetInteracted = true;
+    if (activeView === 'train' && currentRange) runTrain();
+  });
+  function lbResetStatsSourceToSncf(){
+    if (lbStatsSourceSelect) lbStatsSourceSelect.value = 'sncf';
+    const hint = byId('statsV2CflSourceHint');
+    if (hint) hint.hidden = true;
+    trainLoaded = '';
+  }
   function normalizeTrain(value){
     const match = String(value || '').replace(/\s+/g, '').match(/\d{4,6}/);
     return match ? match[0] : '';
@@ -10979,6 +11004,10 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   function renderTrain(payload, train, stop){
+    const cfl = payload?.source === 'CFL_HAFAS' && ['IC','RE','RB'].includes(payload?.category);
+    const trainLabel = cfl ? (payload.category + ' ' + train) : ('TER ' + train);
+    const punctLabel = byId('statsV2TrainPunct')?.previousElementSibling;
+    if (punctLabel) punctLabel.textContent = cfl ? 'Sans retard observé' : 'Ponctualité';
     const rows = [...(Array.isArray(payload?.series) ? payload.series : [])]
       .sort((a, b) => String(a.date).localeCompare(String(b.date)));
     trainLoaded = train;
@@ -10995,8 +11024,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const max = delayedValues.length ? Math.max(...delayedValues) : 0;
     const calendarMode = dateDiffInclusive(currentRange.from, currentRange.to) > 30;
 
-    byId('statsV2TrainTitle').textContent = `TER ${train} · historique`;
-    byId('statsV2TrainMeta').textContent = `${rangeLabel(currentRange)}${stop ? ` · retard à ${stop}` : ' · retard maximal du parcours'}`;
+    byId('statsV2TrainTitle').textContent = trainLabel + (cfl ? ' · historique CFL/HAFAS' : ' · historique');
+    byId('statsV2TrainMeta').textContent = (cfl ? 'Prévisions CFL/HAFAS · ' : '') + rangeLabel(currentRange) + (stop ? ' · retard à ' + stop : ' · retard maximal du parcours');
     byId('statsV2TrainPunct').textContent = total ? fmtPct(punctuality) : '—';
     byId('statsV2TrainRuns').textContent = fmtInt(total);
     byId('statsV2TrainAvg').textContent = delayedValues.length ? fmtDelay(avg) : '0 min';
@@ -11062,12 +11091,13 @@ document.addEventListener('DOMContentLoaded', () => {
       tbody.innerHTML = rows.slice(-60).reverse().map((row) => {
         const bucket = bucketOf(row);
         const info = STATUS[bucket] || STATUS.NO_DATA;
+        const statusLabel = cfl && bucket === 'PARTIAL' ? 'Arrêt supprimé observé' : info.label;
         const value = ['CANCELED','PARTIAL'].includes(bucket) ? '—' : fmtDelay(toNumber(row.value));
         const cause = circulationCause(row);
         return `
           <tr>
             <td>${escapeHtml(row.date)}</td>
-            <td><span class="stats-v2__status-label" style="--status-color:${info.color}">${escapeHtml(info.label)}</span></td>
+            <td><span class="stats-v2__status-label" style="--status-color:${info.color}">${escapeHtml(statusLabel)}</span></td>
             <td class="is-num">${value}</td>
             <td class="stats-v2__table-cause${cause ? '' : ' is-empty'}"${cause ? ` title="${escapeHtml(cause)}"` : ''}>${cause ? escapeHtml(cause) : '—'}</td>
           </tr>
@@ -11078,7 +11108,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const message = byId('statsV2TrainMessage');
     if (message) {
       message.hidden = total > 0;
-      message.textContent = total ? '' : `Aucune donnée trouvée pour le TER ${train} sur cette période.`;
+      message.textContent = total ? '' : (cfl ? 'Aucune observation CFL/HAFAS pour ' + trainLabel + ' sur cette période ou à cette gare (collecte depuis le 21/10/2026).' : `Aucune donnée trouvée pour le TER ${train} sur cette période.`);
     }
   }
 
@@ -11205,27 +11235,34 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   async function runTrain(){
-    const train = normalizeTrain(byId('statsV2TrainInput')?.value || settings.favoriteTrain);
+    const cflCategory = String(byId('statsV2TrainSource')?.value || 'sncf');
+    const isCfl = ['IC','RE','RB'].includes(cflCategory);
+    const trainRaw = byId('statsV2TrainInput')?.value || settings.favoriteTrain;
+    const cflMatch = isCfl ? /^(?:(IC|RE|RB)\s*)?(\d{3,6})$/i.exec(String(trainRaw || '').trim()) : null;
+    const train = isCfl ? (cflMatch && (!cflMatch[1] || cflMatch[1].toUpperCase() === cflCategory) ? cflMatch[2] : '') : normalizeTrain(trainRaw);
     const stop = String(byId('statsV2TrainStop')?.value || '').trim();
     const message = byId('statsV2TrainMessage');
     if (!train) {
       if (message) {
         message.hidden = false;
-        message.textContent = 'Entre un numéro de train de 4 à 6 chiffres.';
+        message.textContent = isCfl ? 'Pour CFL, indique un numéro IC, RE ou RB de 3 à 6 chiffres.' : 'Entre un numéro de train de 4 à 6 chiffres.';
       }
       return;
     }
     byId('statsV2TrainInput').value = train;
-    setBusy(true, `Analyse du TER ${train}…`);
+    setBusy(true, isCfl ? ('Analyse du ' + cflCategory + ' ' + train + ' (CFL/HAFAS)…') : `Analyse du TER ${train}…`);
     try {
       const query = new URLSearchParams({ from: currentRange.from, to: currentRange.to, trainId: train });
       if (stop) query.set('stop', stop);
-      const payload = await apiJson(`/api/stats/gtfs/train?${query.toString()}`);
+      const path = isCfl
+        ? '/api/stats/cfl/category-train?' + new URLSearchParams({from:currentRange.from,to:currentRange.to,trainId:train,category:cflCategory,...(stop?{stop}:{})}).toString()
+        : `/api/stats/gtfs/train?${query.toString()}`;
+      const payload = await apiJson(path);
       renderTrain(payload, train, stop);
       showError('');
-      byId('statsV2LiveText').textContent = `Historique du TER ${train} chargé`;
+      byId('statsV2LiveText').textContent = isCfl ? ('Historique CFL/HAFAS du ' + cflCategory + ' ' + train + ' chargé') : `Historique du TER ${train} chargé`;
     } catch (error) {
-      showError(`Impossible de charger le TER ${train} : ${error?.message || error}`);
+      showError((isCfl ? ('Impossible de charger le ' + cflCategory + ' ' + train) : ('Impossible de charger le TER ' + train)) + ' : ' + (error?.message || error));
     } finally {
       setBusy(false);
     }
@@ -11700,6 +11737,7 @@ document.addEventListener('DOMContentLoaded', () => {
     computeTrainSeriesFromRawDays,
     colorForPunctuality: punctualityColor,
     openTrain(train){
+      lbResetStatsSourceToSncf();
       byId('statsV2TrainInput').value = normalizeTrain(train);
       setView('train', { autoRun: false });
       return runTrain();
@@ -11830,6 +11868,7 @@ document.addEventListener('DOMContentLoaded', () => {
       byId('tableauTrainSearchForm')?.requestSubmit();
     }else{
       hasTargetInteracted=true;
+      lbResetStatsSourceToSncf();
       byId('statsV2TrainInput').value=train;
       byId('statsV2TrainStop').value=''; // pas de gare implicite
       runTrain();
