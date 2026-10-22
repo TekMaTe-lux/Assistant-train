@@ -310,7 +310,7 @@ function refresh(){
  }).catch(function(){});
 }
 /* Décoration indépendante du LIVE : l'image ne bloque jamais les horaires. */
-function stationPhotoKey(value){return norm(value).replace(/\\s+/g,'-');}
+function stationPhotoKey(value){return norm(value).replace(/\s+/g,'-');}
 function setStationHero(){
  var head=document.querySelector('#lbStationBoardOverlay .lb-board-head');
  if(!head)return;
@@ -321,7 +321,7 @@ function setStationHero(){
  function apply(url){head.style.setProperty('--lb-board-station-photo','url("'+url+'")');}
  apply(fallback);
  var selected=cfg.byStation&&cfg.byStation[stationPhotoKey(S.station)];
- if(typeof selected!=='string'||!/^[a-z0-9][a-z0-9._-]*\\.(webp|jpe?g|png)$/i.test(selected))return;
+ if(typeof selected!=='string'||!/^[a-z0-9][a-z0-9._-]*\.(webp|jpe?g|png)$/i.test(selected))return;
  var key=stationPhotoKey(S.station),candidate=base+selected,probe=new Image();
  probe.onload=function(){if(S.open&&stationPhotoKey(S.station)===key)apply(candidate);};
  probe.onerror=function(){if(S.open&&stationPhotoKey(S.station)===key)apply(fallback);};
