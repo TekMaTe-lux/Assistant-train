@@ -9732,10 +9732,15 @@ async function chargerEtAfficherAlertes() {
           : (eventFamily === 'partial-cancel' || eventFamily === 'delay' || eventFamily === 'capacity' || isReducedSeats)
             ? 'orange'
             : (styleMeta.prio === 1 ? 'red' : ((styleMeta.prio === 2 || styleMeta.prio === 3 || styleMeta.prio === 4) ? 'orange' : 'info'));
+        // Même pictogramme que les autres cartes de retard (CFL/SNCF).
+        // N'altère pas la gravité ou les données de l'alerte.
+        const alertIcon = !futureWork && alertLevel === 'orange' &&
+          (eventFamily === 'delay' || /^retards?\b/i.test(titre))
+          ? '⏰' : (styleMeta.icone || 'ℹ️');
         const detailEntry = {
           key: `a_${++LB_ALERT_SEQ}`,
           level: alertLevel,
-          icon: styleMeta.icone || 'ℹ️',
+          icon: alertIcon,
           title: cflCompactRoute?.title || titre || styleMeta.label || 'Information',
           description: (cflCompactRoute ? cflCompactRoute.route + ' — ' : '') + (stripHtml(detailRaw) || description || ''),
           descriptionHtml: (cflCompactRoute ? `<strong>${escapeAlertHtml(cflCompactRoute.route)}</strong><br>` : '') + (detailHtml || descriptionHtml || ''),
@@ -9814,7 +9819,7 @@ async function chargerEtAfficherAlertes() {
         div.className = classeCouleur;
         div.innerHTML = `
           <div class="disruption-title-row">
-            <span class="disruption-icon">${styleMeta.icone || 'ℹ️'}</span>
+            <span class="disruption-icon">${alertIcon}</span>
             <span class="disruption-title-text">${cflCompactRoute ? escapeAlertHtml(cflCompactRoute.title) : titre}</span>
           </div>
           ${cflCompactRoute ? `<div class="disruption-description disruption-cfl-route"><strong>${escapeAlertHtml(cflCompactRoute.route)}</strong></div>` : ''}
