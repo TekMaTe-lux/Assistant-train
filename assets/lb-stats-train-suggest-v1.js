@@ -28,25 +28,43 @@
         border-bottom:1px solid rgba(103,212,223,.15);
       }
       #statsV2TrainPanel .lb-stats-train-suggest__results {
-        max-height:275px; overflow-y:auto; overscroll-behavior:contain;
+        display:block !important; max-height:min(380px,48vh);
+        overflow-x:hidden !important; overflow-y:auto !important;
+        overscroll-behavior:contain;
       }
-      /* Chaque train est UNE ligne de texte : ni badge, ni carte, ni étiquette. */
-      #statsV2TrainPanel .lb-stats-train-suggest__item {
-        display:block; width:100%; padding:7px 10px; text-align:left;
-        background:transparent; color:#e2f8fb; border:0;
-        border-bottom:1px solid rgba(106,213,227,.12);
-        border-radius:0;
-        cursor:pointer; font:600 12.5px/1.35 Rajdhani,system-ui,sans-serif;
-        white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+      /* Les styles generaux des boutons du site appliquent width:180px,
+         border-radius et un rendu "chip". Neutralisation STRICTEMENT ici. */
+      #statsV2TrainPanel .lb-stats-train-suggest__results > button.lb-stats-train-suggest__item {
+        box-sizing:border-box !important;
+        display:block !important;
+        width:100% !important; min-width:0 !important; max-width:none !important;
+        height:auto !important; min-height:0 !important; max-height:none !important;
+        margin:0 !important; padding:8px 11px !important;
+        float:none !important;
+        background:transparent !important; background-image:none !important;
+        color:#e2f8fb !important; text-align:left !important;
+        border:0 !important;
+        border-bottom:1px solid rgba(106,213,227,.15) !important;
+        border-radius:0 !important; box-shadow:none !important;
+        text-shadow:none !important; transform:none !important;
+        cursor:pointer;
+        font:600 13px/1.35 Rajdhani,system-ui,sans-serif !important;
+        text-transform:none !important; letter-spacing:normal !important;
+        white-space:normal !important; overflow:visible !important;
+        text-overflow:clip !important; overflow-wrap:anywhere;
       }
-      #statsV2TrainPanel .lb-stats-train-suggest__item:hover,
-      #statsV2TrainPanel .lb-stats-train-suggest__item.is-active {
-        background:rgba(34,151,182,.24); outline:none;
+      #statsV2TrainPanel .lb-stats-train-suggest__results > button.lb-stats-train-suggest__item:hover,
+      #statsV2TrainPanel .lb-stats-train-suggest__results > button.lb-stats-train-suggest__item.is-active,
+      #statsV2TrainPanel .lb-stats-train-suggest__results > button.lb-stats-train-suggest__item:focus-visible {
+        background:rgba(34,151,182,.22) !important;
+        outline:none !important;
       }
       @media(max-width:540px){
         #statsV2TrainPanel .lb-stats-train-suggest { min-width:0; }
-        #statsV2TrainPanel .lb-stats-train-suggest__results { max-height:260px; }
-        #statsV2TrainPanel .lb-stats-train-suggest__item { font-size:11.4px; padding:8px 7px; }
+        #statsV2TrainPanel .lb-stats-train-suggest__results { max-height:min(370px,48vh); }
+        #statsV2TrainPanel .lb-stats-train-suggest__results > button.lb-stats-train-suggest__item {
+          font-size:12px !important; padding:9px 9px !important;
+        }
       }
     `;
     document.head.appendChild(style);
