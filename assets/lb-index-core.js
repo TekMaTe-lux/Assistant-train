@@ -9695,9 +9695,23 @@ async function chargerEtAfficherAlertes() {
 
         const descriptionRaw = String(alerte.description_text ?? '');
         const description = stripHtml(descriptionRaw);
-        const descriptionHtml = displayTerGrandEstLinkAsBer(sanitizeAlertHtml(descriptionRaw, titre));
+        // LB_CFL_REMOVE_REDUNDANT_SEARCH_PROMPT_20261022 :
+        // On est déjà sur La Bétaillère : masquer seulement la consigne
+        // générique CFL dans l'interface, sans toucher aux messages sources.
+        const cflAlertSource = /(?:CFL|HAFAS)/i.test(String(alerte.source || ''))
+          && !/(?:SNCF|GTFS|SIRI)/i.test(String(alerte.source || ''));
+        const withoutCflTimetablePrompt = (html) => {
+          if (!cflAlertSource || !html) return html;
+          return String(html).replace(
+            /(?:<br\\s*\\/?>\\s*)?Veuillez\\s+consulter\\s+notre\\s+recherche\\s+horaire\\s+afin\\s+de\\s+suivre\\s+votre\\s+train\\s+en\\s+temps\\s+r[ée]el\\.?/gi,
+            ''
+          ).trim();
+        };
+        const descriptionHtml = withoutCflTimetablePrompt(
+          displayTerGrandEstLinkAsBer(sanitizeAlertHtml(descriptionRaw, titre))
+        );
         const detailRaw = String(alerte.detail_html ?? descriptionRaw);
-        const detailHtml = sanitizeAlertHtml(detailRaw, titre);
+        const detailHtml = withoutCflTimetablePrompt(sanitizeAlertHtml(detailRaw, titre));
         const hasExtendedDetail = normalizeAlertText(detailRaw) !== normalizeAlertText(descriptionRaw);
 
         const workVariants = Array.isArray(alerte._lbWorkVariants)
@@ -9779,7 +9793,7 @@ async function chargerEtAfficherAlertes() {
           level: alertLevel,
           icon: alertIcon,
           title: cflCompactRoute?.title || titre || styleMeta.label || 'Information',
-          description: (cflCompactRoute ? cflCompactRoute.route + ' — ' : '') + (stripHtml(detailRaw) || description || ''),
+          description: (cflCompactRoute ? cflCompactRoute.route + ' — ' : '') + (cflAlertSource ? stripHtml(detailHtml) : stripHtml(detailRaw)),
           descriptionHtml: (cflCompactRoute ? `<strong>${escapeAlertHtml(cflCompactRoute.route)}</strong><br>` : '') + (detailHtml || descriptionHtml || ''),
           trains: trainsCibles.slice(),
           source: publicSource,
