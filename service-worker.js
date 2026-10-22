@@ -1,4 +1,4 @@
-const CACHE_VERSION = 'v190';
+const CACHE_VERSION = 'v191';
 const APP_CACHE = `lbetaillere-app-${CACHE_VERSION}`;
 const STATIC_CACHE = `lbetaillere-static-${CACHE_VERSION}`;
 const DATA_CACHE = `lbetaillere-data-${CACHE_VERSION}`;
@@ -33,7 +33,7 @@ const APP_SHELL = [
   './assets/lb-index-late.css?v=20261015-desktop-fret-v6',
   './assets/lb-home-premium-v2.css?v=1',
   './assets/lb-index-head.js?v=20261013-daily-dedupe1',
-  './assets/lb-index-core.js?v=20261022-cfl-clean1',
+  './assets/lb-index-core.js?v=20261022-unique-delay-clock1',
   './assets/lb-account-page-v1.js?v=20261006-2',
   './assets/lb-account-page-v1.css?v=20261006-4',
   './assets/lb-grade-thumbs/grade-0.webp',
