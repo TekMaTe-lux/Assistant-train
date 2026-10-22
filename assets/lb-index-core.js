@@ -11317,8 +11317,13 @@ document.addEventListener('DOMContentLoaded', () => {
     let promise=lbStatsTimetables.get(cacheKey);
     if(!promise){
       const params=new URLSearchParams({date:ymd,trains:selected.number});
-      promise=apiJson('/api/train-static-batch?'+params.toString())
-        .then(data=>data?.trains?.[selected.number]||null).catch(()=>null);
+      // Same public GTFS route and fetch policy as the existing train tables.
+      promise=fetch('https://vps.labetaillere.fr/api/train-static-batch?'+params.toString(),{
+        cache:'default',credentials:'omit'
+      }).then(response=>{
+        if(!response.ok)throw new Error('static_route_'+response.status);
+        return response.json();
+      }).then(data=>data?.trains?.[selected.number]||null).catch(()=>null);
       lbStatsTimetables.set(cacheKey,promise);
       if(lbStatsTimetables.size>32)lbStatsTimetables.delete(lbStatsTimetables.keys().next().value);
     }
