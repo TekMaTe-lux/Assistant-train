@@ -190,15 +190,6 @@ function patchTableInPlace(host,markup){
  var template=document.createElement('template');template.innerHTML=markup;
  var next=template.content.querySelector('.lb-gare-table');
  if(!next||!next.tBodies?.[0]||existing.tHead?.textContent!==next.tHead?.textContent)return false;
- var top=host.querySelector('.lb-gare-table-top');
- var nextTop=template.content.querySelector('.lb-gare-table-top');
- if(top&&nextTop){
-  var clock=top.querySelector('#lbBoardClock');
-  var nextClock=nextTop.querySelector('#lbBoardClock');
-  if(clock&&nextClock)clock.textContent=nextClock.textContent;
-  var title=top.querySelector('b'),nextTitle=nextTop.querySelector('b');
-  if(title&&nextTitle&&title.textContent!==nextTitle.textContent)title.textContent=nextTitle.textContent;
- }
  var body=existing.tBodies[0],desired=Array.from(next.tBodies[0].rows);
  function id(row){
   var button=row.querySelector('[data-lb-board-train]');
@@ -239,10 +230,8 @@ function draw(rows,cached){
   if(host.innerHTML!==empty)host.innerHTML=empty;
   S.lastMarkup=empty;more.hidden=true;return;
  }
- var heading=S.mode==='dep'?'DÉPARTS':'ARRIVÉES';
  var col=S.mode==='dep'?'DESTINATION':'PROVENANCE';
- var html='<div class="lb-gare-table-top"><b>'+heading+'</b><span class="lb-gare-clock-live"><span class="lb-gare-clock-live-label" aria-hidden="true">LIVE</span><time id="lbBoardClock" aria-label="Heure actuelle" aria-live="off" title="Horloge actualisée chaque seconde">'+boardClockText()+'</time></span></div>'+
- '<table class="lb-gare-table"><colgroup><col style="width:47%"><col style="width:21%"><col style="width:32%"></colgroup>'+
+ var html='<table class="lb-gare-table"><colgroup><col style="width:47%"><col style="width:21%"><col style="width:32%"></colgroup>'+
  '<thead><tr><th>'+col+'</th><th>HEURE</th><th aria-label="Voie et détails"></th></tr></thead><tbody>';
  rows.slice(0,S.limit).forEach(function(r,rowIndex){
   var late=r.delay>0,partial=!!r.partial,cancelled=!!r.cancelled;
@@ -264,13 +253,10 @@ function draw(rows,cached){
  });
  var markup=html+'</tbody></table>';
  // L'horloge qui avance ne nécessite pas un remplacement de tout le tableau.
- var stable=markup.replace(/<time id="lbBoardClock"[^>]*>[^<]*<\/time>/,'<time id="lbBoardClock"></time>');
- if(S.lastMarkup===stable&&host.querySelector('.lb-gare-table')){
-  var clockLabel=host.querySelector('#lbBoardClock');
-  if(clockLabel)clockLabel.textContent=boardClockText();
- }else{
+ // Horloge indépendante du contenu : ne reconstruire les cellules que si les trains changent.
+ if(S.lastMarkup!==markup||!host.querySelector('.lb-gare-table')){
   if(!patchTableInPlace(host,markup))host.innerHTML=markup;
-  S.lastMarkup=stable;
+  S.lastMarkup=markup;
  }
  more.hidden=rows.length<=S.limit;more.textContent='Plus de trains';
 }
@@ -780,7 +766,7 @@ function init(){
  wrap.innerHTML='<div class="lb-board-shade" data-lb-board-close></div><section id="lbStationBoardSheet" class="lb-board-sheet" role="dialog" aria-modal="true" aria-labelledby="lbBoardTitle" tabindex="-1">'+
  '<div class="lb-board-handle" aria-hidden="true"></div><header class="lb-board-head"><span class="lb-board-symbol" aria-hidden="true"><svg viewBox="0 0 64 72" aria-hidden="true" focusable="false"><path d="M32 4C18 4 8 14 8 28c0 17 17 31 24 39 7-8 24-22 24-39C56 14 46 4 32 4Z" fill="none" stroke="currentColor" stroke-width="2.8"/><rect x="19" y="18" width="26" height="29" rx="7" fill="none" stroke="currentColor" stroke-width="2.7"/><path d="M22 28h20M23 39h18" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/><circle cx="25" cy="42.5" r="2" fill="currentColor"/><circle cx="39" cy="42.5" r="2" fill="currentColor"/></svg></span><div class="lb-board-head-text"><h2 id="lbBoardTitle"><span class="lb-board-overline">GARE DE</span><span id="lbBoardName">Nancy</span></h2></div><button type="button" class="lb-auth-close tron-close-button lb-board-x" data-lb-board-close aria-label="Fermer la gare"></button></header>'+
  '<span id="lbBoardStationLabel" class="lb-board-picker-label">Choisir une gare</span><div class="lb-board-picker"><button type="button" id="lbBoardStationToggle" aria-labelledby="lbBoardStationLabel lbBoardStationValue" aria-controls="lbBoardStationPanel" aria-expanded="false"><span id="lbBoardStationValue">Nancy</span><span class="lb-board-station-chevron" aria-hidden="true">⌄</span></button><div id="lbBoardStationPanel" class="lb-board-station-panel" hidden><label for="lbBoardStationSearch" class="lb-board-station-search-label">Rechercher une gare</label><input id="lbBoardStationSearch" type="search" inputmode="search" autocomplete="off" spellcheck="false" placeholder="Nom de la gare…" aria-controls="lbBoardStationResults"><div id="lbBoardStationResults" class="lb-board-station-results" role="group" aria-label="Choisir une gare"></div><p id="lbBoardStationHint" class="lb-board-station-hint" aria-live="polite"></p></div></div>'+ 
- '<div class="lb-board-tabs" role="tablist" aria-label="Départs ou arrivées"><button type="button" data-lb-board-mode="dep" role="tab" aria-selected="true">↗ Départs</button><button type="button" data-lb-board-mode="arr" role="tab" aria-selected="false">↙ Arrivées</button></div>'+
+ '<div class="lb-board-toolbar"><div class="lb-board-tabs" role="tablist" aria-label="Départs ou arrivées"><button type="button" data-lb-board-mode="dep" role="tab" aria-selected="true">↗ Départs</button><button type="button" data-lb-board-mode="arr" role="tab" aria-selected="false">↙ Arrivées</button></div><span class="lb-gare-clock-live"><span class="lb-gare-clock-live-label" aria-hidden="true">LIVE</span><time id="lbBoardClock" aria-label="Heure actuelle" aria-live="off" title="Horloge actualisée chaque seconde">--:--:--</time></span></div>'+
  '<p class="lb-board-source" id="lbBoardSource" aria-live="polite">Chargement à la demande…</p><div id="lbBoardRows" class="lb-board-rows" aria-live="polite"></div>'+
  '<button type="button" class="lb-board-more" id="lbBoardMore" hidden>Voir plus de trains ↓</button></section>';
  document.body.appendChild(wrap);
