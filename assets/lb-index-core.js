@@ -9703,7 +9703,7 @@ async function chargerEtAfficherAlertes() {
         const withoutCflTimetablePrompt = (html) => {
           if (!cflAlertSource || !html) return html;
           return String(html).replace(
-            /(?:<br\\s*\\/?>\\s*)?Veuillez\\s+consulter\\s+notre\\s+recherche\\s+horaire\\s+afin\\s+de\\s+suivre\\s+votre\\s+train\\s+en\\s+temps\\s+r[ée]el\\.?/gi,
+            /(?:<br\s*\/?>\s*)?Veuillez\s+consulter\s+notre\s+recherche\s+horaire\s+afin\s+de\s+suivre\s+votre\s+train\s+en\s+temps\s+r[ée]el\.?/gi,
             ''
           ).trim();
         };
