@@ -11153,11 +11153,14 @@ document.addEventListener('DOMContentLoaded', () => {
     table.innerHTML=stops.map(st=>{
       const cancelled=Boolean(st.cancelled);
       const delay=validValue(st)?st.delayMinutes:null;
-      const state=cancelled?'Arrêt supprimé':delay===null?'Non renseigné':delay>0?'En retard':delay<0?'En avance':'À l’heure';
-      const className=cancelled?'lb-run-profile__cancelled':delay===null?'lb-run-profile__unknown':delay>0?'lb-run-profile__late':'lb-run-profile__on-time';
+      // Reprise des couleurs et badges du tableau Statistiques existant.
+      const statusKey=cancelled?'CANCELED':delay===null?'NO_DATA':delay>0?'DELAYED':'ON_TIME';
+      const info=STATUS[statusKey] || STATUS.NO_DATA;
+      const state=cancelled?'Supprimé':delay===null?'Non renseigné':delay<0?'En avance':info.label;
       const delayText=delay===null?'—':(delay>0?'+':'')+delay+' min';
-      return '<tr><td>'+escapeHtml(st.station)+'</td><td>'+(st.planned?escapeHtml(String(st.planned).slice(0,5)):'—')+
-        '</td><td class="is-num">'+escapeHtml(delayText)+'</td><td class="'+className+'">'+escapeHtml(state)+'</td></tr>';
+      return '<tr><td>'+escapeHtml(st.station)+'</td>'+
+        '<td class="is-num lb-train-run-profile__delay" style="--status-color:'+info.color+'">'+escapeHtml(delayText)+'</td>'+
+        '<td><span class="stats-v2__status-label" style="--status-color:'+info.color+'">'+escapeHtml(state)+'</span></td></tr>';
     }).join('');
     if(source)source.textContent=selected.cfl
       ? 'Source : CFL/HAFAS · dernières prévisions observées par arrêt, non certifiées à l’arrivée.'+
