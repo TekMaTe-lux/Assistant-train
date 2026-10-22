@@ -145,7 +145,11 @@ function track(row){
   if(typeof getVoiesForTrain==='function')maps.push(getVoiesForTrain(row.number));
   if(typeof getCflVoiesForTrain==='function')maps.push(getCflVoiesForTrain(row.number));
   for(var m of maps){if(!(m instanceof Map))continue;
-   for(var e of m){var stop=norm(e[0]);if(stop!==norm(row.station)&&!stop.endsWith(norm(row.station)))continue;
+   for(var e of m){
+    // SNCF: cle "gare|HH:MM" ; CFL: cle gare. Comparer uniquement les noms exacts.
+    var stop=norm(String(e[0]||'').split('|')[0]).replace(/\s+/g,'');
+    var station=norm(row.station).replace(/\s+/g,'');
+    if(!station||stop!==station)continue;
     var v=e[1];v=typeof v==='string'?v:(row.mode==='dep'?v?.depTrack||v?.genericTrack:v?.arrTrack||v?.genericTrack);
     if(v)return String(v).replace(/^voie\s*/i,'').slice(0,8);
    }
