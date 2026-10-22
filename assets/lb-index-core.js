@@ -11167,6 +11167,7 @@ document.addEventListener('DOMContentLoaded', () => {
         (data.luxArrivalIncluded?' Arrivée à Luxembourg complétée par StationBoard.':'')+
         (data.skippedAmbiguousArrival?' Certaines arrivées ambiguës ne sont pas rattachées.':'')
       : 'Source : archives SNCF GTFS-RT · ordre des arrêts enregistré dans le flux.'+
+        (data.cancellationDetailsSource === 'SNCF_API_ARCHIVE' ? ' Arrêts supprimés vérifiés dans les archives SNCF API.' : '')+
         (data.partialCancellationUnlocated?' Une suppression partielle ne peut pas être localisée dans cette archive.':'');
     destroyChart('profile');
     if(typeof Chart!=='undefined'){
