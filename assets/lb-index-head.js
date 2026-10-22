@@ -460,9 +460,11 @@ document.addEventListener('DOMContentLoaded', () => {
       ensureChartJs();
     }
 
+    // LB_STATS_UX_SIMPLIFIED_20261022: use only the native Stats dashboard,
+    // its unique source period and four direct tabs.
+    // The extra discovery dashboard duplicated buttons, periods and KPIs.
     if (hash === '#stats') {
-      loadCss('lb-stats-discovery-v1-css-lazy', './assets/lb-stats-discovery-v1.css?v=1');
-      loadScript('lb-stats-discovery-v1-js-lazy', './assets/lb-stats-discovery-v1.js?v=1');
+      document.getElementById('lbStatsDiscovery')?.remove();
     }
   }
 
