@@ -10066,7 +10066,7 @@ document.addEventListener('DOMContentLoaded', () => {
   let hasTargetInteracted = false;
   let trainLoaded = '';
   let stopLoaded = '';
-  const charts = { evolutionMini: null, evolution: null, hourly: null, train: null, stop: null };
+  const charts = { evolutionMini: null, evolution: null, hourly: null, train: null, stop: null, profile: null };
 
   function escapeHtml(value){
     return String(value ?? '')
@@ -10921,6 +10921,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if(meta) meta.textContent='Trains archivés depuis le 21 octobre 2026';
     const messageBox=byId('statsV2TrainMessage');
     if(messageBox){ messageBox.hidden=false; messageBox.textContent=message; }
+    lbClearTrainRunProfile();
   }
   function lbPopulateCflTrains(payload) {
     if (!lbCflTrainSelect || !payload?.ok || !Array.isArray(payload.categories)) {
@@ -11053,7 +11054,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const info = STATUS[bucket] || STATUS.NO_DATA;
         const detail = row?.value == null ? '' : ` · ${fmtDelay(row.value)}`;
         const tooltip = `${humanDate(iso, { year: true })} · ${info.label}${detail}`;
-        return `<button class="stats-v2__calendar-day" type="button" style="--day-color:${info.color}" data-tooltip="${escapeHtml(tooltip)}" aria-label="${escapeHtml(tooltip)}"><span>${Number(iso.slice(-2))}</span></button>`;
+        return `<button class="stats-v2__calendar-day${row ? ' lb-train-run-profile__date' : ''}" type="button" style="--day-color:${info.color}" ${row ? `data-stats-train-run-date="${escapeHtml(iso)}"` : ''} data-tooltip="${escapeHtml(tooltip)}" aria-label="${escapeHtml(tooltip)}"><span>${Number(iso.slice(-2))}</span></button>`;
       }).join('');
       return `<section class="stats-v2__calendar-month"><h4>${escapeHtml(label)}</h4><div class="stats-v2__calendar-weekdays"><span>L</span><span>M</span><span>M</span><span>J</span><span>V</span><span>S</span><span>D</span></div><div class="stats-v2__calendar-days">${blanks}${cells}</div></section>`;
     }).join('');
@@ -11095,6 +11096,181 @@ document.addEventListener('DOMContentLoaded', () => {
     return [...new Set(texts)][0] || '';
   }
 
+  // LB_STATS_DELAY_BY_STOP_PROFILE_20261022
+  // Additive train-run view. No change to aggregated SNCF/CFL statistics.
+  let lbProfileRequestId = 0;
+  let lbProfileSelectedDate = '';
+  let lbProfileSelectedTrain = '';
+  function lbClearTrainRunProfile(){
+    ++lbProfileRequestId;
+    lbProfileSelectedDate = '';
+    lbProfileSelectedTrain = '';
+    destroyChart('profile');
+    const section = byId('statsV2TrainRunProfile');
+    if (section) section.hidden = true;
+    const content = byId('statsV2TrainRunProfileContent');
+    if (content) content.hidden = true;
+    const table = byId('statsV2TrainRunProfileTable');
+    if (table) table.replaceChildren();
+    root.querySelectorAll('[data-stats-train-run-date]').forEach(el=>{
+      el.classList.remove('is-selected-run');
+      el.removeAttribute('aria-current');
+    });
+  }
+  function lbProfileCurrentTrain(){
+    const cfl = byId('statsV2TrainSource')?.value === 'cfl';
+    if(cfl){
+      const match = /^(IC|RE|RB) (\d{3,6})$/.exec(byId('statsV2CflTrainSelect')?.value || '');
+      return match ? {cfl:true,category:match[1],number:match[2],key:match[0]} : null;
+    }
+    const number = normalizeTrain(byId('statsV2TrainInput')?.value || settings.favoriteTrain);
+    return number ? {cfl:false,number,key:'TER '+number} : null;
+  }
+  function lbRenderTrainRunProfile(data, date, selected, scrollToProfile){
+    const section=byId('statsV2TrainRunProfile');
+    const content=byId('statsV2TrainRunProfileContent');
+    const canvas=byId('statsV2TrainRunProfileChart');
+    const table=byId('statsV2TrainRunProfileTable');
+    const source=byId('statsV2TrainRunProfileSource');
+    if(!section || !content || !canvas || !table)return;
+    const stops=Array.isArray(data?.stops) ? data.stops.filter(st=>st?.station).slice(0,130) : [];
+    const validValue=st=>!st.cancelled && typeof st.delayMinutes === 'number' && Number.isFinite(st.delayMinutes);
+    section.hidden=false;
+    byId('statsV2TrainRunProfileTitle').textContent='Profil du retard par arrêt · '+selected.key;
+    byId('statsV2TrainRunProfileMeta').textContent='Circulation du '+humanDate(date,{year:true})+
+      (stops.length ? ' · '+stops.length+' arrêts archivés' : ' · aucun arrêt archivé');
+    const hint=byId('statsV2TrainRunProfileHint');
+    if(!stops.length){
+      content.hidden=true;
+      if(hint)hint.textContent='Aucun arrêt archivé pour cette circulation : impossible de tracer une courbe fiable.';
+      destroyChart('profile');
+      return;
+    }
+    if(hint)hint.textContent='Chaque point représente le retard observé à une gare. Glisse horizontalement pour parcourir tous les arrêts.';
+    content.hidden=false;
+    const chartHost=canvas.parentElement;
+    if(chartHost)chartHost.style.minWidth=Math.max(600,stops.length*91)+'px';
+    table.innerHTML=stops.map(st=>{
+      const cancelled=Boolean(st.cancelled);
+      const delay=validValue(st)?st.delayMinutes:null;
+      const state=cancelled?'Arrêt supprimé':delay===null?'Non renseigné':delay>0?'En retard':delay<0?'En avance':'À l’heure';
+      const className=cancelled?'lb-run-profile__cancelled':delay===null?'lb-run-profile__unknown':delay>0?'lb-run-profile__late':'lb-run-profile__on-time';
+      const delayText=delay===null?'—':(delay>0?'+':'')+delay+' min';
+      return '<tr><td>'+escapeHtml(st.station)+'</td><td>'+(st.planned?escapeHtml(String(st.planned).slice(0,5)):'—')+
+        '</td><td class="is-num">'+escapeHtml(delayText)+'</td><td class="'+className+'">'+escapeHtml(state)+'</td></tr>';
+    }).join('');
+    if(source)source.textContent=selected.cfl
+      ? 'Source : CFL/HAFAS · dernières prévisions observées par arrêt, non certifiées à l’arrivée.'+
+        (data.luxArrivalIncluded?' Arrivée à Luxembourg complétée par StationBoard.':'')+
+        (data.skippedAmbiguousArrival?' Certaines arrivées ambiguës ne sont pas rattachées.':'')
+      : 'Source : archives SNCF GTFS-RT · ordre des arrêts enregistré dans le flux.'+
+        (data.partialCancellationUnlocated?' Une suppression partielle ne peut pas être localisée dans cette archive.':'');
+    destroyChart('profile');
+    if(typeof Chart!=='undefined'){
+      const values=stops.map(st=>validValue(st)?st.delayMinutes:null);
+      const pointColors=stops.map(st=>st.cancelled?COLORS.cancel:!validValue(st)?COLORS.muted:st.delayMinutes>0?COLORS.late:COLORS.cyan);
+      charts.profile=new Chart(canvas,{
+        type:'line',
+        data:{
+          labels:stops.map(st=>st.station),
+          datasets:[{
+            label:'Retard par arrêt (min)',
+            data:values,
+            spanGaps:false,
+            tension:0,
+            borderColor:COLORS.cyan,
+            backgroundColor:'rgba(94,231,242,.1)',
+            borderWidth:2.4,
+            pointBackgroundColor:pointColors,
+            pointBorderColor:pointColors,
+            pointRadius:4.4,
+            pointHoverRadius:7,
+            fill:false
+          }]
+        },
+        options:{
+          responsive:true,
+          maintainAspectRatio:false,
+          animation:{duration:200},
+          interaction:{mode:'nearest',intersect:false},
+          plugins:{
+            legend:{display:false},
+            tooltip:{
+              ...chartBaseOptions().plugins.tooltip,
+              callbacks:{
+                title:ctx=>stops[ctx[0]?.dataIndex]?.station||'',
+                label:ctx=>'Retard : '+(ctx.raw>0?'+':'')+ctx.raw+' min',
+                afterLabel:ctx=>{
+                  const st=stops[ctx.dataIndex];
+                  return st?.planned?'Horaire prévu : '+String(st.planned).slice(0,5):'';
+                }
+              }
+            }
+          },
+          scales:{
+            x:{grid:{display:false},ticks:{color:'#9cc4ce',autoSkip:false,maxRotation:55,minRotation:35,font:{size:11}},title:{display:true,text:'Arrêts dans l’ordre du parcours',color:'#9cc4ce'}},
+            y:{beginAtZero:values.every(v=>v===null||v>=0),
+              title:{display:true,text:'Retard (minutes)',color:'#9cc4ce'},
+              grid:{color:COLORS.grid},
+              ticks:{color:'#9cc4ce',precision:0,callback:value=>value+' min'}}
+          }
+        }
+      });
+    }
+    root.querySelectorAll('[data-stats-train-run-date]').forEach(el=>{
+      const selectedDate=el.dataset.statsTrainRunDate===date;
+      el.classList.toggle('is-selected-run',selectedDate);
+      if(selectedDate)el.setAttribute('aria-current','date');
+      else el.removeAttribute('aria-current');
+    });
+    if(scrollToProfile)section.scrollIntoView({behavior:'smooth',block:'start'});
+  }
+  async function lbLoadTrainRunProfile(date,scrollToProfile=false){
+    const selected=lbProfileCurrentTrain();
+    if(!selected || !/^\d{4}-\d{2}-\d{2}$/.test(String(date||'')))return;
+    const requestId=++lbProfileRequestId;
+    lbProfileSelectedDate=date;
+    lbProfileSelectedTrain=selected.key;
+    const section=byId('statsV2TrainRunProfile');
+    const content=byId('statsV2TrainRunProfileContent');
+    const hint=byId('statsV2TrainRunProfileHint');
+    if(section)section.hidden=false;
+    if(content)content.hidden=true;
+    if(hint)hint.textContent='Chargement du profil de retard par arrêt…';
+    const params=new URLSearchParams({trainId:selected.number,date});
+    let path;
+    if(selected.cfl){
+      params.set('category',selected.category);
+      path='/api/stats/cfl/category-train-run?'+params.toString();
+    }else{
+      path='/api/stats/gtfs/train-run?'+params.toString();
+    }
+    try{
+      const payload=await apiJson(path);
+      if(requestId!==lbProfileRequestId || lbProfileCurrentTrain()?.key!==selected.key)return;
+      lbRenderTrainRunProfile(payload,date,selected,scrollToProfile);
+    }catch(e){
+      if(requestId!==lbProfileRequestId)return;
+      if(content)content.hidden=true;
+      destroyChart('profile');
+      if(hint)hint.textContent='Profil indisponible pour cette circulation : aucun arrêt archivé ou source momentanément inaccessible.';
+    }
+  }
+  for(const id of ['statsV2TrainTable','statsV2TrainCalendar']){
+    const host=byId(id);
+    host?.addEventListener('click',event=>{
+      const target=event.target?.closest?.('[data-stats-train-run-date]');
+      if(target?.dataset.statsTrainRunDate)lbLoadTrainRunProfile(target.dataset.statsTrainRunDate,true);
+    });
+    if(id==='statsV2TrainTable')host?.addEventListener('keydown',event=>{
+      if(event.key!=='Enter' && event.key!==' ')return;
+      const target=event.target?.closest?.('[data-stats-train-run-date]');
+      if(!target?.dataset.statsTrainRunDate)return;
+      event.preventDefault();
+      lbLoadTrainRunProfile(target.dataset.statsTrainRunDate,true);
+    });
+  }
+
   function renderTrain(payload, train, stop){
     const cfl = payload?.source === 'CFL_HAFAS' && ['IC','RE','RB'].includes(payload?.category);
     const trainLabel = cfl ? (payload.category + ' ' + train) : ('TER ' + train);
@@ -11103,6 +11279,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const rows = [...(Array.isArray(payload?.series) ? payload.series : [])]
       .sort((a, b) => String(a.date).localeCompare(String(b.date)));
     trainLoaded = train;
+    lbClearTrainRunProfile();
     const counts = { ON_TIME: 0, DELAYED: 0, PARTIAL: 0, CANCELED: 0, NO_DATA: 0 };
     const delayedValues = [];
     for (const row of rows) {
@@ -11196,7 +11373,7 @@ document.addEventListener('DOMContentLoaded', () => {
             : (row.observedStops ? row.observedStops + ' arrêt(s) observé(s)' : ''))
           : circulationCause(row);
         return `
-          <tr>
+          <tr class="lb-train-run-profile__date" data-stats-train-run-date="${escapeHtml(row.date)}" tabindex="0" role="button" aria-label="Voir le retard par arrêt du ${escapeHtml(row.date)}">
             <td>${escapeHtml(row.date)}</td>
             <td><span class="stats-v2__status-label" style="--status-color:${info.color}">${escapeHtml(statusLabel)}</span></td>
             <td class="is-num">${value}</td>
@@ -11211,6 +11388,9 @@ document.addEventListener('DOMContentLoaded', () => {
       message.hidden = total > 0;
       message.textContent = total ? '' : (cfl ? 'Aucune observation CFL/HAFAS pour ' + trainLabel + ' sur cette période ou à cette gare (collecte depuis le 21/10/2026).' : `Aucune donnée trouvée pour le TER ${train} sur cette période.`);
     }
+    const profile=byId('statsV2TrainRunProfile');
+    if(profile)profile.hidden=!rows.length;
+    if(rows.length)lbLoadTrainRunProfile(rows[rows.length-1].date,false);
   }
 
 
@@ -11351,6 +11531,7 @@ document.addEventListener('DOMContentLoaded', () => {
       return;
     }
     if(!isCfl)byId('statsV2TrainInput').value = train;
+    lbClearTrainRunProfile();
     setBusy(true, isCfl ? ('Analyse du ' + cflCategory + ' ' + train + ' (CFL/HAFAS)…') : `Analyse du TER ${train}…`);
     try {
       const query = new URLSearchParams({ from: currentRange.from, to: currentRange.to, trainId: train });
