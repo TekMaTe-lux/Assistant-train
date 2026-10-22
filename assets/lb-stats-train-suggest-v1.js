@@ -95,7 +95,13 @@
       menu.hidden = false;
       input.setAttribute('aria-expanded', 'true');
     };
-    const stamp = time => time.replace(':','h');
+    const stamp = time => {
+      const parts = /^(\d+):(\d{2})$/.exec(String(time || ''));
+      if (!parts) return String(time || '').replace(':','h');
+      const hour = Number(parts[1]);
+      return String(hour % 24).padStart(2, '0') + 'h' + parts[2] +
+        (hour >= 24 ? ' +1j' : '');
+    };
 
     function select(train) {
       input.value = train[0];
