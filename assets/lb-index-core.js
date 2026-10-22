@@ -11262,9 +11262,9 @@ document.addEventListener('DOMContentLoaded', () => {
                 maxRotation:narrowProfile?0:55,minRotation:narrowProfile?0:35,
                 font:{size:narrowProfile?(window.innerWidth<=360?9:10):11,lineHeight:1.15},
                 padding:narrowProfile?9:3,
-                callback:narrowProfile?function(value){
+                ...(narrowProfile?{callback:function(value){
                   return lbProfileMobileTickLabel(this.getLabelForValue(value),window.innerWidth<=360?9:11);
-                }:undefined
+                }}:{})
               },
               title:{display:true,text:'Arrêts dans l’ordre du parcours',color:'#9cc4ce',padding:{top:narrowProfile?12:4}}
             },
