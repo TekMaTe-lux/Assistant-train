@@ -11126,6 +11126,36 @@ document.addEventListener('DOMContentLoaded', () => {
     const number = normalizeTrain(byId('statsV2TrainInput')?.value || settings.favoriteTrain);
     return number ? {cfl:false,number,key:'TER '+number} : null;
   }
+  /* Libelles mobiles du profil par arret : 2 lignes, nom complet en tooltip/tableau.
+     N'affecte ni les mesures archivees ni les autres graphiques de Stats. */
+  function lbProfileMobileTickLabel(value,limit){
+    const text=String(value||'').trim();
+    if(text.length<=limit)return text;
+    const parts=text.replace(/-/g,'- ').split(/\s+/).filter(Boolean);
+    const lines=[];
+    let line='';
+    for(const part of parts){
+      if(part.length>limit){
+        if(line){lines.push(line);line='';}
+        if(part.length<=limit*2){
+          const mid=Math.ceil(part.length/2);
+          lines.push(part.slice(0,mid));
+          line=part.slice(mid);
+        }else{
+          lines.push(part.slice(0,limit-1)+'…');
+        }
+      }else if(!line)line=part;
+      else if((line.endsWith('-')?line+part:line+' '+part).length<=limit){
+        line=line.endsWith('-')?line+part:line+' '+part;
+      }else{
+        lines.push(line);
+        line=part;
+      }
+    }
+    if(line)lines.push(line);
+    if(lines.length<=2)return lines;
+    return [lines[0],lines.slice(1).join(' ').slice(0,limit-1)+'…'];
+  }
   function lbRenderTrainRunProfile(data, date, selected, scrollToProfile){
     const section=byId('statsV2TrainRunProfile');
     const content=byId('statsV2TrainRunProfileContent');
@@ -11149,7 +11179,18 @@ document.addEventListener('DOMContentLoaded', () => {
     if(hint)hint.textContent='Chaque point représente le retard observé à une gare. Glisse horizontalement pour parcourir tous les arrêts.';
     content.hidden=false;
     const chartHost=canvas.parentElement;
-    if(chartHost)chartHost.style.minWidth=Math.max(600,stops.length*91)+'px';
+    const narrowProfile=window.matchMedia('(max-width: 620px)').matches;
+    const profileScroller=chartHost?.closest('.lb-train-run-profile__scroller');
+    if(chartHost){
+      // Quatre arrêts doivent tenir sur l'écran ; au-delà, défilement par gare,
+      // sans revenir au minimum fixe de 600 px de la version ordinateur.
+      const minWidth=narrowProfile
+        ? (stops.length<=4 ? (profileScroller?.clientWidth||0)
+          : Math.max(profileScroller?.clientWidth||0,stops.length*84))
+        : Math.max(600,stops.length*91);
+      chartHost.style.minWidth=Math.ceil(minWidth)+'px';
+      if(profileScroller)profileScroller.scrollLeft=0;
+    }
     table.innerHTML=stops.map(st=>{
       const cancelled=Boolean(st.cancelled);
       const delay=validValue(st)?st.delayMinutes:null;
@@ -11196,6 +11237,7 @@ document.addEventListener('DOMContentLoaded', () => {
           responsive:true,
           maintainAspectRatio:false,
           animation:{duration:200},
+          layout:{padding:narrowProfile?{top:8,bottom:5,left:3,right:3}:0},
           interaction:{mode:'nearest',intersect:false},
           plugins:{
             legend:{display:false},
@@ -11212,9 +11254,22 @@ document.addEventListener('DOMContentLoaded', () => {
             }
           },
           scales:{
-            x:{grid:{display:false},ticks:{color:'#9cc4ce',autoSkip:false,maxRotation:55,minRotation:35,font:{size:11}},title:{display:true,text:'Arrêts dans l’ordre du parcours',color:'#9cc4ce'}},
+            x:{
+              grid:{display:false},
+              offset:narrowProfile,
+              ticks:{
+                color:'#9cc4ce',autoSkip:false,
+                maxRotation:narrowProfile?0:55,minRotation:narrowProfile?0:35,
+                font:{size:narrowProfile?(window.innerWidth<=360?9:10):11,lineHeight:1.15},
+                padding:narrowProfile?9:3,
+                callback:narrowProfile?function(value){
+                  return lbProfileMobileTickLabel(this.getLabelForValue(value),window.innerWidth<=360?9:11);
+                }:undefined
+              },
+              title:{display:true,text:'Arrêts dans l’ordre du parcours',color:'#9cc4ce',padding:{top:narrowProfile?12:4}}
+            },
             y:{beginAtZero:values.every(v=>v===null||v>=0),
-              title:{display:true,text:'Retard (minutes)',color:'#9cc4ce'},
+              title:{display:!narrowProfile,text:'Retard (minutes)',color:'#9cc4ce'},
               grid:{color:COLORS.grid},
               ticks:{color:'#9cc4ce',precision:0,callback:value=>value+' min'}}
           }
