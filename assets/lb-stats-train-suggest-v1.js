@@ -30,15 +30,14 @@
       #statsV2TrainPanel .lb-stats-train-suggest__results {
         max-height:275px; overflow-y:auto; overscroll-behavior:contain;
       }
+      /* Chaque train est UNE ligne de texte : ni badge, ni carte, ni étiquette. */
       #statsV2TrainPanel .lb-stats-train-suggest__item {
-        display:block; width:100%; padding:10px 11px; text-align:left;
+        display:block; width:100%; padding:7px 10px; text-align:left;
         background:transparent; color:#e2f8fb; border:0;
-        border-bottom:1px solid rgba(106,213,227,.09);
-        cursor:pointer; font:600 13px/1.3 Rajdhani,system-ui,sans-serif;
-        white-space:normal;
-      }
-      #statsV2TrainPanel .lb-stats-train-suggest__item b {
-        color:#61e9f2; margin-right:7px; font-size:14px;
+        border-bottom:1px solid rgba(106,213,227,.12);
+        border-radius:0;
+        cursor:pointer; font:600 12.5px/1.35 Rajdhani,system-ui,sans-serif;
+        white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
       }
       #statsV2TrainPanel .lb-stats-train-suggest__item:hover,
       #statsV2TrainPanel .lb-stats-train-suggest__item.is-active {
@@ -46,7 +45,8 @@
       }
       @media(max-width:540px){
         #statsV2TrainPanel .lb-stats-train-suggest { min-width:0; }
-        #statsV2TrainPanel .lb-stats-train-suggest__results { max-height:230px; }
+        #statsV2TrainPanel .lb-stats-train-suggest__results { max-height:260px; }
+        #statsV2TrainPanel .lb-stats-train-suggest__item { font-size:11.4px; padding:8px 7px; }
       }
     `;
     document.head.appendChild(style);
@@ -118,15 +118,19 @@
         const numberMatch = number.startsWith(search);
         scored.push({ row, priority: numberMatch ? 0 : start ? 1 : 2 });
       }
-      scored.sort((a,b)=>a.priority-b.priority || a.row[2].localeCompare(b.row[2]) ||
+      // Horaires croissants même quand la gare est en destination : le soir reste visible.
+      scored.sort((a,b)=>
+        (/^\d/.test(search) ? a.priority-b.priority : 0) ||
+        a.row[2].localeCompare(b.row[2]) ||
         a.row[0].localeCompare(b.row[0],undefined,{numeric:true}));
       matches = scored.map(item=>item.row);
       active = 0;
-      const visible = matches.slice(0, 45);
+      // Aucun plafond : tous les trains et variantes lundi→dimanche restent accessibles.
+      const visible = matches;
       header.textContent = search
-        ? (matches.length ? matches.length + ' train(s) trouvé(s) · Choisis ton TER'
+        ? (matches.length ? matches.length + ' horaire(s) · lundi à dimanche'
           : 'Aucun train trouvé — essaie une autre gare ou heure')
-        : 'Recherche par numéro, gare ou horaire théorique';
+        : 'Tous les trains du Sillon · lundi à dimanche';
       results.replaceChildren();
       for (const [i, row] of visible.entries()) {
         const item = document.createElement('button');
@@ -134,12 +138,12 @@
         item.className = 'lb-stats-train-suggest__item' + (i === active ? ' is-active' : '');
         item.setAttribute('role', 'option');
         item.setAttribute('aria-selected', String(i === active));
-        const number = document.createElement('b');
-        number.textContent = row[0];
-        const route = document.createElement('span');
-        route.textContent = row[1] + ' ' + stamp(row[2]) + ' → ' +
-          row[3] + ' ' + stamp(row[4]);
-        item.append(number,route);
+        const line = row[0] + '  ' + row[1] + ' ' + stamp(row[2]) +
+          ' → ' + row[3] + ' ' + stamp(row[4]);
+        item.textContent = line;
+        const weekdays = ['lundi','mardi','mercredi','jeudi','vendredi','samedi','dimanche'];
+        item.title = line + (Array.isArray(row[5]) ?
+          ' · ' + row[5].map(day => weekdays[day]).filter(Boolean).join(', ') : '');
         item.addEventListener('pointerdown',event=>event.preventDefault());
         item.addEventListener('click',()=>select(row));
         results.appendChild(item);
@@ -148,7 +152,7 @@
     }
 
     function highlight(index) {
-      active = (index + Math.min(45,matches.length)) % Math.min(45,matches.length);
+      active = (index + matches.length) % matches.length;
       [...results.children].forEach((item,i)=>{
         item.classList.toggle('is-active',i===active);
         item.setAttribute('aria-selected',String(i===active));
@@ -168,7 +172,7 @@
         if (!response.ok) throw new Error('Catalogue indisponible');
         const data = await response.json();
         if (!Array.isArray(data?.trains) || !data.trains.length) throw new Error('Catalogue vide');
-        catalog = data.trains.filter(row=>Array.isArray(row) && row.length === 5 &&
+        catalog = data.trains.filter(row=>Array.isArray(row) && row.length >= 5 &&
           /^\d{4,6}$/.test(row[0]));
         // Le datalist historique (top trains) demeure la solution de repli si l'API échoue.
         input.removeAttribute('list');
