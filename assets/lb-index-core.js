@@ -9639,6 +9639,23 @@ async function chargerEtAfficherAlertes() {
         const rawTitle = String(alerte.header_text ?? styleMeta.label ?? '').trim();
         const titre = futureWork && /^travaux en cours[.!]?$/i.test(rawTitle)
           ? 'Travaux à venir' : rawTitle;
+
+        // LB_CFL_COMPACT_ALERT_ROUTE_20261022
+        // Présentation seule : les données brutes CFL/HAFAS, l'identité du train,
+        // les filtres et la déduplication ne sont pas modifiés.
+        const cflCompactRoute = (() => {
+          const originSource = String(alerte.source || '');
+          if (!/(?:CFL|HAFAS)/i.test(originSource) || /(?:SNCF|SIRI|GTFS)/i.test(originSource)) return null;
+          const match = rawTitle.match(/^([^:]{2,50})\s*:\s*(.+?)\s+(\d{1,2}:\d{2})\s*[-–—]\s*(.+?)\s+(\d{1,2}:\d{2})(?:\s*\(\s*N[°ºo.]?\s*\d{1,6}\s*\))?\s*$/i);
+          if (!match) return null;
+          const station = (value) => String(value || '').trim()
+            .replace(/\s*\((?:France|Germany|Belgium|Deutschland|Allemagne|Belgique)\)\s*$/i, '')
+            .replace(/^METZ\s+VILLE$/i, 'METZ');
+          const from = station(match[2]), to = station(match[4]);
+          if (!from || !to) return null;
+          return { title: match[1].trim(), route: `${from} ${match[3]} - ${to} ${match[5]}` };
+        })();
+
         const descriptionRaw = String(alerte.description_text ?? '');
         const description = stripHtml(descriptionRaw);
         const descriptionHtml = sanitizeAlertHtml(descriptionRaw, titre);
@@ -9719,9 +9736,9 @@ async function chargerEtAfficherAlertes() {
           key: `a_${++LB_ALERT_SEQ}`,
           level: alertLevel,
           icon: styleMeta.icone || 'ℹ️',
-          title: titre || styleMeta.label || 'Information',
-          description: stripHtml(detailRaw) || description || '',
-          descriptionHtml: detailHtml || descriptionHtml || '',
+          title: cflCompactRoute?.title || titre || styleMeta.label || 'Information',
+          description: (cflCompactRoute ? cflCompactRoute.route + ' — ' : '') + (stripHtml(detailRaw) || description || ''),
+          descriptionHtml: (cflCompactRoute ? `<strong>${escapeAlertHtml(cflCompactRoute.route)}</strong><br>` : '') + (detailHtml || descriptionHtml || ''),
           trains: trainsCibles.slice(),
           source: publicSource,
           sourceTechnical: alerte.source || ''
@@ -9798,8 +9815,9 @@ async function chargerEtAfficherAlertes() {
         div.innerHTML = `
           <div class="disruption-title-row">
             <span class="disruption-icon">${styleMeta.icone || 'ℹ️'}</span>
-            <span class="disruption-title-text">${titre}</span>
+            <span class="disruption-title-text">${cflCompactRoute ? escapeAlertHtml(cflCompactRoute.title) : titre}</span>
           </div>
+          ${cflCompactRoute ? `<div class="disruption-description disruption-cfl-route"><strong>${escapeAlertHtml(cflCompactRoute.route)}</strong></div>` : ''}
           ${groupedWork
             ? workImpactsHtml
             : (descriptionHtml ? `<div class="disruption-description">${descriptionHtml}</div>` : '')}
