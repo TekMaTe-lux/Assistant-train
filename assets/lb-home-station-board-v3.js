@@ -498,17 +498,6 @@ function defaultStation(){
 }
 function renderChoices(){
  var favorites=accountStations();
- var quick=document.getElementById('lbBoardFavorites');
- if(quick){
-  quick.hidden=!(favorites.morning||favorites.evening);
-  quick.querySelectorAll('[data-lb-board-favorite]').forEach(function(button){
-   var when=button.dataset.lbBoardFavorite,name=favorites[when]||'';
-   button.hidden=!name;
-   button.querySelector('.lb-board-fav-station').textContent=name;
-   button.setAttribute('aria-pressed',String(!!name&&norm(S.station)===norm(name)));
-   button.setAttribute('aria-label',(when==='morning'?'Gare du matin : ':'Gare du soir : ')+name);
-  });
- }
  var seen=new Set(),all=[];
  [favorites.morning,favorites.evening].concat(priority,S.stations).forEach(function(name){
   if(!name||seen.has(norm(name)))return;
@@ -791,7 +780,6 @@ function init(){
  wrap.innerHTML='<div class="lb-board-shade" data-lb-board-close></div><section id="lbStationBoardSheet" class="lb-board-sheet" role="dialog" aria-modal="true" aria-labelledby="lbBoardTitle" tabindex="-1">'+
  '<div class="lb-board-handle" aria-hidden="true"></div><header class="lb-board-head"><span class="lb-board-symbol" aria-hidden="true"><svg viewBox="0 0 64 72" aria-hidden="true" focusable="false"><path d="M32 4C18 4 8 14 8 28c0 17 17 31 24 39 7-8 24-22 24-39C56 14 46 4 32 4Z" fill="none" stroke="currentColor" stroke-width="2.8"/><rect x="19" y="18" width="26" height="29" rx="7" fill="none" stroke="currentColor" stroke-width="2.7"/><path d="M22 28h20M23 39h18" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/><circle cx="25" cy="42.5" r="2" fill="currentColor"/><circle cx="39" cy="42.5" r="2" fill="currentColor"/></svg></span><div class="lb-board-head-text"><h2 id="lbBoardTitle"><span class="lb-board-overline">GARE DE</span><span id="lbBoardName">Nancy</span></h2></div><button type="button" class="lb-auth-close tron-close-button lb-board-x" data-lb-board-close aria-label="Fermer la gare"></button></header>'+
  '<span id="lbBoardStationLabel" class="lb-board-picker-label">Choisir une gare</span><div class="lb-board-picker"><button type="button" id="lbBoardStationToggle" aria-labelledby="lbBoardStationLabel lbBoardStationValue" aria-controls="lbBoardStationPanel" aria-expanded="false"><span id="lbBoardStationValue">Nancy</span><span class="lb-board-station-chevron" aria-hidden="true">⌄</span></button><div id="lbBoardStationPanel" class="lb-board-station-panel" hidden><label for="lbBoardStationSearch" class="lb-board-station-search-label">Rechercher une gare</label><input id="lbBoardStationSearch" type="search" inputmode="search" autocomplete="off" spellcheck="false" placeholder="Nom de la gare…" aria-controls="lbBoardStationResults"><div id="lbBoardStationResults" class="lb-board-station-results" role="group" aria-label="Choisir une gare"></div><p id="lbBoardStationHint" class="lb-board-station-hint" aria-live="polite"></p></div></div>'+ 
- '<div id="lbBoardFavorites" class="lb-board-favorites" role="group" aria-label="Mes gares favorites" hidden><button type="button" data-lb-board-favorite="morning"><span class="lb-board-fav-label">☀ Matin</span><span class="lb-board-fav-station"></span></button><button type="button" data-lb-board-favorite="evening"><span class="lb-board-fav-label">☾ Soir</span><span class="lb-board-fav-station"></span></button></div>'+ 
  '<div class="lb-board-tabs" role="tablist" aria-label="Départs ou arrivées"><button type="button" data-lb-board-mode="dep" role="tab" aria-selected="true">↗ Départs</button><button type="button" data-lb-board-mode="arr" role="tab" aria-selected="false">↙ Arrivées</button></div>'+
  '<p class="lb-board-source" id="lbBoardSource" aria-live="polite">Chargement à la demande…</p><div id="lbBoardRows" class="lb-board-rows" aria-live="polite"></div>'+
  '<button type="button" class="lb-board-more" id="lbBoardMore" hidden>Voir plus de trains ↓</button></section>';
@@ -807,8 +795,6 @@ function init(){
    return;
   }
   if(!e.target.closest('.lb-board-picker'))showStationPicker(false);
-  var favorite=e.target.closest('[data-lb-board-favorite]');
-  if(favorite){var name=accountStations()[favorite.dataset.lbBoardFavorite];if(name)choose(name,true);return;}
   var mode=e.target.closest('[data-lb-board-mode]');if(mode){if(S.mode===mode.dataset.lbBoardMode)return;S.mode=mode.dataset.lbBoardMode;S.limit=8;useRecentExact();tabs();refresh();requestExact();ensureLuxArrivalTracks();return;}
   var train=e.target.closest('[data-lb-board-train]');if(train){openTrainAndReturnToBoard(train);return;}
   if(e.target.closest('#lbBoardMore')){S.limit+=8;render();}
