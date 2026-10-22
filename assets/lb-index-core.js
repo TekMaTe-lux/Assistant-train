@@ -9822,10 +9822,15 @@ async function chargerEtAfficherAlertes() {
           if (!header.dataset.alertKeyMain) header.dataset.alertKeyMain = detailEntry.key;
 
           const iconHost = header.querySelector('.train-state') || header;
-          if (!iconHost.querySelector('.train-alert-icon')) {
+          // LB_UNIQUE_DELAY_CLOCK_20261022 : le statut du tableau affiche déjà
+          // ⏰ pour un retard. Une alerte SNCF/CFL supplémentaire ne doit pas
+          // doubler l'horloge ; les deux sources restent dans les détails.
+          const redundantDelayClock = alertIcon === '⏰' &&
+            String(iconHost.textContent || '').includes('⏰');
+          if (!iconHost.querySelector('.train-alert-icon') && !redundantDelayClock) {
             const iconSpan = document.createElement('span');
             iconSpan.className = 'icon train-alert-icon';
-            iconSpan.textContent = styleMeta.icone || '⚠️';
+            iconSpan.textContent = alertIcon;
             iconSpan.title = titre || styleMeta.label || 'Information';
             iconSpan.dataset.alertKey = detailEntry.key;
             iconHost.appendChild(iconSpan);
@@ -19150,13 +19155,28 @@ async function loadAffluenceDate(dateStr){
     modal.setAttribute('aria-hidden', 'false');
   }
 
-  function openForKey(alertKey, trainNo, fallbackTitle){
-    const item = alertKey ? LB_ALERTS_BY_KEY.get(String(alertKey)) : null;
-    if (item) return openDetails([item], trainNo, fallbackTitle);
+  function openForKey(alertKey, trainNo, fallbackTitle, clickedDelayClock = false){
     const trainKey = String(trainNo || '').trim();
     const disr = LB_TABLE_DISRUPTIONS_BY_TRAIN.get(trainKey) || [];
-    if (disr.length) return openDetails(disr, trainNo, fallbackTitle);
     const list = LB_ALERTS_BY_TRAIN.get(trainKey) || [];
+    if (clickedDelayClock) {
+      // Une seule horloge, mais garder les messages distincts SNCF et CFL.
+      const delayItems = [...disr, ...list].filter(it =>
+        it && it.level === 'orange' &&
+        (it.icon === '⏰' || /^retards?\\b/i.test(String(it.title || '')))
+      );
+      const seen = new Set();
+      const unique = delayItems.filter(it => {
+        const key = [it.source || '', it.title || '', it.description || ''].join('|');
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+      if (unique.length > 1) return openDetails(unique, trainNo, fallbackTitle);
+    }
+    const item = alertKey ? LB_ALERTS_BY_KEY.get(String(alertKey)) : null;
+    if (item) return openDetails([item], trainNo, fallbackTitle);
+    if (disr.length) return openDetails(disr, trainNo, fallbackTitle);
     return openDetails(list, trainNo, fallbackTitle);
   }
 
@@ -19201,7 +19221,8 @@ async function loadAffluenceDate(dateStr){
       }], trainNo, fallback);
       return;
     }
-    openForKey(alertKey, trainNo, fallback);
+    openForKey(alertKey, trainNo, fallback,
+      String(icon.textContent || '').includes('⏰'));
   });
 })();
 
