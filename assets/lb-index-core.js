@@ -9158,6 +9158,43 @@ async function chargerEtAfficherAlertes() {
     return doc.body.innerHTML.trim();
   }
 
+  // LB_TER_TO_BER_DISPLAY_LINK_20261022
+  // Adaptation éditoriale limitée à l'affichage des cartes ; le message
+  // officiel SNCF reste intact dans le flux et dans les détails de l'alerte.
+  function displayTerGrandEstLinkAsBer(html) {
+    if (!html || !/site\s+TER\s+Grand[ -]Est/i.test(html)) return html;
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+    let changed = false;
+    for (const link of doc.body.querySelectorAll('a[href]')) {
+      if (!/^site\s+TER\s+Grand[ -]Est$/i.test((link.textContent || '').trim())) continue;
+      let isOfficialTer = false;
+      try {
+        const url = new URL(link.getAttribute('href'), location.href);
+        isOfficialTer = url.protocol === 'https:' &&
+          (url.hostname === 'ter.sncf.com' || url.hostname === 'www.ter.sncf.com') &&
+          /^\/grand-est(?:\/|$)/i.test(url.pathname);
+      } catch (_) {}
+      if (!isOfficialTer) continue;
+      const paragraph = link.closest('p');
+      if (!paragraph || !/informations?\s+en\s+temps\s+r[ée]el/i.test(paragraph.textContent || '')) continue;
+      // Phrase propre (pas « sur le labetaillere.fr ») avec un lien direct
+      // vers la recherche. Mention d'indépendance : pas de fausse caution SNCF.
+      paragraph.textContent = 'Informations en temps réel sur ';
+      const berLink = doc.createElement('a');
+      berLink.href = 'https://www.labetaillere.fr/#search';
+      berLink.textContent = 'labetaillere.fr';
+      berLink.title = 'Lien indépendant proposé par La Bétaillère';
+      paragraph.appendChild(berLink);
+      paragraph.appendChild(doc.createTextNode(" ou l'application de mobilité de votre choix. "));
+      const note = doc.createElement('small');
+      note.className = 'disruption-ber-link-note';
+      note.textContent = '(Lien indépendant proposé par La Bétaillère)';
+      paragraph.appendChild(note);
+      changed = true;
+    }
+    return changed ? doc.body.innerHTML.trim() : html;
+  }
+
   function alertActiveForDate(alert, dateObj) {
     const startMs = (alert.active_period_start != null) ? alert.active_period_start * 1000 : -Infinity;
     const endMs   = (alert.active_period_end   != null) ? alert.active_period_end   * 1000 :  Infinity;
@@ -9658,7 +9695,7 @@ async function chargerEtAfficherAlertes() {
 
         const descriptionRaw = String(alerte.description_text ?? '');
         const description = stripHtml(descriptionRaw);
-        const descriptionHtml = sanitizeAlertHtml(descriptionRaw, titre);
+        const descriptionHtml = displayTerGrandEstLinkAsBer(sanitizeAlertHtml(descriptionRaw, titre));
         const detailRaw = String(alerte.detail_html ?? descriptionRaw);
         const detailHtml = sanitizeAlertHtml(detailRaw, titre);
         const hasExtendedDetail = normalizeAlertText(detailRaw) !== normalizeAlertText(descriptionRaw);
