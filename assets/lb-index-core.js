@@ -10879,29 +10879,121 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }
 
-  // LB_STATS_CFL_IC_RE_RB_20261022: category selector affects ONLY the train history tab.
-  const lbCflTrainExamples = { IC:'5335', RE:'411', RB:'4711' };
-  let lbLastSncfTrain = '';
+  // LB_STATS_CFL_CATALOG_PICKER_20261022: single CFL group, archived train list on demand.
+  // SNCF's typed input, routes and graphs are untouched unless CFL is chosen.
   const lbStatsSourceSelect = byId('statsV2TrainSource');
-  lbStatsSourceSelect?.addEventListener('change', () => {
-    const selected = lbStatsSourceSelect.value;
-    const field = byId('statsV2TrainInput');
-    if (field && selected !== 'sncf' && !lbLastSncfTrain)
-      lbLastSncfTrain = normalizeTrain(field.value) || settings.favoriteTrain || FALLBACK_TRAIN;
-    if (field) field.value = selected === 'sncf'
-      ? (lbLastSncfTrain || settings.favoriteTrain || FALLBACK_TRAIN)
-      : (lbCflTrainExamples[selected] || '');
+  const lbCflTrainSelect = byId('statsV2CflTrainSelect');
+  const lbSncfTrainInput = byId('statsV2TrainInput');
+  const lbSncfTrainFinder = byId('statsV2LookupToggle');
+  const lbStatsTrainLabel = byId('statsV2TrainNumberLabel');
+  let lbLastSncfTrain = '';
+  let lbLastCflTrain = '';
+  let lbCflCatalog = null;
+  let lbCflCatalogLoad = null;
+  function lbApplyStatsTrainSourceUi(){
+    const isCfl = lbStatsSourceSelect?.value === 'cfl';
+    if (lbSncfTrainInput) lbSncfTrainInput.hidden = isCfl;
+    if (lbCflTrainSelect) lbCflTrainSelect.hidden = !isCfl;
+    if (lbSncfTrainFinder) lbSncfTrainFinder.hidden = isCfl;
+    if (lbStatsTrainLabel){
+      lbStatsTrainLabel.htmlFor = isCfl ? 'statsV2CflTrainSelect' : 'statsV2TrainInput';
+      lbStatsTrainLabel.textContent = isCfl ? 'Train CFL archivé' : 'Numéro de train';
+    }
     const hint = byId('statsV2CflSourceHint');
-    if (hint) hint.hidden = selected === 'sncf';
+    if (hint) hint.hidden = !isCfl;
+    return isCfl;
+  }
+  function lbResetStatsTrainResult(message){
     trainLoaded = '';
-    hasTargetInteracted = true;
-    if (activeView === 'train' && currentRange) runTrain();
+    for(const id of ['statsV2TrainPunct','statsV2TrainRuns','statsV2TrainAvg','statsV2TrainMax',
+                     'statsV2TrainBestWeekday','statsV2TrainWorstWeekday']) {
+      const node = byId(id); if(node) node.textContent = '—';
+    }
+    const table=byId('statsV2TrainTable');
+    if(table) table.replaceChildren();
+    const chart=byId('statsV2TrainChart');
+    if(chart) { destroyChart('train'); chart.parentElement.hidden = false; }
+    const calendar=byId('statsV2TrainCalendar');
+    if(calendar) { calendar.replaceChildren();calendar.hidden=true; }
+    const title=byId('statsV2TrainTitle');
+    if(title) title.textContent = 'Historique CFL/HAFAS · IC / RE / RB';
+    const meta=byId('statsV2TrainMeta');
+    if(meta) meta.textContent='Trains archivés depuis le 21 octobre 2026';
+    const messageBox=byId('statsV2TrainMessage');
+    if(messageBox){ messageBox.hidden=false; messageBox.textContent=message; }
+  }
+  function lbPopulateCflTrains(payload) {
+    if (!lbCflTrainSelect || !payload?.ok || !Array.isArray(payload.categories)) {
+      throw new Error('Liste CFL indisponible');
+    }
+    const fragment = document.createDocumentFragment();
+    const placeholder = document.createElement('option');
+    placeholder.value = '';
+    placeholder.textContent = 'Choisir un train IC, RE ou RB…';
+    fragment.appendChild(placeholder);
+    let count = 0;
+    for (const group of payload.categories) {
+      const category=String(group?.category||'').toUpperCase();
+      if(!['IC','RE','RB'].includes(category) || !Array.isArray(group.trains)) continue;
+      const optgroup=document.createElement('optgroup');
+      optgroup.label=category + ' · CFL/HAFAS';
+      for(const item of group.trains){
+        const number=String(item?.number||'');
+        if(!/^\d{3,6}$/.test(number) || item?.category!==category)continue;
+        const option=document.createElement('option');
+        option.value=category+' '+number;
+        option.textContent=number + ' · ' + category;
+        option.title='Historique observé sur ' + (Number(item.days)||0) + ' jour(s)';
+        optgroup.appendChild(option);
+        count++;
+      }
+      if(optgroup.childElementCount)fragment.appendChild(optgroup);
+    }
+    if(!count)throw new Error('Pas encore de trains CFL archivés');
+    lbCflTrainSelect.replaceChildren(fragment);
+    lbCflTrainSelect.value=lbLastCflTrain;
+    if(lbCflTrainSelect.selectedIndex<0)lbCflTrainSelect.value='';
+    lbCflTrainSelect.disabled=false;
+  }
+  async function lbLoadCflTrainCatalog(){
+    if(lbCflCatalog){ lbPopulateCflTrains(lbCflCatalog);return; }
+    if(!lbCflCatalogLoad) lbCflCatalogLoad=apiJson('/api/stats/cfl/train-catalog')
+      .then(data=>{lbCflCatalog=data;return data;})
+      .finally(()=>{lbCflCatalogLoad=null;});
+    const data=await lbCflCatalogLoad;
+    lbPopulateCflTrains(data);
+  }
+  lbStatsSourceSelect?.addEventListener('change',async()=>{
+    const isCfl=lbApplyStatsTrainSourceUi();
+    hasTargetInteracted=true;
+    if(!isCfl){
+      if(lbSncfTrainInput)lbSncfTrainInput.value=lbLastSncfTrain || lbSncfTrainInput.value || settings.favoriteTrain || FALLBACK_TRAIN;
+      trainLoaded='';
+      if(activeView==='train' && currentRange)runTrain();
+      return;
+    }
+    if(!lbLastSncfTrain)lbLastSncfTrain=normalizeTrain(lbSncfTrainInput?.value || settings.favoriteTrain) || FALLBACK_TRAIN;
+    lbResetStatsTrainResult('Chargement des numéros de trains CFL archivés…');
+    if(lbCflTrainSelect)lbCflTrainSelect.disabled=true;
+    try{
+      await lbLoadCflTrainCatalog();
+      if(lbStatsSourceSelect.value!=='cfl')return;
+      if(lbCflTrainSelect?.value && activeView==='train' && currentRange)runTrain();
+      else lbResetStatsTrainResult('Choisis un train IC, RE ou RB dans la liste déroulante.');
+    }catch(error){
+      if(lbStatsSourceSelect.value==='cfl')lbResetStatsTrainResult('Liste des trains CFL momentanément indisponible. Change de source puis réessaie.');
+    }
+  });
+  lbCflTrainSelect?.addEventListener('change',()=>{
+    lbLastCflTrain=String(lbCflTrainSelect.value||'');
+    hasTargetInteracted=true;
+    if(activeView==='train' && currentRange && lbLastCflTrain)runTrain();
+    else if(!lbLastCflTrain)lbResetStatsTrainResult('Choisis un train IC, RE ou RB dans la liste déroulante.');
   });
   function lbResetStatsSourceToSncf(){
-    if (lbStatsSourceSelect) lbStatsSourceSelect.value = 'sncf';
-    const hint = byId('statsV2CflSourceHint');
-    if (hint) hint.hidden = true;
-    trainLoaded = '';
+    if(lbStatsSourceSelect)lbStatsSourceSelect.value='sncf';
+    lbApplyStatsTrainSourceUi();
+    trainLoaded='';
   }
   function normalizeTrain(value){
     const match = String(value || '').replace(/\s+/g, '').match(/\d{4,6}/);
@@ -11244,21 +11336,21 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   async function runTrain(){
-    const cflCategory = String(byId('statsV2TrainSource')?.value || 'sncf');
-    const isCfl = ['IC','RE','RB'].includes(cflCategory);
-    const trainRaw = byId('statsV2TrainInput')?.value || settings.favoriteTrain;
-    const cflMatch = isCfl ? /^(?:(IC|RE|RB)\s*)?(\d{3,6})$/i.exec(String(trainRaw || '').trim()) : null;
-    const train = isCfl ? (cflMatch && (!cflMatch[1] || cflMatch[1].toUpperCase() === cflCategory) ? cflMatch[2] : '') : normalizeTrain(trainRaw);
+    const isCfl = byId('statsV2TrainSource')?.value === 'cfl';
+    const selectedCflTrain = String(byId('statsV2CflTrainSelect')?.value || '');
+    const cflMatch = isCfl ? /^(IC|RE|RB) (\d{3,6})$/.exec(selectedCflTrain) : null;
+    const cflCategory = cflMatch?.[1] || '';
+    const train = isCfl ? (cflMatch?.[2] || '') : normalizeTrain(byId('statsV2TrainInput')?.value || settings.favoriteTrain);
     const stop = String(byId('statsV2TrainStop')?.value || '').trim();
     const message = byId('statsV2TrainMessage');
     if (!train) {
       if (message) {
         message.hidden = false;
-        message.textContent = isCfl ? 'Pour CFL, indique un numéro IC, RE ou RB de 3 à 6 chiffres.' : 'Entre un numéro de train de 4 à 6 chiffres.';
+        message.textContent = isCfl ? 'Choisis un train IC, RE ou RB dans la liste déroulante.' : 'Entre un numéro de train de 4 à 6 chiffres.';
       }
       return;
     }
-    byId('statsV2TrainInput').value = train;
+    if(!isCfl)byId('statsV2TrainInput').value = train;
     setBusy(true, isCfl ? ('Analyse du ' + cflCategory + ' ' + train + ' (CFL/HAFAS)…') : `Analyse du TER ${train}…`);
     try {
       const query = new URLSearchParams({ from: currentRange.from, to: currentRange.to, trainId: train });
